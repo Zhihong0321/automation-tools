@@ -1,5 +1,11 @@
 # agy-lab: install, authenticate and drive the Antigravity CLI inside a container.
 #
+# Lives at the repo root, not next to the app it builds. Railway's builder looks
+# for a Dockerfile at the root of the build context and falls back to language
+# autodetection when it finds none — which is how a Dockerfile one directory down
+# gets silently ignored and the deploy fails claiming it cannot tell what the app
+# is. Keeping it here means the service needs no Root Directory setting to work.
+#
 # agy is NOT installed at build time. It installs at runtime into $HOME/.local/bin,
 # which is the Railway volume, for three reasons:
 #   1. the credential the login produces lands under the same $HOME, so binary and
@@ -27,8 +33,8 @@ ENV HOME=/data \
 RUN mkdir -p /data
 
 WORKDIR /app
-COPY package.json ./
-COPY src ./src
+COPY agy-lab/package.json ./
+COPY agy-lab/src ./src
 
 EXPOSE 8080
 CMD ["node", "src/server.ts"]

@@ -10,11 +10,15 @@ cloud or needs a worker at home.
 
 ## Railway setup
 
-1. **New service → deploy from this repo.**
-2. **Settings → Root Directory → `agy-lab`.** The repo holds more than this tool.
-3. **Variables → `LAB_TOKEN`** — 16+ random characters. The service refuses to
+1. **New service → deploy from this repo.** No Root Directory setting needed —
+   the Dockerfile sits at the repo root and copies `agy-lab/` in. Railway's
+   builder only looks for a Dockerfile at the root of the build context and falls
+   back to language autodetection when it finds none, so a Dockerfile one
+   directory down is silently ignored and the deploy fails claiming it cannot
+   tell what the app is.
+2. **Variables → `LAB_TOKEN`** — 16+ random characters. The service refuses to
    start without it (see *Security* below).
-4. **Volume → mount at `/data`.** `HOME=/data`, and agy derives everything from
+3. **Volume → mount at `/data`.** `HOME=/data`, and agy derives everything from
    `HOME`: the binary at `~/.local/bin/agy`, settings, conversations, and the
    credential store. Without the volume the container works fine and forgets the
    login on every redeploy.
