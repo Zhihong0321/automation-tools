@@ -162,6 +162,47 @@ export async function handle(
           .then(() => 'ok')
           .catch((e: Error) => 'FAILED: ' + e.message.split('\n')[0]!.slice(0, 120));
       }
+
+      // ?steps=<json array> — drive the flow one action at a time and dump where
+      // it ended up. This is the whole point of the debug layer: every remaining
+      // screen can be reached and READ from here, so no screen has to be guessed
+      // at and no question costs a redeploy.
+      //
+      // [{"fill":"input#x","value":"a@b.com","wait":800},{"click":"button:text-is(\"Continue\")","wait":3000}]
+      //
+      // Stops at the first failure and reports which step failed, because
+      // continuing past a broken step only produces a confusing final state.
+      const stepLog: unknown[] = [];
+      const stepsRaw = url.searchParams.get('steps');
+      if (stepsRaw) {
+        let steps: Array<Record<string, unknown>> = [];
+        try {
+          const parsed: unknown = JSON.parse(stepsRaw);
+          if (Array.isArray(parsed)) steps = parsed as Array<Record<string, unknown>>;
+        } catch (e) {
+          stepLog.push({ error: 'steps is not valid JSON: ' + (e as Error).message.slice(0, 80) });
+        }
+        for (const st of steps.slice(0, 20)) {
+          const sel = typeof st.click === 'string' ? st.click : typeof st.fill === 'string' ? st.fill : null;
+          try {
+            if (typeof st.goto === 'string') {
+              await page.goto(st.goto, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+            } else if (typeof st.fill === 'string') {
+              await page.locator(st.fill).first().fill(String(st.value ?? ''), { timeout: 15_000 });
+            } else if (typeof st.click === 'string') {
+              await page.locator(st.click).first().click({ timeout: 20_000 });
+            } else if (typeof st.press === 'string') {
+              await page.keyboard.press(st.press);
+            }
+            if (typeof st.wait === 'number') await page.waitForTimeout(Math.min(st.wait, 20_000));
+            stepLog.push({ ...st, value: st.value ? '(supplied)' : undefined, ok: true });
+          } catch (e) {
+            stepLog.push({ ...st, value: st.value ? '(supplied)' : undefined, ok: false, selector: sel, error: (e as Error).message.split('\n')[0]!.slice(0, 160) });
+            break;
+          }
+        }
+      }
+
       if (waitMs) await page.waitForTimeout(waitMs);
 
       const dom = await page.evaluate(() => {
@@ -240,6 +281,7 @@ export async function handle(
         navigatedTo: target,
         clicked,
         clickSelector: clickSel,
+        steps: stepLog,
         locatorCounts: probes,
         ...dom,
       };

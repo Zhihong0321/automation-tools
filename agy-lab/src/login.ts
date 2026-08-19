@@ -361,7 +361,46 @@ export async function run(id: string, creds: Credentials, opts: { maxSteps?: num
   });
 }
 
-/** Resume a login that stopped for a code. The browser is still on the OTP page. */
+/**
+ * Resume a login that stopped for a code.
+ *
+ * Deliberately NOT run(id, { otp: code }). That restarted the whole state machine
+ * with no email and no password, so when the page was anywhere other than the code
+ * screen it died instantly on the email step with "The page is asking for an email
+ * and none was supplied" — a message about missing credentials rather than about
+ * the real problem, which is that nothing asked for a code. Measured: ms 4.
+ *
+ * This enters the code where the page actually is, and says so plainly otherwise.
+ */
 export async function otp(id: string, code: string): Promise<LoginResult> {
-  return run(id, { otp: code });
+  const started = Date.now();
+  return browser.withProfile(id, async () => {
+    const { page } = await browser.acquire(id);
+    const step = await detect(page, 10_000);
+    const finish = (state: LoginResult['state'], detail: string): LoginResult => ({
+      id,
+      state,
+      step,
+      detail,
+      url: page.url(),
+      ms: Date.now() - started,
+      trail: [step],
+    });
+
+    if (step !== 'otp') {
+      return finish(
+        'failed',
+        `Nothing is asking for a code - the page is at the "${step}" step. Log in with email and password first.`,
+      );
+    }
+
+    await enterOtp(page, code);
+    await submit(page);
+    await settle(page);
+
+    const after = await detect(page, 25_000);
+    if (after === 'ready') return finish('ready', 'Signed in.');
+    if (after === 'otp') return finish('failed', 'Still on the code screen - the code was rejected or incomplete.');
+    return finish('failed', `Code submitted, but the page moved to the "${after}" step instead of signing in.`);
+  });
 }
