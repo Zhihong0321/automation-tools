@@ -19,9 +19,6 @@ export type Health = 'ready' | 'logged_out' | 'challenged' | 'busy' | 'never_use
  * DOM, both change together.
  */
 export const TEMP_CHAT_URL = 'https://chatgpt.com/?temporary-chat=true';
-const COMPOSER = '#prompt-textarea';
-/** The signed-out wall. ChatGPT shows these on the marketing/login page only. */
-const LOGGED_OUT = 'button[data-testid="login-button"], a[href*="/auth/login"], [data-testid="welcome-login-button"]';
 /** Bot-check interstitials. Emphatically not a logout. */
 const CHALLENGE = /just a moment|checking your browser|verify you are human|cf-chl|challenge-platform|attention required/i;
 
@@ -129,9 +126,9 @@ export interface ProbeOutcome {
 /**
  * Is this profile signed in?
  *
- * Races the two outcomes rather than waiting for one and inferring the other: a
- * logged-out page never grows a composer, so waiting for the composer alone turns
- * every logout into a timeout and loses the distinction that matters.
+ * Waits until the page has committed to an answer, then reads every signal at
+ * once and ranks them. See the comment inside for why racing selectors is the
+ * wrong shape against the current site.
  *
  * `keepOpen` leaves the browser held afterwards, which is what the login flow
  * wants — probing and then immediately closing the window a human is looking at
@@ -156,25 +153,62 @@ export async function probe(id: string, opts: { timeoutMs?: number; keepOpen?: b
       opened = true;
       await page.goto(TEMP_CHAT_URL, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
 
-      const verdict = await Promise.race([
-        page.waitForSelector(COMPOSER, { timeout: timeoutMs, state: 'visible' }).then(() => 'ready' as const),
-        page.waitForSelector(LOGGED_OUT, { timeout: timeoutMs, state: 'visible' }).then(() => 'logged_out' as const),
-      ]).catch(() => 'timeout' as const);
+      // Wait for the page to commit to an answer, then read every signal at once.
+      //
+      // The obvious design — race a composer selector against a sign-in selector —
+      // is WRONG against the current site, measured 2026-08-19 from a container:
+      // the logged-OUT page now ships a fully working composer ("Ask anything"),
+      // so "the composer is live" no longer means "signed in". Racing would report
+      // a signed-out profile as ready, which is the worst failure this thing can
+      // have: the pipeline would run against an anonymous session and quietly
+      // produce garbage instead of stopping.
+      await page
+        .waitForFunction(
+          () => {
+            const el = document.querySelector('#prompt-textarea');
+            const login = Array.from(document.querySelectorAll('button, a')).some((n) =>
+              /^(log ?in|sign ?up)/i.test((n.textContent ?? '').trim()),
+            );
+            return Boolean(el) || login;
+          },
+          { timeout: timeoutMs },
+        )
+        .catch(() => {});
+
+      const s = await page
+        .evaluate(() => {
+          const text = (n: Element) => (n.textContent ?? '').trim().toLowerCase();
+          const clickable = Array.from(document.querySelectorAll('button, a'));
+          return {
+            login:
+              Boolean(document.querySelector('[data-testid="login-button"], a[href*="/auth/login"]')) ||
+              clickable.some((n) => ['log in', 'login', 'sign up', 'sign up for free'].includes(text(n))),
+            composer: Boolean(document.querySelector('#prompt-textarea')),
+            account: Boolean(
+              document.querySelector('[data-testid="profile-button"], [data-testid="accounts-profile-button"]'),
+            ),
+            body: (document.body?.innerText ?? '').slice(0, 400),
+          };
+        })
+        .catch(() => ({ login: false, composer: false, account: false, body: '' }));
 
       const url = page.url();
       const title = await page.title().catch(() => '');
-      const extra = { url, title };
+      const extra = { url, title, signals: { login: s.login, composer: s.composer, account: s.account } };
 
-      if (verdict === 'ready') return done('ready', `Signed in - composer is live on ${hostOf(url)}.`, extra);
-      if (verdict === 'logged_out') return done('logged_out', `Sign-in wall at ${hostOf(url)}.`, extra);
+      // A visible sign-in control outranks everything: the signed-out page has a
+      // composer too, but a signed-in one never offers you a login button.
+      if (s.login) return done('logged_out', `Sign-in wall at ${hostOf(url)} - "Log in" is on the page.`, extra);
+      if (s.account || s.composer) {
+        return done('ready', `Signed in - composer live and no login control on ${hostOf(url)}.`, extra);
+      }
 
       // A challenge is the single most likely outcome from a datacenter IP, and
       // the single most misleading one to report as a logout.
-      const body = await page.evaluate(() => document.body?.innerText?.slice(0, 400) ?? '').catch(() => '');
-      if (CHALLENGE.test(title) || CHALLENGE.test(url) || CHALLENGE.test(body)) {
+      if (CHALLENGE.test(title) || CHALLENGE.test(url) || CHALLENGE.test(s.body)) {
         return done('challenged', `Bot check in the way ("${title}"). The session may be fine.`, extra);
       }
-      return done('unknown', `Neither composer nor sign-in wall within ${Math.round(timeoutMs / 1000)}s at ${hostOf(url)} ("${title}").`, extra);
+      return done('unknown', `No login control and no composer within ${Math.round(timeoutMs / 1000)}s at ${hostOf(url)} ("${title}").`, extra);
     } catch (err: unknown) {
       const detail = (err as { message?: string }).message ?? String(err);
       if (/ProcessSingleton|SingletonLock|already (?:in use|running)|user data directory is already/i.test(detail)) {
@@ -291,8 +325,8 @@ export async function ask(id: string, prompt: string, timeoutMs = 180_000): Prom
     if (!page.url().includes('chatgpt.com')) {
       await page.goto(TEMP_CHAT_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     }
-    await page.waitForSelector(COMPOSER, { timeout: 60_000, state: 'visible' });
-    await page.click(COMPOSER);
+    await page.waitForSelector("#prompt-textarea", { timeout: 60_000, state: "visible" });
+    await page.click('#prompt-textarea');
     await page.keyboard.type(prompt, { delay: 12 });
     await page.keyboard.press('Enter');
 
