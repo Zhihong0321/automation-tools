@@ -128,6 +128,29 @@ function proxyOption(): { server: string; username?: string; password?: string }
   }
 }
 
+/**
+ * Remove the lock a dead Chrome left behind.
+ *
+ * SingletonLock is a symlink naming the host and pid that owns the profile —
+ * "72bd41b1f986-153". When a container is killed the file survives on the volume
+ * and the next container has a different hostname and no such pid, so Chrome sees
+ * a profile it believes is in use by someone it cannot ask, and refuses.
+ *
+ * Safe to clear unconditionally at this point ONLY because of the discipline
+ * above it: callers hold the per-profile mutex, `held` says we have no live
+ * context for this id, and MAX_OPEN caps what else can be running. Under those
+ * three, any lock still on disk belongs to a process from a previous life.
+ */
+function clearStaleLocks(dir: string): void {
+  for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+    try {
+      fs.rmSync(path.join(dir, name), { force: true });
+    } catch {
+      /* nothing there, or not ours to remove — the launch will say so */
+    }
+  }
+}
+
 export function isHeld(id: string): boolean {
   return held.has(id);
 }
@@ -170,6 +193,7 @@ export async function acquire(id: string): Promise<Held> {
 
   const dir = profileDir(id);
   fs.mkdirSync(dir, { recursive: true });
+  clearStaleLocks(dir);
 
   const context = await chromium.launchPersistentContext(dir, {
     channel: 'chrome',

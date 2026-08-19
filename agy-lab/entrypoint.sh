@@ -11,7 +11,12 @@
 set -e
 
 if [ -z "$SKIP_XVFB" ]; then
-  Xvfb :99 -screen 0 1280x900x24 -nolisten tcp -nolisten unix &
+  # -nolisten tcp only. NOT -nolisten unix: the UNIX socket at /tmp/.X11-unix/X99
+  # is the only channel a local Chrome uses, so disabling it leaves Xvfb running
+  # and unreachable. Chrome then exits instantly and Playwright reports "Target
+  # page, context or browser has been closed" — which reads like a crash rather
+  # than like a display nothing is able to connect to.
+  Xvfb :99 -screen 0 1280x900x24 -nolisten tcp &
   # Wait for the socket rather than sleeping a fixed amount: on a cold Railway
   # container Xvfb can take longer than any number you would guess, and a Chrome
   # that launches one moment too early fails with a bare "Missing X server".
@@ -20,7 +25,13 @@ if [ -z "$SKIP_XVFB" ]; then
     i=$((i + 1))
     sleep 0.1
   done
-  echo "[entrypoint] Xvfb on :99 after ${i} tenths"
+  if [ -e /tmp/.X11-unix/X99 ]; then
+    echo "[entrypoint] Xvfb ready on :99 after ${i} tenths"
+  else
+    # Loud, because every browser operation will fail and the error it produces
+    # names neither Xvfb nor the display.
+    echo "[entrypoint] WARNING: no X socket at /tmp/.X11-unix/X99 after 10s - Chrome will not start"
+  fi
 fi
 
 exec "$@"
