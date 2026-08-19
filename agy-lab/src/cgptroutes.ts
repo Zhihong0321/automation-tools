@@ -137,17 +137,31 @@ export async function handle(
   // launch args as /login uses. A fresh local Chrome is a different experiment
   // and its agreement proves nothing about this one.
   //
-  // ?goto=<url>  navigate first (omit to inspect whatever is on screen now)
-  // ?wait=<ms>   settle before reading, so a late-rendering page can be sampled
-  //              at several ages instead of guessed at
+  // ?goto=<url>     navigate first (omit to inspect whatever is on screen now)
+  // ?click=<sel>    click a selector, then dump what it produced
+  // ?wait=<ms>      settle before reading, so a late-rendering page can be
+  //                 sampled at several ages instead of guessed at
+  //
+  // ?click exists so each step of the flow can be advanced and OBSERVED from
+  // here, without credentials and without a redeploy per question.
   if (method === 'GET' && action === 'dom') {
     const target = url.searchParams.get('goto');
+    const clickSel = url.searchParams.get('click');
     const waitMs = Math.min(Number(url.searchParams.get('wait') ?? 0) || 0, 30_000);
 
     const out = await browser.withProfile(id, async () => {
       sessions.create(id);
       const { page } = await browser.acquire(id);
       if (target) await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
+      let clicked: string | null = null;
+      if (clickSel) {
+        clicked = await page
+          .locator(clickSel)
+          .first()
+          .click({ timeout: 20_000 })
+          .then(() => 'ok')
+          .catch((e: Error) => 'FAILED: ' + e.message.split('\n')[0]!.slice(0, 120));
+      }
       if (waitMs) await page.waitForTimeout(waitMs);
 
       const dom = await page.evaluate(() => {
@@ -224,6 +238,8 @@ export async function handle(
         title: await page.title().catch(() => ''),
         waitedMs: waitMs,
         navigatedTo: target,
+        clicked,
+        clickSelector: clickSel,
         locatorCounts: probes,
         ...dom,
       };

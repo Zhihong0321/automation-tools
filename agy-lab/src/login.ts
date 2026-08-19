@@ -178,17 +178,11 @@ async function firstVisible(page: Page, selectors: readonly string[], timeoutMs 
 /** Fill the first VISIBLE match. The first match alone can be a hidden duplicate. */
 export async function fillFirstVisible(page: Page, selectors: readonly string[], value: string): Promise<boolean> {
   for (const sel of selectors) {
-    const group = page.locator(sel);
-    const n = await group.count().catch(() => 0);
-    for (let i = 0; i < Math.min(n, 5); i++) {
-      try {
-        const c = group.nth(i);
-        await c.waitFor({ state: 'visible', timeout: 2500 });
-        await c.fill(value, { timeout: 10_000 });
-        return true;
-      } catch {
-        /* hidden duplicate - keep looking */
-      }
+    try {
+      await page.locator(sel + ':visible').first().fill(value, { timeout: 8000 });
+      return true;
+    } catch {
+      /* not this shape, or still hidden - try the next */
     }
   }
   return false;
@@ -197,49 +191,46 @@ export async function fillFirstVisible(page: Page, selectors: readonly string[],
 /**
  * Click the sign-in control.
  *
- * By accessible name rather than by `:has-text`, which matches substrings and so
- * can land on a wrapper that contains the button instead of the button.
+ * DOM-based and auto-waiting, which together remove the race that broke this.
+ *
+ * Measured on prod: at 1500ms after navigation getByRole finds 2 buttons, but
+ * SIGNALS (a raw DOM walk) reports a visible "Log in" EARLIER than that —
+ * getByRole reads the accessibility tree, which lags. So detect() returned
+ * "landing", clickLogin sampled getByRole once, got 0, and gave up. That is the
+ * whole 1797ms failure: not a wrong selector, a selector consulted too early
+ * through a slower index.
+ *
+ * ":text-is" is exact text over the DOM, the same basis SIGNALS uses, so the two
+ * can no longer disagree. ":visible" filters the hidden duplicates — the page
+ * carries 12 elements whose text is "Log in" and only 3 are on screen. And
+ * click() auto-waits for actionability, so a control that has not rendered yet is
+ * waited for instead of being missed by a single badly-timed sample.
  */
 export async function clickLogin(page: Page): Promise<boolean> {
-  const candidates = [
-    page.getByRole('button', { name: /^log ?in$/i }),
-    page.getByRole('link', { name: /^log ?in$/i }),
-    page.locator('[data-testid="login-button"]'),
-    page.locator('a[href*="/auth/login"]'),
-  ];
-  for (const group of candidates) {
-    const n = await group.count().catch(() => 0);
-    // Walk every match, not just .first(). The page carries duplicate mobile and
-    // desktop trees — the measurement found two "Log in" buttons and eight
-    // elements containing that text — so the first match can be the hidden copy.
-    for (let i = 0; i < Math.min(n, 5); i++) {
-      const c = group.nth(i);
-      try {
-        await c.waitFor({ state: 'visible', timeout: 3000 });
-        await c.click({ timeout: 10_000 });
-        return true;
-      } catch {
-        /* hidden duplicate, or covered - try the next one */
-      }
-    }
+  const target = page.locator('button:text-is("Log in"):visible, a:text-is("Log in"):visible').first();
+  try {
+    await target.click({ timeout: 20_000 });
+    return true;
+  } catch {
+    return false;
   }
-  return false;
 }
 
-/** Click whatever submits this form. Enter is the fallback, and often the only one. */
+/**
+ * Click whatever submits this form.
+ *
+ * Exact text, never a substring: the sign-in modal also offers "Continue with
+ * Google", "Continue with Apple" and "Continue with phone", and a loose match
+ * clicks an SSO provider and derails the flow into a login that never completes.
+ */
 async function submit(page: Page): Promise<void> {
-  for (const name of SUBMIT_NAMES) {
-    const group = page.getByRole('button', { name });
-    const n = await group.count().catch(() => 0);
-    for (let i = 0; i < Math.min(n, 5); i++) {
-      try {
-        const c = group.nth(i);
-        await c.waitFor({ state: 'visible', timeout: 2000 });
-        await c.click({ timeout: 10_000 });
-        return;
-      } catch {
-        /* hidden duplicate - keep looking */
-      }
+  for (const word of ['Continue', 'Log in', 'Next', 'Sign in']) {
+    const c = page.locator(`button:text-is("${word}"):visible, [role="button"]:text-is("${word}"):visible`).first();
+    try {
+      await c.click({ timeout: 6000 });
+      return;
+    } catch {
+      /* not this one */
     }
   }
   await page.keyboard.press('Enter');
