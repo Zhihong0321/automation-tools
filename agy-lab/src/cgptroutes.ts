@@ -1,14 +1,18 @@
 // HTTP surface for the ChatGPT sessions, split out so server.ts stays readable.
 //
-// The remote-control endpoints are a browser you can drive from a web page: a
-// JPEG frame out, a click or a keystroke in. Deliberately screenshot-polling
-// rather than a CDP screencast or VNC — a login is a handful of clicks on a static
-// form, so 1-2 frames a second is plenty, and it costs no X11 stack, no websocket
-// protocol and no native dependency. The expensive options buy smooth video for a
-// task that does not need it.
+// Logging in is scripted, not driven by hand — see login.ts. There was a
+// click-on-a-screenshot remote control here and it is gone: a login is a fixed
+// sequence of known fields, so aiming a mouse at a JPEG spent three round trips
+// per step to do what filling a named input does in one, and missed silently
+// whenever the frame was stale.
+//
+// GET /frame survives as a READ-ONLY diagnostic. When a scripted login stops on
+// an unrecognised page, the only thing that answers "what is it actually showing"
+// is a picture of it. Nothing accepts coordinates any more.
 import type http from 'node:http';
 import * as browser from './browser.ts';
 import * as sessions from './sessions.ts';
+import * as login from './login.ts';
 
 export interface Ctx {
   json: (res: http.ServerResponse, status: number, body: unknown) => void;
@@ -97,9 +101,36 @@ export async function handle(
   const action = m[2]!;
 
   // Every action below touches the browser, so every one of them counts as use.
-  // Without this the idle sweeper would close a profile out from under someone
-  // who is actively clicking through a login.
+  // Without this the idle sweeper would close a profile mid-login — and a login
+  // that stops for an OTP can wait minutes for a human to read a phone.
   browser.touch(id);
+
+  // Scripted login. Credentials arrive here, are typed into the page, and go out
+  // of scope with the request: the profile keeps the resulting session cookies,
+  // which is the point, and nothing keeps the password.
+  if (method === 'POST' && action === 'login') {
+    const body = await readJson(req);
+    const email = str(body.email).trim();
+    const password = str(body.password);
+    if (!email || !password) return reply(json, res, 400, { error: 'email and password are required' });
+    const out = await login.run(id, { email, password, otp: str(body.otp).trim() || undefined });
+    // Record the outcome so the session list reflects it without a second probe.
+    if (out.state === 'ready') await sessions.probe(id, { timeoutMs: 30_000, keepOpen: true });
+    json(res, 200, out);
+    return true;
+  }
+
+  // Resume a login that stopped for a code. The browser is still on that page, so
+  // this continues the flow rather than starting it again.
+  if (method === 'POST' && action === 'otp') {
+    const body = await readJson(req);
+    const code = str(body.code ?? body.otp).trim();
+    if (!code) return reply(json, res, 400, { error: 'code is required' });
+    const out = await login.otp(id, code);
+    if (out.state === 'ready') await sessions.probe(id, { timeoutMs: 30_000, keepOpen: true });
+    json(res, 200, out);
+    return true;
+  }
 
   if (method === 'POST' && action === 'probe') {
     const body = await readJson(req);
@@ -145,54 +176,6 @@ export async function handle(
     } catch (err) {
       json(res, 503, { error: firstLine((err as Error).message) });
     }
-    return true;
-  }
-
-  if (method === 'POST' && action === 'click') {
-    const body = await readJson(req);
-    const x = num(body.x, -1);
-    const y = num(body.y, -1);
-    if (x < 0 || y < 0) return reply(json, res, 400, { error: 'x and y are required' });
-    await browser.withProfile(id, async () => {
-      const { page } = await browser.acquire(id);
-      await page.mouse.click(x, y, { delay: 40 });
-    });
-    json(res, 200, { id, clicked: { x, y } });
-    return true;
-  }
-
-  if (method === 'POST' && action === 'type') {
-    const body = await readJson(req);
-    await browser.withProfile(id, async () => {
-      const { page } = await browser.acquire(id);
-      // A per-character delay, because a form filled instantly is one of the
-      // cheapest automation tells there is, and this runs against a login page
-      // that is actively looking for them.
-      await page.keyboard.type(str(body.text), { delay: num(body.delay, 45) });
-      if (body.enter === true) await page.keyboard.press('Enter');
-    });
-    json(res, 200, { id, typed: str(body.text).length });
-    return true;
-  }
-
-  if (method === 'POST' && action === 'key') {
-    const body = await readJson(req);
-    const key = str(body.key, 'Enter');
-    await browser.withProfile(id, async () => {
-      const { page } = await browser.acquire(id);
-      await page.keyboard.press(key);
-    });
-    json(res, 200, { id, key });
-    return true;
-  }
-
-  if (method === 'POST' && action === 'scroll') {
-    const body = await readJson(req);
-    await browser.withProfile(id, async () => {
-      const { page } = await browser.acquire(id);
-      await page.mouse.wheel(0, num(body.dy, 400));
-    });
-    json(res, 200, { id, scrolled: num(body.dy, 400) });
     return true;
   }
 

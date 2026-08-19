@@ -133,24 +133,23 @@ export function page(): string {
   </div>
 
   <div class="card">
-    <h2>Remote browser <span id="rcLabel" style="color:var(--muted);text-transform:none;letter-spacing:0"></span></h2>
+    <h2>Log in <span id="rcLabel" style="color:var(--muted);text-transform:none;letter-spacing:0"></span></h2>
     <div class="row">
-      <input id="rcUrl" placeholder="https://chatgpt.com/?temporary-chat=true" style="flex:1;min-width:220px">
-      <button onclick="rcGoto()">Go</button>
-      <button onclick="rcScroll(400)">Scroll down</button>
-      <button onclick="rcScroll(-400)">Up</button>
-      <button onclick="rcClose()">Close browser</button>
+      <input id="loginId" placeholder="session id" style="min-width:150px">
+      <input id="loginEmail" placeholder="email" autocomplete="off" style="flex:1;min-width:180px">
+      <input id="loginPass" type="password" placeholder="password" autocomplete="new-password" style="flex:1;min-width:160px">
+      <button class="primary" onclick="doLogin()">Log in</button>
     </div>
     <div class="row" style="margin-top:8px">
-      <input id="rcType" placeholder="Type into the page, Enter to submit" style="flex:1;min-width:220px"
-             onkeydown="if(event.key==='Enter'){rcTypeText(true);event.preventDefault();}">
-      <button onclick="rcTypeText(false)">Type</button>
-      <button onclick="rcKey('Tab')">Tab</button>
-      <button onclick="rcKey('Escape')">Esc</button>
+      <input id="loginOtp" placeholder="one-time code (only if asked)" style="flex:1;min-width:200px"
+             onkeydown="if(event.key==='Enter'){doOtp();event.preventDefault();}">
+      <button onclick="doOtp()">Submit code</button>
+      <button onclick="shot()">Screenshot</button>
+      <button onclick="closeBrowser()">Close browser</button>
     </div>
-    <p class="hint">Click directly on the image to click the page. Frames refresh about once a second while a session is attached.</p>
-    <img id="rcFrame" style="display:none;width:100%;max-width:1280px;border:1px solid var(--line);border-radius:8px;margin-top:10px;cursor:crosshair"
-         onclick="rcClick(event)">
+    <p class="hint">Credentials are typed into the page and discarded with the request — the profile keeps the session cookies, nothing keeps the password. If a code is needed the login stops and holds the page; enter it above and the flow resumes where it left off.</p>
+    <pre id="loginOut" style="display:none"></pre>
+    <img id="rcFrame" style="display:none;width:100%;max-width:1280px;border:1px solid var(--line);border-radius:8px;margin-top:10px">
   </div>
 
   <div class="card">
@@ -324,7 +323,15 @@ async function inspectFile() {
 }
 
 // ---- ChatGPT sessions ------------------------------------------------------
-let rcId = null, rcTimer = null;
+// Point the login form at a session and scroll it into view, so "Log in" on a row
+// lands you on the form already filled in rather than somewhere below the fold.
+function pickForLogin(id) {
+  $('loginId').value = id;
+  $('rcLabel').textContent = '- ' + id;
+  $('loginId').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  $('loginEmail').focus();
+}
+
 const CGPT_LABEL = {
   ready: 'Signed in', logged_out: 'Needs sign-in', challenged: 'Bot check',
   busy: 'Profile in use', never_used: 'Never opened', unknown: 'Could not tell',
@@ -348,7 +355,7 @@ async function loadSessions() {
       (s.open ? '<span class="pill ok">browser open</span>' : '') +
       '<span style="flex:1"></span>' +
       '<button onclick="cgpt(\'' + s.id + '\',\'probe\')">Probe</button>' +
-      '<button onclick="attach(\'' + s.id + '\')">Open + control</button>' +
+      '<button onclick="pickForLogin(\'' + s.id + '\')">Log in</button>' +
       '<button onclick="cgpt(\'' + s.id + '\',\'close\')">Close</button>' +
       '<button onclick="delSession(\'' + s.id + '\')">Delete</button></div>' +
       (s.lastProbe ? '<p class="hint">' + esc(s.lastProbe.detail) + ' - ' + ago(s.lastProbe.at) + '</p>' : '') +
@@ -368,7 +375,6 @@ async function createSession() {
 async function delSession(id) {
   if (!confirm('Delete profile "' + id + '"? Its login is gone for good.')) return;
   await api('/api/cgpt/' + id + '/delete', { method: 'POST', body: '{}' });
-  if (rcId === id) detach();
   loadSessions();
 }
 
@@ -380,75 +386,64 @@ async function cgpt(id, action, payload) {
   loadSessions();
 }
 
-// Attaching starts the frame loop. The browser stays open until it is closed or
-// goes idle, so the profile lock is held for exactly as long as someone is looking.
-async function attach(id) {
-  rcId = id;
+// Scripted login. No coordinates, no frame loop: fill the named fields, submit,
+// and let the server walk the flow. The only picture taken is a diagnostic one,
+// on demand, when the answer is "it stopped on a page I do not recognise".
+async function doLogin() {
+  const id = $('loginId').value.trim() || $('newSession').value.trim();
+  if (!id) return alert('Which session?');
+  $('loginId').value = id;
   $('rcLabel').textContent = '- ' + id;
-  $('rcFrame').style.display = 'block';
-  await api('/api/cgpt/' + id + '/open', { method: 'POST', body: JSON.stringify({ url: $('rcUrl').value.trim() || undefined }) });
-  if (rcTimer) clearInterval(rcTimer);
-  rcTimer = setInterval(frame, 1100);
-  frame();
+  $('loginOut').style.display = 'block';
+  $('loginOut').textContent = 'logging in - this drives a real browser and takes 20-60s...';
+  const { body } = await api('/api/cgpt/' + id + '/login', {
+    method: 'POST',
+    body: JSON.stringify({
+      email: $('loginEmail').value.trim(),
+      password: $('loginPass').value,
+      otp: $('loginOtp').value.trim() || undefined,
+    }),
+  });
+  // Clear the password field on the way out. It is already sent; leaving it in a
+  // form field only widens where it can be read from.
+  $('loginPass').value = '';
+  showLogin(body);
+}
+
+async function doOtp() {
+  const id = $('loginId').value.trim();
+  if (!id) return alert('Which session?');
+  const code = $('loginOtp').value.trim();
+  if (!code) return alert('No code entered.');
+  $('loginOut').style.display = 'block';
+  $('loginOut').textContent = 'submitting code...';
+  const { body } = await api('/api/cgpt/' + id + '/otp', { method: 'POST', body: JSON.stringify({ code }) });
+  $('loginOtp').value = '';
+  showLogin(body);
+}
+
+function showLogin(body) {
+  $('loginOut').textContent = JSON.stringify(body, null, 2);
+  // A stall is the case where a picture actually earns its place, so take one
+  // automatically rather than making someone think to ask.
+  if (body.state === 'needs_otp') $('loginOtp').focus();
+  else if (body.state === 'failed') shot();
   loadSessions();
 }
 
-function detach() {
-  if (rcTimer) clearInterval(rcTimer);
-  rcTimer = null; rcId = null;
-  $('rcFrame').style.display = 'none';
-  $('rcLabel').textContent = '';
-}
-
-// Cache-bust every frame and carry the token in the query string: an <img> cannot
-// send an Authorization header.
-function frame() {
-  if (!rcId) return;
-  $('rcFrame').src = '/api/cgpt/' + rcId + '/frame?token=' + encodeURIComponent(tok()) + '&t=' + Date.now();
-}
-
-// The image is scaled to fit the card, so a click at its natural size has to be
-// mapped back through that scale or every click lands short and to the left.
-async function rcClick(ev) {
-  if (!rcId) return;
+function shot() {
+  const id = $('loginId').value.trim();
+  if (!id) return alert('Which session?');
   const img = $('rcFrame');
-  const r = img.getBoundingClientRect();
-  const x = Math.round((ev.clientX - r.left) * (img.naturalWidth / r.width));
-  const y = Math.round((ev.clientY - r.top) * (img.naturalHeight / r.height));
-  await api('/api/cgpt/' + rcId + '/click', { method: 'POST', body: JSON.stringify({ x, y }) });
-  setTimeout(frame, 400);
+  img.style.display = 'block';
+  img.src = '/api/cgpt/' + id + '/frame?token=' + encodeURIComponent(tok()) + '&t=' + Date.now();
 }
 
-async function rcTypeText(enter) {
-  if (!rcId) return;
-  const text = $('rcType').value;
-  $('rcType').value = '';
-  await api('/api/cgpt/' + rcId + '/type', { method: 'POST', body: JSON.stringify({ text, enter: !!enter }) });
-  setTimeout(frame, 600);
-}
-
-async function rcKey(key) {
-  if (!rcId) return;
-  await api('/api/cgpt/' + rcId + '/key', { method: 'POST', body: JSON.stringify({ key }) });
-  setTimeout(frame, 400);
-}
-
-async function rcScroll(dy) {
-  if (!rcId) return;
-  await api('/api/cgpt/' + rcId + '/scroll', { method: 'POST', body: JSON.stringify({ dy }) });
-  setTimeout(frame, 400);
-}
-
-async function rcGoto() {
-  if (!rcId) return alert('Open a session first.');
-  await api('/api/cgpt/' + rcId + '/goto', { method: 'POST', body: JSON.stringify({ url: $('rcUrl').value.trim() }) });
-  setTimeout(frame, 800);
-}
-
-async function rcClose() {
-  if (!rcId) return;
-  await api('/api/cgpt/' + rcId + '/close', { method: 'POST', body: '{}' });
-  detach();
+async function closeBrowser() {
+  const id = $('loginId').value.trim();
+  if (!id) return;
+  await api('/api/cgpt/' + id + '/close', { method: 'POST', body: '{}' });
+  $('rcFrame').style.display = 'none';
   loadSessions();
 }
 

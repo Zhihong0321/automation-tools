@@ -163,11 +163,24 @@ deploy.
 
 ## Two ways to get a login in
 
-**Remote-control browser.** Press *Open + control* on a session. Chrome runs here,
-the page streams to the UI as a JPEG about once a second, and clicks and
-keystrokes go back the other way. Screenshot polling rather than CDP screencast or
-VNC: a login is a handful of clicks on a static form, so the expensive options buy
-smooth video for a task that does not need it.
+**Scripted login.** Fill in session id, email and password and press *Log in*. The
+server drives the flow: click through to the form, fill the named field, submit,
+look at what came back, repeat. If a one-time code is wanted it stops and holds
+the page — enter the code and the flow resumes from exactly there rather than
+starting over.
+
+Credentials are never stored. They arrive in a request body, are typed into the
+page, and go out of scope with the call; the profile keeps the resulting session
+cookies, which is the point, and nothing keeps the password.
+
+There was a remote-control browser here that you drove by clicking on a
+screenshot, and it is gone. A login is a FIXED sequence of known fields — nothing
+to explore, so nothing to point at. Aiming a mouse at a JPEG spent three round
+trips per step (frame out, coordinates back, frame again to see whether it landed)
+to do what filling a named input does in one, and it missed silently whenever the
+frame was stale. `GET /frame` survives as a read-only diagnostic, because when a
+scripted login stops on an unrecognised page the only thing that answers "what is
+it actually showing" is a picture of it.
 
 **Import from a machine that already has one.** Paste a Playwright `storageState`
 JSON. Cookies go in through the API; localStorage cannot, because it is
@@ -217,11 +230,9 @@ one to report as a logout.
 | `POST /api/cgpt/:id/open` | launch and hold, optionally at a `url` |
 | `POST /api/cgpt/:id/close` | release the profile lock |
 | `POST /api/cgpt/:id/delete` | remove the profile and its login |
-| `GET /api/cgpt/:id/frame` | current page as JPEG (token via `?token=`) |
-| `POST /api/cgpt/:id/click` | `{x, y}` in page coordinates |
-| `POST /api/cgpt/:id/type` | `{text, enter, delay}` |
-| `POST /api/cgpt/:id/key` | `{key}` |
-| `POST /api/cgpt/:id/scroll` | `{dy}` |
+| `POST /api/cgpt/:id/login` | `{email, password, otp?}` — drive the whole login |
+| `POST /api/cgpt/:id/otp` | `{code}` — resume a login that stopped for a code |
+| `GET /api/cgpt/:id/frame` | current page as JPEG, read-only diagnostic (token via `?token=`) |
 | `POST /api/cgpt/:id/goto` | `{url}` |
 | `POST /api/cgpt/:id/import` | `{state}` — a Playwright storageState |
 | `GET /api/cgpt/:id/export` | that session's storageState, **unredacted** |
