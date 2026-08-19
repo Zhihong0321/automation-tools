@@ -13,6 +13,8 @@ import { exec } from 'node:child_process';
 import * as agy from './agy.ts';
 import * as pty from './pty.ts';
 import * as snap from './snapshot.ts';
+import * as browser from './browser.ts';
+import * as cgpt from './cgptroutes.ts';
 import { page } from './ui.ts';
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -89,6 +91,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 
   if (!p.startsWith('/api/')) return json(res, 404, { error: 'not found' });
   if (!authorized(req, url)) return json(res, 401, { error: 'bad or missing token' });
+
+  // ---- ChatGPT sessions --------------------------------------------------
+  // Delegated wholesale. These routes own a browser process each and have their
+  // own locking discipline; interleaving them with the agy routes here would put
+  // that discipline somewhere it is easy to miss.
+  if (p.startsWith('/api/cgpt') || p === '/api/net') {
+    if (await cgpt.handle(req, res, url, { json, readJson })) return;
+  }
 
   // ---- state -------------------------------------------------------------
   if (method === 'GET' && p === '/api/status') {
@@ -260,5 +270,10 @@ server.listen(PORT, '0.0.0.0', () => {
 });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(signal, () => server.close(() => process.exit(0)));
+  process.on(signal, () => {
+    // Close the browsers before the process goes. A Chrome killed with its profile
+    // lock still held leaves a SingletonLock behind, and the next deploy opens to
+    // "profile is already in use" on a profile nothing is using.
+    void browser.releaseAll().finally(() => server.close(() => process.exit(0)));
+  });
 }

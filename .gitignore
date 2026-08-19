@@ -1,3 +1,4 @@
 node_modules/
 .smokehome/
 *.log
+package-lock.json

@@ -127,11 +127,125 @@ web-reachable container than it is on a desktop.
 
 ## Not built yet
 
-Chromium/Playwright for agy's own browser tools — it downloads a driver at
-runtime and already 404s on a normal desktop, so it needs the whole
-`libnss3`/`libatk`/`libgbm` stack baked into the image. Out of scope until the
-auth question is settled.
+agy's *own* browser tools. Chrome is now in the image for the ChatGPT sessions
+below, but agy downloads its own Playwright driver at runtime and already 404s
+doing so on a normal desktop; pointing it at the system Chrome is untried.
 
 `agy update` self-modifies the binary. On a volume that works and silently drifts
 from what this README claims is installed; pin it once there is anything worth
 pinning.
+
+---
+
+# ChatGPT sessions
+
+Many accounts, each a persistent Chrome profile on the volume at
+`/data/profiles/<id>`, each with its own health state.
+
+## Why headed Chrome under Xvfb
+
+Headless is a materially different fingerprint — different user-agent, no window
+chrome, a documented set of behavioural tells — and ChatGPT sits behind bot
+detection that reads exactly those. Xvfb costs a few MB and removes the category.
+Real Google Chrome rather than Chromium, because patchright's stealth patches
+assume the real build and because the desktop pipeline enrolled its profiles with
+`channel: "chrome"` — a profile whose browser build changes between machines is a
+fingerprint change, which is what a bot check looks for.
+
+## One Chrome per profile
+
+Chrome enforces it with a lock file, and a second launch against a live profile
+does not queue — it fails, or half-succeeds and corrupts the profile. Every
+operation therefore goes through a per-id mutex, and a held context is reused
+rather than relaunched. Idle profiles close after `BROWSER_IDLE_MS` (default 5
+min) so a forgotten tab does not pin ~400MB and the profile lock until the next
+deploy.
+
+## Two ways to get a login in
+
+**Remote-control browser.** Press *Open + control* on a session. Chrome runs here,
+the page streams to the UI as a JPEG about once a second, and clicks and
+keystrokes go back the other way. Screenshot polling rather than CDP screencast or
+VNC: a login is a handful of clicks on a static form, so the expensive options buy
+smooth video for a task that does not need it.
+
+**Import from a machine that already has one.** Paste a Playwright `storageState`
+JSON. Cookies go in through the API; localStorage cannot, because it is
+origin-scoped and only reachable from a page already on that origin, so each
+origin is visited once and its entries written in place.
+
+What an import cannot carry is the fingerprint the session was created under. A
+cookie minted at a residential IP and replayed from a datacenter one is exactly
+the pattern account-security systems look for — **the import succeeding is not the
+same as the session surviving.** Probe afterwards.
+
+## Reading the egress check
+
+`GET /api/net` returns 403 with `cf-mitigated: challenge` from **any** address,
+including a residential connection whose real Chrome reaches ChatGPT fine — a bare
+fetch has no browser TLS fingerprint, sends no browser headers and runs no
+JavaScript, so Cloudflare correctly says it is not a browser.
+
+Do not read that as a block. What the endpoint is for is the egress IP, and the
+difference between `challenge` (prove you are a browser — a real Chrome can) and
+`block` (the address is refused outright, and a residential proxy via `PROXY_URL`
+is the only answer). The verdict comes from a session probe, not from this.
+
+## Session states
+
+| | |
+|---|---|
+| `ready` | composer is live; the session works |
+| `logged_out` | the sign-in wall; a human must sign in |
+| `challenged` | a bot check is in the way — **not** a logout |
+| `busy` | another Chrome holds the profile; the probe could not look |
+| `never_used` | no profile directory yet |
+| `unknown` | read `detail` before acting |
+
+`challenged` earns its own state rather than folding into `unknown` because from a
+datacenter IP it is the single most likely outcome and the single most misleading
+one to report as a logout.
+
+## ChatGPT routes
+
+| | |
+|---|---|
+| `GET /api/net` | egress IP and what Cloudflare says |
+| `GET /api/cgpt` | sessions, which are open, idle timeout |
+| `POST /api/cgpt` | `{id, label}` — create a profile |
+| `POST /api/cgpt/:id/probe` | `{keepOpen}` — signed in? |
+| `POST /api/cgpt/:id/open` | launch and hold, optionally at a `url` |
+| `POST /api/cgpt/:id/close` | release the profile lock |
+| `POST /api/cgpt/:id/delete` | remove the profile and its login |
+| `GET /api/cgpt/:id/frame` | current page as JPEG (token via `?token=`) |
+| `POST /api/cgpt/:id/click` | `{x, y}` in page coordinates |
+| `POST /api/cgpt/:id/type` | `{text, enter, delay}` |
+| `POST /api/cgpt/:id/key` | `{key}` |
+| `POST /api/cgpt/:id/scroll` | `{dy}` |
+| `POST /api/cgpt/:id/goto` | `{url}` |
+| `POST /api/cgpt/:id/import` | `{state}` — a Playwright storageState |
+| `GET /api/cgpt/:id/export` | that session's storageState, **unredacted** |
+| `POST /api/cgpt/:id/ask` | `{prompt}` — drive the real UI and read the answer |
+
+## Capturing storageState on your PC
+
+```js
+// against the signed-in profile, with the pipeline not running
+const ctx = await chromium.launchPersistentContext(profileDir, { channel: 'chrome', headless: false });
+await ctx.pages()[0].goto('https://chatgpt.com/');
+console.log(JSON.stringify(await ctx.storageState()));
+await ctx.close();
+```
+
+## Memory
+
+Chrome is ~400MB resident per open profile, on top of agy's language server and
+CLI backend. Two profiles open at once on a 512MB plan will OOM. Budget 2GB, more
+if several sessions run concurrently.
+
+## `--no-sandbox`
+
+Required: the container runs as root and Chrome refuses to sandbox as root. That
+is a genuine weakening — a compromised page gets the container. Accepted because
+the alternative, a non-root user owning a volume Railway mounts as root, trades
+one problem for a worse one.

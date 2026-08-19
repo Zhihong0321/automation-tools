@@ -114,6 +114,66 @@ export function page(): string {
     </div>
     <pre id="research" style="display:none"></pre>
   </div>
+
+  <div class="card">
+    <h2>Egress</h2>
+    <p class="hint" style="margin:0 0 10px">What the outside world sees when this container connects. <b>A 403 with <code>cf-mitigated: challenge</code> is normal here</b> — a bare fetch is not a browser and Cloudflare says so from any address, including a home connection whose real Chrome works fine. What matters is the egress IP, and <code>challenge</code> (a browser can pass) versus <code>block</code> (only a residential proxy fixes it). The real verdict is a session probe.</p>
+    <div class="row"><button onclick="netCheck()">Check egress + chatgpt.com</button></div>
+    <pre id="net" style="display:none"></pre>
+  </div>
+
+  <div class="card">
+    <h2>ChatGPT sessions</h2>
+    <div class="row">
+      <input id="newSession" placeholder="session id, e.g. openai-main" style="flex:1;min-width:180px">
+      <button onclick="createSession()">Create</button>
+      <button onclick="loadSessions()">Refresh</button>
+    </div>
+    <div id="sessionList" style="margin-top:14px"></div>
+  </div>
+
+  <div class="card">
+    <h2>Remote browser <span id="rcLabel" style="color:var(--muted);text-transform:none;letter-spacing:0"></span></h2>
+    <div class="row">
+      <input id="rcUrl" placeholder="https://chatgpt.com/?temporary-chat=true" style="flex:1;min-width:220px">
+      <button onclick="rcGoto()">Go</button>
+      <button onclick="rcScroll(400)">Scroll down</button>
+      <button onclick="rcScroll(-400)">Up</button>
+      <button onclick="rcClose()">Close browser</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <input id="rcType" placeholder="Type into the page, Enter to submit" style="flex:1;min-width:220px"
+             onkeydown="if(event.key==='Enter'){rcTypeText(true);event.preventDefault();}">
+      <button onclick="rcTypeText(false)">Type</button>
+      <button onclick="rcKey('Tab')">Tab</button>
+      <button onclick="rcKey('Escape')">Esc</button>
+    </div>
+    <p class="hint">Click directly on the image to click the page. Frames refresh about once a second while a session is attached.</p>
+    <img id="rcFrame" style="display:none;width:100%;max-width:1280px;border:1px solid var(--line);border-radius:8px;margin-top:10px;cursor:crosshair"
+         onclick="rcClick(event)">
+  </div>
+
+  <div class="card">
+    <h2>Import a session from your PC</h2>
+    <p class="hint" style="margin:0 0 10px">Paste a Playwright <code>storageState</code> JSON. Cookies and localStorage are replayed into the profile. Importing succeeding is not the same as the session surviving — probe afterwards.</p>
+    <textarea id="stateJson" rows="4" placeholder='{"cookies":[...],"origins":[...]}'></textarea>
+    <div class="row" style="margin-top:8px">
+      <input id="importTarget" placeholder="target session id" style="flex:1;min-width:160px">
+      <button class="primary" onclick="importState()">Import</button>
+      <button onclick="exportState()">Export that session</button>
+    </div>
+    <pre id="importOut" style="display:none"></pre>
+  </div>
+
+  <div class="card">
+    <h2>Ask through a session</h2>
+    <div class="row">
+      <input id="askId" placeholder="session id" style="min-width:150px">
+      <input id="askPrompt" value="Reply with exactly: OK" style="flex:1;min-width:220px">
+      <button class="primary" onclick="ask()">Ask</button>
+    </div>
+    <pre id="askOut" style="display:none"></pre>
+  </div>
 </div>
 
 <script>
@@ -137,6 +197,17 @@ async function api(path, opts = {}) {
     $('authState').textContent = 'token rejected';
   }
   return { status: res.status, body };
+}
+
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function ago(iso) {
+  if (!iso) return 'never';
+  const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
+  if (s < 60) return Math.round(s) + 's ago';
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  return Math.round(s / 3600) + 'h ago';
 }
 
 // Strip the escape sequences a pty emits. agy in print mode is close to linear
@@ -241,8 +312,168 @@ async function inspectFile() {
   $('research').textContent = JSON.stringify(body, null, 2);
 }
 
+// ---- ChatGPT sessions ------------------------------------------------------
+let rcId = null, rcTimer = null;
+const CGPT_LABEL = {
+  ready: 'Signed in', logged_out: 'Needs sign-in', challenged: 'Bot check',
+  busy: 'Profile in use', never_used: 'Never opened', unknown: 'Could not tell',
+};
+
+async function netCheck() {
+  $('net').style.display = 'block';
+  $('net').textContent = 'checking...';
+  const { body } = await api('/api/net');
+  $('net').textContent = JSON.stringify(body, null, 2);
+}
+
+async function loadSessions() {
+  const { body } = await api('/api/cgpt');
+  const rows = (body.sessions || []).map((s) => {
+    const st = s.lastProbe ? s.lastProbe.status : 'never_used';
+    return '<div style="border-top:1px solid var(--line);padding:10px 0">' +
+      '<div class="row"><b style="font-family:ui-monospace,Consolas,monospace">' + s.id + '</b>' +
+      '<span class="pill ' + (st === 'ready' ? 'ready' : st === 'logged_out' ? 'logged_out' : 'unknown') + '">' +
+        (CGPT_LABEL[st] || st) + '</span>' +
+      (s.open ? '<span class="pill ok">browser open</span>' : '') +
+      '<span style="flex:1"></span>' +
+      '<button onclick="cgpt(\'' + s.id + '\',\'probe\')">Probe</button>' +
+      '<button onclick="attach(\'' + s.id + '\')">Open + control</button>' +
+      '<button onclick="cgpt(\'' + s.id + '\',\'close\')">Close</button>' +
+      '<button onclick="delSession(\'' + s.id + '\')">Delete</button></div>' +
+      (s.lastProbe ? '<p class="hint">' + esc(s.lastProbe.detail) + ' - ' + ago(s.lastProbe.at) + '</p>' : '') +
+    '</div>';
+  }).join('');
+  $('sessionList').innerHTML = rows || '<p class="hint">No sessions yet. Create one above.</p>';
+}
+
+async function createSession() {
+  const id = $('newSession').value.trim();
+  if (!id) return;
+  await api('/api/cgpt', { method: 'POST', body: JSON.stringify({ id }) });
+  $('newSession').value = '';
+  loadSessions();
+}
+
+async function delSession(id) {
+  if (!confirm('Delete profile "' + id + '"? Its login is gone for good.')) return;
+  await api('/api/cgpt/' + id + '/delete', { method: 'POST', body: '{}' });
+  if (rcId === id) detach();
+  loadSessions();
+}
+
+async function cgpt(id, action, payload) {
+  const el = $('sessionList');
+  el.style.opacity = '.5';
+  await api('/api/cgpt/' + id + '/' + action, { method: 'POST', body: JSON.stringify(payload || {}) });
+  el.style.opacity = '1';
+  loadSessions();
+}
+
+// Attaching starts the frame loop. The browser stays open until it is closed or
+// goes idle, so the profile lock is held for exactly as long as someone is looking.
+async function attach(id) {
+  rcId = id;
+  $('rcLabel').textContent = '- ' + id;
+  $('rcFrame').style.display = 'block';
+  await api('/api/cgpt/' + id + '/open', { method: 'POST', body: JSON.stringify({ url: $('rcUrl').value.trim() || undefined }) });
+  if (rcTimer) clearInterval(rcTimer);
+  rcTimer = setInterval(frame, 1100);
+  frame();
+  loadSessions();
+}
+
+function detach() {
+  if (rcTimer) clearInterval(rcTimer);
+  rcTimer = null; rcId = null;
+  $('rcFrame').style.display = 'none';
+  $('rcLabel').textContent = '';
+}
+
+// Cache-bust every frame and carry the token in the query string: an <img> cannot
+// send an Authorization header.
+function frame() {
+  if (!rcId) return;
+  $('rcFrame').src = '/api/cgpt/' + rcId + '/frame?token=' + encodeURIComponent(tok()) + '&t=' + Date.now();
+}
+
+// The image is scaled to fit the card, so a click at its natural size has to be
+// mapped back through that scale or every click lands short and to the left.
+async function rcClick(ev) {
+  if (!rcId) return;
+  const img = $('rcFrame');
+  const r = img.getBoundingClientRect();
+  const x = Math.round((ev.clientX - r.left) * (img.naturalWidth / r.width));
+  const y = Math.round((ev.clientY - r.top) * (img.naturalHeight / r.height));
+  await api('/api/cgpt/' + rcId + '/click', { method: 'POST', body: JSON.stringify({ x, y }) });
+  setTimeout(frame, 400);
+}
+
+async function rcTypeText(enter) {
+  if (!rcId) return;
+  const text = $('rcType').value;
+  $('rcType').value = '';
+  await api('/api/cgpt/' + rcId + '/type', { method: 'POST', body: JSON.stringify({ text, enter: !!enter }) });
+  setTimeout(frame, 600);
+}
+
+async function rcKey(key) {
+  if (!rcId) return;
+  await api('/api/cgpt/' + rcId + '/key', { method: 'POST', body: JSON.stringify({ key }) });
+  setTimeout(frame, 400);
+}
+
+async function rcScroll(dy) {
+  if (!rcId) return;
+  await api('/api/cgpt/' + rcId + '/scroll', { method: 'POST', body: JSON.stringify({ dy }) });
+  setTimeout(frame, 400);
+}
+
+async function rcGoto() {
+  if (!rcId) return alert('Open a session first.');
+  await api('/api/cgpt/' + rcId + '/goto', { method: 'POST', body: JSON.stringify({ url: $('rcUrl').value.trim() }) });
+  setTimeout(frame, 800);
+}
+
+async function rcClose() {
+  if (!rcId) return;
+  await api('/api/cgpt/' + rcId + '/close', { method: 'POST', body: '{}' });
+  detach();
+  loadSessions();
+}
+
+async function importState() {
+  const id = $('importTarget').value.trim();
+  if (!id) return alert('Which session should it go into?');
+  let state;
+  try { state = JSON.parse($('stateJson').value); }
+  catch (e) { return alert('That is not valid JSON.'); }
+  $('importOut').style.display = 'block';
+  $('importOut').textContent = 'importing...';
+  const { body } = await api('/api/cgpt/' + id + '/import', { method: 'POST', body: JSON.stringify({ state }) });
+  $('importOut').textContent = JSON.stringify(body, null, 2);
+  loadSessions();
+}
+
+async function exportState() {
+  const id = $('importTarget').value.trim();
+  if (!id) return alert('Which session?');
+  const { body } = await api('/api/cgpt/' + id + '/export');
+  $('importOut').style.display = 'block';
+  $('importOut').textContent = JSON.stringify(body, null, 2);
+}
+
+async function ask() {
+  const id = $('askId').value.trim();
+  if (!id) return alert('Which session?');
+  $('askOut').style.display = 'block';
+  $('askOut').textContent = 'asking - this drives the real UI and can take a minute...';
+  const { body } = await api('/api/cgpt/' + id + '/ask', { method: 'POST', body: JSON.stringify({ prompt: $('askPrompt').value }) });
+  $('askOut').textContent = JSON.stringify(body, null, 2);
+}
+
 $('token').value = tok();
 refresh();
+loadSessions();
 setInterval(() => { if (!poller) refresh(); }, 15000);
 </script>
 </body>

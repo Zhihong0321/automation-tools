@@ -1,11 +1,14 @@
 {
   "name": "agy-lab",
-  "version": "0.1.0",
-  "description": "Install, authenticate and drive the Antigravity CLI (agy) inside a Railway container.",
+  "version": "0.2.0",
+  "description": "Install, authenticate and drive the Antigravity CLI and signed-in ChatGPT browser sessions inside a container.",
   "type": "module",
   "private": true,
   "scripts": {
     "start": "node src/server.ts"
   },
-  "engines": { "node": ">=24" }
+  "engines": { "node": ">=24" },
+  "dependencies": {
+    "patchright": "^1.61.1"
+  }
 }
