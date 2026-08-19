@@ -38,14 +38,45 @@ export interface LoginResult {
  * and the markup differs between them. A single selector that works today is a
  * login that breaks on a Tuesday for reasons nobody can reproduce.
  */
-const SEL = {
-  login: ['[data-testid="login-button"]', 'a[href*="/auth/login"]', 'button:has-text("Log in")', 'a:has-text("Log in")'],
-  email: ['input[name="email"]', 'input[type="email"]', 'input[name="username"]', '#email-input', '#username'],
+/**
+ * Selectors, written against the DOM as it actually is — measured in the
+ * container on 2026-08-19, not remembered.
+ *
+ * What the measurement overturned:
+ *   [data-testid="login-button"]   0 matches. Does not exist. This came from
+ *                                  gmap-recon's session-monitor and has been
+ *                                  dead there too.
+ *   a[href*="/auth/login"]         0 matches.
+ *   button:has-text("Log in")      8 matches — wrappers, not the button.
+ *   getByRole button /^log ?in$/i  2 matches: the real ones, top bar and sidebar.
+ *
+ * The email field is name="login_hint", NOT name="email". Anything keyed on
+ * "email" as a name matches nothing.
+ */
+export const SEL = {
+  // Ordered so a visible, uniquely-named control wins before anything broad.
+  email: [
+    'input#mobile-auth-email',
+    'input[name="login_hint"]',
+    'input[type="email"]',
+    'input[autocomplete="email"]',
+    'input[name="email"]',
+    'input[name="username"]',
+  ],
   password: ['input[type="password"]', 'input[name="password"]', '#password'],
   otp: ['input[autocomplete="one-time-code"]', 'input[name="code"]', 'input[name="otp"]', 'input[inputmode="numeric"]'],
-  submit: ['button[type="submit"]', 'button:has-text("Continue")', 'button:has-text("Log in")', 'button:has-text("Next")'],
   composer: ['#prompt-textarea'],
 } as const;
+
+/**
+ * Submit buttons, by EXACT accessible name.
+ *
+ * Exactness is a safety requirement here, not tidiness. The sign-in modal also
+ * offers "Continue with Google", "Continue with Apple" and "Continue with phone";
+ * a loose match on "Continue" clicks an SSO provider and derails the whole flow
+ * into a Google login that will never complete.
+ */
+const SUBMIT_NAMES = [/^continue$/i, /^log ?in$/i, /^next$/i, /^sign ?in$/i];
 
 const CHALLENGE = /just a moment|checking your browser|verify you are human|cf-chl|challenge-platform|attention required/i;
 
@@ -72,7 +103,7 @@ interface Signals {
  * Matching text exactly, over buttons and anchors only, is what the session probe
  * already does successfully.
  */
-const SIGNALS = () => {
+export const SIGNALS = () => {
   const visible = (el: Element | null): boolean => {
     if (!el) return false;
     const r = (el as HTMLElement).getBoundingClientRect();
@@ -115,7 +146,7 @@ async function signals(page: Page, waitMs: number): Promise<Signals> {
   }
 }
 
-async function detect(page: Page, waitMs = 25_000): Promise<Step> {
+export async function detect(page: Page, waitMs = 25_000): Promise<Step> {
   const s = await signals(page, waitMs);
 
   // Order matters and is not arbitrary. OTP before password because some flows
@@ -144,27 +175,52 @@ async function firstVisible(page: Page, selectors: readonly string[], timeoutMs 
   return null;
 }
 
+/** Fill the first VISIBLE match. The first match alone can be a hidden duplicate. */
+export async function fillFirstVisible(page: Page, selectors: readonly string[], value: string): Promise<boolean> {
+  for (const sel of selectors) {
+    const group = page.locator(sel);
+    const n = await group.count().catch(() => 0);
+    for (let i = 0; i < Math.min(n, 5); i++) {
+      try {
+        const c = group.nth(i);
+        await c.waitFor({ state: 'visible', timeout: 2500 });
+        await c.fill(value, { timeout: 10_000 });
+        return true;
+      } catch {
+        /* hidden duplicate - keep looking */
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * Click the sign-in control.
  *
  * By accessible name rather than by `:has-text`, which matches substrings and so
  * can land on a wrapper that contains the button instead of the button.
  */
-async function clickLogin(page: Page): Promise<boolean> {
+export async function clickLogin(page: Page): Promise<boolean> {
   const candidates = [
-    page.locator('[data-testid="login-button"]').first(),
-    page.getByRole('button', { name: /^log ?in$/i }).first(),
-    page.getByRole('link', { name: /^log ?in$/i }).first(),
-    page.locator('a[href*="/auth/login"]').first(),
+    page.getByRole('button', { name: /^log ?in$/i }),
+    page.getByRole('link', { name: /^log ?in$/i }),
+    page.locator('[data-testid="login-button"]'),
+    page.locator('a[href*="/auth/login"]'),
   ];
-  for (const c of candidates) {
-    try {
-      if ((await c.count()) > 0 && (await c.isVisible())) {
-        await c.click({ timeout: 12_000 });
+  for (const group of candidates) {
+    const n = await group.count().catch(() => 0);
+    // Walk every match, not just .first(). The page carries duplicate mobile and
+    // desktop trees — the measurement found two "Log in" buttons and eight
+    // elements containing that text — so the first match can be the hidden copy.
+    for (let i = 0; i < Math.min(n, 5); i++) {
+      const c = group.nth(i);
+      try {
+        await c.waitFor({ state: 'visible', timeout: 3000 });
+        await c.click({ timeout: 10_000 });
         return true;
+      } catch {
+        /* hidden duplicate, or covered - try the next one */
       }
-    } catch {
-      /* try the next shape */
     }
   }
   return false;
@@ -172,15 +228,35 @@ async function clickLogin(page: Page): Promise<boolean> {
 
 /** Click whatever submits this form. Enter is the fallback, and often the only one. */
 async function submit(page: Page): Promise<void> {
-  const sel = await firstVisible(page, SEL.submit, 800);
-  if (sel) await page.locator(sel).first().click({ timeout: 10_000 }).catch(() => {});
-  else await page.keyboard.press('Enter');
+  for (const name of SUBMIT_NAMES) {
+    const group = page.getByRole('button', { name });
+    const n = await group.count().catch(() => 0);
+    for (let i = 0; i < Math.min(n, 5); i++) {
+      try {
+        const c = group.nth(i);
+        await c.waitFor({ state: 'visible', timeout: 2000 });
+        await c.click({ timeout: 10_000 });
+        return;
+      } catch {
+        /* hidden duplicate - keep looking */
+      }
+    }
+  }
+  await page.keyboard.press('Enter');
 }
 
-/** Let the page navigate or re-render before looking again. */
+/**
+ * Let the page navigate or re-render before looking again.
+ *
+ * Measured: clicking Log in opens a MODAL. The URL does not change and no new
+ * document loads, so waiting on a navigation is waiting for something that will
+ * never happen. The load-state wait stays only for the steps that DO navigate,
+ * with a short timeout, and the real settling is the fixed pause plus the polling
+ * detector that follows it.
+ */
 async function settle(page: Page): Promise<void> {
-  await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => {});
-  await page.waitForTimeout(1400);
+  await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(1500);
 }
 
 /**
@@ -251,9 +327,9 @@ export async function run(id: string, creds: Credentials, opts: { maxSteps?: num
 
       if (step === 'email') {
         if (!creds.email) return finish('failed', step, 'The page is asking for an email and none was supplied.');
-        const sel = await firstVisible(page, SEL.email);
-        if (!sel) return finish('failed', step, 'An email field was detected but no known selector matched it.');
-        await page.locator(sel).first().fill(creds.email, { timeout: 15_000 });
+        if (!(await fillFirstVisible(page, SEL.email, creds.email))) {
+          return finish('failed', step, 'An email field was detected but no visible one could be filled.');
+        }
         await submit(page);
         await settle(page);
         continue;
@@ -261,9 +337,9 @@ export async function run(id: string, creds: Credentials, opts: { maxSteps?: num
 
       if (step === 'password') {
         if (!creds.password) return finish('failed', step, 'The page is asking for a password and none was supplied.');
-        const sel = await firstVisible(page, SEL.password);
-        if (!sel) return finish('failed', step, 'A password field was detected but no known selector matched it.');
-        await page.locator(sel).first().fill(creds.password, { timeout: 15_000 });
+        if (!(await fillFirstVisible(page, SEL.password, creds.password))) {
+          return finish('failed', step, 'A password field was detected but no visible one could be filled.');
+        }
         await submit(page);
         await settle(page);
         continue;
