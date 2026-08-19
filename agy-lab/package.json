@@ -1,0 +1,11 @@
+{
+  "name": "agy-lab",
+  "version": "0.1.0",
+  "description": "Install, authenticate and drive the Antigravity CLI (agy) inside a Railway container.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node src/server.ts"
+  },
+  "engines": { "node": ">=24" }
+}

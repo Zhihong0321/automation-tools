@@ -1,0 +1,264 @@
+// agy-lab: the HTTP surface.
+//
+// This binds 0.0.0.0 because Railway requires it, and it exposes a shell endpoint
+// because finding out where a credential lands is not a thing you can do through
+// a fixed API. Those two facts together are why LAB_TOKEN is mandatory and the
+// process refuses to start without it. There is no "dev mode" that skips it: an
+// open /api/exec on a public hostname is a root shell for whoever scans the port
+// first, and this container will be holding a live Google session.
+import http from 'node:http';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import { exec } from 'node:child_process';
+import * as agy from './agy.ts';
+import * as pty from './pty.ts';
+import * as snap from './snapshot.ts';
+import { page } from './ui.ts';
+
+const PORT = Number(process.env.PORT ?? 8080);
+const TOKEN = process.env.LAB_TOKEN ?? '';
+
+if (TOKEN.length < 16) {
+  console.error('LAB_TOKEN is missing or shorter than 16 characters. Refusing to start.');
+  console.error('Set it in the Railway service variables, then redeploy.');
+  process.exit(1);
+}
+
+/** Snapshots by label, so a login can be diffed against the state before it. */
+const snapshots = new Map<string, snap.Snapshot>();
+
+function json(res: http.ServerResponse, status: number, body: unknown): void {
+  const payload = JSON.stringify(body, null, 2);
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(payload),
+    'cache-control': 'no-store',
+  });
+  res.end(payload);
+}
+
+/** Hash both sides first, so timingSafeEqual never sees mismatched lengths. */
+function authorized(req: http.IncomingMessage, url: URL): boolean {
+  const header = req.headers.authorization ?? '';
+  const supplied = header.startsWith('Bearer ') ? header.slice(7) : (url.searchParams.get('token') ?? '');
+  const a = crypto.createHash('sha256').update(supplied).digest();
+  const b = crypto.createHash('sha256').update(TOKEN).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+async function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const c of req) {
+    size += (c as Buffer).length;
+    if (size > 1 << 20) throw new Error('body too large');
+    chunks.push(c as Buffer);
+  }
+  if (!chunks.length) return {};
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+  } catch {
+    throw new Error('body is not valid JSON');
+  }
+}
+
+const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback);
+const num = (v: unknown, fallback: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+
+const server = http.createServer((req, res) => {
+  void handle(req, res).catch((err: unknown) => {
+    json(res, 500, { error: (err as Error).message ?? String(err) });
+  });
+});
+
+async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const url = new URL(req.url ?? '/', 'http://' + (req.headers.host ?? 'localhost'));
+  const p = url.pathname;
+  const method = req.method ?? 'GET';
+
+  // Railway's healthcheck has no token and must never be given one.
+  if (p === '/healthz') return json(res, 200, { ok: true, at: new Date().toISOString() });
+
+  // The shell is public; every byte of data behind it is not. The page prompts for
+  // the token and sends it with each call.
+  if (method === 'GET' && (p === '/' || p === '/index.html')) {
+    const html = page();
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    return void res.end(html);
+  }
+
+  if (!p.startsWith('/api/')) return json(res, 404, { error: 'not found' });
+  if (!authorized(req, url)) return json(res, 401, { error: 'bad or missing token' });
+
+  // ---- state -------------------------------------------------------------
+  if (method === 'GET' && p === '/api/status') {
+    return json(res, 200, { ...(await agy.status()), sessions: pty.list(), snapshots: [...snapshots.keys()] });
+  }
+
+  if (method === 'POST' && p === '/api/probe') {
+    const body = await readJson(req);
+    return json(res, 200, await agy.probe(num(body.timeoutMs, 120_000)));
+  }
+
+  // ---- install -----------------------------------------------------------
+  // Run through the pty like everything else: the installer prints progress and a
+  // PATH warning worth seeing, and one streaming mechanism is easier to trust
+  // than two.
+  if (method === 'POST' && p === '/api/install') {
+    const cmd = agy.INSTALL_CMD + ' 2>&1; echo "[exit $?]"; ls -la ' + pty.sh(agy.BIN_DIR) + ' 2>&1';
+    return json(res, 202, pty.start(cmd, { fakeSsh: false }).view());
+  }
+
+  // ---- terminal sessions -------------------------------------------------
+  if (method === 'POST' && p === '/api/session') {
+    const body = await readJson(req);
+    const command = str(body.command).trim();
+    if (!command) return json(res, 400, { error: 'command is required' });
+    const env = (body.env && typeof body.env === 'object' ? body.env : {}) as Record<string, string>;
+    return json(res, 202, pty.start(command, { fakeSsh: body.fakeSsh !== false, env }).view());
+  }
+
+  // The login. Snapshot first, then start the run that triggers it.
+  //
+  // Print mode rather than the TUI on purpose: agy's changelog documents the
+  // authorization code being read from the controlling terminal specifically in
+  // `-p` runs, and a linear prompt-and-answer is legible in a browser in a way a
+  // full-screen TUI redrawing over itself is not.
+  if (method === 'POST' && p === '/api/login') {
+    const body = await readJson(req);
+    snapshots.set('pre-login', snap.take(agy.HOME));
+    const timeout = num(body.timeoutMs, 900_000);
+    const command =
+      pty.sh(agy.BIN) + ' -p ' + pty.sh(str(body.prompt, 'Reply with exactly: OK')) +
+      ' --print-timeout ' + Math.round(timeout / 1000) + 's --output-format text 2>&1';
+    const s = pty.start(command, { fakeSsh: body.fakeSsh !== false });
+    return json(res, 202, { ...s.view(), snapshot: 'pre-login' });
+  }
+
+  const sessionMatch = /^\/api\/session\/([a-z0-9]+)(\/input|\/kill)?$/.exec(p);
+  if (sessionMatch) {
+    const s = pty.get(sessionMatch[1]!);
+    if (!s) return json(res, 404, { error: 'no such session' });
+
+    if (method === 'GET' && !sessionMatch[2]) {
+      const out = s.since(num(Number(url.searchParams.get('offset')), 0));
+      return json(res, 200, { ...s.view(), ...out });
+    }
+    // Writing the OAuth code into a live terminal is the entire login flow.
+    if (method === 'POST' && sessionMatch[2] === '/input') {
+      const body = await readJson(req);
+      const ok = s.write(str(body.text), body.newline !== false);
+      return json(res, ok ? 200 : 409, { ...s.view(), written: ok });
+    }
+    if (method === 'POST' && sessionMatch[2] === '/kill') {
+      s.kill();
+      return json(res, 200, s.view());
+    }
+  }
+
+  // ---- run a prompt ------------------------------------------------------
+  if (method === 'POST' && p === '/api/run') {
+    const body = await readJson(req);
+    const prompt = str(body.prompt).trim();
+    if (!prompt) return json(res, 400, { error: 'prompt is required' });
+    const timeout = num(body.timeoutMs, 300_000);
+    // Tools are opt-in per run. There is no narrower per-tool allow flag on the
+    // command line, so --dangerously-skip-permissions is all-or-nothing: it must
+    // be a deliberate choice each time, not a default that quietly auto-approves
+    // whatever an agent decides to run inside a container holding a live session.
+    const args =
+      '-p ' + pty.sh(prompt) +
+      ' --print-timeout ' + Math.round(timeout / 1000) + 's' +
+      ' --output-format ' + str(body.format, 'text') +
+      (body.tools === true ? ' --dangerously-skip-permissions' : '');
+    return json(res, 202, pty.start(pty.sh(agy.BIN) + ' ' + args + ' 2>&1', { fakeSsh: true }).view());
+  }
+
+  // ---- research ----------------------------------------------------------
+  if (method === 'POST' && p === '/api/exec') {
+    const body = await readJson(req);
+    const cmd = str(body.cmd).trim();
+    if (!cmd) return json(res, 400, { error: 'cmd is required' });
+    const timeout = num(body.timeoutMs, 60_000);
+    return await new Promise<void>((resolve) => {
+      exec(cmd, { timeout, maxBuffer: 8 << 20, cwd: agy.HOME, env: process.env }, (err, stdout, stderr) => {
+        json(res, 200, {
+          cmd,
+          code: err ? ((err as { code?: number | string }).code ?? 1) : 0,
+          killed: Boolean((err as { killed?: boolean } | null)?.killed),
+          stdout,
+          stderr,
+        });
+        resolve();
+      });
+    });
+  }
+
+  if (method === 'POST' && p === '/api/snapshot') {
+    const body = await readJson(req);
+    const label = str(body.label, 'now');
+    const s = snap.take(str(body.root, agy.HOME));
+    snapshots.set(label, s);
+    return json(res, 200, { label, files: Object.keys(s).length });
+  }
+
+  if (method === 'GET' && p === '/api/snapshot/diff') {
+    const from = snapshots.get(url.searchParams.get('from') ?? 'pre-login');
+    if (!from) return json(res, 404, { error: 'no such snapshot', have: [...snapshots.keys()] });
+    const toLabel = url.searchParams.get('to');
+    const to = toLabel ? snapshots.get(toLabel) : snap.take(agy.HOME);
+    if (!to) return json(res, 404, { error: 'no such snapshot', have: [...snapshots.keys()] });
+    return json(res, 200, snap.diff(from, to));
+  }
+
+  if (method === 'GET' && p === '/api/file') {
+    const file = url.searchParams.get('path');
+    if (!file) return json(res, 400, { error: 'path is required' });
+    try {
+      // reveal=1 prints secrets verbatim. Off by default: the file we are hunting
+      // for is a live token, and a browser tab is not a vault.
+      return json(res, 200, snap.inspect(file, url.searchParams.get('reveal') === '1'));
+    } catch (err) {
+      return json(res, 404, { error: (err as Error).message });
+    }
+  }
+
+  if (method === 'POST' && p === '/api/settings/provider') {
+    const body = await readJson(req);
+    const provider = body.provider === null ? null : str(body.provider, 'gemini');
+    return json(res, 200, agy.setModelProvider(provider));
+  }
+
+  json(res, 404, { error: 'not found', path: p });
+}
+
+// A cwd that does not exist makes every exec fail with a bare ENOENT that reads
+// like a missing binary. Cheap to rule out at boot rather than debug later.
+fs.mkdirSync(agy.HOME, { recursive: true });
+
+// Run outside the container and HOME is a real person's home directory, where
+// this process will happily rewrite the settings.json of an agy they use daily.
+// Loud, because it is not obvious until something has already been overwritten.
+if (agy.HOME !== '/data') {
+  console.warn('WARNING: HOME is ' + agy.HOME + ', not /data.');
+  console.warn('This writes to a real home directory. Set HOME=/data unless you mean it.');
+}
+
+// Without this a bind failure is an unhandled 'error' event and a stack trace.
+// Railway shows the last line of the log when a deploy fails to become healthy,
+// so that line should say what went wrong rather than name a file in node:net.
+server.on('error', (err: NodeJS.ErrnoException) => {
+  console.error('Could not start: ' + err.message);
+  process.exit(1);
+});
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log('agy-lab listening on :' + PORT);
+  console.log('  HOME     ' + agy.HOME);
+  console.log('  agy      ' + (fs.existsSync(agy.BIN) ? agy.BIN : 'not installed yet - POST /api/install'));
+  console.log('  appData  ' + agy.APP_DATA);
+});
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => server.close(() => process.exit(0)));
+}
