@@ -174,6 +174,10 @@ export async function handle(
       // continuing past a broken step only produces a confusing final state.
       const stepLog: unknown[] = [];
       const stepsRaw = url.searchParams.get('steps');
+      // Keyboard events go to the focused page. Under Xvfb nothing else is
+      // competing for focus, but a page that was never brought forward can still
+      // swallow them silently - which looks exactly like a widget ignoring input.
+      if (stepsRaw) await page.bringToFront().catch(() => {});
       if (stepsRaw) {
         let steps: Array<Record<string, unknown>> = [];
         try {
@@ -191,6 +195,15 @@ export async function handle(
               await page.locator(st.fill).first().fill(String(st.value ?? ''), { timeout: 15_000 });
             } else if (typeof st.click === 'string') {
               await page.locator(st.click).first().click({ timeout: 20_000 });
+            } else if (typeof st.type === 'string') {
+              // Real keystrokes. react-aria and similar widgets track their own
+              // state and ignore a value written straight onto the element, so
+              // fill() can leave the DOM looking right while the component still
+              // believes the field is empty.
+              await page.keyboard.type(st.type, { delay: typeof st.delay === 'number' ? st.delay : 80 });
+            } else if (typeof st.selectall === 'boolean' && st.selectall) {
+              await page.keyboard.press('ControlOrMeta+a');
+              await page.keyboard.press('Delete');
             } else if (typeof st.press === 'string') {
               await page.keyboard.press(st.press);
             }
@@ -247,8 +260,16 @@ export async function handle(
           placeholder: el.getAttribute('placeholder'),
           visible: box(el),
           ariaHidden: hiddenFromA11y(el),
+          // The value, because "I set the field" and "the field holds it" are
+          // different claims and only the second one matters. Masked for password
+          // inputs: length is enough to know a fill landed, and the value itself
+          // has no business in a response body.
+          value:
+            el.getAttribute('type') === 'password'
+              ? '(' + String((el as HTMLInputElement).value ?? '').length + ' chars)'
+              : String((el as HTMLInputElement).value ?? (el as HTMLElement).textContent ?? '').slice(0, 60),
         }));
-        return { clickables, inputs, bodyChars: (document.body?.innerText ?? '').length };
+        return { clickables, inputs, bodyChars: (document.body?.innerText ?? '').length, bodyText: (document.body?.innerText ?? '').replace(/s+/g, ' ').slice(0, 600) };
       });
 
       // Every strategy the automation might use, counted right now against this
