@@ -1,0 +1,5 @@
+# The container runs these; CRLF breaks a shebang with "bad interpreter" and is
+# maddening to diagnose because the file looks correct in every editor.
+*.sh text eol=lf
+Dockerfile text eol=lf
+entrypoint.sh text eol=lf
