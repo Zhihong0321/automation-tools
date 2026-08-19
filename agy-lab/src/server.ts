@@ -29,6 +29,28 @@ if (TOKEN.length < 16) {
 /** Snapshots by label, so a login can be diffed against the state before it. */
 const snapshots = new Map<string, snap.Snapshot>();
 
+const STARTED_AT = new Date().toISOString();
+/** Survives only until the next restart, which is exactly the window it describes. */
+let lastCrash: { kind: string; message: string; at: string } | null = null;
+
+/**
+ * Stay up, and say what happened.
+ *
+ * An unhandled rejection is fatal by default in modern Node, and this process
+ * drives browsers whose pages close under it at unpredictable moments — so the
+ * default turns "a screenshot lost its page" into "the container restarted and
+ * every endpoint 502s". Surviving is the right trade here: this is a research
+ * harness whose job is to still be answering when something else broke, and a
+ * recorded crash you can read beats a clean exit you cannot.
+ */
+for (const kind of ['unhandledRejection', 'uncaughtException'] as const) {
+  process.on(kind, (err: unknown) => {
+    const message = (err as Error)?.stack ?? String(err);
+    lastCrash = { kind, message: message.slice(0, 2000), at: new Date().toISOString() };
+    console.error(`[${kind}] ${message}`);
+  });
+}
+
 function json(res: http.ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body, null, 2);
   res.writeHead(status, {
@@ -102,7 +124,15 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 
   // ---- state -------------------------------------------------------------
   if (method === 'GET' && p === '/api/status') {
-    return json(res, 200, { ...(await agy.status()), sessions: pty.list(), snapshots: [...snapshots.keys()] });
+    return json(res, 200, {
+      ...(await agy.status()),
+      memory: browser.memory(),
+      startedAt: STARTED_AT,
+      uptimeSec: Math.round(process.uptime()),
+      lastCrash,
+      sessions: pty.list(),
+      snapshots: [...snapshots.keys()],
+    });
   }
 
   if (method === 'POST' && p === '/api/probe') {

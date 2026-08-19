@@ -244,7 +244,18 @@ async function refresh() {
     ['GEMINI_API_KEY', body.configured.geminiApiKey ? 'set' : 'not set'],
     ['modelProvider', body.configured.modelProvider || '(unset)'],
     ['GOOGLE_APPLICATION_CREDENTIALS', body.configured.adc ? 'set' : 'not set'],
+    ['memory', body.memory
+      ? body.memory.containerUsedMb + ' / ' + body.memory.containerLimitMb + ' MB, node ' +
+        body.memory.rssMb + ' MB, browsers ' + body.memory.openBrowsers + '/' + body.memory.maxOpenBrowsers
+      : '(unknown)'],
+    ['uptime', body.uptimeSec != null ? Math.round(body.uptimeSec / 60) + 'm (since ' + body.startedAt + ')' : '(unknown)'],
   ];
+  // A restart wipes every open browser and every in-memory snapshot, so a recent
+  // one explains far more symptoms than it looks like it should.
+  if (body.lastCrash) {
+    rows.push(['LAST CRASH', body.lastCrash.kind + ' at ' + body.lastCrash.at + ' - ' +
+      String(body.lastCrash.message).split('\n')[0]]);
+  }
   $('status').innerHTML = rows.map(([k, v]) => '<b>' + k + '</b><span>' + v + '</span>').join('');
   if (body.sessions && body.sessions.length && !cur) attach(body.sessions[body.sessions.length - 1].id);
 }

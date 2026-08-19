@@ -27,8 +27,12 @@ FROM node:24-slim
 #               a worse one; ChatGPT sits behind bot detection that reads it.
 # fonts-*     - without CJK and emoji fonts a page renders as boxes, which makes
 #               every screenshot of the login unreadable
+# tini      - a real init. Without one, node is PID 1, and PID 1 must reap orphaned
+#             children. Chrome spawns and kills subprocesses constantly; unreaped
+#             they pile up as zombies (visible as chrome entries with RSS 0) until
+#             the process table is exhausted and nothing can fork at all.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      curl ca-certificates util-linux procps git less gnupg xvfb \
+      curl ca-certificates util-linux procps git less gnupg xvfb tini \
       fonts-liberation fonts-noto-color-emoji fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
@@ -66,5 +70,7 @@ COPY agy-lab/entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 
 EXPOSE 8080
-ENTRYPOINT ["./entrypoint.sh"]
+# tini reaps the zombies Chrome leaves behind and forwards signals, so SIGTERM on
+# a redeploy still reaches the app and its browsers close cleanly.
+ENTRYPOINT ["/usr/bin/tini", "--", "./entrypoint.sh"]
 CMD ["node", "src/server.ts"]

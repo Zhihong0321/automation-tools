@@ -49,8 +49,29 @@ const ARGS = [
   '--no-first-run',
   '--no-default-browser-check',
   '--disable-blink-features=AutomationControlled',
+  // Memory. A headed Chrome on a 4GB container is fine; two of them plus Xvfb
+  // plus agy's language server is not, and the way that failure presents is the
+  // whole container restarting — which looks like every endpoint breaking at
+  // once rather than like a browser using too much.
+  '--disable-gpu',
+  '--disable-extensions',
+  '--disable-background-networking',
+  '--disable-background-timer-throttling',
+  '--renderer-process-limit=2',
   `--window-size=${VIEWPORT.width},${VIEWPORT.height + 100}`,
 ];
+
+/**
+ * How many profiles may be open at once.
+ *
+ * One by default. Chrome is ~400-700MB resident per profile and the container is
+ * capped at 4GB shared with Xvfb, Node and agy — and there is no reason to hold
+ * two, because a human drives one browser at a time and every automated operation
+ * already serialises through the per-profile mutex. Opening a second evicts the
+ * least recently used rather than refusing: refusing would strand someone whose
+ * previous browser is idling and who has no obvious way to know that.
+ */
+const MAX_OPEN = Math.max(1, Number(process.env.MAX_OPEN_BROWSERS ?? 1));
 
 export interface Held {
   id: string;
@@ -137,6 +158,16 @@ export async function acquire(id: string): Promise<Held> {
   }
   if (existing) await release(id); // stale: every page gone, context unusable
 
+  // Evict before launching, never after: the point is to not have two Chromes
+  // resident at the same instant, and closing afterwards would still let both
+  // exist during the launch.
+  while (held.size >= MAX_OPEN) {
+    let oldest: Held | undefined;
+    for (const h of held.values()) if (!oldest || h.lastUsed < oldest.lastUsed) oldest = h;
+    if (!oldest) break;
+    await release(oldest.id);
+  }
+
   const dir = profileDir(id);
   fs.mkdirSync(dir, { recursive: true });
 
@@ -176,9 +207,35 @@ export function touch(id: string): void {
 const sweeper = setInterval(() => {
   const now = Date.now();
   for (const [id, entry] of held) {
-    if (now - entry.lastUsed > IDLE_MS) void withProfile(id, () => release(id));
+    if (now - entry.lastUsed <= IDLE_MS) continue;
+    // The .catch is not decoration. withProfile returns a promise nobody awaits
+    // here, and an unhandled rejection is fatal to the process by default in
+    // modern Node — so a browser that fails to close would take the whole
+    // container down, which presents as every endpoint 502ing at once.
+    void withProfile(id, () => release(id)).catch(() => {});
   }
 }, 30_000);
 sweeper.unref();
+
+/** Resident memory per process, for the status page. Linux-only, best effort. */
+export function memory(): Record<string, unknown> {
+  const read = (p: string): number | null => {
+    try {
+      return Number(fs.readFileSync(p, 'utf8').trim());
+    } catch {
+      return null;
+    }
+  };
+  const limit = read('/sys/fs/cgroup/memory.max');
+  const current = read('/sys/fs/cgroup/memory.current');
+  const mb = (n: number | null) => (n === null || !Number.isFinite(n) ? null : Math.round(n / 1024 / 1024));
+  return {
+    containerUsedMb: mb(current),
+    containerLimitMb: mb(limit),
+    rssMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+    openBrowsers: held.size,
+    maxOpenBrowsers: MAX_OPEN,
+  };
+}
 
 export { IDLE_MS, VIEWPORT };
