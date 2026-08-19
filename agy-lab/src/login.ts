@@ -49,11 +49,94 @@ const SEL = {
 
 const CHALLENGE = /just a moment|checking your browser|verify you are human|cf-chl|challenge-platform|attention required/i;
 
-/** First selector in the list that is actually visible, or null. */
-async function firstVisible(page: Page, selectors: readonly string[], timeoutMs = 1200): Promise<string | null> {
+interface Signals {
+  otp: boolean;
+  password: boolean;
+  email: boolean;
+  login: boolean;
+  composer: boolean;
+  title: string;
+}
+
+/**
+ * Read every signal from the DOM in one pass.
+ *
+ * Runs in the page rather than through Playwright selectors because the two
+ * previous attempts at this both failed on the same page the screenshot shows
+ * plainly. `locator.isVisible()` does NOT wait — it answers about this instant —
+ * so against a React shell that has fired DOMContentLoaded but rendered nothing,
+ * every selector reports absent and the flow concludes it is on an unrecognised
+ * page. And `:has-text("Log in")` matches a substring, which on this site also
+ * catches wrapper elements.
+ *
+ * Matching text exactly, over buttons and anchors only, is what the session probe
+ * already does successfully.
+ */
+const SIGNALS = () => {
+  const visible = (el: Element | null): boolean => {
+    if (!el) return false;
+    const r = (el as HTMLElement).getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    const st = getComputedStyle(el as HTMLElement);
+    return st.visibility !== 'hidden' && st.display !== 'none';
+  };
+  const q = (sel: string): boolean => Array.from(document.querySelectorAll(sel)).some(visible);
+  const label = (el: Element) => (el.textContent ?? '').trim().toLowerCase();
+
+  return {
+    otp: q('input[autocomplete="one-time-code"], input[name="code"], input[name="otp"], input[inputmode="numeric"]'),
+    password: q('input[type="password"], input[name="password"], #password'),
+    email: q('input[name="email"], input[type="email"], input[name="username"], #email-input, #username'),
+    login:
+      q('[data-testid="login-button"], a[href*="/auth/login"]') ||
+      Array.from(document.querySelectorAll('button, a')).some(
+        (n) => visible(n) && ['log in', 'login', 'sign up', 'sign up for free'].includes(label(n)),
+      ),
+    composer: q('#prompt-textarea'),
+    title: document.title,
+  };
+};
+
+/**
+ * Poll until the page shows something recognisable, then classify it.
+ *
+ * Polling from Node rather than a page-side waitForFunction keeps one copy of the
+ * predicate: the alternative is writing the same DOM walk twice, once to wait on
+ * and once to read, and those two copies drift.
+ */
+async function signals(page: Page, waitMs: number): Promise<Signals> {
+  const deadline = Date.now() + waitMs;
+  let last: Signals = { otp: false, password: false, email: false, login: false, composer: false, title: '' };
+  for (;;) {
+    last = await page.evaluate(SIGNALS).catch(() => last);
+    if (last.otp || last.password || last.email || last.login || last.composer) return last;
+    if (Date.now() >= deadline) return last;
+    await page.waitForTimeout(500);
+  }
+}
+
+async function detect(page: Page, waitMs = 25_000): Promise<Step> {
+  const s = await signals(page, waitMs);
+
+  // Order matters and is not arbitrary. OTP before password because some flows
+  // keep a hidden password field on the OTP page; password before email for the
+  // same reason; login before ready because the signed-out page has a composer
+  // too, so a composer alone must never win.
+  if (s.otp) return 'otp';
+  if (s.password) return 'password';
+  if (s.email) return 'email';
+  if (s.login) return 'landing';
+  if (s.composer) return 'ready';
+  if (CHALLENGE.test(s.title) || CHALLENGE.test(page.url())) return 'challenged';
+  return 'unknown';
+}
+
+/** First selector in the list that is present and visible right now, or null. */
+async function firstVisible(page: Page, selectors: readonly string[], timeoutMs = 4000): Promise<string | null> {
   for (const sel of selectors) {
     try {
-      if (await page.locator(sel).first().isVisible({ timeout: timeoutMs })) return sel;
+      await page.locator(sel).first().waitFor({ state: 'visible', timeout: timeoutMs });
+      return sel;
     } catch {
       /* not present, not visible, or a selector this front end does not use */
     }
@@ -61,21 +144,30 @@ async function firstVisible(page: Page, selectors: readonly string[], timeoutMs 
   return null;
 }
 
-async function detect(page: Page): Promise<Step> {
-  // Order matters and is not arbitrary. OTP before password because some flows
-  // keep a hidden password field on the OTP page; password before email for the
-  // same reason; and `ready` last so a stray composer on a signed-out page cannot
-  // short-circuit the whole thing.
-  if (await firstVisible(page, SEL.otp)) return 'otp';
-  if (await firstVisible(page, SEL.password)) return 'password';
-  if (await firstVisible(page, SEL.email)) return 'email';
-
-  const title = await page.title().catch(() => '');
-  if (CHALLENGE.test(title) || CHALLENGE.test(page.url())) return 'challenged';
-
-  if (await firstVisible(page, SEL.login)) return 'landing';
-  if (await firstVisible(page, SEL.composer)) return 'ready';
-  return 'unknown';
+/**
+ * Click the sign-in control.
+ *
+ * By accessible name rather than by `:has-text`, which matches substrings and so
+ * can land on a wrapper that contains the button instead of the button.
+ */
+async function clickLogin(page: Page): Promise<boolean> {
+  const candidates = [
+    page.locator('[data-testid="login-button"]').first(),
+    page.getByRole('button', { name: /^log ?in$/i }).first(),
+    page.getByRole('link', { name: /^log ?in$/i }).first(),
+    page.locator('a[href*="/auth/login"]').first(),
+  ];
+  for (const c of candidates) {
+    try {
+      if ((await c.count()) > 0 && (await c.isVisible())) {
+        await c.click({ timeout: 12_000 });
+        return true;
+      }
+    } catch {
+      /* try the next shape */
+    }
+  }
+  return false;
 }
 
 /** Click whatever submits this form. Enter is the fallback, and often the only one. */
@@ -150,15 +242,17 @@ export async function run(id: string, creds: Credentials, opts: { maxSteps?: num
       if (step === 'challenged') return finish('failed', step, 'A bot check is in the way. Not a credential problem.');
 
       if (step === 'landing') {
-        const sel = await firstVisible(page, SEL.login, 3000);
-        if (sel) await page.locator(sel).first().click({ timeout: 15_000 }).catch(() => {});
+        if (!(await clickLogin(page))) {
+          return finish('failed', step, 'A sign-in control is on the page but nothing clickable matched it.');
+        }
         await settle(page);
         continue;
       }
 
       if (step === 'email') {
         if (!creds.email) return finish('failed', step, 'The page is asking for an email and none was supplied.');
-        const sel = (await firstVisible(page, SEL.email, 3000))!;
+        const sel = await firstVisible(page, SEL.email);
+        if (!sel) return finish('failed', step, 'An email field was detected but no known selector matched it.');
         await page.locator(sel).first().fill(creds.email, { timeout: 15_000 });
         await submit(page);
         await settle(page);
@@ -167,7 +261,8 @@ export async function run(id: string, creds: Credentials, opts: { maxSteps?: num
 
       if (step === 'password') {
         if (!creds.password) return finish('failed', step, 'The page is asking for a password and none was supplied.');
-        const sel = (await firstVisible(page, SEL.password, 3000))!;
+        const sel = await firstVisible(page, SEL.password);
+        if (!sel) return finish('failed', step, 'A password field was detected but no known selector matched it.');
         await page.locator(sel).first().fill(creds.password, { timeout: 15_000 });
         await submit(page);
         await settle(page);
@@ -188,13 +283,11 @@ export async function run(id: string, creds: Credentials, opts: { maxSteps?: num
         continue;
       }
 
-      // Unknown: give the page one more chance to finish rendering before giving
-      // up, since this is also what a slow load looks like.
-      await settle(page);
-      if ((await detect(page)) === 'unknown') {
-        const title = await page.title().catch(() => '');
-        return finish('failed', 'unknown', `Stuck on an unrecognised page: "${title}" at ${page.url()}.`);
-      }
+      // Unknown after a full detect window means the page really is one this code
+      // does not model — detect() already waited, so waiting again just doubles
+      // the time before an answer.
+      const title = await page.title().catch(() => '');
+      return finish('failed', 'unknown', `Stuck on an unrecognised page: "${title}" at ${page.url()}.`);
     }
 
     return finish('failed', 'unknown', `Gave up after ${maxSteps} steps - the flow is looping. Trail: ${trail.join(' -> ')}`);
