@@ -298,7 +298,12 @@ async function waitForStepChange(page: Page, from: Step, ms = 25_000): Promise<S
  *                    input's centre, so the hit-target check either times out or
  *                    the click lands on the label
  *   keyboard.type()  the digits never arrive - the field stays empty
- *   fill()           the value DOES land, in the DOM and on screen
+ *   fill()           the value DOES land, in the DOM and on screen - and the
+ *                    submit is then REJECTED. fill() writes through the native
+ *                    value setter, so the field shows the digits while the app's
+ *                    own state stays empty, and Enter submits that empty state.
+ *                    Verified twice: fill + Enter is rejected, insertText + Enter
+ *                    signs in. A field that reads back correct is not proof.
  *   click "Continue" nothing: no navigation, no request, no error. An in-page
  *                    capture listener confirms no click event is dispatched at
  *                    all, and a plain <a href="/mfa-challenge"> on the same page
@@ -323,16 +328,13 @@ async function enterOtp(page: Page, code: string): Promise<void> {
   // focus(), not click(): focus addresses the element directly and cannot be
   // intercepted by whatever is painted over it.
   await field.focus({ timeout: 8000 }).catch(() => {});
-  // fill() replaces; fill('') does NOT clear this field, so overwrite instead of
-  // clearing first.
-  await field.fill(digits, { timeout: 8000 }).catch(() => {});
 
-  // Belt and braces: fill() writes the value, Input.insertText fires the input
-  // events a controlled component listens to. Only used if the value did not take.
-  if ((await field.inputValue().catch(() => '')) !== digits) {
-    await field.focus().catch(() => {});
-    await page.keyboard.insertText(digits);
-  }
+  // Select whatever is there, then insertText - which REPLACES the selection and
+  // fires beforeinput/input, so the app's own state changes with the field.
+  // Deliberately not fill(): fill() leaves the app believing the field is empty,
+  // and the submit that follows is rejected with no error shown.
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.insertText(digits);
 
   await page.keyboard.press('Enter');
 }
