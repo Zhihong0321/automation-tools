@@ -144,6 +144,8 @@ export function body(): string {
     <a href="#agy">agy</a>
     <a href="#chatgpt">ChatGPT</a>
     <a href="#meta">Meta AI</a>
+    <span class="nav-label">Home worker</span>
+    <a href="#jobs">Jobs</a>
     <span class="nav-label">Operating it</span>
     <a href="#sessions">Sessions</a>
     <a href="#observe">Observation layer</a>
@@ -482,6 +484,49 @@ data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"..."}}]}
   <code>data-testid</code>s, so the selectors are steadier than ChatGPT's — with one trap:
   <code>[data-testid="composer-input"]</code> is a zero-sized textarea mirror, not the
   editor. Filling it reads back correct and types into nothing.</p>
+</section>
+
+<section id="jobs">
+  <h2>Jobs &mdash; work sent to a machine at home</h2>
+  <p>Google Maps cannot be scanned from here. Google does not block a datacenter IP, it
+  <strong>degrades</strong> it: the search that returns ~100 businesses from a home line
+  returns ~60 from a rented one, with no error and no captcha. A scan run in this
+  container is thin and looks complete.</p>
+  <p>So the scan runs on a Mac mini at home, and this is the queue that reaches it. The
+  mini is behind NAT with no public address, so the direction is inverted &mdash; it
+  long-polls for work rather than being called. No tunnel, no port forwarding, no dynamic
+  DNS.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Route</th><th>Does</th></tr></thead>
+    <tbody>
+      <tr><td><code>POST /api/jobs</code></td><td><code>{type, payload, timeoutMs}</code> &rarr; 201 with the job, status <code>pending</code></td></tr>
+      <tr><td><code>GET /api/jobs/next?worker=&amp;wait=&amp;types=</code></td><td>the worker's claim. Held open up to 25s; <code>204</code> when there is nothing, <code>200</code> with the job when there is. Answers instantly if a job is already queued.</td></tr>
+      <tr><td><code>POST /api/jobs/:id/result</code></td><td><code>{ok, result, error}</code> &rarr; the job becomes <code>done</code> or <code>failed</code></td></tr>
+      <tr><td><code>GET /api/jobs/:id</code></td><td>status and result</td></tr>
+      <tr><td><code>GET /api/jobs</code></td><td>the queue, plus every worker and when it last checked in</td></tr>
+    </tbody>
+  </table></div>
+  <pre><code>ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \
+     -H 'content-type: application/json' -d '{"type":"ping"}' | jq -r .job.id)
+curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
+
+{
+  "hostname": "macmini",
+  "platform": "darwin 24.5.0 arm64",
+  "publicIp": "…the home line…"
+}</code></pre>
+  <p><code>ping</code> is the only job type today, and <code>publicIp</code> is the field
+  worth reading: it is what the internet sees when that machine makes a request. A Railway
+  address there would mean the job never left the container.</p>
+  <div class="call"><span class="h">In memory, and leased</span>
+  <p>Jobs live in a Map and are lost on redeploy &mdash; about six minutes of exposure,
+  accepted while the transport is being proven. Each job carries a lease instead: one that
+  is still <code>running</code> past its <code>timeoutMs</code> goes back to
+  <code>pending</code>, up to three times, then fails with a message saying so. A queue
+  that strands work silently is worse than one that loses it visibly.</p></div>
+  <p>The long poll is not written to <a href="#logs">the request log</a>. One request every
+  25 s forever would be ~3,500 records a day burying everything else; result posts and
+  failures are still recorded.</p>
 </section>
 
 <section id="sessions">

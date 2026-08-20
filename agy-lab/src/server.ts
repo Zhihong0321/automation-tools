@@ -16,6 +16,7 @@ import * as snap from './snapshot.ts';
 import * as browser from './browser.ts';
 import * as cgpt from './cgptroutes.ts';
 import * as gateway from './gateway.ts';
+import * as jobs from './jobs.ts';
 import * as queue from './queue.ts';
 import * as log from './logstore.ts';
 import { page } from './ui.ts';
@@ -131,9 +132,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // Log from here down, before the auth gate, so a rejected token is recorded too:
   // a 401 nobody can see is how a misconfigured client stays misconfigured. The
   // record closes itself when the response does, whatever route handled it.
-  log.begin(req, url);
-  res.on('finish', () => log.end(req, res.statusCode));
-  res.on('close', () => log.end(req, res.statusCode));
+  //
+  // The worker's long-poll is the one exception. It is one request every 25s,
+  // forever, from a machine that is supposed to be idle most of the time — logged,
+  // it would be ~3,500 records a day burying every request anyone actually cares
+  // about. Its result posts and its failures still land in the log.
+  if (!(method === 'GET' && p === '/api/jobs/next')) {
+    log.begin(req, url);
+    res.on('finish', () => log.end(req, res.statusCode));
+    res.on('close', () => log.end(req, res.statusCode));
+  }
 
   if (!authorized(req, url)) {
     // An OpenAI client parses the error envelope and prints its message; a bare
@@ -154,6 +162,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // that discipline somewhere it is easy to miss.
   if (p.startsWith('/api/cgpt') || p === '/api/net') {
     if (await cgpt.handle(req, res, url, { json, readJson })) return;
+  }
+
+  // ---- the job broker -----------------------------------------------------
+  // Work handed to a machine this service cannot reach. The Mac mini long-polls
+  // /api/jobs/next from home, runs the job on a residential IP, and posts the
+  // result back. See jobs.ts for why the direction is inverted.
+  if (p === '/api/jobs' || p.startsWith('/api/jobs/')) {
+    if (await jobs.handle(req, res, url, { json, readJson })) return;
   }
 
   // ---- logs ---------------------------------------------------------------

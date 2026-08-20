@@ -111,6 +111,55 @@ inherited.
 
 ---
 
+## Jobs — work sent to a machine at home
+
+Google Maps cannot be scanned from this container. Google does not block a
+datacenter IP, it **degrades** it: the search that returns ~100 businesses from a
+home line returns ~60 from a rented one, with no error and no captcha. A scan run
+here is thin and looks complete, which is worse than one that fails.
+
+So the scan runs on a Mac mini at home and this queue is how it is reached. The
+mini is behind NAT with no public address, so the direction is inverted — it
+long-polls for work rather than being called. No tunnel, no port forwarding, no
+dynamic DNS, nothing on the home router.
+
+| Route | Does |
+|---|---|
+| `POST /api/jobs` | `{type, payload, timeoutMs}` → 201 with the job, status `pending` |
+| `GET /api/jobs/next?worker=&wait=&types=` | the worker's claim. Held open up to 25s; `204` when idle, `200` with the job otherwise. Answers instantly if one is already queued. |
+| `POST /api/jobs/:id/result` | `{ok, result, error}` → the job becomes `done` or `failed` |
+| `GET /api/jobs/:id` | status and result |
+| `GET /api/jobs` | the queue, plus every worker and when it last checked in |
+
+```bash
+ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \
+     -H 'content-type: application/json' -d '{"type":"ping"}' | jq -r .job.id)
+curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
+```
+
+```json
+{"hostname":"macmini","platform":"darwin 24.5.0 arm64","publicIp":"…the home line…"}
+```
+
+`ping` is the only job type today. `publicIp` is the field worth reading: it is what
+the internet sees when that machine makes a request, and a Railway address there
+would mean the job never left this container.
+
+**In memory, and leased.** Jobs live in a Map and are lost on redeploy — about six
+minutes of exposure, accepted while the transport is still being proven. Each job
+carries a lease instead: one still `running` past its `timeoutMs` returns to
+`pending`, up to three times, then fails with a message saying so. A queue that
+strands work silently is worse than one that loses it visibly.
+
+The long poll is not written to the request log — one request every 25s forever
+would be ~3,500 records a day burying everything else. Result posts and failures
+still are.
+
+The worker itself is `worker/macmini.mjs`; `worker/README.md` is how it is installed
+and `docs/plan-macmini-worker.md` is why it exists and what comes next.
+
+---
+
 ## The queue
 
 Every engine here is a personal account with a human usage limit, so calls are
