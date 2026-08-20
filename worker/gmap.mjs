@@ -160,6 +160,40 @@ const EXTRACT = `(() => {
 })()`;
 
 /**
+ * Turn a page reading into a verdict. Exported and pure because this is THE rule
+ * of the whole scan and it must not depend on catching Google in the act: a real
+ * empty feed is rare on demand — a nonsense query still returns fuzzy matches —
+ * so the branch that matters most would otherwise never be exercised.
+ *
+ * An empty feed returns `found: null, blocked: true`, never `found: 0`. During a
+ * soft block the two readings are identical, and a 0 written into the dataset is
+ * a claim about the town that nothing downstream can tell apart from the truth.
+ */
+export function classify(page, businesses, max) {
+  const sig = page.signals;
+  const blocked = sig.captcha || sig.consent || !page.feedPresent || businesses.length === 0;
+  return {
+    found: blocked ? null : businesses.length,
+    capped: !blocked && businesses.length >= max,
+    blocked,
+    blockedReason: !blocked
+      ? null
+      : sig.captcha
+        ? 'captcha'
+        : sig.consent
+          ? 'consent wall'
+          : !page.feedPresent
+            ? 'no results feed'
+            : 'feed returned nothing — indistinguishable from a soft block, not recorded as 0',
+    // Not a block on its own — Maps serves this to any signed-out session — but it
+    // is what separates two runs that otherwise look the same, and it is why
+    // `reviews` comes back null.
+    limitedView: sig.limitedView,
+    signedIn: sig.signedIn,
+  };
+}
+
+/**
  * @param {{keyword:string, place:string, max?:number}} payload
  * @returns {Promise<{businesses:Array, found:number|null, capped:boolean, blocked:boolean, ...}>}
  */
@@ -207,26 +241,13 @@ export async function scan(payload) {
 
     const page = await conn.evaluate(EXTRACT);
     const businesses = page.businesses.filter((b) => b.name).slice(0, max);
-    const sig = page.signals;
-    // An empty feed is the ambiguous case the whole design is about, so it is
-    // never a count. Everything else that says "degraded" is reported alongside.
-    const blocked = sig.captcha || sig.consent || !page.feedPresent || businesses.length === 0;
 
     return {
       query,
       keyword,
       place: place || null,
       businesses,
-      found: blocked ? null : businesses.length,
-      capped: businesses.length >= max,
-      blocked,
-      blockedReason: blocked
-        ? (sig.captcha ? 'captcha' : sig.consent ? 'consent wall' : !page.feedPresent ? 'no results feed' : 'feed returned nothing — indistinguishable from a soft block, not recorded as 0')
-        : null,
-      // Not a block on its own — Maps serves this to signed-out sessions — but it
-      // is the difference between two runs that otherwise look the same.
-      limitedView: sig.limitedView,
-      signedIn: sig.signedIn,
+      ...classify(page, businesses, max),
       scrolls,
       tookMs: Date.now() - startedAt,
       at: new Date().toISOString(),
