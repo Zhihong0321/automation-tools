@@ -70,15 +70,26 @@ container and nothing has been proven — stop and find out why.
 
 ## Keep it running
 
+Use the **daemon**, not the agent. A LaunchAgent starts when a user logs in; a mini
+that reboots at 3am and stops at the login window runs no agent, and there is nothing
+in the log to say so — the jobs just stay `pending`. A LaunchDaemon starts at boot with
+nobody logged in. It still runs as you, not as root, so it can read the chmod-600 token.
+
 ```bash
-sed -e "s|__HOME__|$HOME|g" -e "s|__NODE__|$(which node)|g" \
-    worker/com.eternalgy.gmapworker.plist > ~/Library/LaunchAgents/com.eternalgy.gmapworker.plist
-launchctl load ~/Library/LaunchAgents/com.eternalgy.gmapworker.plist
+sed -e "s|__HOME__|$HOME|g" -e "s|__NODE__|$(which node)|g" -e "s|__USER__|$(id -un)|g" \
+    worker/com.eternalgy.gmapworker.daemon.plist > /tmp/gmapworker.plist
+sudo install -o root -g wheel -m 644 /tmp/gmapworker.plist \
+    /Library/LaunchDaemons/com.eternalgy.gmapworker.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.eternalgy.gmapworker.plist
 tail -f ~/Library/Logs/gmap-worker.log
 ```
 
-`launchctl unload` to stop it, and re-run the two lines above after a `git pull` that
-changes the worker.
+To stop it: `sudo launchctl bootout system/com.eternalgy.gmapworker`. Re-run the four
+lines above after a `git pull` that changes the worker, or after any Node change.
+
+`com.eternalgy.gmapworker.plist` (no `.daemon`) is the LaunchAgent version. It is kept
+only for a mini that is already set to log in automatically; on anything else it is the
+trap described above.
 
 **Check what `$(which node)` actually resolved to.** launchd needs an absolute path, so
 that sed bakes one in permanently. If Node came from nvm rather than brew it will be
@@ -107,7 +118,8 @@ sleeping does.
 |---|---|
 | `FATAL: 401 — LAB_TOKEN is wrong or was rotated` | the worker exits on purpose. Retrying a bad token forever looks identical to working. |
 | `poll failed (…) — retrying in 5s`, doubling to 60s | the lab is down or redeploying. It reconnects by itself; nothing to do. |
-| a job sits `pending` and the worker log is silent | the mini is asleep, or the process is not running. `launchctl list \| grep gmapworker`. |
+| a job sits `pending` and the worker log is silent | the mini is asleep, or the process is not running. `sudo launchctl list \| grep gmapworker`. |
+| nothing at all in the log after a reboot | the job was installed as an agent, not a daemon, and nobody logged in. |
 | a job goes back to `pending` on its own | its lease expired — the worker died mid-job. Three of those and the job fails with a message saying so. |
 | the worker stops coming back after a Node upgrade | the plist holds the absolute path baked in at install. Re-run the `sed` line above. |
 
