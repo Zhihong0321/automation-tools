@@ -80,9 +80,26 @@ tail -f ~/Library/Logs/gmap-worker.log
 `launchctl unload` to stop it, and re-run the two lines above after a `git pull` that
 changes the worker.
 
-> **System Settings → Energy:** turn on *Start up automatically after a power failure*
-> and *Prevent automatic sleeping when the display is off*. A sleeping mini answers no
-> polls, and the queue will simply say `pending` forever with no error anywhere.
+**Check what `$(which node)` actually resolved to.** launchd needs an absolute path, so
+that sed bakes one in permanently. If Node came from nvm rather than brew it will be
+version-specific — `~/.nvm/versions/node/v24.13.1/bin/node` — and the day that version is
+uninstalled or switched away from, the plist points at nothing. It fails at boot, where
+nobody is looking. Either install Node with brew so the path is `/opt/homebrew/bin/node`,
+or re-run the sed after any Node change.
+
+**Power.** A sleeping mini answers no polls, and the queue will simply say `pending`
+forever with no error anywhere. The two settings live in System Settings → Energy, but
+set and verify them from the shell — the checkbox labels move between macOS versions and
+`pmset` does not:
+
+```bash
+sudo pmset -a autorestart 1   # come back by itself after a power cut
+sudo pmset -a sleep 0         # never sleep the machine
+pmset -g | grep -E 'autorestart|^ sleep'
+```
+
+Both must read what you set them to. `displaysleep` does not matter; only the machine
+sleeping does.
 
 ## Reading the failure modes
 
@@ -92,6 +109,7 @@ changes the worker.
 | `poll failed (…) — retrying in 5s`, doubling to 60s | the lab is down or redeploying. It reconnects by itself; nothing to do. |
 | a job sits `pending` and the worker log is silent | the mini is asleep, or the process is not running. `launchctl list \| grep gmapworker`. |
 | a job goes back to `pending` on its own | its lease expired — the worker died mid-job. Three of those and the job fails with a message saying so. |
+| the worker stops coming back after a Node upgrade | the plist holds the absolute path baked in at install. Re-run the `sed` line above. |
 
 ## Configuration
 
