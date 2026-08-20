@@ -16,7 +16,10 @@ import * as snap from './snapshot.ts';
 import * as browser from './browser.ts';
 import * as cgpt from './cgptroutes.ts';
 import * as gateway from './gateway.ts';
+import * as queue from './queue.ts';
+import * as log from './logstore.ts';
 import { page } from './ui.ts';
+import { page as docsPage } from './docs.ts';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const TOKEN = process.env.LAB_TOKEN ?? '';
@@ -112,10 +115,26 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     return void res.end(html);
   }
 
+  // The API reference, served by the deploy it documents so the two cannot drift.
+  // Public for the same reason the console is: it describes the surface, and the
+  // token is what actually guards it.
+  if (method === 'GET' && (p === '/docs' || p === '/docs.html')) {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    return void res.end(docsPage());
+  }
+
   // /v1/* is the gateway - the OpenAI-shaped surface other tools point at. It sits
   // behind the same token because a bearer header is exactly what an OpenAI client
   // already sends, so pointing one here costs a base URL and nothing else.
   if (!p.startsWith('/api/') && !p.startsWith('/v1/')) return json(res, 404, { error: 'not found' });
+
+  // Log from here down, before the auth gate, so a rejected token is recorded too:
+  // a 401 nobody can see is how a misconfigured client stays misconfigured. The
+  // record closes itself when the response does, whatever route handled it.
+  log.begin(req, url);
+  res.on('finish', () => log.end(req, res.statusCode));
+  res.on('close', () => log.end(req, res.statusCode));
+
   if (!authorized(req, url)) {
     // An OpenAI client parses the error envelope and prints its message; a bare
     // {error: string} shows up there as [object Object].
@@ -137,6 +156,30 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (await cgpt.handle(req, res, url, { json, readJson })) return;
   }
 
+  // ---- logs ---------------------------------------------------------------
+  // One record per request, newest first. ?errors=1 (or /api/logs/errors) is the
+  // error log: everything that answered 4xx/5xx or recorded a failure.
+  if (method === 'GET' && (p === '/api/logs' || p === '/api/logs/errors')) {
+    const q = url.searchParams;
+    const asNumber = (v: string | null): number | undefined => (v && Number.isFinite(Number(v)) ? Number(v) : undefined);
+    try {
+      return json(res, 200, {
+        ...log.read({
+          limit: asNumber(q.get('limit')),
+          errorsOnly: p.endsWith('/errors') || q.get('errors') === '1',
+          engine: q.get('engine') ?? undefined,
+          status: asNumber(q.get('status')),
+          since: q.get('since') ?? undefined,
+          date: q.get('date') ?? undefined,
+          path: q.get('path') ?? undefined,
+        }),
+        days: log.days(),
+      });
+    } catch (err) {
+      return json(res, 400, { error: (err as Error).message });
+    }
+  }
+
   // ---- state -------------------------------------------------------------
   if (method === 'GET' && p === '/api/status') {
     return json(res, 200, {
@@ -145,6 +188,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       startedAt: STARTED_AT,
       uptimeSec: Math.round(process.uptime()),
       lastCrash,
+      queue: queue.snapshot(),
+      logs: log.stats(),
       sessions: pty.list(),
       snapshots: [...snapshots.keys()],
     });

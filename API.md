@@ -7,6 +7,7 @@ tool that already talks to an LLM only has to change a base URL.
 Base URL   https://ee-auto.up.railway.app/v1
 API key    the LAB_TOKEN of this service
 Models     agy | chatgpt | chatgpt:<session> | meta | meta:<session>
+Reference  https://ee-auto.up.railway.app/docs   (the same surface, laid out to read)
 ```
 
 | Engine | What it actually is | Typical |
@@ -110,6 +111,63 @@ inherited.
 
 ---
 
+## The queue
+
+Every engine here is a personal account with a human usage limit, so calls are
+admitted rather than accepted. **An admitted call waits; it does not fail** - an
+answer at +40s beats an error at +0s. It is refused up front only when waiting
+would be worse than being told no.
+
+| Lane | At once | Engines | Spacing |
+|---|---|---|---|
+| `browser` | 1 | `chatgpt` + `meta` - the container has one Chrome | 2s between calls |
+| `agy` | 2 | `agy` | none |
+
+Slots are per lane; spacing, caps and counters are per engine, because the lane is
+a machine limit and the account that gets rate-limited is not.
+
+Three refusals, all 429 with `Retry-After` and a `queue` snapshot in the body:
+
+| `type` | Fires when |
+|---|---|
+| `rate_limit_exceeded` | the engine's hourly cap is used up (off unless `*_HOURLY_LIMIT` is set) |
+| `queue_full` | more than `QUEUE_MAX_DEPTH` (10) are already waiting in that lane |
+| `queue_too_slow` | the estimate exceeds `QUEUE_MAX_WAIT_MS` (300s) |
+
+A call that waited reports `agy_lab.queuedMs` (native shape: `queuedMs`). A queued
+**stream** narrates the wait in SSE comment lines - `: queued ahead=3 eta=41s`, then
+`: waiting` every 15s - so no intermediary mistakes a silent socket for a dead one.
+Hanging up cancels the work. `GET /api/queue` shows what is running, waiting and
+spaced right now.
+
+`POST /api/cgpt/:id/ask` goes through the same queue. A path to an account that
+skips the spacing is not a shortcut; it is the one call that gets it limited.
+
+---
+
+## Logs
+
+| Call | Does |
+|---|---|
+| `GET /api/logs` | one record per request, newest first |
+| `GET /api/logs/errors` | the same, filtered to 4xx/5xx and anything that recorded a failure |
+
+Filters: `limit`, `errors=1`, `engine`, `status`, `since`, `path`, and `date=YYYY-MM-DD`
+to read a day off the volume instead of memory. The last 1000 records stay in
+memory; every record is appended to `/data/logs/api-YYYY-MM-DD.jsonl`.
+
+Each record carries `engine`, `model`, `stream`, `promptChars`, `promptHead` (first
+140 chars), `answerChars`, `queuedMs` and `engineMs` - the last pair is what says
+whether the gateway or the engine was slow - plus `status`, `ms`, `ip`, `ua` and
+`error: {type, message}`.
+
+**The token is never logged.** It arrives in a header and, for clients that cannot
+set one, in `?token=` - so the query string is stored with that parameter redacted.
+Records start before the auth check, so a rejected token shows up as a 401 rather
+than as nothing at all. `LOG_PROMPTS=0` keeps sizes and drops previews.
+
+---
+
 ## What the OpenAI shape promises and this cannot keep
 
 - **Sampling parameters do nothing.** `temperature`, `top_p`, `max_tokens`, `seed`,
@@ -190,7 +248,14 @@ In a stream the status line is already sent, so a failure arrives as a final
 | `AGY_ASK_TIMEOUT_MS` | 300000 | |
 | `CGPT_ASK_TIMEOUT_MS` | 180000 | |
 | `AGY_MAX_CONCURRENT` | 2 | agy runs in flight at once |
-| `MAX_OPEN_BROWSERS` | 1 | Chrome profiles open at once |
+| `MAX_OPEN_BROWSERS` | 1 | Chrome profiles open at once - the browser lane's width |
+| `CGPT_MIN_GAP_MS`, `META_MIN_GAP_MS` | 2000 | spacing between calls to that account |
+| `AGY_MIN_GAP_MS` | 0 | |
+| `QUEUE_MAX_DEPTH` | 10 | waiting calls before 429; `CGPT_MAX_QUEUE` etc. override per engine |
+| `QUEUE_MAX_WAIT_MS` | 300000 | longest wait the gateway will promise |
+| `*_HOURLY_LIMIT` | off | calls per rolling hour, per engine |
+| `LOG_MEMORY` | 1000 | records kept in memory |
+| `LOG_PROMPTS` | on | `0` drops prompt previews |
 
 The rest of the service — installing agy, driving a login, the DOM observation
 layer — is in [agy-lab/README.md](agy-lab/README.md) and

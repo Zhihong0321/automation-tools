@@ -14,6 +14,7 @@ import * as browser from './browser.ts';
 import * as sessions from './sessions.ts';
 import * as login from './login.ts';
 import * as meta from './meta.ts';
+import * as queue from './queue.ts';
 import { parseSecret, totp, secondsLeft } from './totp.ts';
 
 export interface Ctx {
@@ -592,12 +593,27 @@ export async function handle(
     return true;
   }
 
+  // Through the same admission queue as the gateway, deliberately. This route
+  // predates it, and a way to reach an account that skips the spacing and the caps
+  // is not a shortcut - it is the one call that gets the account limited.
   if (method === 'POST' && action === 'ask') {
     const body = await readJson(req);
     const prompt = str(body.prompt).trim();
     if (!prompt) return reply(json, res, 400, { error: 'prompt is required' });
-    const run = sessions.kindOf(id) === 'meta' ? meta.ask : sessions.ask;
-    json(res, 200, await run(id, prompt, num(body.timeoutMs, 180_000)));
+    const kind = sessions.kindOf(id) === 'meta' ? 'meta' : 'chatgpt';
+    const run = kind === 'meta' ? meta.ask : sessions.ask;
+    try {
+      const admitted = await queue.run(kind, () => run(id, prompt, num(body.timeoutMs, 180_000)));
+      json(res, 200, {
+        ...admitted.value,
+        ...(admitted.queuedMs > 250 ? { queuedMs: admitted.queuedMs } : {}),
+      });
+    } catch (err) {
+      const e = err as queue.BusyError;
+      if (e.status !== 429) throw err;
+      res.setHeader('retry-after', String(e.retryAfterSec));
+      json(res, 429, { error: e.message, type: e.type, retry_after: e.retryAfterSec, queue: e.queue });
+    }
     return true;
   }
 

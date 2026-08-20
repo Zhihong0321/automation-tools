@@ -24,6 +24,8 @@ import type http from 'node:http';
 import * as agy from './agy.ts';
 import * as sessions from './sessions.ts';
 import * as meta from './meta.ts';
+import * as queue from './queue.ts';
+import * as log from './logstore.ts';
 
 export interface Ctx {
   json: (res: http.ServerResponse, status: number, body: unknown) => void;
@@ -237,9 +239,34 @@ export interface AskResult {
   engine: 'agy' | 'chatgpt' | 'meta';
   /** Browser engines only: false means the answer stopped growing because time ran out, not because it finished. */
   settled?: boolean;
+  /** How long this call waited for its turn. Absent when it did not wait. */
+  queuedMs?: number;
 }
 
+/**
+ * Every engine call goes through the admission queue, and none goes round it.
+ *
+ * The engines are personal accounts with human usage limits, and a burst does not
+ * make answers arrive faster - it makes one Chrome profile thrash and the traffic
+ * look automated. See queue.ts for the three ways a call can be refused rather
+ * than queued; all three surface here as a 429 with Retry-After.
+ */
 async function runAsk(
+  route: Route,
+  prompt: string,
+  opts: { timeoutMs?: number; tools?: boolean; onDelta?: (chunk: string) => void; onQueued?: (info: queue.QueueInfo) => void } = {},
+): Promise<AskResult> {
+  const admitted = await queue
+    .run(route.engine, () => engineAsk(route, prompt, opts), { onQueued: opts.onQueued })
+    .catch((err: unknown) => {
+      const e = err as queue.BusyError;
+      if (e.status === 429) throw e;
+      throw err;
+    });
+  return { ...admitted.value, ...(admitted.queuedMs > 250 ? { queuedMs: admitted.queuedMs } : {}) };
+}
+
+async function engineAsk(
   route: Route,
   prompt: string,
   opts: { timeoutMs?: number; tools?: boolean; onDelta?: (chunk: string) => void } = {},
@@ -319,6 +346,7 @@ function completionBody(id: string, result: AskResult, prompt: string, ignored: 
     agy_lab: {
       engine: result.engine,
       ms: result.ms,
+      ...(result.queuedMs ? { queuedMs: result.queuedMs } : {}),
       ...(result.settled === undefined ? {} : { settled: result.settled }),
       ...(ignored.length ? { ignored } : {}),
     },
@@ -364,9 +392,12 @@ async function chatCompletions(req: http.IncomingMessage, res: http.ServerRespon
   const timeoutMs = num(body.timeoutMs ?? body.timeout_ms, timeoutFor(route));
   const ignored = IGNORABLE.filter((k) => body[k] !== undefined);
   const id = completionId();
+  log.note(req, { engine: route.engine, model: route.model, stream: body.stream === true });
+  log.notePrompt(req, prompt);
 
   if (body.stream !== true) {
     const result = await runAsk(route, prompt, { timeoutMs, tools: body.tools === true });
+    noteResult(req, result);
     ctx.json(res, 200, completionBody(id, result, prompt, ignored));
     return;
   }
@@ -380,14 +411,35 @@ async function chatCompletions(req: http.IncomingMessage, res: http.ServerRespon
   req.on('close', () => {
     aborted = true;
   });
+
+  // A queued call can sit for a minute before the engine says anything. An SSE
+  // connection that silent gets closed by an intermediary that assumes it died, so
+  // the wait is narrated in comment lines - ignored by every SSE client, and
+  // enough traffic to keep the socket honest.
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+  const stopHeartbeat = (): void => {
+    if (heartbeat) clearInterval(heartbeat);
+    heartbeat = null;
+  };
   try {
     const result = await runAsk(route, prompt, {
       timeoutMs,
       tools: body.tools === true,
+      onQueued: (info) => {
+        if (aborted) return;
+        res.write(': queued ahead=' + info.ahead + ' eta=' + Math.ceil(info.estimatedWaitMs / 1000) + 's\n\n');
+        heartbeat = setInterval(() => {
+          if (aborted) return stopHeartbeat();
+          res.write(': waiting\n\n');
+        }, 15_000);
+      },
       onDelta: (chunk) => {
+        stopHeartbeat();
         if (!aborted && chunk) sseSend(res, chunkBody(id, route.model, { content: chunk }, null));
       },
     });
+    stopHeartbeat();
+    noteResult(req, result);
     if (aborted) return void res.end();
     sseSend(res, chunkBody(id, result.model, {}, result.settled === false ? 'length' : 'stop'));
     sseSend(res, {
@@ -397,16 +449,41 @@ async function chatCompletions(req: http.IncomingMessage, res: http.ServerRespon
       model: result.model,
       choices: [],
       usage: usage(prompt, result.answer),
-      agy_lab: { engine: result.engine, ms: result.ms, ...(ignored.length ? { ignored } : {}) },
+      agy_lab: {
+        engine: result.engine,
+        ms: result.ms,
+        ...(result.queuedMs ? { queuedMs: result.queuedMs } : {}),
+        ...(ignored.length ? { ignored } : {}),
+      },
     });
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (err: unknown) {
-    const e = err as HttpError;
-    sseSend(res, { error: { message: e.message, type: e.type ?? 'engine_error', code: e.status ?? 502 } });
+    stopHeartbeat();
+    const e = err as HttpError & { retryAfterSec?: number; queue?: unknown };
+    log.noteError(req, e);
+    sseSend(res, {
+      error: {
+        message: e.message,
+        type: e.type ?? 'engine_error',
+        code: e.status ?? 502,
+        ...(e.retryAfterSec ? { retry_after: e.retryAfterSec } : {}),
+      },
+    });
     res.write('data: [DONE]\n\n');
     res.end();
   }
+}
+
+/** One place that copies an answer's shape into the log record. */
+function noteResult(req: http.IncomingMessage, result: AskResult): void {
+  log.note(req, {
+    engine: result.engine,
+    model: result.model,
+    answerChars: result.answer.length,
+    engineMs: result.ms,
+    ...(result.queuedMs ? { queuedMs: result.queuedMs } : {}),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -418,15 +495,19 @@ async function nativeAsk(req: http.IncomingMessage, res: http.ServerResponse, ct
   const route = resolveModel(str(body.model ?? body.engine));
   const prompt = body.messages ? promptFromMessages(body.messages) : str(body.prompt).trim();
   if (!prompt) throw fail(400, 'prompt is required (or messages).');
+  log.note(req, { engine: route.engine, model: route.model });
+  log.notePrompt(req, prompt);
   const result = await runAsk(route, prompt, {
     timeoutMs: num(body.timeoutMs, timeoutFor(route)),
     tools: body.tools === true,
   });
+  noteResult(req, result);
   ctx.json(res, 200, {
     model: result.model,
     engine: result.engine,
     answer: result.answer,
     ms: result.ms,
+    ...(result.queuedMs ? { queuedMs: result.queuedMs } : {}),
     ...(result.settled === undefined ? {} : { settled: result.settled }),
   });
 }
@@ -447,6 +528,13 @@ export async function handle(
       ctx.json(res, 200, models());
       return true;
     }
+    // What the queue is doing right now: running, waiting, spacing, and how much
+    // of each engine's hourly allowance is gone. The thing to look at when a call
+    // comes back 429 or takes a minute to start.
+    if (method === 'GET' && p === '/api/queue') {
+      ctx.json(res, 200, queue.snapshot());
+      return true;
+    }
     if (method === 'POST' && p === '/v1/chat/completions') {
       await chatCompletions(req, res, ctx);
       return true;
@@ -457,13 +545,23 @@ export async function handle(
     }
     return false;
   } catch (err: unknown) {
-    const e = err as HttpError;
+    const e = err as HttpError & { retryAfterSec?: number; queue?: Record<string, unknown> };
+    log.noteError(req, e);
     if (res.headersSent) {
       res.end();
       return true;
     }
+    // Retry-After is the part a client can act on without reading prose, and the
+    // queue snapshot is the part a human can. A 429 carries both.
+    if (e.retryAfterSec) res.setHeader('retry-after', String(e.retryAfterSec));
     ctx.json(res, e.status ?? 500, {
-      error: { message: e.message ?? String(err), type: e.type ?? 'server_error', code: e.status ?? 500 },
+      error: {
+        message: e.message ?? String(err),
+        type: e.type ?? 'server_error',
+        code: e.status ?? 500,
+        ...(e.retryAfterSec ? { retry_after: e.retryAfterSec } : {}),
+      },
+      ...(e.queue ? { queue: e.queue } : {}),
     });
     return true;
   }
