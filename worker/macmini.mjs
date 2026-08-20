@@ -14,6 +14,10 @@
 //     200  -> run the handler, POST the result, ask again
 //     err  -> wait (backing off to 60s), ask again — never exit
 //
+// A gmap.scan holds the loop for minutes while it runs; that is intended. One
+// machine, one scan at a time, is what a residential line can do without
+// looking like something other than a person.
+//
 // It never exits on purpose. A worker that quits on a network blip is a worker
 // that is offline until someone notices, and the whole point of this machine is
 // that nobody is watching it.
@@ -24,6 +28,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { scan as gmapScan } from './gmap.mjs';
 
 // Config from a file the process owner can chmod 600, so the token is not in a
 // launchd plist that every process on the box can read.
@@ -87,7 +92,7 @@ async function ping(payload) {
   };
 }
 
-const handlers = { ping };
+const handlers = { ping, 'gmap.scan': gmapScan };
 
 // ---------------------------------------------------------------- the client
 
