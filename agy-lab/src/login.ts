@@ -325,17 +325,28 @@ async function enterOtp(page: Page, code: string): Promise<void> {
   const field = page.locator(sel + ':visible').first();
   const digits = code.trim();
 
-  // focus(), not click(): focus addresses the element directly and cannot be
-  // intercepted by whatever is painted over it.
-  await field.focus({ timeout: 8000 }).catch(() => {});
+  // This is the exact sequence that signed in, and it is deliberately minimal.
+  // Every extra action here has been tried and made it worse.
 
-  // Select whatever is there, then insertText - which REPLACES the selection and
-  // fires beforeinput/input, so the app's own state changes with the field.
-  // Deliberately not fill(): fill() leaves the app believing the field is empty,
-  // and the submit that follows is rejected with no error shown.
-  await page.keyboard.press('ControlOrMeta+a');
+  // The MFA page focuses the code field itself on arrival. Only reach for focus
+  // when it does not - focus(), never click(), because the floating label covers
+  // the input's centre.
+  const alreadyFocused = await field.evaluate((el) => el === document.activeElement).catch(() => false);
+  if (!alreadyFocused) await field.focus({ timeout: 8000 }).catch(() => {});
+
+  // Select-all only if there is something to replace. On a fresh page the field is
+  // empty and the keystroke is pointless; on a retry it is the only way to clear,
+  // because fill('') does not.
+  if (await field.inputValue().catch(() => '')) await page.keyboard.press('ControlOrMeta+a');
+
+  // insertText, never fill(): it fires beforeinput/input so the app's own state
+  // changes with the field. fill() writes the value straight onto the element and
+  // the submit that follows is rejected with no error rendered.
   await page.keyboard.insertText(digits);
 
+  // Let the input event be processed before submitting. Measured: Enter fired in
+  // the same tick submits the state as it was BEFORE the digits arrived.
+  await page.waitForTimeout(400);
   await page.keyboard.press('Enter');
 }
 
