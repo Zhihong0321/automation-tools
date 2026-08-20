@@ -16,6 +16,7 @@
 import type { Page } from 'patchright';
 import * as browser from './browser.ts';
 import * as sessions from './sessions.ts';
+import { freshCode, parseSecret } from './totp.ts';
 
 /** Where the flow currently is. Each one names the next thing that must happen. */
 export type Step = 'ready' | 'landing' | 'email' | 'password' | 'otp' | 'challenged' | 'unknown';
@@ -251,24 +252,96 @@ async function settle(page: Page): Promise<void> {
 }
 
 /**
- * Type into a one-time-code field.
+ * Enter a one-time code AND submit it. Measured on the live MFA page 2026-08-20.
  *
- * Some builds use a single input, others six that each hold one digit and advance
- * on keypress. Typing through the keyboard rather than filling a value covers
- * both: the split version receives the digits it expects, and the single version
- * cannot tell the difference.
+ * Everything else that looks like it should work does not, and each reason cost a
+ * round of guessing, so they are written down:
+ *
+ *   click the field  the floating <label> paints a positioner div over the
+ *                    input's centre, so the hit-target check either times out or
+ *                    the click lands on the label
+ *   keyboard.type()  the digits never arrive - the field stays empty
+ *   fill()           the value DOES land, in the DOM and on screen
+ *   click "Continue" nothing: no navigation, no request, no error. An in-page
+ *                    capture listener confirms no click event is dispatched at
+ *                    all, and a plain <a href="/mfa-challenge"> on the same page
+ *                    does not navigate either - which needs no JavaScript. So it
+ *                    is not the widget, the framework, or the selector: pointer
+ *                    input is not reaching the renderer on this page.
+ *   form.submit()    posts, and the server answers HTTP 500
+ *
+ * What works: focus the field, put the digits in, press Enter. Enter reaches the
+ * page when clicks do not, and it submits through the app's own handler rather
+ * than around it.
+ *
+ * Do not "simplify" this back to click + type + click-submit. That is the version
+ * that spent two sessions failing.
  */
 async function enterOtp(page: Page, code: string): Promise<void> {
   const sel = await firstVisible(page, SEL.otp, 3000);
   if (!sel) return;
-  await page.locator(sel).first().click({ timeout: 8000 }).catch(() => {});
-  await page.keyboard.type(code.trim(), { delay: 90 });
+  const field = page.locator(sel + ':visible').first();
+  const digits = code.trim();
+
+  // focus(), not click(): focus addresses the element directly and cannot be
+  // intercepted by whatever is painted over it.
+  await field.focus({ timeout: 8000 }).catch(() => {});
+  // fill() replaces; fill('') does NOT clear this field, so overwrite instead of
+  // clearing first.
+  await field.fill(digits, { timeout: 8000 }).catch(() => {});
+
+  // Belt and braces: fill() writes the value, Input.insertText fires the input
+  // events a controlled component listens to. Only used if the value did not take.
+  if ((await field.inputValue().catch(() => '')) !== digits) {
+    await field.focus().catch(() => {});
+    await page.keyboard.insertText(digits);
+  }
+
+  await page.keyboard.press('Enter');
+}
+
+/**
+ * Click the Cloudflare Turnstile checkbox.
+ *
+ * The widget lives in a CROSS-ORIGIN iframe, which page.locator() cannot enter,
+ * so there is no selector for the checkbox and never will be. What is reachable
+ * is the iframe ELEMENT's position in the page; the checkbox sits at its left,
+ * vertically centred. A viewport-level mouse click at that point solves it -
+ * measured, twice, on the real auth page.
+ *
+ * Returns false when no widget is present, so the caller can tell "no challenge"
+ * from "challenge not solved".
+ */
+export async function solveTurnstile(page: Page): Promise<boolean> {
+  const frame = page.locator('iframe[src*="challenges.cloudflare.com"]').first();
+  const box = await frame.boundingBox({ timeout: 8000 }).catch(() => null);
+  if (!box) return false;
+
+  await page.mouse.move(box.x + 21, box.y + box.height / 2, { steps: 12 });
+  await page.waitForTimeout(120);
+  await page.mouse.down();
+  await page.waitForTimeout(70);
+  await page.mouse.up();
+  await page.waitForTimeout(6000);
+  return true;
 }
 
 export interface Credentials {
   email?: string;
   password?: string;
   otp?: string;
+  /**
+   * The TOTP shared secret, so the code is derived here at the moment of submit.
+   *
+   * A one-time code cannot be stored - it is a function of the clock - and a code
+   * handed over by a human is already several seconds old when it arrives. The
+   * secret is the storable half, and with it the 30-second window stops being a
+   * race and unattended re-login becomes possible at all.
+   *
+   * Accepts a bare base32 secret, an otpauth:// URI, or Google Authenticator's
+   * otpauth-migration:// export link. See totp.ts.
+   */
+  totpSecret?: string;
 }
 
 /**
@@ -306,7 +379,18 @@ export async function run(id: string, creds: Credentials, opts: { maxSteps?: num
       trail.push(step);
 
       if (step === 'ready') return finish('ready', step, 'Signed in - composer is live and no login control is on the page.');
-      if (step === 'challenged') return finish('failed', step, 'A bot check is in the way. Not a credential problem.');
+
+      if (step === 'challenged') {
+        // A Turnstile checkbox is not a dead end, it is a click - see
+        // solveTurnstile. Only give up if there is no widget to click, or if
+        // clicking it left us still challenged.
+        if (await solveTurnstile(page)) {
+          await settle(page);
+          if ((await detect(page)) !== 'challenged') continue;
+          return finish('failed', step, 'The Turnstile checkbox was clicked and the challenge did not clear.');
+        }
+        return finish('failed', step, 'A bot check is in the way and no Turnstile widget was found to click.');
+      }
 
       if (step === 'landing') {
         if (!(await clickLogin(page))) {
@@ -340,11 +424,16 @@ export async function run(id: string, creds: Credentials, opts: { maxSteps?: num
         // Stopping here is the correct behaviour, not a failure: the code does not
         // exist yet when the call starts. The browser stays open holding this exact
         // page, so /otp resumes rather than starting over.
-        if (!creds.otp) {
-          return finish('needs_otp', step, 'A one-time code is required. Post it to /otp - this browser stays on the page.');
+        // With the shared secret there is no waiting and no human: derive the code
+        // now, at the moment it is needed, with a full window ahead of it.
+        const code = creds.otp ?? (creds.totpSecret ? await freshCode(parseSecret(creds.totpSecret)[0]!.secret, 8) : undefined);
+        if (!code) {
+          return finish('needs_otp', step, 'A one-time code is required. Post it to /otp - this browser stays on the page. Better: store the TOTP secret so no one has to.');
         }
-        await enterOtp(page, creds.otp);
-        await submit(page);
+        // enterOtp submits with Enter. Do NOT add submit() here - the Continue
+        // button on this page does not respond to clicks at all, and calling it
+        // only adds a 6-second timeout per attempt.
+        await enterOtp(page, code);
         await settle(page);
         creds = { ...creds, otp: undefined };
         continue;
@@ -394,8 +483,9 @@ export async function otp(id: string, code: string): Promise<LoginResult> {
       );
     }
 
+    // enterOtp presses Enter itself; the Continue button on this page ignores
+    // clicks entirely, so submit() here only costs a timeout.
     await enterOtp(page, code);
-    await submit(page);
     await settle(page);
 
     const after = await detect(page, 25_000);

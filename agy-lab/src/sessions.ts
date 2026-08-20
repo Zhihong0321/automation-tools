@@ -30,6 +30,17 @@ export interface SessionRecord {
   createdAt: string;
   lastProbe: { status: Health; detail: string; at: string; ms: number } | null;
   notes?: string;
+  /**
+   * This account's TOTP shared secret, base32.
+   *
+   * Stored because the alternative is a human reading a phone at the exact moment
+   * a cookie expires, and that is not automation. It sits beside the browser
+   * profile on the volume, which already holds the session cookies for the same
+   * account - so it adds no new class of secret to the box, it only makes an
+   * unattended re-login possible instead of a page that waits for someone to wake
+   * up. Never returned by list().
+   */
+  totpSecret?: string;
 }
 
 type Manifest = Record<string, SessionRecord>;
@@ -78,6 +89,9 @@ export function list(): Array<SessionRecord & { dir: string; initialized: boolea
       label: manifest[id]?.label ?? id,
       createdAt: manifest[id]?.createdAt ?? '(unknown)',
       lastProbe: manifest[id]?.lastProbe ?? null,
+      // Whether one is set, never the value. A list endpoint has no business
+      // handing out a credential that mints login codes.
+      totpSecret: manifest[id]?.totpSecret ? '(set)' : undefined,
       ...(manifest[id]?.notes ? { notes: manifest[id]!.notes } : {}),
       dir,
       // Chrome's own marker that it has run here at least once. Nothing has ever
@@ -96,6 +110,20 @@ export function create(id: string, label?: string): SessionRecord {
   if (label) m[id]!.label = label;
   writeManifest(m);
   return m[id]!;
+}
+
+/** Store, or with null clear, the TOTP secret for a session. */
+export function setTotpSecret(id: string, secret: string | null): void {
+  const m = readManifest();
+  m[id] = m[id] ?? { id, label: id, createdAt: new Date().toISOString(), lastProbe: null };
+  if (secret) m[id]!.totpSecret = secret;
+  else delete m[id]!.totpSecret;
+  writeManifest(m);
+}
+
+/** The stored secret, or null. Read by the login flow; never by list(). */
+export function getTotpSecret(id: string): string | null {
+  return readManifest()[id]?.totpSecret ?? null;
 }
 
 export async function remove(id: string): Promise<void> {

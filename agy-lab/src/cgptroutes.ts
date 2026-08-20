@@ -13,6 +13,7 @@ import type http from 'node:http';
 import * as browser from './browser.ts';
 import * as sessions from './sessions.ts';
 import * as login from './login.ts';
+import { parseSecret, totp, secondsLeft } from './totp.ts';
 
 export interface Ctx {
   json: (res: http.ServerResponse, status: number, body: unknown) => void;
@@ -113,10 +114,54 @@ export async function handle(
     const email = str(body.email).trim();
     const password = str(body.password);
     if (!email || !password) return reply(json, res, 400, { error: 'email and password are required' });
-    const out = await login.run(id, { email, password, otp: str(body.otp).trim() || undefined });
+    // A secret sent with the login is also remembered, so the next re-login needs
+    // nobody. Fall back to the stored one when this request does not carry it.
+    const supplied = str(body.totpSecret).trim();
+    if (supplied) {
+      try {
+        sessions.setTotpSecret(id, parseSecret(supplied)[0]!.secret);
+      } catch (e) {
+        return reply(json, res, 400, { error: 'totpSecret: ' + (e as Error).message });
+      }
+    }
+    const out = await login.run(id, {
+      email,
+      password,
+      otp: str(body.otp).trim() || undefined,
+      totpSecret: sessions.getTotpSecret(id) ?? undefined,
+    });
     // Record the outcome so the session list reflects it without a second probe.
     if (out.state === 'ready') await sessions.probe(id, { timeoutMs: 30_000, keepOpen: true });
     json(res, 200, out);
+    return true;
+  }
+
+  // Store the TOTP shared secret for this account.
+  //
+  // Takes a bare base32 secret, an otpauth:// URI, or Google Authenticator's
+  // otpauth-migration:// export link - whichever form the person actually has,
+  // because asking someone to convert between them is asking for a transcription
+  // error. Answers with a code generated from it, which is the only honest proof
+  // that what was stored is what the authenticator app holds.
+  if (method === 'POST' && action === 'totp') {
+    const body = await readJson(req);
+    const raw = str(body.secret ?? body.totpSecret ?? body.uri).trim();
+    if (!raw) return reply(json, res, 400, { error: 'secret is required (base32, otpauth:// or otpauth-migration://)' });
+    let parsed;
+    try {
+      parsed = parseSecret(raw)[0]!;
+    } catch (e) {
+      return reply(json, res, 400, { error: (e as Error).message });
+    }
+    sessions.setTotpSecret(id, parsed.secret);
+    json(res, 200, {
+      id,
+      stored: true,
+      account: parsed.name ?? null,
+      issuer: parsed.issuer ?? null,
+      codeNow: totp(parsed.secret),
+      validForSeconds: secondsLeft(),
+    });
     return true;
   }
 
