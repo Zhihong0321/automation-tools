@@ -204,6 +204,19 @@ export async function handle(
             } else if (typeof st.selectall === 'boolean' && st.selectall) {
               await page.keyboard.press('ControlOrMeta+a');
               await page.keyboard.press('Delete');
+            } else if (Array.isArray(st.mouse)) {
+              // A real click at viewport coordinates. Two things a selector click
+              // cannot do: land inside a CROSS-ORIGIN iframe — page.locator() does
+              // not cross that boundary, and Cloudflare Turnstile lives in one — and
+              // arrive as an actual mouse event through CDP rather than as an element
+              // method, which is part of what a bot check reads.
+              const mx = Number((st.mouse as unknown[])[0]);
+              const my = Number((st.mouse as unknown[])[1]);
+              await page.mouse.move(mx, my, { steps: 12 });
+              await page.waitForTimeout(120);
+              await page.mouse.down();
+              await page.waitForTimeout(70);
+              await page.mouse.up();
             } else if (typeof st.press === 'string') {
               await page.keyboard.press(st.press);
             }
@@ -269,8 +282,68 @@ export async function handle(
               ? '(' + String((el as HTMLInputElement).value ?? '').length + ' chars)'
               : String((el as HTMLInputElement).value ?? (el as HTMLElement).textContent ?? '').slice(0, 60),
         }));
-        return { clickables, inputs, bodyChars: (document.body?.innerText ?? '').length, bodyText: (document.body?.innerText ?? '').replace(/s+/g, ' ').slice(0, 600) };
+        // \s+, not s+. Without the backslash this deletes every lowercase "s"
+        // from the page text, so "Performing security verification" is reported
+        // as "Performing ecurity verification" - a dump that quietly lies about
+        // the one thing it exists to show.
+        return { clickables, inputs, bodyChars: (document.body?.innerText ?? '').length, bodyText: (document.body?.innerText ?? '').replace(/\s+/g, ' ').slice(0, 600) };
       });
+
+      // Every frame, not just the top document. A cross-origin iframe is invisible
+      // both to page.locator() and to the dump above, so a Turnstile checkbox inside
+      // one looks exactly like an empty page with nothing on it — and "nothing is
+      // there" is the one conclusion that stops you looking. Playwright attaches to
+      // every frame, so this reads them for real instead of guessing at the markup.
+      //
+      // Rects are converted to VIEWPORT coordinates by adding the iframe element's
+      // own offset, so they can be handed straight to a {"mouse":[x,y]} step. That is
+      // the point: aim from a measurement, never from a screenshot.
+      const frames: unknown[] = [];
+      for (const f of page.frames()) {
+        if (f === page.mainFrame()) continue;
+        const fe = await f.frameElement().catch(() => null);
+        const fr = fe ? await fe.boundingBox().catch(() => null) : null;
+        const inner = await f
+          .evaluate(() => {
+            const vis = (el: Element) => {
+              const r = el.getBoundingClientRect();
+              const cs = getComputedStyle(el as HTMLElement);
+              return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none';
+            };
+            return Array.from(
+              document.querySelectorAll('input, button, a, label, [role="button"], [role="checkbox"], textarea'),
+            )
+              .filter(vis)
+              .slice(0, 25)
+              .map((el) => {
+                const r = el.getBoundingClientRect();
+                return {
+                  tag: el.tagName,
+                  type: el.getAttribute('type'),
+                  id: el.id || null,
+                  name: el.getAttribute('name'),
+                  role: el.getAttribute('role'),
+                  aria: el.getAttribute('aria-label'),
+                  text: (el.textContent ?? '').trim().replace(/s+/g, " ").slice(0, 50),
+                  rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+                };
+              });
+          })
+          .catch((e: Error) => 'EVAL FAILED: ' + e.message.slice(0, 100));
+        const els = Array.isArray(inner)
+          ? inner.map((el) => ({
+              ...el,
+              // centre of the element, in page coordinates
+              click: fr ? [Math.round(fr.x + el.rect.x + el.rect.w / 2), Math.round(fr.y + el.rect.y + el.rect.h / 2)] : null,
+            }))
+          : inner;
+        frames.push({
+          url: f.url().slice(0, 140),
+          name: f.name(),
+          frameRect: fr ? { x: Math.round(fr.x), y: Math.round(fr.y), w: Math.round(fr.width), h: Math.round(fr.height) } : null,
+          els,
+        });
+      }
 
       // Every strategy the automation might use, counted right now against this
       // page. Disagreement between these IS the diagnosis.
@@ -303,6 +376,7 @@ export async function handle(
         clicked,
         clickSelector: clickSel,
         steps: stepLog,
+        frames,
         locatorCounts: probes,
         ...dom,
       };
