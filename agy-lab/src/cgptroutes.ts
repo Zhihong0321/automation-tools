@@ -152,6 +152,21 @@ export async function handle(
     const out = await browser.withProfile(id, async () => {
       sessions.create(id);
       const { page } = await browser.acquire(id);
+
+      // Console output and uncaught errors, for the length of this request only.
+      // A page that renders correctly and then ignores every click is usually a
+      // page whose script threw during hydration - and that throw is visible
+      // nowhere except here.
+      const logs: string[] = [];
+      const onConsole = (m: { type: () => string; text: () => string }) => {
+        if (logs.length < 40) logs.push(m.type().slice(0, 7) + ': ' + m.text().slice(0, 200));
+      };
+      const onError = (e: Error) => {
+        if (logs.length < 40) logs.push('PAGEERROR: ' + String(e.message).slice(0, 300));
+      };
+      page.on('console', onConsole);
+      page.on('pageerror', onError);
+      try {
       if (target) await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
       let clicked: string | null = null;
       if (clickSel) {
@@ -217,8 +232,23 @@ export async function handle(
               await page.mouse.down();
               await page.waitForTimeout(70);
               await page.mouse.up();
+            } else if (typeof st.insert === 'string') {
+              // Input.insertText. Not a keystroke: it hands text straight to the
+              // focused node and fires beforeinput/input, which is what a React
+              // controlled component listens to. Works where dispatched key events
+              // are being dropped, and is the only text path that does.
+              await page.keyboard.insertText(st.insert);
             } else if (typeof st.press === 'string') {
               await page.keyboard.press(st.press);
+            } else if (typeof st.eval === 'string') {
+              // Arbitrary expression against the live page. The whole reason the
+              // debug layer exists is that every question should cost one API call
+              // instead of one deploy; without this, every question that the fixed
+              // dump does not already answer costs a rebuild.
+              const r = await page.evaluate(st.eval);
+              stepLog.push({ eval: st.eval.slice(0, 120), result: JSON.parse(JSON.stringify(r ?? null)) });
+              if (typeof st.wait === 'number') await page.waitForTimeout(Math.min(st.wait, 20_000));
+              continue;
             }
             if (typeof st.wait === 'number') await page.waitForTimeout(Math.min(st.wait, 20_000));
             stepLog.push({ ...st, value: st.value ? '(supplied)' : undefined, ok: true });
@@ -273,6 +303,11 @@ export async function handle(
           placeholder: el.getAttribute('placeholder'),
           visible: box(el),
           ariaHidden: hiddenFromA11y(el),
+          // readOnly and disabled, because both produce the same symptom as a
+          // field that "ignores keystrokes" and neither is visible on a screenshot.
+          readOnly: (el as HTMLInputElement).readOnly === true,
+          disabled: (el as HTMLInputElement).disabled === true,
+          focused: el === document.activeElement,
           // The value, because "I set the field" and "the field holds it" are
           // different claims and only the second one matters. Masked for password
           // inputs: length is enough to know a fill landed, and the value itself
@@ -282,11 +317,27 @@ export async function handle(
               ? '(' + String((el as HTMLInputElement).value ?? '').length + ' chars)'
               : String((el as HTMLInputElement).value ?? (el as HTMLElement).textContent ?? '').slice(0, 60),
         }));
+        // Where input would actually go, whether the document believes it has
+        // focus at all, and whether anything is covering the page. A click that
+        // "succeeds" and changes nothing is usually one of these three.
+        const ae = document.activeElement;
+        const focus = {
+          activeElement: ae ? ae.tagName + (ae.id ? '#' + ae.id : '') + ((ae as HTMLInputElement).name ? '[name=' + (ae as HTMLInputElement).name + ']' : '') : null,
+          hasFocus: document.hasFocus(),
+          visibilityState: document.visibilityState,
+          readyState: document.readyState,
+          // What sits at the middle of the viewport - an invisible full-page
+          // overlay swallowing clicks shows up here and nowhere else.
+          topAtCentre: (() => {
+            const t = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+            return t ? t.tagName + (t.id ? '#' + t.id : '') + (t.className && typeof t.className === 'string' ? '.' + t.className.split(/\s+/)[0] : '') : null;
+          })(),
+        };
         // \s+, not s+. Without the backslash this deletes every lowercase "s"
         // from the page text, so "Performing security verification" is reported
         // as "Performing ecurity verification" - a dump that quietly lies about
         // the one thing it exists to show.
-        return { clickables, inputs, bodyChars: (document.body?.innerText ?? '').length, bodyText: (document.body?.innerText ?? '').replace(/\s+/g, ' ').slice(0, 600) };
+        return { clickables, inputs, focus, bodyChars: (document.body?.innerText ?? '').length, bodyText: (document.body?.innerText ?? '').replace(/\s+/g, ' ').slice(0, 600) };
       });
 
       // Every frame, not just the top document. A cross-origin iframe is invisible
@@ -377,9 +428,18 @@ export async function handle(
         clickSelector: clickSel,
         steps: stepLog,
         frames,
+        // Every tab in the context, not just the one being driven. A second tab
+        // that took over the window is invisible from inside the first one, and
+        // it looks exactly like a page that stopped responding to input.
+        tabs: page.context().pages().map((p) => (p === page ? '* ' : '  ') + p.url().slice(0, 90)),
+        console: logs,
         locatorCounts: probes,
         ...dom,
       };
+      } finally {
+        page.off('console', onConsole);
+        page.off('pageerror', onError);
+      }
     });
     json(res, 200, out);
     return true;
