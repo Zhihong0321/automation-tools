@@ -8,6 +8,12 @@ This is a research harness, not a product. It exists to settle one question:
 local PC?* The answer decides whether the gmap-recon pipeline can move to the
 cloud or needs a worker at home.
 
+It can: agy holds its login across a redeploy, and so does a ChatGPT browser
+session. So the harness now has a consumer-facing end - a gateway that serves
+both to other tools in the OpenAI chat-completions shape, documented in
+[../API.md](../API.md). Everything below is the machinery under it: installing
+agy, driving a login, and observing a page that will not cooperate.
+
 ## Railway setup
 
 1. **New service → deploy from this repo.** No Root Directory setting needed —

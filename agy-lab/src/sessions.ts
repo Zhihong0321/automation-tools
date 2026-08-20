@@ -339,6 +339,40 @@ export async function exportState(id: string): Promise<StorageState> {
 // ---------------------------------------------------------------------------
 
 /**
+ * Read the last assistant message, minus the controls ChatGPT renders inside it.
+ *
+ * Measured on prod, 2026-08-20: the assistant message subtree contains a <button>
+ * whose label ("Edit") is the FIRST text node in it, so a plain innerText prefixes
+ * every answer with a word the model never said - and a caller parsing line
+ * records gets a bogus first line. The button sits inside the same container as
+ * the prose, so there is no selector that takes one and not the other; the text is
+ * read from a copy with the controls removed instead.
+ *
+ * The copy has to be IN the document to be read. innerText is layout-dependent and
+ * degrades to textContent on a detached node - which is exactly where the line
+ * breaks are lost, and line breaks are the whole reason this reads innerText.
+ */
+function readAnswer(): string {
+  const nodes = document.querySelectorAll('[data-message-author-role="assistant"]');
+  const el = nodes[nodes.length - 1] as HTMLElement | undefined;
+  if (!el) return '';
+  try {
+    const copy = el.cloneNode(true) as HTMLElement;
+    copy.querySelectorAll('button, [role="button"], svg').forEach((n) => n.remove());
+    copy.style.position = 'fixed';
+    copy.style.left = '-99999px';
+    copy.style.top = '0';
+    copy.style.width = (el.clientWidth || 800) + 'px';
+    document.body.appendChild(copy);
+    const text = copy.innerText;
+    copy.remove();
+    return text.trim() || el.innerText.trim();
+  } catch {
+    return el.innerText.trim();
+  }
+}
+
+/**
  * Send one prompt through the signed-in UI and read the answer back.
  *
  * This is the wrapper other tools reach through the gateway, so it answers to a
@@ -409,13 +443,7 @@ export async function ask(
     let quiet = 0;
     while (Date.now() < deadline && quiet < 3) {
       await page.waitForTimeout(1500);
-      const text = await page
-        .evaluate(() => {
-          const nodes = document.querySelectorAll('[data-message-author-role="assistant"]');
-          const el = nodes[nodes.length - 1] as HTMLElement | undefined;
-          return el?.innerText ?? '';
-        })
-        .catch(() => '');
+      const text = await page.evaluate(readAnswer).catch(() => '');
       if (text && text === last) quiet++;
       else quiet = 0;
       // Only emit an append. A re-render that is not an extension of what the
