@@ -137,6 +137,11 @@ async function run(job) {
   try {
     const result = await handler(job.payload, job);
     await report(job.id, true, result, null);
+    // A scan that ran fine but did not persist is the one failure that is
+    // invisible from here: the caller gets its rows and the job says done. The
+    // usual cause is the pg-proxy token having expired overnight, so it is
+    // named in the log rather than left inside the result JSON nobody reads.
+    if (result?.saveError) say('job ' + job.id + ' ran but did NOT save: ' + result.saveError);
     say('job ' + job.id + ' done in ' + (Date.now() - at) + 'ms');
   } catch (err) {
     // The handler failing must not take the loop down with it. Report and carry on.

@@ -25,10 +25,15 @@ export async function sql(text, params = []) {
   });
   const body = await r.text();
   if (!r.ok) {
-    // The token is short-lived. Say that plainly rather than let a 401 read as
-    // a query bug at 3am.
-    if (r.status === 401 || r.status === 403) {
-      throw new Error('pg-proxy rejected the token (' + r.status + ') — PG_PROXY_TOKEN is expired or wrong');
+    // The token is short-lived and the proxy reports a bad one as 400 with a
+    // message, not as 401 — so status alone is not enough to recognise it. Left
+    // unnamed this reads like a query bug at 3am, when it is only ever "paste a
+    // new token into ~/.gmap-worker.env".
+    if (r.status === 401 || r.status === 403 || /token|jwt|expired|signature/i.test(body)) {
+      throw new Error(
+        'pg-proxy rejected the token (' + r.status + ': ' + body.slice(0, 120) +
+        ') — refresh PG_PROXY_TOKEN in ~/.gmap-worker.env',
+      );
     }
     throw new Error('pg-proxy ' + r.status + ': ' + body.slice(0, 300));
   }
