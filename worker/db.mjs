@@ -1,0 +1,118 @@
+// Writing a scan into Postgres, through the pg-proxy.
+//
+// The proxy is an HTTP endpoint that takes parameterised SQL, so there is no pg
+// driver here and no connection pool to keep alive across a 25s idle poll —
+// which suits a worker that spends almost all its life doing nothing.
+//
+// WHAT IS PRESERVED HERE. The scan's one rule survives into storage rather than
+// being re-decided: a blocked scan writes `found = null`, never 0, and the table
+// carries a CHECK constraint saying so. If this code ever regresses, the insert
+// fails loudly instead of writing a quiet lie about a town.
+const URL_ = () => (process.env.PG_PROXY_URL ?? '').replace(/\/+$/, '');
+const DB = () => process.env.PG_DB_NAME ?? '';
+const TOKEN = () => process.env.PG_PROXY_TOKEN ?? '';
+
+export function configured() {
+  return Boolean(URL_() && DB() && TOKEN());
+}
+
+export async function sql(text, params = []) {
+  const r = await fetch(URL_() + '/api/sql', {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + TOKEN(), 'content-type': 'application/json' },
+    body: JSON.stringify({ db_name: DB(), sql: text, params }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const body = await r.text();
+  if (!r.ok) {
+    // The token is short-lived. Say that plainly rather than let a 401 read as
+    // a query bug at 3am.
+    if (r.status === 401 || r.status === 403) {
+      throw new Error('pg-proxy rejected the token (' + r.status + ') — PG_PROXY_TOKEN is expired or wrong');
+    }
+    throw new Error('pg-proxy ' + r.status + ': ' + body.slice(0, 300));
+  }
+  return JSON.parse(body);
+}
+
+/** Google's own id for a place. Without it the same shop lands twice on the next scan. */
+function placeKey(b) {
+  const m = /!19s([A-Za-z0-9_-]+)/.exec(b.mapsUrl ?? '');
+  if (m) return m[1];
+  // A result with no id is rare but must still dedupe, or a weekly scan of the
+  // same town grows a duplicate row every run.
+  return 'name:' + (b.name ?? '').toLowerCase().trim() + '|' + (b.address ?? '').toLowerCase().trim();
+}
+
+/**
+ * Persist one scan: the companies it found, the report itself, and the link
+ * between them. Returns the report id.
+ */
+export async function saveScan(result, { jobId = null, worker = null, userId = null } = {}) {
+  const businesses = result.businesses ?? [];
+
+  // 1. Companies, upserted on Google's place id. A company seen in an earlier
+  //    search is refreshed and re-linked, never duplicated.
+  const byKey = new Map();
+  for (const b of businesses) if (!byKey.has(placeKey(b))) byKey.set(placeKey(b), b);
+  const rows = [...byKey.entries()];
+
+  let idByKey = new Map();
+  if (rows.length) {
+    const cols = 9;
+    const values = rows
+      .map((_, i) => '(' + Array.from({ length: cols }, (_, j) => '$' + (i * cols + j + 1)).join(',') + ')')
+      .join(',');
+    const params = rows.flatMap(([key, b]) => [
+      key, b.name, b.rating, b.reviews, b.category, b.address, b.phone, b.website, b.mapsUrl,
+    ]);
+    const out = await sql(
+      `insert into company_data (place_id,name,rating,reviews,category,address,phone,website,maps_url)
+       values ${values}
+       on conflict (place_id) do update set
+         name     = excluded.name,
+         rating   = coalesce(excluded.rating,   company_data.rating),
+         reviews  = coalesce(excluded.reviews,  company_data.reviews),
+         category = coalesce(excluded.category, company_data.category),
+         address  = coalesce(excluded.address,  company_data.address),
+         phone    = coalesce(excluded.phone,    company_data.phone),
+         website  = coalesce(excluded.website,  company_data.website),
+         maps_url = excluded.maps_url,
+         last_seen_at = now()
+       returning id, place_id`,
+      params,
+    );
+    idByKey = new Map(out.rows.map((r) => [r.place_id, r.id]));
+  }
+
+  // 2. The report. `found` is null for a blocked scan — the constraint enforces it.
+  const report = await sql(
+    `insert into search_report
+       (user_id, keyword, place, query, found, blocked, blocked_reason, capped, limited_view, job_id, worker, took_ms)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     returning id`,
+    [
+      userId, result.keyword, result.place, result.query,
+      result.blocked ? null : result.found,
+      Boolean(result.blocked), result.blockedReason, Boolean(result.capped),
+      result.limitedView ?? null, jobId, worker, result.tookMs ?? null,
+    ],
+  );
+  const reportId = report.rows[0].id;
+
+  // 3. The list, in the order Maps returned it — rank is the feed position, which
+  //    is the only ranking signal a scan actually observes.
+  const links = businesses
+    .map((b, i) => [idByKey.get(placeKey(b)), i + 1])
+    .filter(([id]) => id != null);
+  if (links.length) {
+    const values = links.map((_, i) => '($' + (i * 3 + 1) + ',$' + (i * 3 + 2) + ',$' + (i * 3 + 3) + ')').join(',');
+    await sql(
+      `insert into search_report_company (report_id, company_id, rank)
+       values ${values} on conflict (report_id, company_id) do nothing`,
+      links.flatMap(([companyId, rank]) => [reportId, companyId, rank]),
+    );
+  }
+
+  return { reportId, companies: rows.length, linked: links.length };
+}

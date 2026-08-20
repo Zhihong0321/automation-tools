@@ -135,7 +135,7 @@ async function run(job) {
   }
   say('job ' + job.id + ' type=' + job.type + ' — running');
   try {
-    const result = await handler(job.payload);
+    const result = await handler(job.payload, job);
     await report(job.id, true, result, null);
     say('job ' + job.id + ' done in ' + (Date.now() - at) + 'ms');
   } catch (err) {

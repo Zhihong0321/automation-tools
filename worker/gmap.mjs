@@ -19,6 +19,8 @@
 //      signals go back with the result so the caller can compare a town against
 //      its own history — which is the only place a soft block is visible at all.
 import { spawn } from 'node:child_process';
+import os from 'node:os';
+import { saveScan, configured as dbConfigured } from './db.mjs';
 
 const CHROME = process.env.CHROME_PATH
   ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -197,7 +199,7 @@ export function classify(page, businesses, max) {
  * @param {{keyword:string, place:string, max?:number}} payload
  * @returns {Promise<{businesses:Array, found:number|null, capped:boolean, blocked:boolean, ...}>}
  */
-export async function scan(payload) {
+export async function scan(payload, job = null) {
   const keyword = (payload?.keyword ?? '').trim();
   const place = (payload?.place ?? '').trim();
   if (!keyword) throw new Error('gmap.scan needs a keyword');
@@ -242,7 +244,7 @@ export async function scan(payload) {
     const page = await conn.evaluate(EXTRACT);
     const businesses = page.businesses.filter((b) => b.name).slice(0, max);
 
-    return {
+    const result = {
       query,
       keyword,
       place: place || null,
@@ -252,6 +254,25 @@ export async function scan(payload) {
       tookMs: Date.now() - startedAt,
       at: new Date().toISOString(),
     };
+
+    // The scan is the expensive part and it has already happened. A database
+    // that is down, or a token that expired overnight, must not turn a good
+    // scan into a failed job — the rows come back either way and the failure is
+    // reported in the result where it can be seen.
+    if (dbConfigured()) {
+      try {
+        result.saved = await saveScan(result, {
+          jobId: job?.id ?? null,
+          worker: process.env.WORKER_NAME || os.hostname(),
+          userId: payload?.userId ?? null,
+        });
+      } catch (err) {
+        result.saved = null;
+        result.saveError = err.message;
+      }
+    }
+
+    return result;
   } finally {
     try { ws?.close(); } catch { /* already gone */ }
     chrome.kill('SIGKILL');
