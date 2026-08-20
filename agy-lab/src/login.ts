@@ -369,6 +369,9 @@ export async function run(id: string, creds: Credentials, opts: { maxSteps?: num
   const maxSteps = opts.maxSteps ?? 12;
   const started = Date.now();
   const trail: string[] = [];
+  // Consecutive "detected it, could not act on it" rounds. Bounded so a page that
+  // genuinely will not accept input still terminates instead of spinning.
+  let misses = 0;
 
   return browser.withProfile(id, async () => {
     sessions.create(id);
@@ -444,8 +447,15 @@ export async function run(id: string, creds: Credentials, opts: { maxSteps?: num
       if (step === 'email') {
         if (!creds.email) return finish('failed', step, 'The page is asking for an email and none was supplied.');
         if (!(await fillFirstVisible(page, SEL.email, creds.email))) {
-          return finish('failed', step, 'An email field was detected but no visible one could be filled.');
+          // Detected but gone by the time we reached for it: the page was mid
+          // navigation. Look again rather than declaring failure - measured on
+          // prod, this is what "a password field was detected but no visible one
+          // could be filled" was, on a page that had already become the MFA page.
+          if (++misses > 3) return finish('failed', step, 'An email field kept being detected but never stayed long enough to fill.');
+          await settle(page);
+          continue;
         }
+        misses = 0;
         await submit(page);
         await settle(page);
         continue;
@@ -454,8 +464,13 @@ export async function run(id: string, creds: Credentials, opts: { maxSteps?: num
       if (step === 'password') {
         if (!creds.password) return finish('failed', step, 'The page is asking for a password and none was supplied.');
         if (!(await fillFirstVisible(page, SEL.password, creds.password))) {
-          return finish('failed', step, 'A password field was detected but no visible one could be filled.');
+          // Same race as the email step: SIGNALS saw the field on the page it was
+          // leaving. Re-detect instead of failing.
+          if (++misses > 3) return finish('failed', step, 'A password field kept being detected but never stayed long enough to fill.');
+          await settle(page);
+          continue;
         }
+        misses = 0;
         await submit(page);
         await settle(page);
         continue;
