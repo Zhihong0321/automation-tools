@@ -24,9 +24,21 @@
 // account that gets rate-limited is per engine.
 
 export type Engine = 'agy' | 'chatgpt' | 'meta';
-type Lane = 'agy' | 'browser';
+/** Where the work runs. The container is this process; the mini is a worker on the job queue. */
+export type Location = 'container' | 'mini';
+type Lane = 'agy' | 'browser' | 'mini';
 
-const laneOf = (engine: Engine): Lane => (engine === 'agy' ? 'agy' : 'browser');
+/**
+ * The mini is its own lane, not extra width on `browser`.
+ *
+ * `browser` is width 1 because the container has exactly one Chrome. The mini is
+ * a DIFFERENT machine with a DIFFERENT ChatGPT account and its own browser, so
+ * sharing a lane with the container would serialize two things that have no
+ * reason to wait for each other and throw away the capacity the mini was added
+ * for. Separate lane, separate width, separate gap.
+ */
+const laneOf = (engine: Engine, location: Location = 'container'): Lane =>
+  location === 'mini' ? 'mini' : engine === 'agy' ? 'agy' : 'browser';
 
 const int = (name: string, fallback: number): number => {
   const raw = Number(process.env[name]);
@@ -62,7 +74,14 @@ function policy(engine: Engine): {
 
 /** How many run at once in a lane. One browser is a hard limit of the container, not a policy. */
 const laneConcurrency = (lane: Lane): number =>
-  lane === 'agy' ? Math.max(1, int('AGY_MAX_CONCURRENT', 2)) : Math.max(1, int('MAX_OPEN_BROWSERS', 1));
+  lane === 'agy'
+    ? Math.max(1, int('AGY_MAX_CONCURRENT', 2))
+    : lane === 'mini'
+      // ego lite runs each account in its own task space, so the mini's ceiling is
+      // accounts, not browsers — unlike the container, where it is literally one
+      // Chrome. Two is what has actually been measured running side by side.
+      ? Math.max(1, int('MINI_MAX_CONCURRENT', 2))
+      : Math.max(1, int('MAX_OPEN_BROWSERS', 1));
 
 interface LaneState {
   inflight: number;
@@ -85,6 +104,8 @@ interface EngineState {
 const lanes: Record<Lane, LaneState> = {
   agy: { inflight: 0, waiting: [], emaMs: 20_000, samples: 0 },
   browser: { inflight: 0, waiting: [], emaMs: 13_000, samples: 0 },
+  // Seeded from measured mini round trips (~7.5s end to end including the job hop).
+  mini: { inflight: 0, waiting: [], emaMs: 8_000, samples: 0 },
 };
 
 const engines: Record<Engine, EngineState> = {
@@ -160,9 +181,9 @@ export interface Admitted<T> {
 export async function run<T>(
   engine: Engine,
   fn: () => Promise<T>,
-  hooks: { onQueued?: (info: QueueInfo) => void } = {},
+  hooks: { onQueued?: (info: QueueInfo) => void; location?: Location } = {},
 ): Promise<Admitted<T>> {
-  const lane = laneOf(engine);
+  const lane = laneOf(engine, hooks.location);
   const l = lanes[lane];
   const p = policy(engine);
   const arrived = Date.now();
@@ -184,7 +205,7 @@ export async function run<T>(
     const wait = estimateWaitMs(lane, engine);
     throw busy(
       'queue_full',
-      `System busy: ${l.waiting.length} calls are already waiting for ${lane === 'agy' ? 'agy' : 'the browser'} and the queue is capped at ${p.maxDepth}. Retry in about ${Math.ceil(wait / 1000)}s.`,
+      `System busy: ${l.waiting.length} calls are already waiting for ${lane === 'agy' ? 'agy' : lane === 'mini' ? 'the mini' : 'the browser'} and the queue is capped at ${p.maxDepth}. Retry in about ${Math.ceil(wait / 1000)}s.`,
       wait / 1000,
       engine,
     );

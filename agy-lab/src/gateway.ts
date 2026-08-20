@@ -25,6 +25,7 @@ import * as agy from './agy.ts';
 import * as sessions from './sessions.ts';
 import * as meta from './meta.ts';
 import * as queue from './queue.ts';
+import * as jobs from './jobs.ts';
 import * as log from './logstore.ts';
 
 export interface Ctx {
@@ -58,10 +59,45 @@ function fail(status: number, message: string, type = 'invalid_request_error'): 
 // Models
 // ---------------------------------------------------------------------------
 
-type Route =
+type Location = queue.Location;
+
+type Route = { location: Location } & (
   | { engine: 'agy'; model: string }
   | { engine: 'chatgpt'; model: string; session: string }
-  | { engine: 'meta'; model: string; session: string };
+  | { engine: 'meta'; model: string; session: string }
+);
+
+/** The job type the mini's worker lane claims for an engine. */
+const jobTypeFor = (engine: 'agy' | 'chatgpt'): string => engine + '.ask';
+
+/**
+ * Is a worker that serves this engine actually polling right now?
+ *
+ * Without this check a call for a mini engine becomes a job that sits pending
+ * until it times out, and the caller reads that as the engine being slow rather
+ * than absent — a minute of waiting to be told something that was knowable
+ * immediately.
+ */
+function miniLive(engine: 'agy' | 'chatgpt'): boolean {
+  return jobs.liveTypes().includes(jobTypeFor(engine));
+}
+
+/**
+ * Where a request runs when it did not say.
+ *
+ * Explicit `@mini` / `@container` always wins; this is only the bare-name case.
+ * The mini is preferred when it is live because it is the capacity that was
+ * ADDED — a different machine, a different account, its own rate limit — so
+ * sending pooled traffic to the container first would leave the new capacity
+ * idle and keep the old bottleneck. Falls back the moment the mini stops polling.
+ */
+function defaultLocation(engine: 'agy' | 'chatgpt' | 'meta'): Location {
+  if (engine === 'meta') return 'container';
+  const pref = process.env.ROUTING_PREFER?.trim().toLowerCase();
+  if (pref === 'container') return 'container';
+  if (pref === 'mini') return miniLive(engine) ? 'mini' : 'container';
+  return miniLive(engine) ? 'mini' : 'container';
+}
 
 /** The default timeout for a route, since two of the three engines are browsers. */
 const timeoutFor = (route: Route): number =>
@@ -101,23 +137,51 @@ function defaultSession(kind: sessions.Kind): string {
  * that actually ran.
  */
 export function resolveModel(raw: string): Route {
-  const wanted = str(raw).trim();
+  let wanted = str(raw).trim();
   if (!wanted || wanted.toLowerCase() === 'auto') {
     const fallback = process.env.DEFAULT_MODEL?.trim();
     return resolveModel(!fallback || fallback.toLowerCase() === 'auto' ? 'agy' : fallback);
   }
+  // `@mini` / `@container` pins the location. Split before the session split so an
+  // account id containing an @ is not mistaken for one.
+  let pinned: Location | null = null;
+  const at = wanted.lastIndexOf('@');
+  if (at > 0) {
+    const tail = wanted.slice(at + 1).toLowerCase();
+    if (tail === 'mini' || tail === 'macmini') { pinned = 'mini'; wanted = wanted.slice(0, at); }
+    else if (tail === 'container' || tail === 'cloud') { pinned = 'container'; wanted = wanted.slice(0, at); }
+    else throw fail(404, `Unknown location "@${tail}". Use @mini or @container.`, 'model_not_found');
+  }
   const [head, ...rest] = wanted.split(/[:/]/);
   const name = (head ?? '').toLowerCase();
-  if (name === 'agy' || name === 'antigravity') return { engine: 'agy', model: 'agy' };
+  if (name === 'agy' || name === 'antigravity') {
+    const location = pinned ?? defaultLocation('agy');
+    if (location === 'mini' && !miniLive('agy')) {
+      throw fail(503, 'No mini worker is claiming agy.ask right now.', 'engine_unavailable');
+    }
+    return { engine: 'agy', model: location === 'mini' ? 'agy@mini' : 'agy', location };
+  }
   // Meta before ChatGPT: "meta" is checked by exact name, and llama-* is the
   // model family a caller pointing at Meta AI is most likely to hard-code.
   if (name === 'meta' || name === 'metaai' || name === 'meta.ai' || /^llama/.test(name)) {
+    if (pinned === 'mini') throw fail(404, 'The mini does not run Meta AI.', 'model_not_found');
     const session = rest.join(':').trim() || defaultSession('meta');
-    return { engine: 'meta', model: 'meta:' + session, session };
+    return { engine: 'meta', model: 'meta:' + session, session, location: 'container' };
   }
   if (name === 'chatgpt' || name === 'openai' || /^(gpt|o[134])/.test(name)) {
+    const location = pinned ?? defaultLocation('chatgpt');
+    if (location === 'mini') {
+      if (!miniLive('chatgpt')) {
+        throw fail(503, 'No mini worker is claiming chatgpt.ask right now.', 'engine_unavailable');
+      }
+      // The mini's accounts live in ITS registry, not this container's session
+      // store, so defaultSession() must not be consulted for them — it would name
+      // a container profile the mini has never heard of.
+      const session = rest.join(':').trim() || process.env.MINI_DEFAULT_SESSION?.trim() || 'mini-main';
+      return { engine: 'chatgpt', model: 'chatgpt:' + session + '@mini', session, location };
+    }
     const session = rest.join(':').trim() || defaultSession('chatgpt');
-    return { engine: 'chatgpt', model: 'chatgpt:' + session, session };
+    return { engine: 'chatgpt', model: 'chatgpt:' + session, session, location };
   }
   throw fail(404, `Unknown model "${wanted}". GET /v1/models lists what this gateway serves.`, 'model_not_found');
 }
@@ -143,16 +207,84 @@ function models(): Record<string, unknown> {
         lastProbe: s.lastProbe,
       }),
     );
+  // What the mini is serving RIGHT NOW, from the types its lanes last claimed —
+  // not from configuration. A location that is listed but not polling is the one
+  // thing this endpoint exists to make visible, so liveness is read per call and
+  // the entry is emitted either way rather than being hidden when it is down.
+  const miniWorkers = jobs.liveWorkers();
+  const miniEntry = (engine: 'agy' | 'chatgpt') => {
+    const live = miniLive(engine);
+    const id = engine === 'agy' ? 'agy@mini' : 'chatgpt@mini';
+    return entry(id, {
+      engine,
+      location: 'mini',
+      ready: live,
+      workers: miniWorkers.filter((w) => (w.types ?? []).includes(jobTypeFor(engine))).map((w) => w.name),
+      ...(live ? {} : { detail: 'no worker is claiming ' + jobTypeFor(engine) }),
+    });
+  };
+
   return {
     object: 'list',
     data: [
-      entry('agy', { engine: 'agy' }),
+      entry('agy', { engine: 'agy', location: 'container' }),
       ...named('chatgpt', cgpt, 'chatgpt'),
       ...(cgpt.length ? [entry('chatgpt', { engine: 'chatgpt', alias_for: 'chatgpt:' + defaultSession('chatgpt') })] : []),
       ...named('meta', metaSessions, 'meta'),
       ...(metaSessions.length ? [entry('meta', { engine: 'meta', alias_for: 'meta:' + defaultSession('meta') })] : []),
+      miniEntry('chatgpt'),
+      miniEntry('agy'),
     ],
   };
+}
+
+/**
+ * Run a call on the mini by putting it on the job queue and awaiting the result.
+ *
+ * The mini is not reachable from here — it is behind a home connection and polls
+ * out. So a "route to the mini" is a job it claims, which is why this needs
+ * jobs.wait() and why the gateway could not offer a second location before that
+ * existed.
+ *
+ * There is no streaming: the worker reports once, when it is done. onDelta is
+ * called with the whole answer so a streaming client still gets its one chunk
+ * rather than silence.
+ */
+async function miniAsk(
+  route: Route,
+  prompt: string,
+  opts: { timeoutMs?: number; onDelta?: (chunk: string) => void } = {},
+): Promise<AskResult> {
+  if (route.engine === 'meta') throw fail(404, 'The mini does not run Meta AI.', 'model_not_found');
+  const timeoutMs = opts.timeoutMs ?? timeoutFor(route);
+  const session = route.engine === 'chatgpt' ? (route as { session: string }).session : undefined;
+
+  // Give the worker its full budget, then wait slightly longer than the job's own
+  // timeout: expiring here first would report a timeout for work still running.
+  const job = jobs.create(jobTypeFor(route.engine), { id: session, prompt, timeoutMs }, timeoutMs);
+  const settled = await jobs.wait(job.id, timeoutMs + 5_000);
+
+  if (!settled) throw fail(502, 'the mini job vanished before it finished', 'engine_error');
+  if (settled.status === 'pending' || settled.status === 'running') {
+    throw fail(504, `the mini did not answer within ${Math.round(timeoutMs / 1000)}s (job ${settled.id} is still running)`, 'timeout');
+  }
+  if (settled.status === 'failed') {
+    throw fail(502, settled.error ?? 'the mini reported a failure with no message', 'engine_error');
+  }
+
+  const out = (settled.result ?? {}) as { ok?: boolean; answer?: string; ms?: number; code?: string; error?: string };
+  // The worker reports transport success separately from engine success: a job
+  // can be `done` and still carry ok:false, e.g. a signed-out account.
+  if (out.ok === false) {
+    const code = out.code ?? 'engine_error';
+    const status = code === 'signed_out' || code === 'no_space' ? 503 : code === 'answer_timeout' ? 504 : 502;
+    throw fail(status, out.error ?? 'the mini could not answer: ' + code, code === 'signed_out' ? 'engine_unavailable' : 'engine_error');
+  }
+  const answer = str(out.answer).trim();
+  if (!answer) throw fail(502, 'the mini returned an empty answer', 'engine_error');
+
+  opts.onDelta?.(answer);
+  return { answer, ms: num(out.ms, 0), model: route.model, engine: route.engine };
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +389,7 @@ async function runAsk(
   opts: { timeoutMs?: number; tools?: boolean; onDelta?: (chunk: string) => void; onQueued?: (info: queue.QueueInfo) => void } = {},
 ): Promise<AskResult> {
   const admitted = await queue
-    .run(route.engine, () => engineAsk(route, prompt, opts), { onQueued: opts.onQueued })
+    .run(route.engine, () => engineAsk(route, prompt, opts), { onQueued: opts.onQueued, location: route.location })
     .catch((err: unknown) => {
       const e = err as queue.BusyError;
       if (e.status === 429) throw e;
@@ -271,6 +403,8 @@ async function engineAsk(
   prompt: string,
   opts: { timeoutMs?: number; tools?: boolean; onDelta?: (chunk: string) => void } = {},
 ): Promise<AskResult> {
+  if (route.location === 'mini') return miniAsk(route, prompt, opts);
+
   if (route.engine === 'agy') {
     // A dead session and a slow one are different problems with different fixes,
     // and the status code is the only part of this most clients will read.

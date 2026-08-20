@@ -61,6 +61,14 @@ export interface WorkerInfo {
   taken: number;
   done: number;
   failed: number;
+  /**
+   * The job types this worker's last claim asked for. Recorded so the gateway can
+   * tell whether anything capable of a type is actually online BEFORE routing to
+   * it — without this a call for an engine no live worker serves becomes a job
+   * that sits pending until it times out, which reads to the caller as the engine
+   * being slow rather than absent.
+   */
+  types: string[] | null;
 }
 
 /** Long enough for a Maps search with its scroll plateau, short enough to notice a dead worker. */
@@ -88,6 +96,23 @@ interface Waiter {
 }
 const waiters: Waiter[] = [];
 
+/** Callers blocked in `wait()`, keyed by job id. */
+const finishWaiters = new Map<string, Set<(job: Job) => void>>();
+
+/**
+ * Announce a job reaching a terminal state. Must be called from EVERY place a
+ * job becomes done or failed — `finish()` for a real result, `sweep()` for a
+ * lease that expired past its attempts. A terminal transition that skips this
+ * leaves `wait()` hanging until its own timeout, which looks exactly like a slow
+ * worker and is why the timeout is not a substitute for calling it.
+ */
+function settleFinished(job: Job): void {
+  const set = finishWaiters.get(job.id);
+  if (!set) return;
+  finishWaiters.delete(job.id);
+  for (const resolve of set) resolve(job);
+}
+
 const now = (): string => new Date().toISOString();
 const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback);
 const num = (v: unknown, fallback: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
@@ -104,13 +129,34 @@ function callerIp(req: http.IncomingMessage): string | null {
   return req.socket.remoteAddress ?? null;
 }
 
-function touch(name: string, ip: string | null): WorkerInfo {
+function touch(name: string, ip: string | null, types?: string[] | null): WorkerInfo {
   const existing = workers.get(name);
-  const info: WorkerInfo = existing ?? { name, lastSeenAt: now(), ip, taken: 0, done: 0, failed: 0 };
+  const info: WorkerInfo =
+    existing ?? { name, lastSeenAt: now(), ip, taken: 0, done: 0, failed: 0, types: null };
   info.lastSeenAt = now();
   if (ip) info.ip = ip;
+  // Only a claim declares types. A result POST also touches, and must not erase
+  // what the claim recorded — an empty list there would read as "serves nothing".
+  if (types && types.length) info.types = types;
   workers.set(name, info);
   return info;
+}
+
+/**
+ * Workers seen within `withinMs`, i.e. the ones a route may still count on. A
+ * worker that stopped polling is not "slow", it is gone; the gateway needs that
+ * distinction to refuse rather than enqueue.
+ */
+export function liveWorkers(withinMs = 90_000): WorkerInfo[] {
+  const at = Date.now();
+  return [...workers.values()].filter((w) => at - Date.parse(w.lastSeenAt) <= withinMs);
+}
+
+/** Every job type at least one live worker is currently claiming. */
+export function liveTypes(withinMs = 90_000): string[] {
+  const out = new Set<string>();
+  for (const w of liveWorkers(withinMs)) for (const t of w.types ?? []) out.add(t);
+  return [...out];
 }
 
 /**
@@ -128,6 +174,7 @@ function sweep(): void {
       job.status = 'failed';
       job.finishedAt = now();
       job.error = 'lease expired ' + job.attempts + 'x without a result (last worker: ' + (job.worker ?? 'unknown') + ')';
+      settleFinished(job);
       continue;
     }
     job.status = 'pending';
@@ -260,7 +307,36 @@ export function finish(id: string, ok: boolean, result: unknown, error: string |
     if (ok) info.done += 1;
     else info.failed += 1;
   }
+  settleFinished(job);
   return job;
+}
+
+/**
+ * Resolve when a job reaches a terminal state, or when `timeoutMs` runs out.
+ *
+ * This is what lets a request await its own job instead of the caller polling.
+ * Resolving with the job STILL RUNNING on timeout is deliberate: the work is not
+ * cancelled, the result will land, and the caller gets an id it can read later —
+ * so a slow answer degrades to "come back for it" rather than being thrown away.
+ * `null` means no such job at all.
+ */
+export function wait(id: string, timeoutMs: number): Promise<Job | null> {
+  const job = get(id);
+  if (!job) return Promise.resolve(null);
+  if (job.status === 'done' || job.status === 'failed') return Promise.resolve(job);
+
+  return new Promise<Job | null>((resolve) => {
+    const done = (j: Job | null): void => {
+      clearTimeout(timer);
+      finishWaiters.get(id)?.delete(settle);
+      resolve(j);
+    };
+    const settle = (j: Job): void => done(j);
+    const timer = setTimeout(() => done(get(id)), Math.max(1_000, timeoutMs));
+    const set = finishWaiters.get(id) ?? new Set();
+    set.add(settle);
+    finishWaiters.set(id, set);
+  });
 }
 
 export function get(id: string): Job | null {
@@ -302,8 +378,8 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       json(res, 400, { error: 'worker is required — name the machine asking, it is what /api/jobs reports' });
       return true;
     }
-    touch(worker, callerIp(req));
     const types = (q.get('types') ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+    touch(worker, callerIp(req), types);
     const waitSec = Number(q.get('wait'));
     const controller = new AbortController();
     // The socket closing IS the cancellation. Without this a worker restarted

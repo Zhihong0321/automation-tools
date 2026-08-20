@@ -29,6 +29,8 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { scan as gmapScan } from './gmap.mjs';
+import * as chatgpt from './chatgpt-ego.mjs';
+import * as agy from './agy.mjs';
 
 // Config from a file the process owner can chmod 600, so the token is not in a
 // launchd plist that every process on the box can read.
@@ -44,9 +46,37 @@ if (fs.existsSync(ENV_FILE)) {
 const LAB = (process.env.LAB_URL ?? 'https://ee-auto.up.railway.app').replace(/\/+$/, '');
 const TOKEN = (process.env.LAB_TOKEN ?? '').trim();
 const NAME = (process.env.WORKER_NAME ?? os.hostname()).trim();
-/** Empty = take any job. Set it once a second worker exists and they must not steal each other's work. */
-const TYPES = (process.env.WORKER_TYPES ?? '').trim();
 const WAIT_SEC = 25;
+
+/**
+ * LANES. One claim loop per lane, running side by side in this one process.
+ *
+ * A single loop was right while the only job was a scan. It stops being right
+ * the moment a 15-second ChatGPT call can end up queued behind a 60-second Maps
+ * scan: the caller of the first is an HTTP request somebody is waiting on, and
+ * the second holds the loop for minutes by design.
+ *
+ * The split is by duration, not by engine. `scan` is the slow residential-line
+ * work that must stay one-at-a-time — that is what a home connection can do
+ * without looking like something other than a person. `ask` is everything that
+ * answers in seconds. Each lane is serial within itself, which is also what
+ * keeps one Chrome per profile true for ChatGPT without any lock of our own.
+ *
+ * Each lane checks in under its own name, so a lane that dies is visible in
+ * GET /api/jobs instead of being covered for by its neighbour still polling.
+ */
+const LANES = (() => {
+  // WORKER_TYPES collapses the whole worker back to one lane taking exactly
+  // those types. It predates lanes and is kept because it is the switch that
+  // pins a machine to one kind of work — the reason to reach for it now is to
+  // run the wrappers on one box and the scan on another.
+  const pinned = (process.env.WORKER_TYPES ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+  if (pinned.length) return [{ suffix: '', types: pinned }];
+  return [
+    { suffix: '', types: ['ping', 'gmap.scan'] },
+    { suffix: '-ask', types: ['chatgpt.ask', 'chatgpt.probe', 'agy.ask', 'agy.probe'] },
+  ];
+})();
 
 if (!TOKEN) {
   console.error('LAB_TOKEN is not set. Put it in ' + ENV_FILE + ' as LAB_TOKEN=… or pass it in the environment.');
@@ -92,13 +122,23 @@ async function ping(payload) {
   };
 }
 
-const handlers = { ping, 'gmap.scan': gmapScan };
+const handlers = {
+  ping,
+  'gmap.scan': gmapScan,
+  // The wrappers this machine now runs alongside the cloud's. Different account
+  // for ChatGPT, and the agy that is already signed in here — so these are a
+  // second lane rather than a copy of the container's one.
+  'chatgpt.ask': chatgpt.ask,
+  'chatgpt.probe': chatgpt.probe,
+  'agy.ask': agy.ask,
+  'agy.probe': agy.probe,
+};
 
 // ---------------------------------------------------------------- the client
 
-async function claim() {
-  const q = new URLSearchParams({ worker: NAME, wait: String(WAIT_SEC) });
-  if (TYPES) q.set('types', TYPES);
+async function claim(name, types) {
+  const q = new URLSearchParams({ worker: name, wait: String(WAIT_SEC) });
+  if (types.length) q.set('types', types.join(','));
   // Above the server's own 25s ceiling: the server is expected to answer 204
   // first, so a timeout here means the network ate it, not that it was idle.
   const r = await fetch(LAB + '/api/jobs/next?' + q, {
@@ -113,30 +153,30 @@ async function claim() {
   return (await r.json()).job ?? null;
 }
 
-async function report(id, ok, result, error) {
+async function report(name, id, ok, result, error) {
   const r = await fetch(LAB + '/api/jobs/' + id + '/result', {
     method: 'POST',
     headers: jsonHeaders,
-    body: JSON.stringify({ worker: NAME, ok, result, error }),
+    body: JSON.stringify({ worker: name, ok, result, error }),
     signal: AbortSignal.timeout(30_000),
   });
   if (!r.ok) throw new Error('posting the result answered ' + r.status + ': ' + (await r.text()).slice(0, 200));
 }
 
-async function run(job) {
+async function run(name, job) {
   const handler = handlers[job.type];
   const at = Date.now();
   if (!handler) {
     // Not a crash: an unknown type means this worker is older than whatever
     // queued the job. Saying so beats leaving it to expire as a silent timeout.
     say('job ' + job.id + ' type=' + job.type + ' — no handler on this worker');
-    await report(job.id, false, null, 'no handler for type "' + job.type + '" on worker ' + NAME);
+    await report(name, job.id, false, null, 'no handler for type "' + job.type + '" on worker ' + name);
     return;
   }
   say('job ' + job.id + ' type=' + job.type + ' — running');
   try {
     const result = await handler(job.payload, job);
-    await report(job.id, true, result, null);
+    await report(name, job.id, true, result, null);
     // A scan that ran fine but did not persist is the one failure that is
     // invisible from here: the caller gets its rows and the job says done. The
     // usual cause is the pg-proxy token having expired overnight, so it is
@@ -146,7 +186,13 @@ async function run(job) {
   } catch (err) {
     // The handler failing must not take the loop down with it. Report and carry on.
     say('job ' + job.id + ' FAILED after ' + (Date.now() - at) + 'ms: ' + err.message);
-    await report(job.id, false, null, err.stack?.slice(0, 2000) ?? String(err)).catch((e) =>
+    // A wrapper that is merely signed out must say so in a form the gateway can
+    // read, not as a stack trace: it is the difference between "fix this login"
+    // and "this machine is broken".
+    const detail = err.code === 'logged_out' || err.code === 'timeout'
+      ? err.code + ': ' + err.message
+      : (err.stack?.slice(0, 2000) ?? String(err));
+    await report(name, job.id, false, null, detail).catch((e) =>
       say('could not even report the failure: ' + e.message),
     );
   }
@@ -163,21 +209,35 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
   });
 }
 
-say('worker "' + NAME + '" -> ' + LAB + (TYPES ? ' (types: ' + TYPES + ')' : ' (any type)'));
-
-let backoff = 0;
-while (!stopping) {
-  try {
-    const job = await claim();
-    backoff = 0;
-    if (job) await run(job);
-  } catch (err) {
-    if (err.fatal) {
-      say('FATAL: ' + err.message);
-      process.exit(1);
+/**
+ * One lane's claim loop. Never exits on purpose: a worker that quits on a
+ * network blip is a worker that is offline until someone notices, and the whole
+ * point of this machine is that nobody is watching it.
+ *
+ * The backoff is per lane. A lane whose engine is sick should not slow the one
+ * beside it that is fine.
+ */
+async function lane(name, types) {
+  say('lane "' + name + '" -> ' + LAB + ' (' + types.join(', ') + ')');
+  let backoff = 0;
+  while (!stopping) {
+    try {
+      const job = await claim(name, types);
+      backoff = 0;
+      if (job) await run(name, job);
+    } catch (err) {
+      if (err.fatal) {
+        say('FATAL: ' + err.message);
+        process.exit(1);
+      }
+      backoff = Math.min(backoff ? backoff * 2 : 5_000, 60_000);
+      say('[' + name + '] poll failed (' + err.message + ') — retrying in ' + backoff / 1000 + 's');
+      await new Promise((r) => setTimeout(r, backoff));
     }
-    backoff = Math.min(backoff ? backoff * 2 : 5_000, 60_000);
-    say('poll failed (' + err.message + ') — retrying in ' + backoff / 1000 + 's');
-    await new Promise((r) => setTimeout(r, backoff));
   }
 }
+
+say('worker "' + NAME + '" -> ' + LAB);
+// Promise.all rather than await in sequence: the lanes are the concurrency. If
+// one ever settles the process should end, which is what a rejection here does.
+await Promise.all(LANES.map((l) => lane(NAME + l.suffix, l.types)));

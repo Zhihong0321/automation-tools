@@ -1,0 +1,123 @@
+// The agy CLI as a worker job. Runs on the mini against the copy of agy that is
+// already installed and already signed in here.
+//
+// This is the cheap half of moving the wrappers home: agy needs no browser, no
+// profile and no login flow — the binary at ~/.local/bin/agy holds a Google
+// session in the macOS keyring, which is the one place the container could not
+// use (no D-Bus, no keyring, hence the whole OAuth-paste apparatus in agy-lab).
+// On this machine it is just a command that answers.
+//
+// The four probe states are the same vocabulary agy-lab uses, for the same
+// reason: "could not tell" and "signed out" are different problems and only one
+// of them is fixed by signing in again.
+import { spawn } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
+
+const BIN = process.env.AGY_BIN ?? path.join(os.homedir(), '.local/bin/agy');
+const DEFAULT_TIMEOUT_MS = Number(process.env.AGY_TIMEOUT_MS ?? 300_000);
+
+/** Everything agy prints that means "I am not signed in" rather than "here is your answer". */
+const LOGGED_OUT = /not (?:signed|logged) in|no credentials|please (?:sign|log) in|authenticate|unauthorized|oauth/i;
+
+/**
+ * Run one prompt through `agy -p`.
+ *
+ * -p prints once, when it is done: there is no growing text, so there is nothing
+ * to stream and no settle loop. The whole call is spawn, collect, exit code.
+ *
+ * `tools` is opt-in per call and never inherited, because the only flag agy has
+ * is --dangerously-skip-permissions — all-or-nothing tool auto-approval with
+ * nobody watching. On this machine that is a shell on the home network, not on a
+ * throwaway container, so the default matters more here than it does in the lab.
+ */
+export async function ask(payload = {}) {
+  const prompt = String(payload.prompt ?? '').trim();
+  if (!prompt) throw new Error('agy.ask needs a prompt');
+  const timeoutMs = Number(payload.timeoutMs) > 0 ? Number(payload.timeoutMs) : DEFAULT_TIMEOUT_MS;
+
+  const args = ['-p', prompt];
+  if (payload.tools === true) args.push('--dangerously-skip-permissions');
+
+  const startedAt = Date.now();
+  const { code, stdout, stderr, timedOut } = await run(args, timeoutMs);
+  const ms = Date.now() - startedAt;
+  const answer = stdout.trim();
+
+  if (timedOut) {
+    throw Object.assign(new Error(`agy did not finish within ${Math.round(timeoutMs / 1000)}s`), { code: 'timeout' });
+  }
+  // Exit code first, then the text: agy can exit 0 having printed a sign-in
+  // notice, and it can exit non-zero having printed a perfectly good answer to
+  // stdout with a warning on stderr. Neither reading is safe alone.
+  if (code !== 0 && !answer) {
+    const detail = firstLine(stderr) || `agy exited ${code} with no output`;
+    throw Object.assign(new Error(detail), { code: LOGGED_OUT.test(stderr) ? 'logged_out' : 'engine_error' });
+  }
+  if (!answer) {
+    throw Object.assign(new Error('agy exited 0 but printed nothing'), { code: 'engine_error' });
+  }
+  if (LOGGED_OUT.test(answer) && answer.length < 200) {
+    throw Object.assign(new Error(`agy is not signed in: ${firstLine(answer)}`), { code: 'logged_out' });
+  }
+
+  return { engine: 'agy', answer, ms, at: new Date().toISOString(), ...(stderr.trim() ? { stderr: firstLine(stderr) } : {}) };
+}
+
+/**
+ * Is the local agy usable right now?
+ *
+ * One real model call, because nothing cheaper is honest: a binary that exists
+ * and a binary whose Google session is still valid are different claims, and only
+ * the second one is what a caller about to route work here needs to know.
+ */
+export async function probe(payload = {}) {
+  const startedAt = Date.now();
+  try {
+    const out = await ask({ prompt: 'Reply with exactly one word: ok', timeoutMs: Number(payload.timeoutMs) || 90_000 });
+    return { status: 'ready', detail: `answered in ${out.ms}ms`, sample: out.answer.slice(0, 80), ms: Date.now() - startedAt };
+  } catch (err) {
+    const status = err.code === 'logged_out' ? 'logged_out' : err.code === 'timeout' ? 'unknown' : 'unknown';
+    return { status, detail: err.message, ms: Date.now() - startedAt };
+  }
+}
+
+function run(args, timeoutMs) {
+  return new Promise((resolve) => {
+    // cwd is the home directory rather than wherever the worker was started:
+    // agy reads project context from cwd, and a prompt answered against whatever
+    // repo the worker happened to be launched in is a different answer.
+    const child = spawn(BIN, args, { cwd: os.homedir(), stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, timeoutMs);
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ code: 127, stdout, stderr: `${stderr}\ncould not run ${BIN}: ${err.message}`, timedOut });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? 0, stdout, stderr, timedOut });
+    });
+  });
+}
+
+function firstLine(text, limit = 300) {
+  const line = String(text).split(/\r?\n/).find((l) => l.trim()) ?? String(text);
+  return line.length > limit ? `${line.slice(0, limit)}...` : line.trim();
+}
+
+// Standalone, so this can be proven on the mini before anything routes to it:
+//   node worker/agy.mjs probe
+//   node worker/agy.mjs ask "capital of Malaysia? one word"
+if (import.meta.filename === process.argv[1]) {
+  const [cmd, ...rest] = process.argv.slice(2);
+  const out = cmd === 'ask' ? await ask({ prompt: rest.join(' ') }) : await probe();
+  console.log(JSON.stringify(out, null, 2));
+}
