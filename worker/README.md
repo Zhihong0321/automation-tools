@@ -118,6 +118,7 @@ sleeping does.
 |---|---|
 | `FATAL: 401 — LAB_TOKEN is wrong or was rotated` | the worker exits on purpose. Retrying a bad token forever looks identical to working. |
 | `poll failed (…) — retrying in 5s`, doubling to 60s | the lab is down or redeploying. It reconnects by itself; nothing to do. |
+| a burst of `poll failed (fetch failed)` right after a reboot | the daemon starts before the network is up. It backs off to 60s and connects when the link comes back — on this mini it took about 4 minutes. Expected, not a fault. |
 | a job sits `pending` and the worker log is silent | the mini is asleep, or the process is not running. `sudo launchctl list \| grep gmapworker`. |
 | nothing at all in the log after a reboot | the job was installed as an agent, not a daemon, and nobody logged in. |
 | a job goes back to `pending` on its own | its lease expired — the worker died mid-job. Three of those and the job fails with a message saying so. |
