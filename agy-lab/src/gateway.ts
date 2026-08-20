@@ -23,6 +23,7 @@ import crypto from 'node:crypto';
 import type http from 'node:http';
 import * as agy from './agy.ts';
 import * as sessions from './sessions.ts';
+import * as meta from './meta.ts';
 
 export interface Ctx {
   json: (res: http.ServerResponse, status: number, body: unknown) => void;
@@ -36,6 +37,8 @@ export interface Ctx {
  */
 const AGY_TIMEOUT_MS = Number(process.env.AGY_ASK_TIMEOUT_MS ?? 300_000);
 const CGPT_TIMEOUT_MS = Number(process.env.CGPT_ASK_TIMEOUT_MS ?? 180_000);
+/** Meta AI is the same shape of slow as ChatGPT - a browser watching text appear. */
+const META_TIMEOUT_MS = Number(process.env.META_ASK_TIMEOUT_MS ?? CGPT_TIMEOUT_MS);
 
 const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback);
 const num = (v: unknown, fallback: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
@@ -53,7 +56,14 @@ function fail(status: number, message: string, type = 'invalid_request_error'): 
 // Models
 // ---------------------------------------------------------------------------
 
-type Route = { engine: 'agy'; model: string } | { engine: 'chatgpt'; model: string; session: string };
+type Route =
+  | { engine: 'agy'; model: string }
+  | { engine: 'chatgpt'; model: string; session: string }
+  | { engine: 'meta'; model: string; session: string };
+
+/** The default timeout for a route, since two of the three engines are browsers. */
+const timeoutFor = (route: Route): number =>
+  route.engine === 'agy' ? AGY_TIMEOUT_MS : route.engine === 'meta' ? META_TIMEOUT_MS : CGPT_TIMEOUT_MS;
 
 /**
  * Which ChatGPT account a bare `chatgpt` means.
@@ -62,13 +72,19 @@ type Route = { engine: 'agy'; model: string } | { engine: 'chatgpt'; model: stri
  * here, and routing to a signed-out profile produces a 503 for a request that a
  * working account beside it could have answered.
  */
-function defaultSession(): string {
-  const pinned = process.env.CGPT_DEFAULT_SESSION?.trim();
+function defaultSession(kind: sessions.Kind): string {
+  const pinned = (kind === 'meta' ? process.env.META_DEFAULT_SESSION : process.env.CGPT_DEFAULT_SESSION)?.trim();
   if (pinned) return pinned;
-  const all = sessions.list().filter((s) => s.initialized);
+  const all = sessions.list().filter((s) => s.initialized && s.kind === kind);
   const pick = all.find((s) => s.lastProbe?.status === 'ready') ?? all[0];
   if (!pick) {
-    throw fail(503, 'No ChatGPT session exists yet. Create one with POST /api/cgpt, then /login.', 'no_session');
+    throw fail(
+      503,
+      kind === 'meta'
+        ? 'No Meta AI session exists yet. Sign in on a residential connection and POST the storageState to /api/cgpt/<id>/import with {"kind":"meta"} - the login cannot be driven from this container.'
+        : 'No ChatGPT session exists yet. Create one with POST /api/cgpt, then /login.',
+      'no_session',
+    );
   }
   return pick.id;
 }
@@ -91,8 +107,14 @@ export function resolveModel(raw: string): Route {
   const [head, ...rest] = wanted.split(/[:/]/);
   const name = (head ?? '').toLowerCase();
   if (name === 'agy' || name === 'antigravity') return { engine: 'agy', model: 'agy' };
+  // Meta before ChatGPT: "meta" is checked by exact name, and llama-* is the
+  // model family a caller pointing at Meta AI is most likely to hard-code.
+  if (name === 'meta' || name === 'metaai' || name === 'meta.ai' || /^llama/.test(name)) {
+    const session = rest.join(':').trim() || defaultSession('meta');
+    return { engine: 'meta', model: 'meta:' + session, session };
+  }
   if (name === 'chatgpt' || name === 'openai' || /^(gpt|o[134])/.test(name)) {
-    const session = rest.join(':').trim() || defaultSession();
+    const session = rest.join(':').trim() || defaultSession('chatgpt');
     return { engine: 'chatgpt', model: 'chatgpt:' + session, session };
   }
   throw fail(404, `Unknown model "${wanted}". GET /v1/models lists what this gateway serves.`, 'model_not_found');
@@ -107,20 +129,26 @@ function models(): Record<string, unknown> {
     owned_by: 'agy-lab',
     ...extra,
   });
-  const cgpt = sessions.list().filter((s) => s.initialized);
+  const live = sessions.list().filter((s) => s.initialized);
+  const cgpt = live.filter((s) => s.kind === 'chatgpt');
+  const metaSessions = live.filter((s) => s.kind === 'meta');
+  const named = (prefix: string, list: typeof live, engine: string) =>
+    list.map((s) =>
+      entry(prefix + ':' + s.id, {
+        engine,
+        label: s.label,
+        ready: s.lastProbe?.status === 'ready',
+        lastProbe: s.lastProbe,
+      }),
+    );
   return {
     object: 'list',
     data: [
       entry('agy', { engine: 'agy' }),
-      ...cgpt.map((s) =>
-        entry('chatgpt:' + s.id, {
-          engine: 'chatgpt',
-          label: s.label,
-          ready: s.lastProbe?.status === 'ready',
-          lastProbe: s.lastProbe,
-        }),
-      ),
-      ...(cgpt.length ? [entry('chatgpt', { engine: 'chatgpt', alias_for: 'chatgpt:' + defaultSession() })] : []),
+      ...named('chatgpt', cgpt, 'chatgpt'),
+      ...(cgpt.length ? [entry('chatgpt', { engine: 'chatgpt', alias_for: 'chatgpt:' + defaultSession('chatgpt') })] : []),
+      ...named('meta', metaSessions, 'meta'),
+      ...(metaSessions.length ? [entry('meta', { engine: 'meta', alias_for: 'meta:' + defaultSession('meta') })] : []),
     ],
   };
 }
@@ -206,8 +234,8 @@ export interface AskResult {
   answer: string;
   ms: number;
   model: string;
-  engine: 'agy' | 'chatgpt';
-  /** ChatGPT only: false means the answer stopped growing because time ran out, not because it finished. */
+  engine: 'agy' | 'chatgpt' | 'meta';
+  /** Browser engines only: false means the answer stopped growing because time ran out, not because it finished. */
   settled?: boolean;
 }
 
@@ -233,25 +261,31 @@ async function runAsk(
     return { answer: out.answer, ms: out.ms, model: route.model, engine: 'agy' };
   }
 
-  const out = (await sessions
-    .ask(route.session, prompt, { timeoutMs: opts.timeoutMs ?? CGPT_TIMEOUT_MS, fresh: true, onDelta: opts.onDelta })
-    .catch((err: unknown) => {
-      const e = err as { code?: string; message?: string };
-      const message = e.message ?? 'the ChatGPT session failed.';
-      if (e.code === 'logged_out') throw fail(503, message, 'engine_unavailable');
-      if (/bad session id|no profile directory/i.test(message)) throw fail(404, message, 'model_not_found');
-      throw fail(502, message, 'engine_error');
-    })) as { answer?: string; ms?: number; settled?: boolean };
+  // Two browser engines, one code path: they differ in which site they drive,
+  // not in how a call to them can fail.
+  const site = route.engine === 'meta' ? 'Meta AI' : 'ChatGPT';
+  const drive = route.engine === 'meta' ? meta.ask : sessions.ask;
+  const out = (await drive(route.session, prompt, {
+    timeoutMs: opts.timeoutMs ?? timeoutFor(route),
+    fresh: true,
+    onDelta: opts.onDelta,
+  }).catch((err: unknown) => {
+    const e = err as { code?: string; message?: string };
+    const message = e.message ?? `the ${site} session failed.`;
+    if (e.code === 'logged_out') throw fail(503, message, 'engine_unavailable');
+    if (/bad session id|no profile directory/i.test(message)) throw fail(404, message, 'model_not_found');
+    throw fail(502, message, 'engine_error');
+  })) as { answer?: string; ms?: number; settled?: boolean };
 
   const answer = str(out.answer);
   if (!answer) {
     throw fail(
       502,
-      'the ChatGPT session produced no text. GET /api/cgpt/:id/frame shows what it is looking at.',
+      `the ${site} session produced no text. GET /api/cgpt/:id/frame shows what it is looking at.`,
       'engine_error',
     );
   }
-  return { answer, ms: num(out.ms, 0), model: route.model, engine: 'chatgpt', settled: out.settled === true };
+  return { answer, ms: num(out.ms, 0), model: route.model, engine: route.engine, settled: out.settled === true };
 }
 
 // ---------------------------------------------------------------------------
@@ -327,10 +361,7 @@ async function chatCompletions(req: http.IncomingMessage, res: http.ServerRespon
 
   const route = resolveModel(str(body.model));
   const prompt = promptFromMessages(body.messages);
-  const timeoutMs = num(
-    body.timeoutMs ?? body.timeout_ms,
-    route.engine === 'agy' ? AGY_TIMEOUT_MS : CGPT_TIMEOUT_MS,
-  );
+  const timeoutMs = num(body.timeoutMs ?? body.timeout_ms, timeoutFor(route));
   const ignored = IGNORABLE.filter((k) => body[k] !== undefined);
   const id = completionId();
 
@@ -388,7 +419,7 @@ async function nativeAsk(req: http.IncomingMessage, res: http.ServerResponse, ct
   const prompt = body.messages ? promptFromMessages(body.messages) : str(body.prompt).trim();
   if (!prompt) throw fail(400, 'prompt is required (or messages).');
   const result = await runAsk(route, prompt, {
-    timeoutMs: num(body.timeoutMs, route.engine === 'agy' ? AGY_TIMEOUT_MS : CGPT_TIMEOUT_MS),
+    timeoutMs: num(body.timeoutMs, timeoutFor(route)),
     tools: body.tools === true,
   });
   ctx.json(res, 200, {

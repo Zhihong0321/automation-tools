@@ -13,6 +13,9 @@ import * as browser from './browser.ts';
 
 export type Health = 'ready' | 'logged_out' | 'challenged' | 'busy' | 'never_used' | 'unknown';
 
+/** The site a profile belongs to. One engine each; see `kind` on SessionRecord. */
+export type Kind = 'chatgpt' | 'meta';
+
 /**
  * These MUST track ../../gmap-recon/src/chatgpt.ts. Copied rather than imported
  * so a broken engine build cannot take this down — but when ChatGPT changes its
@@ -27,6 +30,16 @@ const MANIFEST = path.join(browser.PROFILE_ROOT, 'manifest.json');
 export interface SessionRecord {
   id: string;
   label: string;
+  /**
+   * Which site this profile is signed in to.
+   *
+   * A profile is a browser login and a browser login belongs to exactly one site,
+   * so this is what stops a meta.ai profile being probed against chatgpt.com, and
+   * what stops it appearing in the gateway as `chatgpt:<id>` - a model every
+   * caller would then get a 503 from forever. Absent means "chatgpt": every
+   * record written before this field existed is one.
+   */
+  kind?: Kind;
   createdAt: string;
   lastProbe: { status: Health; detail: string; at: string; ms: number } | null;
   notes?: string;
@@ -89,6 +102,7 @@ export function list(): Array<SessionRecord & { dir: string; initialized: boolea
       label: manifest[id]?.label ?? id,
       createdAt: manifest[id]?.createdAt ?? '(unknown)',
       lastProbe: manifest[id]?.lastProbe ?? null,
+      kind: manifest[id]?.kind ?? 'chatgpt',
       // Whether one is set, never the value. A list endpoint has no business
       // handing out a credential that mints login codes.
       totpSecret: manifest[id]?.totpSecret ? '(set)' : undefined,
@@ -102,14 +116,23 @@ export function list(): Array<SessionRecord & { dir: string; initialized: boolea
   });
 }
 
-export function create(id: string, label?: string): SessionRecord {
+export function create(id: string, label?: string, kind?: Kind): SessionRecord {
   const dir = browser.profileDir(id); // validates the id
   fs.mkdirSync(dir, { recursive: true });
   const m = readManifest();
   m[id] = m[id] ?? { id, label: label ?? id, createdAt: new Date().toISOString(), lastProbe: null };
   if (label) m[id]!.label = label;
+  // Only ever set, never cleared by a later bare create(). Every route calls
+  // create(id) on the way past, and a profile that silently changed site would
+  // then be driven against the wrong one.
+  if (kind) m[id]!.kind = kind;
   writeManifest(m);
   return m[id]!;
+}
+
+/** Which site this profile is for. Records written before the field existed are ChatGPT. */
+export function kindOf(id: string): Kind {
+  return readManifest()[id]?.kind ?? 'chatgpt';
 }
 
 /** Store, or with null clear, the TOTP secret for a session. */
@@ -134,7 +157,8 @@ export async function remove(id: string): Promise<void> {
   writeManifest(m);
 }
 
-function recordProbe(id: string, status: Health, detail: string, ms: number): void {
+/** Exported so the Meta engine records its probes in the same manifest, in the same shape. */
+export function recordProbe(id: string, status: Health, detail: string, ms: number): void {
   const m = readManifest();
   m[id] = m[id] ?? { id, label: id, createdAt: new Date().toISOString(), lastProbe: null };
   m[id]!.lastProbe = { status, detail, at: new Date().toISOString(), ms };

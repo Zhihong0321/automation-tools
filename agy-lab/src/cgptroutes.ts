@@ -13,6 +13,7 @@ import type http from 'node:http';
 import * as browser from './browser.ts';
 import * as sessions from './sessions.ts';
 import * as login from './login.ts';
+import * as meta from './meta.ts';
 import { parseSecret, totp, secondsLeft } from './totp.ts';
 
 export interface Ctx {
@@ -92,7 +93,9 @@ export async function handle(
     const body = await readJson(req);
     const id = str(body.id).trim();
     if (!id) return reply(json, res, 400, { error: 'id is required' });
-    json(res, 200, sessions.create(id, str(body.label) || undefined));
+    const kind = readKind(body);
+    if (kind instanceof Error) return reply(json, res, 400, { error: kind.message });
+    json(res, 200, sessions.create(id, str(body.label) || undefined, kind));
     return true;
   }
 
@@ -110,6 +113,19 @@ export async function handle(
   // of scope with the request: the profile keeps the resulting session cookies,
   // which is the point, and nothing keeps the password.
   if (method === 'POST' && action === 'login') {
+    // Refused for meta.ai, and not out of caution: measured from this container,
+    // the Facebook half succeeds and the OIDC hop back answers "Meta AI isn't
+    // available in your region". A scripted login here cannot end in a session,
+    // so accepting credentials for one would only take a password in exchange
+    // for a failure.
+    if (sessions.kindOf(id) === 'meta') {
+      return reply(json, res, 400, {
+        error:
+          'meta.ai will not complete a login from this address (region gate on the datacenter IP). Sign in on a residential connection and POST the storageState to /api/cgpt/' +
+          id +
+          '/import - see scripts/meta-login.mjs.',
+      });
+    }
     const body = await readJson(req);
     const email = str(body.email).trim();
     const password = str(body.password);
@@ -492,13 +508,15 @@ export async function handle(
 
   if (method === 'POST' && action === 'probe') {
     const body = await readJson(req);
-    json(res, 200, await sessions.probe(id, { timeoutMs: num(body.timeoutMs, 60_000), keepOpen: body.keepOpen === true }));
+    const opts = { timeoutMs: num(body.timeoutMs, 60_000), keepOpen: body.keepOpen === true };
+    const run = sessions.kindOf(id) === 'meta' ? meta.probe : sessions.probe;
+    json(res, 200, await run(id, opts));
     return true;
   }
 
   if (method === 'POST' && action === 'open') {
     const body = await readJson(req);
-    const target = str(body.url, sessions.TEMP_CHAT_URL);
+    const target = str(body.url, sessions.kindOf(id) === 'meta' ? meta.NEW_CHAT_URL : sessions.TEMP_CHAT_URL);
     const out = await browser.withProfile(id, async () => {
       sessions.create(id);
       const { page } = await browser.acquire(id);
@@ -556,6 +574,12 @@ export async function handle(
     if (!state || (!state.cookies && !state.origins)) {
       return reply(json, res, 400, { error: 'expected a Playwright storageState with cookies and/or origins' });
     }
+    // `kind` matters most here. Import is how a meta.ai session comes into
+    // existence at all, and a profile that arrived without saying so would be
+    // probed against chatgpt.com and published as a chatgpt model.
+    const kind = readKind(body);
+    if (kind instanceof Error) return reply(json, res, 400, { error: kind.message });
+    if (kind) sessions.create(id, undefined, kind);
     json(res, 200, await sessions.importState(id, state));
     return true;
   }
@@ -572,11 +596,27 @@ export async function handle(
     const body = await readJson(req);
     const prompt = str(body.prompt).trim();
     if (!prompt) return reply(json, res, 400, { error: 'prompt is required' });
-    json(res, 200, await sessions.ask(id, prompt, num(body.timeoutMs, 180_000)));
+    const run = sessions.kindOf(id) === 'meta' ? meta.ask : sessions.ask;
+    json(res, 200, await run(id, prompt, num(body.timeoutMs, 180_000)));
     return true;
   }
 
   return false;
+}
+
+/**
+ * The site a request says a profile is for.
+ *
+ * Returns undefined when the caller did not say - which leaves an existing
+ * record alone rather than defaulting it to ChatGPT and re-pointing a meta
+ * profile at the wrong site on the next touch.
+ */
+function readKind(body: Record<string, unknown>): sessions.Kind | undefined | Error {
+  const raw = str(body.kind).trim().toLowerCase();
+  if (!raw) return undefined;
+  if (raw === 'chatgpt' || raw === 'openai') return 'chatgpt';
+  if (raw === 'meta' || raw === 'metaai' || raw === 'meta.ai') return 'meta';
+  return new Error(`unknown kind "${raw}" - expected "chatgpt" or "meta"`);
 }
 
 function reply(json: Ctx['json'], res: http.ServerResponse, status: number, body: unknown): boolean {

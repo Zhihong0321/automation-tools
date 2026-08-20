@@ -1,18 +1,19 @@
-# The gateway — agy and ChatGPT as one API
+# The gateway — agy, ChatGPT and Meta AI as one API
 
-Two engines behind one HTTP surface, in the OpenAI chat-completions shape, so a
+Three engines behind one HTTP surface, in the OpenAI chat-completions shape, so a
 tool that already talks to an LLM only has to change a base URL.
 
 ```
 Base URL   https://ee-auto.up.railway.app/v1
 API key    the LAB_TOKEN of this service
-Models     agy | chatgpt | chatgpt:<session>
+Models     agy | chatgpt | chatgpt:<session> | meta | meta:<session>
 ```
 
 | Engine | What it actually is | Typical |
 |---|---|---|
 | `agy` | the Antigravity CLI, signed in with a Google account, run with `-p` | ~14s for a one-line answer |
 | `chatgpt` | a signed-in ChatGPT session in a real Chrome, typed into and read back | ~15s for a short answer |
+| `meta` | a signed-in meta.ai session in a real Chrome, same way | ~10s for a short answer |
 
 Neither is a hosted API. Every call is a real CLI run or a real browser doing what
 a person would do, and the limits at the bottom of this page follow from that.
@@ -75,6 +76,8 @@ appending `/v1` to a base URL that already has it.
 | `chatgpt`, `openai` | the default ChatGPT session |
 | `chatgpt:<id>` | that ChatGPT session by name — one per account |
 | `gpt-4o`, `gpt-*`, `o1*` … | the default ChatGPT session |
+| `meta`, `metaai`, `llama-*` | the default Meta AI session |
+| `meta:<id>` | that Meta AI session by name |
 | *(empty)*, `auto` | `DEFAULT_MODEL`, which is `agy` unless set |
 
 `gpt-*` maps to ChatGPT because tools hard-code a model id far more often than
@@ -138,6 +141,13 @@ back-end, not a fan-out one.
 read back whole, and asking for one big JSON blob is the shape most likely to come
 back truncated. Ask for line records instead.
 
+**A Meta AI session cannot be re-logged-in from here.** meta.ai refuses a login
+from this container's address — "Meta AI isn't available in your region" — while
+the same account signs in fine from a residential connection, and a session minted
+there replays from here without complaint. So the session is minted locally and
+imported: `node scripts/meta-login.mjs --token $LAB_TOKEN` in the eter-browser
+project. Full measurements in [META-AI.md](META-AI.md).
+
 **A signed-out ChatGPT session is a 503, deliberately.** The logged-out page still
 has a working composer, so a naive wrapper types into it and returns an anonymous
 answer that looks fine and is worthless. The gateway checks for a sign-in wall and
@@ -169,6 +179,8 @@ In a stream the status line is already sent, so a failure arrives as a final
 | `LAB_TOKEN` | — | required; the API key for everything under `/api` and `/v1` |
 | `DEFAULT_MODEL` | `agy` | what an empty or `auto` model resolves to |
 | `CGPT_DEFAULT_SESSION` | first `ready` | which account a bare `chatgpt` means |
+| `META_DEFAULT_SESSION` | first `ready` | which account a bare `meta` means |
+| `META_ASK_TIMEOUT_MS` | `CGPT_ASK_TIMEOUT_MS` | |
 | `AGY_ASK_TIMEOUT_MS` | 300000 | |
 | `CGPT_ASK_TIMEOUT_MS` | 180000 | |
 | `AGY_MAX_CONCURRENT` | 2 | agy runs in flight at once |
