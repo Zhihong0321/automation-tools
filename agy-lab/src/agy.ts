@@ -10,6 +10,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
+import * as pty from './pty.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -181,4 +182,109 @@ export function setModelProvider(provider: string | null): { path: string; setti
 export function firstLine(text: string, limit = 300): string {
   const line = text.split(/\r?\n/).find((l) => l.trim()) ?? text;
   return line.length > limit ? `${line.slice(0, limit)}...` : line.trim();
+}
+
+// ---------------------------------------------------------------------------
+// Asking agy something, synchronously
+// ---------------------------------------------------------------------------
+
+/**
+ * How many agy runs may be in flight at once.
+ *
+ * agy is a Node process with a language server behind it, in a 4GB container that
+ * is also holding a headed Chrome. Two is the point where a burst of API calls
+ * queues instead of racing the browser for memory — and the failure mode of
+ * getting this wrong is the container restarting, which reads as every endpoint
+ * breaking rather than as one prompt being greedy.
+ */
+const MAX_CONCURRENT = Math.max(1, Number(process.env.AGY_MAX_CONCURRENT ?? 2));
+let inFlight = 0;
+const waiting: Array<() => void> = [];
+
+async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (inFlight >= MAX_CONCURRENT) await new Promise<void>((resolve) => waiting.push(resolve));
+  inFlight++;
+  try {
+    return await fn();
+  } finally {
+    inFlight--;
+    waiting.shift()?.();
+  }
+}
+
+export interface AskOptions {
+  timeoutMs?: number;
+  /** --dangerously-skip-permissions. Off unless a caller asks: there is no per-tool allow flag. */
+  tools?: boolean;
+  /** agy's --output-format. `text` unless a caller wants agy's own json envelope. */
+  format?: string;
+}
+
+export interface AskOutcome {
+  answer: string;
+  ms: number;
+  /** Which mechanism produced the answer. `pty` means the plain run printed nothing. */
+  via: 'exec' | 'pty';
+}
+
+export interface AskError extends Error {
+  /** `logged_out` | `timeout` | `not_installed` | `empty` — what the caller should do about it. */
+  code?: string;
+}
+
+function fail(code: string, message: string): AskError {
+  return Object.assign(new Error(message), { code }) as AskError;
+}
+
+/**
+ * One prompt in, one answer out, on the same call.
+ *
+ * /api/run starts a terminal session and hands back an id to poll, which is the
+ * right shape for watching a long agent run and the wrong one for a tool that
+ * wants an answer. This is the other shape. It reuses probe's execFile path
+ * because that is the one measured to work in this container, and falls back to a
+ * pty only for the one known failure it has: agy occasionally exits 0 having
+ * printed nothing when nothing is attached to its stdout.
+ */
+export async function ask(prompt: string, opts: AskOptions = {}): Promise<AskOutcome> {
+  const timeoutMs = opts.timeoutMs ?? 300_000;
+  const started = Date.now();
+  if (!has(BIN)) throw fail('not_installed', `No agy binary at ${BIN}. POST /api/install first.`);
+
+  const args = [
+    '-p', prompt,
+    '--print-timeout', `${Math.max(1, Math.round(timeoutMs / 1000))}s`,
+    '--output-format', opts.format ?? 'text',
+    ...(opts.tools === true ? ['--dangerously-skip-permissions'] : []),
+  ];
+
+  return withSlot(async () => {
+    let text = '';
+    try {
+      const { stdout } = await execFileAsync(BIN, args, { timeout: timeoutMs + 15_000, maxBuffer: 32 << 20 });
+      text = stdout.trim();
+    } catch (err: unknown) {
+      const e = err as { stderr?: unknown; stdout?: unknown; message?: string; code?: unknown; killed?: boolean };
+      const detail =
+        (typeof e.stderr === 'string' && e.stderr.trim()) ||
+        (typeof e.stdout === 'string' && e.stdout.trim()) ||
+        e.message ||
+        String(err);
+      if (e.code === 'ENOENT') throw fail('not_installed', `No agy binary at ${BIN}.`);
+      if (AUTH_FAILURE.test(detail)) throw fail('logged_out', firstLine(detail));
+      if (e.killed) throw fail('timeout', `agy gave no answer within ${Math.round(timeoutMs / 1000)}s.`);
+      throw fail('failed', firstLine(detail));
+    }
+    if (text) return { answer: text, ms: Date.now() - started, via: 'exec' };
+
+    // Empty and exit 0. Known non-TTY behaviour, not a logout — so retry the same
+    // command through a terminal rather than reporting a blank answer as success.
+    const command = pty.sh(BIN) + ' ' + args.map(pty.sh).join(' ') + ' 2>&1';
+    const out = await pty.run(command, { timeoutMs: timeoutMs + 15_000, fakeSsh: true });
+    const answer = out.output.trim();
+    if (out.timedOut) throw fail('timeout', `agy gave no answer within ${Math.round(timeoutMs / 1000)}s.`);
+    if (AUTH_FAILURE.test(answer)) throw fail('logged_out', firstLine(answer));
+    if (!answer) throw fail('empty', 'agy exited 0 and printed nothing, twice - once piped and once on a terminal.');
+    return { answer, ms: Date.now() - started, via: 'pty' };
+  });
 }

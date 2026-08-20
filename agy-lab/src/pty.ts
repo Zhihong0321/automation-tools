@@ -39,7 +39,10 @@ export class PtySession {
   endedAt: string | null = null;
   exitCode: number | null = null;
   running = true;
+  /** Resolves when the command has exited, so a caller can await a run instead of polling it. */
+  done: Promise<void>;
 
+  #resolveDone: (() => void) | null = null;
   #child: ChildProcessWithoutNullStreams;
   #chunks: Buffer[] = [];
   #bytes = 0;
@@ -50,6 +53,9 @@ export class PtySession {
     this.id = id;
     this.command = command;
     this.startedAt = new Date().toISOString();
+    this.done = new Promise<void>((resolve) => {
+      this.#resolveDone = resolve;
+    });
 
     this.#child = spawn('script', ['-q', '-f', '-c', command, '/dev/null'], {
       env: { ...process.env, ...env },
@@ -85,6 +91,7 @@ export class PtySession {
     this.running = false;
     this.exitCode = code;
     this.endedAt = new Date().toISOString();
+    this.#resolveDone?.();
   }
 
   /**
@@ -177,4 +184,53 @@ export function list(): SessionView[] {
 /** Shell-quote for the single string `script -c` hands to sh. */
 export function sh(arg: string): string {
   return `'${arg.replace(/'/g, `'\''`)}'`;
+}
+
+/**
+ * Run a command in a pty and wait for it, rather than streaming it to a browser.
+ *
+ * The interactive sessions above exist because a login needs a human mid-flight.
+ * A prompt does not: it is one command whose whole output is the answer, and the
+ * caller is an HTTP request that has to hold the connection open anyway. Same pty
+ * for the same reason — agy behaves differently without a controlling terminal,
+ * and "exits 0, prints nothing" is the shape that difference takes.
+ */
+export async function run(
+  command: string,
+  opts: { timeoutMs?: number; fakeSsh?: boolean; env?: Record<string, string> } = {},
+): Promise<{ output: string; exitCode: number | null; timedOut: boolean }> {
+  const session = start(command, { fakeSsh: opts.fakeSsh, env: opts.env });
+  let timedOut = false;
+  const timer = opts.timeoutMs
+    ? setTimeout(() => {
+        timedOut = true;
+        session.kill();
+      }, opts.timeoutMs)
+    : null;
+  try {
+    await session.done;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  return { output: clean(session.since(0).data), exitCode: session.exitCode, timedOut };
+}
+
+/**
+ * Strip what the terminal added.
+ *
+ * A pty carries colour codes, cursor moves and carriage returns that no caller of
+ * an API wants in a string it is about to parse. The patterns are built from char
+ * codes instead of written as escapes: an escape lost in an edit leaves a regex
+ * that silently matches nothing, and the damage then shows up as control bytes
+ * inside an answer some other tool is parsing.
+ */
+const ESC = String.fromCharCode(27);
+const BEL = String.fromCharCode(7);
+const CR = String.fromCharCode(13);
+const CSI = new RegExp(ESC + '[[][0-9;?]*[ -/]*[@-~]', 'g');
+const OSC = new RegExp(ESC + '[]][^' + BEL + ESC + ']*(' + BEL + '|' + ESC + '.)', 'g');
+const LONE = new RegExp(ESC + '.', 'g');
+
+export function clean(text: string): string {
+  return text.replace(CSI, '').replace(OSC, '').replace(LONE, '').split(CR).join('').trim();
 }

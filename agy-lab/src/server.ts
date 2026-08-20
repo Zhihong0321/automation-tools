@@ -15,6 +15,7 @@ import * as pty from './pty.ts';
 import * as snap from './snapshot.ts';
 import * as browser from './browser.ts';
 import * as cgpt from './cgptroutes.ts';
+import * as gateway from './gateway.ts';
 import { page } from './ui.ts';
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -111,8 +112,22 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     return void res.end(html);
   }
 
-  if (!p.startsWith('/api/')) return json(res, 404, { error: 'not found' });
-  if (!authorized(req, url)) return json(res, 401, { error: 'bad or missing token' });
+  // /v1/* is the gateway - the OpenAI-shaped surface other tools point at. It sits
+  // behind the same token because a bearer header is exactly what an OpenAI client
+  // already sends, so pointing one here costs a base URL and nothing else.
+  if (!p.startsWith('/api/') && !p.startsWith('/v1/')) return json(res, 404, { error: 'not found' });
+  if (!authorized(req, url)) {
+    // An OpenAI client parses the error envelope and prints its message; a bare
+    // {error: string} shows up there as [object Object].
+    return p.startsWith('/v1/')
+      ? json(res, 401, { error: { message: 'bad or missing token', type: 'invalid_request_error', code: 'invalid_api_key' } })
+      : json(res, 401, { error: 'bad or missing token' });
+  }
+
+  // ---- the gateway ------------------------------------------------------
+  // Before everything else, because this is the surface that has consumers: a
+  // route added below must never shadow one that other tools are calling.
+  if (await gateway.handle(req, res, url, { json, readJson })) return;
 
   // ---- ChatGPT sessions --------------------------------------------------
   // Delegated wholesale. These routes own a browser process each and have their

@@ -341,21 +341,63 @@ export async function exportState(id: string): Promise<StorageState> {
 /**
  * Send one prompt through the signed-in UI and read the answer back.
  *
- * Minimal on purpose — the real wrapper lives in gmap-recon/src/chatgpt.ts. This
- * exists to prove a session is usable end to end, not to replace it. The answer is
- * read as innerText rather than markdown or JSON because long fenced blocks do not
- * read back whole any other way.
+ * This is the wrapper other tools reach through the gateway, so it answers to a
+ * stricter standard than the "prove a session works" probe it grew out of:
+ *
+ * - **Fresh by default.** Each ask opens a new temporary chat. Reusing whatever
+ *   page was already on screen makes call N+1 depend on call N's conversation,
+ *   which is invisible from the API and impossible to reason about from a tool.
+ * - **Refuses a signed-out session.** A logged-out chatgpt.com still ships a
+ *   working composer, so typing into it succeeds and returns something — an
+ *   anonymous answer, or a sign-up wall, indistinguishable from a real reply
+ *   downstream. Better to fail the call than to feed a pipeline garbage.
+ * - **`onDelta`** streams the answer as it grows, because the polling loop below
+ *   already has the growing text and an SSE client is waiting for it.
+ *
+ * The answer is read as innerText rather than markdown or JSON because long
+ * fenced blocks do not read back whole any other way.
  */
-export async function ask(id: string, prompt: string, timeoutMs = 180_000): Promise<Record<string, unknown>> {
+export interface AskOptions {
+  timeoutMs?: number;
+  /** Open a new temporary chat first. Default true; false continues the page's current thread. */
+  fresh?: boolean;
+  /** Called with each new piece of the answer as it streams in. */
+  onDelta?: (chunk: string) => void;
+}
+
+export async function ask(
+  id: string,
+  prompt: string,
+  opts: number | AskOptions = {},
+): Promise<Record<string, unknown>> {
+  const o: AskOptions = typeof opts === 'number' ? { timeoutMs: opts } : opts;
+  const timeoutMs = o.timeoutMs ?? 180_000;
   const started = Date.now();
   return browser.withProfile(id, async () => {
     const { page } = await browser.acquire(id);
-    if (!page.url().includes('chatgpt.com')) {
+    if (o.fresh !== false || !page.url().includes('chatgpt.com')) {
       await page.goto(TEMP_CHAT_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     }
-    await page.waitForSelector("#prompt-textarea", { timeout: 60_000, state: "visible" });
+    await page.waitForSelector('#prompt-textarea', { timeout: 60_000, state: 'visible' });
+
+    // The composer being live is not the signal. A visible sign-in control is.
+    const wall = await page
+      .evaluate(() => {
+        const text = (n: Element) => (n.textContent ?? '').trim().toLowerCase();
+        return Array.from(document.querySelectorAll('button, a')).some((n) =>
+          ['log in', 'login', 'sign up', 'sign up for free'].includes(text(n)),
+        );
+      })
+      .catch(() => false);
+    if (wall) {
+      throw Object.assign(
+        new Error(`session "${id}" is signed out - chatgpt.com is showing a sign-in wall.`),
+        { code: 'logged_out' },
+      );
+    }
+
     await page.click('#prompt-textarea');
-    await page.keyboard.type(prompt, { delay: 12 });
+    const entry = await enterPrompt(page, prompt);
     await page.keyboard.press('Enter');
 
     // Settle on silence rather than on a "done" marker: the DOM has no reliable
@@ -363,6 +405,7 @@ export async function ask(id: string, prompt: string, timeoutMs = 180_000): Prom
     // finished one stops. Three quiet polls is the cheapest honest end condition.
     const deadline = Date.now() + timeoutMs;
     let last = '';
+    let emitted = '';
     let quiet = 0;
     while (Date.now() < deadline && quiet < 3) {
       await page.waitForTimeout(1500);
@@ -375,10 +418,59 @@ export async function ask(id: string, prompt: string, timeoutMs = 180_000): Prom
         .catch(() => '');
       if (text && text === last) quiet++;
       else quiet = 0;
+      // Only emit an append. A re-render that is not an extension of what the
+      // client already has cannot be un-sent, so it waits for the reconcile below.
+      if (o.onDelta && text && text.startsWith(emitted) && text.length > emitted.length) {
+        o.onDelta(text.slice(emitted.length));
+        emitted = text;
+      }
       last = text;
     }
-    return { id, prompt, answer: last, ms: Date.now() - started, settled: quiet >= 3 };
+    if (o.onDelta && last !== emitted) o.onDelta(last.slice(commonPrefix(emitted, last)));
+    return { id, prompt, answer: last, ms: Date.now() - started, settled: quiet >= 3, entry };
   });
+}
+
+/**
+ * Put the prompt in the composer.
+ *
+ * `keyboard.type` was here and cannot stay: Enter submits, so the first newline in
+ * a multi-line prompt sends half a question — and at 12ms a character a prompt
+ * with a document in it spends a minute being typed. `insertText` hands the whole
+ * string to the focused node and fires beforeinput/input, which is what ProseMirror
+ * listens to, in one call.
+ *
+ * It is verified rather than trusted, because "the field looks right" and "the app
+ * accepted it" are different claims — the same distinction that made the MFA login
+ * take a day. If the composer does not read back what was inserted, this clears it
+ * and falls back to real keystrokes with Shift+Enter for the newlines.
+ */
+async function enterPrompt(page: import('patchright').Page, prompt: string): Promise<'insert' | 'type'> {
+  const composerText = () =>
+    page
+      .evaluate(() => (document.querySelector('#prompt-textarea') as HTMLElement | null)?.innerText ?? '')
+      .catch(() => '');
+
+  await page.keyboard.insertText(prompt);
+  const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
+  const head = norm(prompt).slice(0, 40);
+  if (head && norm(await composerText()).includes(head)) return 'insert';
+
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('Delete');
+  const lines = prompt.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (i) await page.keyboard.press('Shift+Enter');
+    if (lines[i]) await page.keyboard.type(lines[i]!, { delay: 12 });
+  }
+  return 'type';
+}
+
+/** Length of the longest shared prefix — how much of a re-rendered answer the client already has. */
+function commonPrefix(a: string, b: string): number {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
 }
 
 function hostOf(url: string): string {
