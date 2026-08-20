@@ -15,8 +15,9 @@ Models     agy | chatgpt | chatgpt:<session> | meta | meta:<session>
 | `chatgpt` | a signed-in ChatGPT session in a real Chrome, typed into and read back | ~15s for a short answer |
 | `meta` | a signed-in meta.ai session in a real Chrome, same way | ~10s for a short answer |
 
-Neither is a hosted API. Every call is a real CLI run or a real browser doing what
-a person would do, and the limits at the bottom of this page follow from that.
+None of the three is a hosted API. Every call is a real CLI run or a real browser
+doing what a person would do, and the limits at the bottom of this page follow
+from that.
 
 ---
 
@@ -84,8 +85,10 @@ appending `/v1` to a base URL that already has it.
 they let you pick one. The response always names the model that actually ran, so
 the substitution is never silent: check `.model` and `.agy_lab.engine`.
 
-The default ChatGPT session is `CGPT_DEFAULT_SESSION` if set, otherwise the first
-session whose last probe said `ready`.
+A bare `chatgpt` or `meta` resolves to `CGPT_DEFAULT_SESSION` / `META_DEFAULT_SESSION`
+if set, otherwise the first session of that kind whose last probe said `ready`.
+Sessions of the two kinds are separate: `meta:` names never resolve against a
+ChatGPT profile, or the reverse.
 
 ### The native shape
 
@@ -98,7 +101,7 @@ curl -s https://ee-auto.up.railway.app/api/ask \
 ```
 
 `settled: false` means the answer stopped growing because the clock ran out, not
-because ChatGPT had finished — the text is real but partial. In the OpenAI shape
+because the model had finished — the text is real but partial. In the OpenAI shape
 the same fact appears as `finish_reason: "length"`.
 
 `tools: true` on either shape runs agy with `--dangerously-skip-permissions`, so
@@ -114,28 +117,31 @@ inherited.
   takes none. They are accepted, ignored, and listed back in `agy_lab.ignored` so
   a caller can see they had no effect rather than assume they worked.
 - **Token counts are an estimate**, characters ÷ 4, marked `"estimated": true`.
-  Neither engine reports real usage.
+  No engine here reports real usage.
 - **`n > 1` is refused**, not faked. Each call is one real model run.
 - **No function calling, no logprobs, no image input.** An image part in a message
   is replaced with `[unsupported content part: image_url]` rather than dropped, so
   a prompt that depended on it fails visibly.
-- **History is flattened into one prompt.** Neither engine takes a message array:
+- **History is flattened into one prompt.** No engine here takes a message array:
   system messages come first verbatim, then `User:` / `Assistant:` turns. A single
   user message is passed through unlabelled.
-- **Every ChatGPT call is a new temporary chat.** There is no server-side
-  conversation to continue — send the history you want considered.
+- **Every browser call starts a new chat** — a temporary chat on ChatGPT, a new
+  thread on Meta AI. There is no server-side conversation to continue, so send the
+  history you want considered.
 
-Streaming is real for ChatGPT (the answer is polled as it renders, ~1.5s
-granularity) and single-shot for agy, which prints only when it is done.
+Streaming is real for the two browser engines (the answer is polled as it renders,
+~1.5s granularity) and single-shot for agy, which prints only when it is done.
 
 ---
 
 ## Limits that will bite you
 
-**One browser at a time.** `MAX_OPEN_BROWSERS=1`, LRU-evicted, closed after five
-minutes idle. Concurrent ChatGPT calls serialise; a cold one also pays the Chrome
-launch. agy runs up to `AGY_MAX_CONCURRENT` (2) at once. This is a pipeline
-back-end, not a fan-out one.
+**One browser at a time, across both browser engines.** `MAX_OPEN_BROWSERS=1`,
+LRU-evicted, closed after five minutes idle. ChatGPT and Meta AI share that one
+slot: calls to them serialise, and alternating between them evicts the other
+profile, which costs about a second per call - measured 9.6s for a warm Meta AI
+call against 10.4s for the same one right after a ChatGPT call. agy is a CLI and runs up to
+`AGY_MAX_CONCURRENT` (2) alongside. This is a pipeline back-end, not a fan-out one.
 
 **Answers are read from `innerText`.** A long fenced code block does not always
 read back whole, and asking for one big JSON blob is the shape most likely to come
