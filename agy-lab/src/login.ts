@@ -266,6 +266,29 @@ async function settle(page: Page): Promise<void> {
 }
 
 /**
+ * Wait until the flow is somewhere ELSE before looking again.
+ *
+ * settle() alone is not enough after a submit. detect() returns as soon as any
+ * signal is true, and one second after pressing Enter the code field is still on
+ * the page - so the loop reads "otp" again and submits a second time into a
+ * request that is still in flight. Measured: eight submissions in thirty seconds,
+ * each one cancelling the last, and a trail of otp -> otp -> otp -> otp.
+ *
+ * A submit is only finished when the page has become a different step. Returns
+ * the step it settled on, so the caller can tell "moved on" from "gave up".
+ */
+async function waitForStepChange(page: Page, from: Step, ms = 25_000): Promise<Step> {
+  const deadline = Date.now() + ms;
+  let now = from;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(750);
+    now = await detect(page, 1000);
+    if (now !== from) return now;
+  }
+  return now;
+}
+
+/**
  * Enter a one-time code AND submit it. Measured on the live MFA page 2026-08-20.
  *
  * Everything else that looks like it should work does not, and each reason cost a
@@ -372,6 +395,8 @@ export async function run(id: string, creds: Credentials, opts: { maxSteps?: num
   // Consecutive "detected it, could not act on it" rounds. Bounded so a page that
   // genuinely will not accept input still terminates instead of spinning.
   let misses = 0;
+  // Submissions of a one-time code. Bounded hard: each attempt burns a code.
+  let otpTries = 0;
 
   return browser.withProfile(id, async () => {
     sessions.create(id);
@@ -457,7 +482,7 @@ export async function run(id: string, creds: Credentials, opts: { maxSteps?: num
         }
         misses = 0;
         await submit(page);
-        await settle(page);
+        await waitForStepChange(page, step);
         continue;
       }
 
@@ -472,7 +497,7 @@ export async function run(id: string, creds: Credentials, opts: { maxSteps?: num
         }
         misses = 0;
         await submit(page);
-        await settle(page);
+        await waitForStepChange(page, step);
         continue;
       }
 
@@ -490,8 +515,20 @@ export async function run(id: string, creds: Credentials, opts: { maxSteps?: num
         // button on this page does not respond to clicks at all, and calling it
         // only adds a 6-second timeout per attempt.
         await enterOtp(page, code);
-        await settle(page);
         creds = { ...creds, otp: undefined };
+
+        // Wait for the page to actually become something else. Re-detecting
+        // immediately reads the code field that is still on screen and fires a
+        // second submit into the first one's request.
+        const after = await waitForStepChange(page, 'otp');
+        if (after === 'otp') {
+          // Two attempts, no more. Each one burns a code, and a code that is
+          // being rejected will be rejected again a second later - the only thing
+          // repeating buys is a rate limit.
+          if (++otpTries >= 2) {
+            return finish('failed', 'otp', 'The one-time code was submitted twice and the page stayed on the code screen - the code is being rejected.');
+          }
+        }
         continue;
       }
 
