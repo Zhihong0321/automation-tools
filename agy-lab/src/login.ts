@@ -19,7 +19,7 @@ import * as sessions from './sessions.ts';
 import { freshCode, parseSecret } from './totp.ts';
 
 /** Where the flow currently is. Each one names the next thing that must happen. */
-export type Step = 'ready' | 'landing' | 'email' | 'password' | 'otp' | 'challenged' | 'unknown';
+export type Step = 'ready' | 'chooser' | 'landing' | 'email' | 'password' | 'otp' | 'challenged' | 'unknown';
 
 export interface LoginResult {
   id: string;
@@ -82,6 +82,7 @@ const SUBMIT_NAMES = [/^continue$/i, /^log ?in$/i, /^next$/i, /^sign ?in$/i];
 const CHALLENGE = /just a moment|checking your browser|verify you are human|cf-chl|challenge-platform|attention required/i;
 
 interface Signals {
+  chooser: boolean;
   otp: boolean;
   password: boolean;
   email: boolean;
@@ -116,6 +117,16 @@ export const SIGNALS = () => {
   const label = (el: Element) => (el.textContent ?? '').trim().toLowerCase();
 
   return {
+    // The account chooser: a real <dialog open> in the TOP LAYER, so it covers
+    // the whole page. Measured after a logout - OpenAI remembers the account and
+    // asks which one to use. Nothing behind it can be clicked while it is up, so
+    // a "Log in" button detected underneath is a button that will never respond,
+    // and the flow has to notice the dialog rather than the button.
+    chooser: (() => {
+      const d = document.querySelector('dialog[open]');
+      if (!d || !visible(d)) return false;
+      return /choose an account|log in to another account/i.test(d.textContent ?? '');
+    })(),
     otp: q('input[autocomplete="one-time-code"], input[name="code"], input[name="otp"], input[inputmode="numeric"]'),
     password: q('input[type="password"], input[name="password"], #password'),
     email: q('input[name="email"], input[type="email"], input[name="username"], #email-input, #username'),
@@ -138,10 +149,10 @@ export const SIGNALS = () => {
  */
 async function signals(page: Page, waitMs: number): Promise<Signals> {
   const deadline = Date.now() + waitMs;
-  let last: Signals = { otp: false, password: false, email: false, login: false, composer: false, title: '' };
+  let last: Signals = { chooser: false, otp: false, password: false, email: false, login: false, composer: false, title: '' };
   for (;;) {
     last = await page.evaluate(SIGNALS).catch(() => last);
-    if (last.otp || last.password || last.email || last.login || last.composer) return last;
+    if (last.chooser || last.otp || last.password || last.email || last.login || last.composer) return last;
     if (Date.now() >= deadline) return last;
     await page.waitForTimeout(500);
   }
@@ -154,6 +165,9 @@ export async function detect(page: Page, waitMs = 25_000): Promise<Step> {
   // keep a hidden password field on the OTP page; password before email for the
   // same reason; login before ready because the signed-out page has a composer
   // too, so a composer alone must never win.
+  // The chooser goes first, ahead of everything. It is a top-layer modal, so
+  // whatever else is detected is behind it and unreachable until it is dealt with.
+  if (s.chooser) return 'chooser';
   if (s.otp) return 'otp';
   if (s.password) return 'password';
   if (s.email) return 'email';
@@ -390,6 +404,33 @@ export async function run(id: string, creds: Credentials, opts: { maxSteps?: num
           return finish('failed', step, 'The Turnstile checkbox was clicked and the challenge did not clear.');
         }
         return finish('failed', step, 'A bot check is in the way and no Turnstile widget was found to click.');
+      }
+
+      if (step === 'chooser') {
+        // Pick the remembered account by its own email text - it is the only
+        // button in the dialog carrying it. Otherwise fall through to "Log in to
+        // another account", which drops the flow back onto the normal email form.
+        const pick = creds.email
+          ? await page
+              .locator(`dialog[open] button:has-text(${JSON.stringify(creds.email)})`)
+              .first()
+              .click({ timeout: 8000 })
+              .then(() => true)
+              .catch(() => false)
+          : false;
+        if (!pick) {
+          const other = await page
+            .locator('dialog[open] button:text-is("Log in to another account")')
+            .first()
+            .click({ timeout: 8000 })
+            .then(() => true)
+            .catch(() => false);
+          if (!other) {
+            return finish('failed', step, 'An account chooser is up and neither the account nor "Log in to another account" could be clicked.');
+          }
+        }
+        await settle(page);
+        continue;
       }
 
       if (step === 'landing') {
