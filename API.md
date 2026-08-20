@@ -141,9 +141,47 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
 {"hostname":"macmini","platform":"darwin 24.5.0 arm64","publicIp":"…the home line…"}
 ```
 
-`ping` is the only job type today. `publicIp` is the field worth reading: it is what
-the internet sees when that machine makes a request, and a Railway address there
-would mean the job never left this container.
+`publicIp` is the field worth reading: it is what the internet sees when that machine
+makes a request, and a Railway address there would mean the job never left this
+container.
+
+### Job types
+
+| type | payload | returns |
+|---|---|---|
+| `ping` | none | `{hostname, platform, node, publicIp, uptimeSec, at}` |
+| `gmap.scan` | `{keyword, place?, max?, userId?}` | `{businesses[], found, capped, blocked, blockedReason, limitedView, saved}` |
+
+```bash
+ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \
+     -H 'content-type: application/json' \
+     -d '{"type":"gmap.scan","timeoutMs":600000,
+          "payload":{"keyword":"aircon service","place":"Johor Bahru","max":40,"userId":"u-123"}}' \
+     | jq -r .job.id)
+curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
+```
+
+```json
+{"query":"aircon service Johor Bahru","found":40,"blocked":false,"capped":true,
+ "limitedView":true,"saved":{"reportId":3,"companies":40,"linked":40},
+ "businesses":[{"name":"…","rating":4.7,"category":"…","address":"…","phone":"…","website":"…","mapsUrl":"…"}]}
+```
+
+**Give it room.** A scan takes 12-60s depending on `max`, so pass a `timeoutMs` above
+the default — `600000` is the working figure. `max` caps the results and defaults to 200.
+
+**Read `found` before `businesses.length`.** `found` is `null` whenever `blocked` is
+true, and that is deliberate rather than missing: Google degrades a throttled search
+instead of erroring, so an empty feed and a town with no such trade are the same
+observation. Recording either as `0` is the one thing that would quietly poison the
+dataset, so a blocked scan carries no count and `blockedReason` says which signal
+fired. `limitedView` marks a signed-out page, which is also why `reviews` comes back
+null.
+
+**Results are persisted.** The worker writes each scan to Postgres itself —
+`company_data`, `search_report` and the link between them, deduped on Google's place
+id. `saved` reports what landed; if it is null, `saveError` says why and the rows
+still come back in the response.
 
 **In memory, and leased.** Jobs live in a Map and are lost on redeploy — about six
 minutes of exposure, accepted while the transport is still being proven. Each job

@@ -515,9 +515,35 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
   "platform": "darwin 24.5.0 arm64",
   "publicIp": "…the home line…"
 }</code></pre>
-  <p><code>ping</code> is the only job type today, and <code>publicIp</code> is the field
-  worth reading: it is what the internet sees when that machine makes a request. A Railway
-  address there would mean the job never left the container.</p>
+  <p><code>publicIp</code> is the field worth reading: it is what the internet sees when
+  that machine makes a request. A Railway address there would mean the job never left the
+  container.</p>
+  <h3>Job types</h3>
+  <table>
+    <tr><th>type</th><th>payload</th><th>returns</th></tr>
+    <tr><td><code>ping</code></td><td>none</td><td><code>{hostname, platform, node, publicIp, uptimeSec, at}</code></td></tr>
+    <tr><td><code>gmap.scan</code></td><td><code>{keyword, place?, max?, userId?}</code></td><td><code>{businesses[], found, capped, blocked, blockedReason, limitedView, saved}</code></td></tr>
+  </table>
+  <pre><code>ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \
+     -H 'content-type: application/json' \
+     -d '{"type":"gmap.scan","timeoutMs":600000,
+          "payload":{"keyword":"aircon service","place":"Johor Bahru","max":40}}' \
+     | jq -r .job.id)
+curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result</code></pre>
+  <p>A scan takes 12&ndash;60s depending on <code>max</code>, so pass a <code>timeoutMs</code>
+  above the default; <code>600000</code> is the working figure. <code>max</code> defaults to 200.</p>
+  <div class="call"><span class="h">Read <code>found</code>, not <code>businesses.length</code></span>
+  <p><code>found</code> is <code>null</code> whenever <code>blocked</code> is true, and that is
+  deliberate rather than missing. Google degrades a throttled search instead of erroring, so an
+  empty feed and a town with no such trade are the same observation &mdash; recording either as
+  <code>0</code> is the one thing that would quietly poison the dataset. A blocked scan therefore
+  carries no count, and <code>blockedReason</code> names the signal that fired.
+  <code>limitedView</code> marks a signed-out page, which is also why <code>reviews</code> comes
+  back null.</p></div>
+  <p>The worker writes each scan to Postgres itself &mdash; <code>company_data</code>,
+  <code>search_report</code> and the link between them, deduped on Google's place id. The schema
+  is checked in at <code>agy-lab/schema.sql</code>. <code>saved</code> reports what landed; when
+  it is null, <code>saveError</code> says why and the rows still come back in the response.</p>
   <div class="call"><span class="h">In memory, and leased</span>
   <p>Jobs live in a Map and are lost on redeploy &mdash; about six minutes of exposure,
   accepted while the transport is being proven. Each job carries a lease instead: one that
