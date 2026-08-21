@@ -14,7 +14,7 @@ Reference  https://ee-auto.up.railway.app/docs   (the same surface, laid out to 
 |---|---|---|
 | `agy` | the Antigravity CLI, signed in with a Google account, run with `-p` | ~14s for a one-line answer |
 | `chatgpt` | a signed-in ChatGPT session in a real Chrome, typed into and read back | ~15s for a short answer |
-| `meta` | a signed-in meta.ai session in a real Chrome, same way | ~10s for a short answer |
+| `meta` | OpenCode + Muse 1.2 on the Mac mini; capability-gated when Meta pages require login | ~5–45s |
 
 None of the three is a hosted API. Every call is a real CLI run or a real browser
 doing what a person would do, and the limits at the bottom of this page follow
@@ -66,6 +66,9 @@ answers this thing can produce.
 | `POST /v1/chat/completions` | the OpenAI shape, `stream: true` supported |
 | `GET /v1/models` | what this box can currently route to, and whether each is signed in |
 | `POST /api/ask` | the native shape: `{model, prompt}` in, `{answer, ms}` out |
+| `POST /api/business-search` | start a Google Maps business-list report |
+| `POST /api/company-research` | start a multi-round company deep-research report |
+| `GET /r/:id` | mobile-first public report page; opaque share id, no bearer token |
 
 `/api/v1/chat/completions` is the same route, for a client that insists on
 appending `/v1` to a base URL that already has it.
@@ -114,6 +117,66 @@ the same fact appears as `finish_reason: "length"`.
 `tools: true` on either shape runs agy with `--dangerously-skip-permissions`, so
 it can touch the filesystem inside the container. Off by default, per call, never
 inherited.
+
+---
+
+## Business intelligence reports
+
+Both product workflows are asynchronous. The POST immediately returns one stable
+share URL; that page shows progress while work runs and the completed report when
+it finishes.
+
+### Search for a business list
+
+```bash
+curl -s https://ee-auto.up.railway.app/api/business-search \
+  -H "Authorization: Bearer $LAB_TOKEN" -H 'content-type: application/json' \
+  -d '{"keyword":"solar installer","place":"Kuala Lumpur","max":40,"requesterId":"crm-42"}'
+```
+
+```json
+{
+  "report": {
+    "id": "AbCdEfGhIjKlMnOpQrSt",
+    "status": "queued",
+    "api_url": "https://ee-auto.up.railway.app/api/business-search/AbCdEfGhIjKlMnOpQrSt",
+    "view_url": "https://ee-auto.up.railway.app/r/AbCdEfGhIjKlMnOpQrSt"
+  }
+}
+```
+
+Poll the returned `api_url` or open `view_url`. Completed company rows expose
+their database `id`, which is the input to deep research.
+
+### Deep-research one company
+
+```bash
+curl -s https://ee-auto.up.railway.app/api/company-research \
+  -H "Authorization: Bearer $LAB_TOKEN" -H 'content-type: application/json' \
+  -d '{"companyId":"123","requesterId":"crm-42"}'
+```
+
+The run persists all benchmark artifacts independently:
+
+- `round01`: Gemini discovery;
+- `round02`: three compact ChatGPT audits for contacts, people and signals;
+- `round03`: capability-gated Meta/Muse social evidence;
+- `round04`: Gemini final synthesis and fidelity validation.
+
+Only candidate rows with raw direct HTTPS evidence URLs enter the validated
+ledger. If Round 04 changes the validated person/contact ID sets or introduces a
+new URL, it is rejected and the deterministic ledger is published instead.
+
+| Route | Auth | Returns |
+|---|---|---|
+| `GET /api/business-search/:id` | bearer | status, companies, view link |
+| `GET /api/company-research/:id` | bearer | status, final report, all raw rounds |
+| `GET /r/:id` | opaque share id | responsive human report |
+| `GET /public/reports/:id` | opaque share id | public final-report JSON, no raw rounds |
+
+The Railway service should be linked to Postgres through `DATABASE_URL`. The
+`PG_PROXY_URL`, `PG_DB_NAME` and `PG_PROXY_TOKEN` fallback is supported, but its
+short-lived bearer is not suitable as the permanent production connection.
 
 ---
 

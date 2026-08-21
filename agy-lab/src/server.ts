@@ -19,6 +19,7 @@ import * as gateway from './gateway.ts';
 import * as jobs from './jobs.ts';
 import * as queue from './queue.ts';
 import * as log from './logstore.ts';
+import * as intel from './intel.ts';
 import { page } from './ui.ts';
 import { page as docsPage } from './docs.ts';
 
@@ -124,6 +125,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     return void res.end(docsPage());
   }
 
+  // Published reports are deliberately outside the bearer-token gate. Their
+  // opaque 20-character id is the share capability, and the page contains only
+  // public business evidence. The authenticated API below creates and inspects
+  // them; requesters can send the /r/:id link without also leaking LAB_TOKEN.
+  if (await intel.handlePublic(req, res, url)) return;
+
   // /v1/* is the gateway - the OpenAI-shaped surface other tools point at. It sits
   // behind the same token because a bearer header is exactly what an OpenAI client
   // already sends, so pointing one here costs a base URL and nothing else.
@@ -150,6 +157,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       ? json(res, 401, { error: { message: 'bad or missing token', type: 'invalid_request_error', code: 'invalid_api_key' } })
       : json(res, 401, { error: 'bad or missing token' });
   }
+
+  // ---- business intelligence product API -------------------------------
+  if (await intel.handleApi(req, res, url, { json, readJson })) return;
 
   // ---- the gateway ------------------------------------------------------
   // Before everything else, because this is the surface that has consumers: a

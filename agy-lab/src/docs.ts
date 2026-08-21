@@ -133,6 +133,7 @@ export function body(): string {
   <div class="brand-sub">gateway API</div>
   <nav>
     <a href="#start">Start here</a>
+    <a href="#intel">Business intelligence</a>
     <a href="#engines">The three engines</a>
     <span class="nav-label">Gateway</span>
     <a href="#chat">Chat completions</a>
@@ -177,8 +178,9 @@ export function body(): string {
   <p>Every route under <code>/v1</code> and <code>/api</code> takes the service's
   <code>LAB_TOKEN</code> as a bearer token — the same header an OpenAI client already
   sends, which is the whole reason the shape was chosen. <code>?token=</code> as a query
-  parameter works too, for a client that cannot set headers. <code>/healthz</code> and
-  this page are the only unauthenticated routes.</p>
+  parameter works too, for a client that cannot set headers. <code>/healthz</code>,
+  this page and opaque published-report URLs under <code>/r/:id</code> are the only
+  unauthenticated routes.</p>
 
 <pre><code>curl -s https://ee-auto.up.railway.app/v1/chat/completions \
   -H "Authorization: Bearer $LAB_TOKEN" -H 'content-type: application/json' \
@@ -209,6 +211,42 @@ await client.chat.completions.create({ model: 'agy', messages: [{ role: 'user', 
   real page. An SDK default of 60s will cut off work that would have finished.</p></div>
 </section>
 
+<section id="intel">
+  <h2>Business intelligence reports</h2>
+  <p>Both workflows are asynchronous. A POST immediately returns one durable,
+  mobile-ready share URL. The same page shows progress while work runs and the
+  completed report afterwards. API calls require <code>LAB_TOKEN</code>; the opaque
+  <code>/r/:id</code> share URL does not.</p>
+
+  <div class="ep"><span class="m post">POST</span><code class="path">/api/business-search</code><span class="tag">202</span></div>
+<pre><code>curl -s https://ee-auto.up.railway.app/api/business-search \
+  -H "Authorization: Bearer $LAB_TOKEN" -H 'content-type: application/json' \
+  -d '{"keyword":"solar installer","place":"Kuala Lumpur","max":40,"requesterId":"crm-42"}'</code></pre>
+  <p>Returns <code>report.id</code>, <code>report.status</code>, <code>report.api_url</code>
+  and <code>report.view_url</code>. Poll <code>GET /api/business-search/:id</code> or
+  open the view URL. Completed company rows include the <code>id</code> used by deep research.</p>
+
+  <div class="ep"><span class="m post">POST</span><code class="path">/api/company-research</code><span class="tag">202</span></div>
+<pre><code>curl -s https://ee-auto.up.railway.app/api/company-research \
+  -H "Authorization: Bearer $LAB_TOKEN" -H 'content-type: application/json' \
+  -d '{"companyId":"123","requesterId":"crm-42"}'</code></pre>
+  <p>The research run persists <code>round01</code> Gemini discovery,
+  split <code>round02</code> ChatGPT audits, capability-gated <code>round03</code>
+  Meta/Muse evidence, and <code>round04</code> Gemini synthesis. Only rows with a raw
+  direct evidence URL enter the final ledger. If R04 changes the validated person
+  or contact sets, it is rejected and the validated ledger is published.</p>
+
+  <div class="tbl"><table><thead><tr><th>Route</th><th>Authentication</th><th>Purpose</th></tr></thead><tbody>
+    <tr><td><code>GET /api/business-search/:id</code></td><td>Bearer token</td><td>Search status, companies and report links</td></tr>
+    <tr><td><code>GET /api/company-research/:id</code></td><td>Bearer token</td><td>Final report plus all benchmark round artifacts</td></tr>
+    <tr><td><code>GET /r/:id</code></td><td>Opaque share id</td><td>Mobile-first human report</td></tr>
+    <tr><td><code>GET /public/reports/:id</code></td><td>Opaque share id</td><td>Public report JSON without raw round artifacts</td></tr>
+  </tbody></table></div>
+  <div class="call info"><span class="h">Database</span><p>Link the Railway Postgres
+  service as <code>DATABASE_URL</code>. The pg-proxy variables are supported as a
+  fallback, but its short-lived bearer is not suitable as the permanent production connection.</p></div>
+</section>
+
 <section id="engines">
   <h2>The three engines</h2>
   <p>None of them is a hosted model API. Each call is a real process doing what a person
@@ -218,7 +256,7 @@ await client.chat.completions.create({ model: 'agy', messages: [{ role: 'user', 
     <tbody>
       <tr><td><code>agy</code></td><td>the Antigravity CLI in print mode (<code>agy -p</code>), signed in with a Google account</td><td class="num">11–25 s</td><td><span class="pill">one chunk</span></td></tr>
       <tr><td><code>chatgpt</code></td><td>a signed-in chatgpt.com session in a real Chrome, typed into and read back</td><td class="num">13–15 s</td><td><span class="pill ok">incremental</span></td></tr>
-      <tr><td><code>meta</code></td><td>a signed-in meta.ai session in the same Chrome, same way</td><td class="num">9–12 s</td><td><span class="pill ok">incremental</span></td></tr>
+      <tr><td><code>meta</code></td><td>OpenCode + Muse 1.2 on the Mac mini; currently public-web only when Meta pages require login</td><td class="num">5–45 s</td><td><span class="pill">one chunk</span></td></tr>
     </tbody>
   </table></div>
   <p>Timings are measurements from 2026-08-20, not estimates: one-line answers over the
@@ -715,6 +753,8 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
     <thead><tr><th>Variable</th><th>Default</th><th></th></tr></thead>
     <tbody>
       <tr><td><code>LAB_TOKEN</code></td><td class="num">&mdash;</td><td>required, 16+ characters; the key for everything under <code>/api</code> and <code>/v1</code></td></tr>
+      <tr><td><code>DATABASE_URL</code></td><td class="num">&mdash;</td><td>preferred durable Postgres connection for published reports; link the Railway database service</td></tr>
+      <tr><td><code>PG_PROXY_URL</code> &middot; <code>PG_DB_NAME</code> &middot; <code>PG_PROXY_TOKEN</code></td><td class="num">unset</td><td>HTTP database fallback; the token expires and is not preferred for production</td></tr>
       <tr><td><code>DEFAULT_MODEL</code></td><td class="num">agy</td><td>what an empty or <code>auto</code> model resolves to</td></tr>
       <tr><td><code>CGPT_DEFAULT_SESSION</code></td><td class="num">first ready</td><td>which account a bare <code>chatgpt</code> means</td></tr>
       <tr><td><code>META_DEFAULT_SESSION</code></td><td class="num">first ready</td><td>which account a bare <code>meta</code> means</td></tr>
