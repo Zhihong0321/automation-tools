@@ -198,7 +198,7 @@ export function body(): string {
   does not keep the POST connection open while Google Maps or the research engines run.</p>
 
   <div class="flow">
-    <div class="flow-step"><b>01 &middot; Discover</b><code>POST /api/business-search</code><p>Keyword plus optional geography.</p></div>
+    <div class="flow-step"><b>01 &middot; Discover</b><code>POST /api/business-search</code><p>Business keyword, location, or both.</p></div>
     <div class="flow-step"><b>02 &middot; Poll</b><code>GET report.api_url</code><p>Wait for a terminal status and read <code>data.companies</code>.</p></div>
     <div class="flow-step"><b>03 &middot; Enrich</b><code>POST /api/company-research</code><p>Pass one returned <code>company.id</code>.</p></div>
     <div class="flow-step"><b>04 &middot; Publish</b><code>GET report.view_url</code><p>Send the permanent mobile report to the requester.</p></div>
@@ -234,9 +234,10 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
 
   <h3>1. Create a business search</h3>
   <div class="ep"><span class="m post">POST</span><code class="path">/api/business-search</code><span class="tag">Bearer &middot; returns 202</span></div>
+  <p>Supply at least one of <code>keyword</code> or <code>place</code>/<code>location</code>. Location-only searches are valid.</p>
   <div class="tbl"><table><thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Meaning</th></tr></thead><tbody>
-    <tr><td><code>keyword</code></td><td>string</td><td><span class="req">yes</span></td><td>Business category, service or keyword.</td></tr>
-    <tr><td><code>place</code></td><td>string</td><td>no</td><td>City, district, state or country. <code>location</code> is accepted as an alias.</td></tr>
+    <tr><td><code>keyword</code></td><td>string</td><td>conditional</td><td>Business category, service or keyword. May be omitted when a location is supplied.</td></tr>
+    <tr><td><code>place</code></td><td>string</td><td>conditional</td><td>City, district, state or country. May be omitted when a keyword is supplied; <code>location</code> is an alias.</td></tr>
     <tr><td><code>max</code></td><td>integer</td><td>no</td><td>1–200; defaults to 100.</td></tr>
     <tr><td><code>requesterId</code></td><td>string</td><td>no</td><td>Your CRM/user/job correlation id. <code>userId</code> is accepted as an alias.</td></tr>
     <tr><td><code>timeoutMs</code></td><td>integer</td><td>no</td><td>Worker deadline; defaults to 600000. It does not make the POST synchronous.</td></tr>

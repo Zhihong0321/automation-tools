@@ -151,10 +151,13 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
 
 Request fields:
 
+At least one of `keyword` or `place`/`location` is required. A location-only
+request such as `{"place":"Petaling Jaya","max":25}` is valid.
+
 | Field | Required | Meaning |
 |---|---:|---|
-| `keyword` | yes | business category, service, or keyword |
-| `place` | no | city, district, state, or country; `location` is an alias |
+| `keyword` | conditional | business category, service, or keyword; omit when searching only by location |
+| `place` | conditional | city, district, state, or country; omit when searching only by keyword; `location` is an alias |
 | `max` | no | 1–200, default 100 |
 | `requesterId` | no | caller-owned correlation id; `userId` is an alias |
 | `timeoutMs` | no | worker deadline, default 600000; the POST remains asynchronous |

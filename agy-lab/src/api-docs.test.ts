@@ -7,6 +7,7 @@ test('served docs explain the complete search-to-research handoff', () => {
   const html = page();
   assert.match(html, /EE Business Intelligence API/);
   assert.match(html, /POST \/api\/business-search/);
+  assert.match(html, /Location-only searches are valid/);
   assert.match(html, /data\.companies\[\]\.id/);
   assert.match(html, /POST \/api\/company-research/);
   assert.match(html, /research_run\.round01/);
@@ -24,6 +25,11 @@ test('OpenAPI contract exposes both workflows and resolves local references', ()
   assert.ok(document.paths['/api/company-research/{reportId}'].get);
   assert.ok(document.paths['/public/reports/{reportId}'].get);
   assert.deepEqual(document.paths['/public/reports/{reportId}'].get.security, []);
+  const searchRequest = document.components.schemas.BusinessSearchRequest;
+  assert.deepEqual(searchRequest.anyOf, [
+    { required: ['keyword'] }, { required: ['place'] }, { required: ['location'] },
+  ]);
+  assert.equal(searchRequest.required, undefined);
 
   const root = document as unknown as Record<string, unknown>;
   const refs: string[] = [];

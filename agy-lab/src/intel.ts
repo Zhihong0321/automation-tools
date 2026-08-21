@@ -267,8 +267,19 @@ async function runBusinessSearch(publicId: string, reportId: string, request: Re
     await db.updateReport(publicId, { status: 'running', error: null });
     if (!jobs.liveTypes().includes('gmap.scan')) throw new Error('Google Maps worker is offline');
     const timeoutMs = Math.min(Math.max(num(request.timeoutMs, 600_000), 60_000), 1_200_000);
+    const keyword = str(request.keyword).trim();
+    const place = str(request.place).trim();
+    // Keep location-only searches working while a Mac mini may still be running
+    // the previous worker, which required a non-empty keyword. Updated workers
+    // use searchMode/originalPlace to preserve the proper field semantics.
+    const locationOnly = !keyword && Boolean(place);
     const job = jobs.create('gmap.scan', {
-      keyword: request.keyword, place: request.place, max: request.max, userId: request.userId,
+      keyword: locationOnly ? place : keyword,
+      place: locationOnly ? null : place || null,
+      searchMode: locationOnly ? 'location_only' : undefined,
+      originalPlace: locationOnly ? place : undefined,
+      max: request.max,
+      userId: request.userId,
     }, timeoutMs);
     await db.updateReport(publicId, { jobId: job.id });
     const settled = await jobs.wait(job.id, timeoutMs + 5_000);
@@ -481,13 +492,15 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     const body = await ctx.readJson(req);
     const keyword = str(body.keyword).trim();
     const place = str(body.place || body.location).trim();
-    if (!keyword) {
-      ctx.json(res, 400, { error: 'keyword is required; place/location is optional' });
+    if (!keyword && !place) {
+      ctx.json(res, 400, { error: 'keyword or place/location is required' });
       return true;
     }
     const max = Math.min(Math.max(Math.round(num(body.max, 100)), 1), 200);
     const request = { keyword, place: place || null, max, userId: str(body.requesterId || body.userId) || null, timeoutMs: num(body.timeoutMs, 600_000) };
-    const title = `${keyword}${place ? ' in ' + place : ''}`;
+    const title = keyword
+      ? `${keyword}${place ? ' in ' + place : ''}`
+      : `Businesses in ${place}`;
     const report = await db.createReport({ type: 'business_search', title, userId: str(request.userId) || null, request });
     void runBusinessSearch(report.public_id, report.id, request);
     ctx.json(res, 202, { report: envelope(req, report) });

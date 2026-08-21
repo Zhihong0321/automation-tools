@@ -10,7 +10,12 @@ test('end-user portal combines discovery, deep research, and report library', ()
   assert.match(html, /\/api\/business-search/);
   assert.match(html, /\/api\/company-research/);
   assert.match(html, /\/api\/reports\?limit=/);
-  assert.match(html, /Deep research/);
+  assert.match(html, /Deep research →/);
+  assert.match(html, /aria-label="Start deep research for /);
+  assert.match(html, /Research underway/);
+  assert.match(html, /Enter a business, a location, or both/);
+  assert.match(html, /if\(!keyword&&!place\)/);
+  assert.doesNotMatch(html, /id="keyword" required/);
   assert.match(html, /sessionStorage/);
   assert.doesNotMatch(html, /eternalgy2026/i);
   const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1];
