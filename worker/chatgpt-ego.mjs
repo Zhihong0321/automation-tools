@@ -51,11 +51,19 @@ const REGISTRY = `${process.env.HOME}/.gmap-worker/spaces.json`;
  * `profileName` are accepted and silently ignored by both `useOrCreateTaskSpace`
  * and `newTaskSpace`. So a space is the only durable handle on "which account",
  * and its numeric id has to be recorded when it is made under the right profile.
- * That is what the registry is: session id -> space id, written once per account.
+ * That is what the registry is: session id -> space, written once per account.
  *
- * Falling through to a NAME would silently create a fresh space on whatever
- * profile happens to be default, i.e. answer as the wrong account, so the miss
- * is an error rather than a default.
+ * PREFER A NAME OVER A NUMERIC ID. Space ids do not survive a browser restart:
+ * after the mini rebooted, listTaskSpaces() came back empty and the id 12 this
+ * registry had pinned was simply gone, so every chatgpt call failed with "task
+ * space not found: 12" while the worker itself looked perfectly healthy. A name
+ * is the durable handle — useOrCreateTaskSpace recreates it on demand, and the
+ * login it needs lives in the profile's cookie jar on disk, which does survive.
+ *
+ * A name is only safe because of the profile guard below. On its own it would
+ * silently create a fresh space on whatever profile happens to be default, i.e.
+ * answer as the wrong account; guarded, that case fails loudly as wrong_profile.
+ * A miss in the registry is still an error rather than a default.
  */
 function spaceFor(id, override) {
   if (override) return typeof override === 'object' ? override : { space: override, profile: null };

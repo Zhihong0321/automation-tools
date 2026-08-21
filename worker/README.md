@@ -232,6 +232,7 @@ sleeping does.
 | nothing at all in the log after a reboot | the job was installed as an agent, not a daemon, and nobody logged in. |
 | a job goes back to `pending` on its own | its lease expired — the worker died mid-job. Three of those and the job fails with a message saying so. |
 | the worker stops coming back after a Node upgrade | the plist holds the absolute path baked in at install. Re-run the `sed` line above. |
+| `chatgpt@mini` fails `task space not found: <n>` after a reboot | task space ids do not survive a browser restart. Register the space by NAME in `~/.gmap-worker/spaces.json` (`"space": "chatgpt-pro"`), not by number — `useOrCreateTaskSpace` then rebuilds it on demand, and the login lives in the profile's cookie jar, which does survive. The profile guard keeps the rebuild honest. |
 | `agy@mini` or `chatgpt@mini` is missing from `/v1/models` | no lane is claiming that type. Either the process is dead, or it is running code older than the handler — a worker only advertises the types it had when it started, so restart it after a `git pull`. |
 | a job fails with `logged_out: agy is not signed in` | agy's own Google session expired. Sign in again interactively on this machine; nothing in the worker stores a credential to refresh. |
 | a `chatgpt.ask` fails `wrong_profile` | the task space in `spaces.json` is gone, and ego lite created a fresh one on whatever profile is default — which answers as the wrong account. Fix the space id, or make the right profile default in the GUI and rebuild it. |
