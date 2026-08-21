@@ -126,6 +126,8 @@ Human reference: <https://ee-auto.up.railway.app/docs>
 
 OpenAPI 3.1: <https://ee-auto.up.railway.app/openapi.json>
 
+End-user workspace: <https://ee-auto.up.railway.app/research>
+
 Both workflows are asynchronous. A POST returns HTTP `202` with a stable opaque
 report id, an authenticated `api_url` for polling, and a public mobile `view_url`.
 
@@ -203,6 +205,7 @@ rejected and `synthesis_mode` is `validated_ledger_fallback`.
 | Route | Auth | Returns |
 |---|---|---|
 | `POST /api/business-search` | bearer | `202` and report envelope |
+| `GET /api/reports` | bearer | combined report library; filter by `type`, `status`, `limit`, `offset` |
 | `GET /api/business-search/:reportId` | bearer | status and `data.companies` |
 | `POST /api/company-research` | bearer | `202` and report envelope |
 | `GET /api/company-research/:reportId` | bearer | status, `data.final`, and raw benchmark rounds |
@@ -212,6 +215,10 @@ rejected and `synthesis_mode` is `validated_ledger_fallback`.
 The Railway service should be linked to Postgres through `DATABASE_URL`. The
 pg-proxy fallback is supported, but its short-lived bearer is not suitable as the
 permanent production connection.
+
+Set a separate 16+ character `PORTAL_TOKEN` before giving `/research` to end
+users. That token is accepted only by the business-search, company-research, and
+report-library routes; it cannot access the operator shell or model/session APIs.
 
 ---
 

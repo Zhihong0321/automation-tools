@@ -438,9 +438,42 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
 export async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL, ctx: Ctx): Promise<boolean> {
   const p = url.pathname;
   const method = req.method ?? 'GET';
-  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research')) return false;
+  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && p !== '/api/reports') return false;
   if (!db.configured()) {
     ctx.json(res, 503, { error: 'report database is not configured; link DATABASE_URL to the Railway service' });
+    return true;
+  }
+
+  if (method === 'GET' && p === '/api/reports') {
+    const rawType = url.searchParams.get('type');
+    const rawStatus = url.searchParams.get('status');
+    const type = rawType === 'business_search' || rawType === 'company_research' ? rawType : null;
+    const allowedStatuses = new Set(['queued', 'running', 'completed', 'partial', 'failed']);
+    const status = allowedStatuses.has(rawStatus ?? '') ? rawStatus as db.ReportStatus : null;
+    const limit = Math.min(Math.max(Math.round(Number(url.searchParams.get('limit') ?? 40) || 40), 1), 100);
+    const offset = Math.max(Math.round(Number(url.searchParams.get('offset') ?? 0) || 0), 0);
+    const listed = await db.listReports({ type, status, limit, offset });
+    const reports = listed.reports.map((report) => {
+      const result = object(report.result);
+      const finalEntity = object(result.entity);
+      const companies = rows(result.companies);
+      return {
+        ...envelope(req, report),
+        preview: report.report_type === 'company_research' ? {
+          company_id: report.company_id,
+          entity: finalEntity,
+          summary: str(result.summary) || null,
+          contacts: rows(result.contacts).length,
+          people: rows(result.people).length,
+          signals: rows(result.signals ?? result.business_signals).length,
+        } : {
+          keyword: str(object(report.request).keyword) || null,
+          place: str(object(report.request).place) || null,
+          companies: companies.length || Number(object(result.search).found ?? 0) || null,
+        },
+      };
+    });
+    ctx.json(res, 200, { reports, total: listed.total, limit, offset });
     return true;
   }
 

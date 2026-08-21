@@ -18,6 +18,7 @@ test('served docs explain the complete search-to-research handoff', () => {
 test('OpenAPI contract exposes both workflows and resolves local references', () => {
   assert.equal(document.openapi, '3.1.0');
   assert.ok(document.paths['/api/business-search'].post);
+  assert.ok(document.paths['/api/reports'].get);
   assert.ok(document.paths['/api/business-search/{reportId}'].get);
   assert.ok(document.paths['/api/company-research'].post);
   assert.ok(document.paths['/api/company-research/{reportId}'].get);
@@ -42,4 +43,3 @@ test('OpenAPI contract exposes both workflows and resolves local references', ()
     assert.notEqual(current, undefined, `unresolved OpenAPI reference: ${ref}`);
   }
 });
-

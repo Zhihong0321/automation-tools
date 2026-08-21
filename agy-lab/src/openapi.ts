@@ -17,6 +17,25 @@ export const document = {
   ],
   security: [{ bearerAuth: [] }],
   paths: {
+    '/api/reports': {
+      get: {
+        operationId: 'listReports',
+        tags: ['Published reports'],
+        summary: 'Browse the combined report library',
+        description: 'Returns business searches and company research reports newest first. This is the data source for the end-user research workspace.',
+        parameters: [
+          { name: 'type', in: 'query', schema: { type: 'string', enum: ['business_search', 'company_research'] } },
+          { name: 'status', in: 'query', schema: { $ref: '#/components/schemas/ReportStatus' } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 40 } },
+          { name: 'offset', in: 'query', schema: { type: 'integer', minimum: 0, default: 0 } },
+        ],
+        responses: {
+          '200': { description: 'Combined report library', content: { 'application/json': { schema: { $ref: '#/components/schemas/ReportListResponse' } } } },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '503': { $ref: '#/components/responses/Unavailable' },
+        },
+      },
+    },
     '/api/business-search': {
       post: {
         operationId: 'createBusinessSearch',
@@ -128,6 +147,8 @@ export const document = {
           error: { type: ['string', 'null'], description: 'Failure detail or partial-run warning.' },
         },
       },
+      ReportListItem: { allOf: [{ $ref: '#/components/schemas/ReportEnvelope' }, { type: 'object', properties: { preview: { type: 'object', additionalProperties: true } } }] },
+      ReportListResponse: { type: 'object', required: ['reports', 'total', 'limit', 'offset'], properties: { reports: { type: 'array', items: { $ref: '#/components/schemas/ReportListItem' } }, total: { type: 'integer' }, limit: { type: 'integer' }, offset: { type: 'integer' } } },
       AcceptedReport: { type: 'object', required: ['report'], properties: { report: { $ref: '#/components/schemas/ReportEnvelope' } } },
       BusinessSearchRequest: {
         type: 'object', required: ['keyword'], additionalProperties: false,

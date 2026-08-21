@@ -192,6 +192,29 @@ export async function getReport(publicId: string): Promise<PublishedReport | nul
   return out.rows[0] ?? null;
 }
 
+export async function listReports(options: {
+  type?: ReportType | null;
+  status?: ReportStatus | null;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<{ reports: PublishedReport[]; total: number }> {
+  await migrate();
+  const limit = Math.min(Math.max(Math.round(options.limit ?? 40), 1), 100);
+  const offset = Math.max(Math.round(options.offset ?? 0), 0);
+  const params = [options.type ?? null, options.status ?? null, limit, offset];
+  const where = `where ($1::text is null or report_type = $1)
+                   and ($2::text is null or status = $2)`;
+  const [items, count] = await Promise.all([
+    sql<PublishedReport>(
+      `select * from published_report ${where}
+       order by created_at desc limit $3 offset $4`,
+      params,
+    ),
+    sql<{ total: string }>(`select count(*)::text as total from published_report ${where}`, params.slice(0, 2)),
+  ]);
+  return { reports: items.rows, total: Number(count.rows[0]?.total ?? 0) };
+}
+
 export async function getCompany(companyId: string): Promise<Record<string, unknown> | null> {
   await migrate();
   const out = await sql('select * from company_data where id = $1', [companyId]);

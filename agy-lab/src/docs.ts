@@ -187,6 +187,7 @@ export function body(): string {
     <div class="fact"><span class="k">Production origin</span><code>https://ee-auto.up.railway.app</code></div>
     <div class="fact"><span class="k">Auth</span><code>Authorization: Bearer LAB_TOKEN</code></div>
     <div class="fact"><span class="k">OpenAPI 3.1</span><code><a href="/openapi.json">/openapi.json</a></code></div>
+    <div class="fact"><span class="k">End-user workspace</span><code><a href="/research">/research</a></code></div>
   </div>
 </header>
 
@@ -213,7 +214,9 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
   <div class="call info"><span class="h">Authentication boundary</span>
   <p>Everything under <code>/api</code> and <code>/v1</code> requires the bearer token.
   <code>/r/:id</code> and <code>/public/reports/:id</code> are deliberately public through an
-  opaque 20-character id. Never append the token to a report link.</p></div>
+  opaque 20-character id. Never append the token to a report link. The end-user
+  <a href="/research">research workspace</a> accepts a scoped <code>PORTAL_TOKEN</code>
+  which can call only business-intelligence routes.</p></div>
 
   <h3>Lifecycle</h3>
   <div class="terminal">
@@ -313,6 +316,7 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
 
   <h3>5. Publish or consume the final report</h3>
   <div class="tbl"><table><thead><tr><th>Route</th><th>Auth</th><th>Use</th></tr></thead><tbody>
+    <tr><td><code>GET /api/reports</code></td><td>Bearer</td><td>Combined paginated library. Filter with <code>type</code>, <code>status</code>, <code>limit</code>, and <code>offset</code>.</td></tr>
     <tr><td><code>GET /r/:reportId</code></td><td>none</td><td>Premium mobile HTML report for the requester.</td></tr>
     <tr><td><code>GET /public/reports/:reportId</code></td><td>none</td><td>Final public JSON. Search reports return <code>companies</code>; deep reports return <code>final</code>. Raw rounds are excluded.</td></tr>
     <tr><td><code>GET /api/company-research/:reportId</code></td><td>Bearer</td><td>Private final output plus raw benchmark rounds.</td></tr>
@@ -854,6 +858,7 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
     <thead><tr><th>Variable</th><th>Default</th><th></th></tr></thead>
     <tbody>
       <tr><td><code>LAB_TOKEN</code></td><td class="num">&mdash;</td><td>required, 16+ characters; the key for everything under <code>/api</code> and <code>/v1</code></td></tr>
+      <tr><td><code>PORTAL_TOKEN</code></td><td class="num">unset</td><td>optional 16+ character end-user key; authorizes only report listing, business search, and company research routes</td></tr>
       <tr><td><code>DATABASE_URL</code></td><td class="num">&mdash;</td><td>preferred durable Postgres connection for published reports; link the Railway database service</td></tr>
       <tr><td><code>PG_PROXY_URL</code> &middot; <code>PG_DB_NAME</code> &middot; <code>PG_PROXY_TOKEN</code></td><td class="num">unset</td><td>HTTP database fallback; the token expires and is not preferred for production</td></tr>
       <tr><td><code>DEFAULT_MODEL</code></td><td class="num">agy</td><td>what an empty or <code>auto</code> model resolves to</td></tr>
