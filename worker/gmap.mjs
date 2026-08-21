@@ -30,6 +30,27 @@ const PLATEAU_ROUNDS = 4;
 const MAX_SCROLLS = 60;
 const SCROLL_PAUSE_MS = 1600;
 const SETTLE_MS = 9000;
+const MAPS = 'https://www.google.com/maps/search/';
+
+/**
+ * The categories a location-only sweep walks. Google Maps has no "everything
+ * here" list — it only ever answers a keyword inside a viewport — so a town is
+ * covered by asking several broad questions and merging the answers.
+ *
+ * The list is ordered widest-first and the sweep STOPS as soon as `max` is
+ * reached, so the usual run is three or four queries, not ten. Override per job
+ * with payload.categories when a caller wants a particular trade.
+ */
+const TOWN_CATEGORIES = [
+  'restaurants', 'shops', 'clinic', 'car repair', 'hardware store',
+  'contractor', 'beauty salon', 'grocery store', 'cafe', 'hotel',
+];
+
+/** Same key db.mjs dedupes on, so a merged sweep cannot land one shop twice. */
+function dedupeKey(b) {
+  const m = /!19s([A-Za-z0-9_-]+)/.exec(b.mapsUrl ?? '');
+  return m ? m[1] : 'name:' + (b.name ?? '').toLowerCase().trim() + '|' + (b.address ?? '').toLowerCase().trim();
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -162,6 +183,47 @@ const EXTRACT = `(() => {
 })()`;
 
 /**
+ * Wait for the feed to actually exist rather than sleeping a guessed amount.
+ * `connect()` already polls for this reason: a slow machine must not fail and a
+ * fast one must not be punished. A sweep runs several of these back to back, so
+ * the difference is the whole cost of the feature.
+ */
+async function waitForFeed(conn, timeoutMs = SETTLE_MS) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const n = await conn.evaluate(`document.querySelectorAll('a[href*="/maps/place/"]').length`);
+    if (n > 0) return true;
+    await sleep(150);
+  }
+  return false;
+}
+
+/** Navigate, scroll the feed to its plateau, and read it. One query's worth of work. */
+async function harvest(conn, url, max) {
+  await conn.cdp('Page.navigate', { url });
+  await waitForFeed(conn);
+  let last = -1;
+  let stable = 0;
+  let scrolls = 0;
+  for (; scrolls < MAX_SCROLLS && stable < PLATEAU_ROUNDS; scrolls++) {
+    const n = await conn.evaluate(`(() => {
+      const f = document.querySelector('[role="feed"]');
+      if (f) f.scrollTop = f.scrollHeight;
+      return document.querySelectorAll('a[href*="/maps/place/"]').length;
+    })()`);
+    if (n === last) stable++;
+    else {
+      stable = 0;
+      last = n;
+    }
+    if (last >= max) break;
+    await sleep(SCROLL_PAUSE_MS);
+  }
+  const page = await conn.evaluate(EXTRACT);
+  return { page, scrolls };
+}
+
+/**
  * Turn a page reading into a verdict. Exported and pure because this is THE rule
  * of the whole scan and it must not depend on catching Google in the act: a real
  * empty feed is rare on demand — a nonsense query still returns fuzzy matches —
@@ -218,34 +280,45 @@ export async function scan(payload, job = null) {
     const conn = await connect();
     ws = conn.ws;
     await conn.cdp('Page.enable');
-    await conn.cdp('Page.navigate', {
-      url: 'https://www.google.com/maps/search/' + encodeURIComponent(query) + '?hl=en',
-    });
-    await sleep(SETTLE_MS);
 
-    // Scroll to the plateau. The count going still is the only reliable end:
-    // the feed has no total, and a fixed number of scrolls either stops early on
-    // a big town or wastes minutes on a small one.
-    let last = -1;
-    let stable = 0;
-    let scrolls = 0;
-    for (; scrolls < MAX_SCROLLS && stable < PLATEAU_ROUNDS; scrolls++) {
-      const n = await conn.evaluate(`(() => {
-        const f = document.querySelector('[role="feed"]');
-        if (f) f.scrollTop = f.scrollHeight;
-        return document.querySelectorAll('a[href*="/maps/place/"]').length;
-      })()`);
-      if (n === last) stable++;
-      else {
-        stable = 0;
-        last = n;
+    let { page, scrolls } = await harvest(conn, MAPS + encodeURIComponent(query) + '?hl=en', max);
+    let businesses = page.businesses.filter((b) => b.name);
+    let categories = null;
+
+    // A bare town name is not a search. Maps resolves it to the town's own map
+    // card, so there is no results feed to read and the old code called that a
+    // block. The redirect carries the viewport, and that is what turns the one
+    // dead query into a sweep: several broad categories asked inside the town's
+    // own map, merged. Google has no "everything here" list to ask for.
+    if (!keyword && place && !page.feedPresent) {
+      const at = /@(-?[\d.]+),(-?[\d.]+),([\d.]+)z/.exec(await conn.evaluate('location.href'));
+      if (at) {
+        const viewport = '@' + at[1] + ',' + at[2] + ',' + at[3] + 'z';
+        const cats = Array.isArray(payload?.categories) && payload.categories.length
+          ? payload.categories
+          : TOWN_CATEGORIES;
+        const seen = new Map();
+        categories = [];
+        scrolls = 0;
+        for (const cat of cats) {
+          const h = await harvest(conn, MAPS + encodeURIComponent(cat) + '/' + viewport + '?hl=en', max);
+          const got = h.page.businesses.filter((b) => b.name);
+          for (const b of got) {
+            const k = dedupeKey(b);
+            if (!seen.has(k)) seen.set(k, b);
+          }
+          categories.push({ category: cat, got: got.length, running: seen.size });
+          scrolls += h.scrolls;
+          // The verdict is read off the last page seen: a sweep that ends on a
+          // captcha must still come back blocked rather than merely short.
+          page = h.page;
+          if (seen.size >= max) break;
+        }
+        businesses = [...seen.values()];
       }
-      if (last >= max) break;
-      await sleep(SCROLL_PAUSE_MS);
     }
 
-    const page = await conn.evaluate(EXTRACT);
-    const businesses = page.businesses.filter((b) => b.name).slice(0, max);
+    businesses = businesses.slice(0, max);
 
     const result = {
       query,
@@ -253,6 +326,7 @@ export async function scan(payload, job = null) {
       place: place || null,
       businesses,
       ...classify(page, businesses, max),
+      categories,
       scrolls,
       tookMs: Date.now() - startedAt,
       at: new Date().toISOString(),
