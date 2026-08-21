@@ -14,6 +14,10 @@
 //     200  -> run the handler, POST the result, ask again
 //     err  -> wait (backing off to 60s), ask again — never exit
 //
+//   POST /api/jobs/heartbeat        every 30s, but only while a job is running
+//     The loop above is silent for as long as the handler takes, and a deep
+//     research round takes minutes. See beat().
+//
 // A gmap.scan holds the loop for minutes while it runs; that is intended. One
 // machine, one scan at a time, is what a residential line can do without
 // looking like something other than a person.
@@ -48,6 +52,9 @@ const LAB = (process.env.LAB_URL ?? 'https://ee-auto.up.railway.app').replace(/\
 const TOKEN = (process.env.LAB_TOKEN ?? '').trim();
 const NAME = (process.env.WORKER_NAME ?? os.hostname()).trim();
 const WAIT_SEC = 25;
+// The lab calls a worker gone after 90s without a check-in. Beating every 30s
+// while a job runs gives three chances to be heard before that window closes.
+const BEAT_MS = 30_000;
 
 /**
  * LANES. One claim loop per lane, running side by side in this one process.
@@ -173,6 +180,35 @@ async function report(name, id, ok, result, error) {
   if (!r.ok) throw new Error('posting the result answered ' + r.status + ': ' + (await r.text()).slice(0, 200));
 }
 
+/**
+ * Say "still here" while this lane is busy.
+ *
+ * The claim loop is the check-in, and the claim loop does not come back around
+ * until the job in hand is finished. That is fine for a job measured in seconds
+ * and wrong for one measured in minutes: the lab drops a worker from its live
+ * table after 90s of silence, so a lane grinding through a 149s `agy.ask` goes
+ * missing halfway through, and the gateway starts refusing every engine this
+ * machine serves — instantly failing a second research run that was never given
+ * a chance to queue. The beat only runs while a job does; an idle lane is
+ * already checking in ~every 25s through its long poll.
+ *
+ * A missed beat is not worth a line in the log or a failed job: the next one is
+ * 30s away and the window is 90s. A lab too old to know the route answers 404,
+ * which is also nothing to say about — this file and the lab deploy separately.
+ */
+function beat(name, types) {
+  const timer = setInterval(() => {
+    fetch(LAB + '/api/jobs/heartbeat', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ worker: name, types }),
+      signal: AbortSignal.timeout(15_000),
+    }).catch(() => {});
+  }, BEAT_MS);
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
 async function run(name, job) {
   const handler = handlers[job.type];
   const at = Date.now();
@@ -234,7 +270,14 @@ async function lane(name, types) {
     try {
       const job = await claim(name, types);
       backoff = 0;
-      if (job) await run(name, job);
+      if (job) {
+        const stop = beat(name, types);
+        try {
+          await run(name, job);
+        } finally {
+          stop();
+        }
+      }
     } catch (err) {
       if (err.fatal) {
         say('FATAL: ' + err.message);

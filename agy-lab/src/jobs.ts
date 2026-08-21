@@ -402,6 +402,30 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     return true;
   }
 
+  // Keep a BUSY worker visible.
+  //
+  // A lane only touches the registry when it claims or when it reports, and it
+  // does neither while a job is in its hands. An `agy.ask` round of deep research
+  // runs two to four minutes — well past the 90s liveWorkers() waits before it
+  // calls a worker gone — so a lane doing exactly what it was told to do ages out
+  // of the table, and the gateway then refuses new work for engines this machine
+  // is demonstrably serving. That refusal is instant and total: every round of a
+  // second research run fails in milliseconds with "no worker is claiming …".
+  if (method === 'POST' && p === '/api/jobs/heartbeat') {
+    const body = await readJson(req);
+    const worker = str(body.worker).trim();
+    if (!worker) {
+      json(res, 400, { error: 'worker is required — name the machine checking in' });
+      return true;
+    }
+    // Types ride along on every beat because a redeploy empties this table: a
+    // beat that re-registered the name alone would read as "here, serving
+    // nothing", which the gateway treats the same as absent.
+    const types = Array.isArray(body.types) ? body.types.map((t) => str(t).trim()).filter(Boolean) : [];
+    json(res, 200, { worker: touch(worker, callerIp(req), types) });
+    return true;
+  }
+
   if (method === 'POST' && p === '/api/jobs') {
     const body = await readJson(req);
     const type = str(body.type).trim();

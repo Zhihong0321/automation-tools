@@ -156,11 +156,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // a 401 nobody can see is how a misconfigured client stays misconfigured. The
   // record closes itself when the response does, whatever route handled it.
   //
-  // The worker's long-poll is the one exception. It is one request every 25s,
-  // forever, from a machine that is supposed to be idle most of the time — logged,
-  // it would be ~3,500 records a day burying every request anyone actually cares
-  // about. Its result posts and its failures still land in the log.
-  if (!(method === 'GET' && p === '/api/jobs/next')) {
+  // The worker's own bookkeeping is the exception. Its long-poll is one request
+  // every 25s, forever, from a machine that is supposed to be idle most of the
+  // time, and its heartbeat is one more every 30s for as long as a job runs —
+  // logged, they would be thousands of records a day burying every request
+  // anyone actually cares about. Result posts and failures still land in the log.
+  const workerChatter = (method === 'GET' && p === '/api/jobs/next')
+    || (method === 'POST' && p === '/api/jobs/heartbeat');
+  if (!workerChatter) {
     log.begin(req, url);
     res.on('finish', () => log.end(req, res.statusCode));
     res.on('close', () => log.end(req, res.statusCode));

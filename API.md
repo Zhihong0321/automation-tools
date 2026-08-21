@@ -270,6 +270,7 @@ dynamic DNS, nothing on the home router.
 |---|---|
 | `POST /api/jobs` | `{type, payload, timeoutMs}` → 201 with the job, status `pending` |
 | `GET /api/jobs/next?worker=&wait=&types=` | the worker's claim. Held open up to 25s; `204` when idle, `200` with the job otherwise. Answers instantly if one is already queued. |
+| `POST /api/jobs/heartbeat` | `{worker, types}`. The worker's check-in while a job is in its hands. The claim above is silent for as long as the handler runs, and a research round runs minutes — past that, the lane ages out of the live table and the gateway starts refusing engines this machine is serving. Types are re-sent every beat so a restarted lab learns the lane again. Not logged. |
 | `POST /api/jobs/:id/result` | `{ok, result, error}` → the job becomes `done` or `failed` |
 | `GET /api/jobs/:id` | status and result |
 | `GET /api/jobs` | the queue, plus every worker and when it last checked in |

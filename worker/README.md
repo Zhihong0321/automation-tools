@@ -13,6 +13,7 @@ It only ever makes outbound requests. Nothing needs to be opened on the router.
 
 ```
 GET  /api/jobs/next?worker=<name>&wait=25&types=…   held open ~25s, 204 when idle
+POST /api/jobs/heartbeat                            every 30s, only while a job runs
 POST /api/jobs/<id>/result                          {ok, result, error}
 ```
 
