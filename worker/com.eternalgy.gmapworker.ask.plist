@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd job for the ask lane, in the USER domain (a LaunchAgent).
+
+  WHY AN AGENT, WHEN THE SCAN RUNS AS A DAEMON. The scan worker is a
+  LaunchDaemon on purpose: it starts at boot with nobody logged in, which is the
+  only way "always on" is true (see com.eternalgy.gmapworker.daemon.plist). The
+  ask lane cannot follow it. ego lite will not start without a GUI session, and
+  the agy on this machine was signed in interactively and keeps its Google
+  session in the login keychain — a process in the system domain has neither, so
+  both engines would find themselves signed out in the one context where nobody
+  is watching the log.
+
+  THE PRICE, AND THE SETTING THAT PAYS IT. An agent starts at login, not at boot.
+  A mini that reboots at 3am and stops at the login window runs no agent, and the
+  failure is invisible — chatgpt@mini simply stops being listed and bare calls
+  fall back to the container. So this file is only half the install: Automatic
+  login must be on (System Settings -> Users & Groups -> Automatic login), and
+  FileVault must stay off for it to work at all.
+
+  Install it with the sed line in README.md — launchd does not expand ~, so
+  __HOME__, __NODE__ and __NODEBIN__ must be real paths before this file is loaded.
+
+  WORKER_TYPES pins this process to one lane rather than letting macmini.mjs
+  build its default two, and it is set HERE rather than left to
+  ~/.gmap-worker.env on purpose: that file carries WORKER_TYPES=ping,gmap.scan as
+  the default for the unpinned scan daemon, and process.loadEnvFile does not
+  override a variable already present in the environment. This line is what keeps
+  the two lanes from collapsing onto each other.
+
+  PATH carries the nvm bin directory because `opencode` (the muse engine) is
+  installed beside node there, and ~/.local/bin because ego-browser and agy are
+  installed there. A launchd job inherits neither.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.eternalgy.gmapworker.ask</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__HOME__/automation-tools/worker/macmini.mjs</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__HOME__/automation-tools</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/gmap-worker-ask.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/gmap-worker-ask.log</string>
+
+  <!--
+    No LAB_TOKEN here. macmini.mjs reads it from ~/.gmap-worker.env at chmod 600,
+    for the same reason the daemon does: a plist is readable by every process on
+    the box and that token is a root shell on the lab container.
+  -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__NODEBIN__:__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>WORKER_NAME</key>
+    <string>macmini-ask</string>
+    <key>WORKER_TYPES</key>
+    <string>chatgpt.ask,chatgpt.probe,meta.ask,meta.probe,muse.ask,muse.probe,agy.ask,agy.probe</string>
+  </dict>
+</dict>
+</plist>

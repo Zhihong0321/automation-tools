@@ -59,8 +59,7 @@ one process per engine:
 | Process | `WORKER_NAME` | `WORKER_TYPES` | Kept alive by |
 |---|---|---|---|
 | the scan | `$(hostname)` | `ping,gmap.scan` | the LaunchDaemon, at boot |
-| ChatGPT | `macmini-ego` | `chatgpt.ask,chatgpt.probe` | nothing yet — started by hand |
-| agy | `macmini-agy` | `agy.ask,agy.probe` | the LaunchAgent below |
+| the ask lane | `macmini-ask` | the six wrapper types plus `muse.*` | the LaunchAgent, at login |
 
 Pinning the daemon matters as much as pinning the wrappers: a claim with no
 `types` asks for **any** job, so an unpinned scan daemon will happily take a
