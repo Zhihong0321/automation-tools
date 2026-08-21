@@ -211,6 +211,41 @@ export function validateFinal(final: Record<string, unknown>, ledger: Record<str
   return [...new Set(errors)];
 }
 
+/**
+ * How a finished research run is published.
+ *
+ * `produced` counts the rounds that came back with usable output, and it is the
+ * whole point of this function. Every round failure is caught where it happens
+ * so one dead engine cannot abandon the work the others did — but nothing used
+ * to ask whether ANY round had run, so a run in which all six calls were refused
+ * published as `partial`: a green "Complete · noted gaps" over four empty
+ * sections, indistinguishable from a company the research genuinely found
+ * nothing on. Nothing ran is not a gap. It is a failure, and it says so.
+ *
+ * Reasons are deduplicated because they repeat by engine, not by round: one
+ * offline worker turning away six calls is one fact, not six.
+ */
+export function publishOutcome(produced: number, failures: string[]): {
+  status: 'completed' | 'partial' | 'failed';
+  error: string | null;
+} {
+  const reasons = [...new Set(failures.filter(Boolean))];
+  if (!produced) {
+    return {
+      status: 'failed',
+      error: 'No research round produced any output, so this report has no findings. '
+        + (reasons.join(' ') || 'Every round failed without reporting a reason.'),
+    };
+  }
+  if (reasons.length) {
+    return {
+      status: 'partial',
+      error: 'Report completed with one or more round/validation gaps; only validated fields are published.',
+    };
+  }
+  return { status: 'completed', error: null };
+}
+
 function companyBaseline(company: Record<string, unknown>): string {
   return JSON.stringify({
     id: String(company.id ?? ''), name: company.name, category: company.category,
@@ -310,7 +345,10 @@ async function runCompanyResearch(publicId: string, reportId: string, company: R
   if (active.has(publicId)) return;
   active.add(publicId);
   const parsedForLedger: Record<string, unknown>[] = [];
-  let hadFailure = false;
+  // Why rounds produced nothing, and how many produced something. The count is
+  // the load-bearing half: see publishOutcome.
+  const failures: string[] = [];
+  let produced = 0;
   try {
     await db.updateReport(publicId, { status: 'running', error: null });
     await db.initResearchRun(reportId);
@@ -320,10 +358,11 @@ async function runCompanyResearch(publicId: string, reportId: string, company: R
       if (r1.parsed) {
         for (const row of [...rows(r1.parsed.contacts), ...rows(r1.parsed.people), ...rows(r1.parsed.signals)]) row._round = 'round01';
         parsedForLedger.push(r1.parsed);
-      } else hadFailure = true;
+        produced += 1;
+      } else failures.push(r1.parse_error ?? 'Round 01 returned no JSON object.');
       await db.saveRound(reportId, 'round01', r1, r1.parsed ? 'completed' : 'invalid_output', { model: r1.model, engine: r1.engine, ms: r1.ms });
     } catch (err) {
-      hadFailure = true;
+      failures.push((err as Error).message ?? String(err));
       await db.saveRound(reportId, 'round01', { error: (err as Error).message }, 'failed', { model: 'agy@mini' });
     }
 
@@ -336,25 +375,33 @@ async function runCompanyResearch(publicId: string, reportId: string, company: R
         if (call.parsed) {
           for (const row of rows(call.parsed[kind])) row._round = 'round02';
           parsedForLedger.push(call.parsed);
-        } else hadFailure = true;
+          produced += 1;
+        } else failures.push(call.parse_error ?? 'Round 02 ' + kind + ' returned no JSON object.');
       } catch (err) {
-        hadFailure = true;
+        failures.push((err as Error).message ?? String(err));
         object(round02.calls)[kind] = { error: (err as Error).message };
       }
     }
     const r2Ok = Object.values(object(round02.calls)).some((v) => object(v).parsed);
-    await db.saveRound(reportId, 'round02', round02, r2Ok ? (hadFailure ? 'partial' : 'completed') : 'failed', { model: 'chatgpt@mini', split_calls: 3 });
+    await db.saveRound(reportId, 'round02', round02, r2Ok ? (failures.length ? 'partial' : 'completed') : 'failed', { model: 'chatgpt@mini', split_calls: 3 });
 
     try {
       const r3 = await ask('meta@mini', round03Prompt(company), 240_000);
       const access = str(r3.parsed?.access_mode);
-      if (r3.parsed && access === 'live_meta_pages') {
-        for (const row of [...rows(r3.parsed.contacts), ...rows(r3.parsed.people), ...rows(r3.parsed.signals)]) row._round = 'round03';
-        parsedForLedger.push(r3.parsed);
-      }
+      if (r3.parsed) {
+        // Answering "no live access" is this round doing its job, so it counts
+        // as output; only an unparseable answer is a failure. Neither was
+        // recorded before, which let a round 03 that returned prose leave the
+        // run looking clean.
+        produced += 1;
+        if (access === 'live_meta_pages') {
+          for (const row of [...rows(r3.parsed.contacts), ...rows(r3.parsed.people), ...rows(r3.parsed.signals)]) row._round = 'round03';
+          parsedForLedger.push(r3.parsed);
+        }
+      } else failures.push(r3.parse_error ?? 'Round 03 returned no JSON object.');
       await db.saveRound(reportId, 'round03', r3, r3.parsed ? 'completed' : 'invalid_output', { model: r3.model, engine: r3.engine, ms: r3.ms, access_mode: access || null });
     } catch (err) {
-      hadFailure = true;
+      failures.push((err as Error).message ?? String(err));
       await db.saveRound(reportId, 'round03', { error: (err as Error).message }, 'failed', { model: 'meta@mini' });
     }
 
@@ -364,20 +411,21 @@ async function runCompanyResearch(publicId: string, reportId: string, company: R
     try {
       const r4 = await ask('agy@mini', round04Prompt(ledger), 420_000);
       const fidelityErrors = r4.parsed ? validateFinal(r4.parsed, ledger) : [r4.parse_error ?? 'invalid final output'];
-      if (r4.parsed && !fidelityErrors.length) finalReport = { ...r4.parsed, synthesis_mode: 'gemini_validated' };
-      else hadFailure = true;
+      if (r4.parsed && !fidelityErrors.length) {
+        finalReport = { ...r4.parsed, synthesis_mode: 'gemini_validated' };
+        produced += 1;
+      } else failures.push('Final synthesis rejected: ' + fidelityErrors.join(', ') + '.');
       r4Artifact = { ...r4, fidelity_errors: fidelityErrors, fallback_used: fidelityErrors.length > 0 };
       await db.saveRound(reportId, 'round04', r4Artifact, fidelityErrors.length ? 'rejected_fallback_used' : 'completed', { model: r4.model, engine: r4.engine, ms: r4.ms });
     } catch (err) {
-      hadFailure = true;
+      failures.push((err as Error).message ?? String(err));
       r4Artifact = { error: (err as Error).message, fallback_used: true };
       await db.saveRound(reportId, 'round04', r4Artifact, 'failed_fallback_used', { model: 'agy@mini' });
     }
     await db.saveFinal(reportId, ledger, finalReport);
+    const outcome = publishOutcome(produced, failures);
     await db.updateReport(publicId, {
-      status: hadFailure ? 'partial' : 'completed', result: finalReport,
-      error: hadFailure ? 'Report completed with one or more round/validation gaps; only validated fields are published.' : null,
-      completed: true,
+      status: outcome.status, result: finalReport, error: outcome.error, completed: true,
     });
   } catch (err) {
     await db.updateReport(publicId, { status: 'failed', error: (err as Error).message ?? String(err), completed: true }).catch(() => {});
@@ -407,10 +455,75 @@ async function ensureRunning(report: db.PublishedReport): Promise<void> {
   }
 }
 
+/** handlePublic sits outside the authed router, so it has no Ctx to answer with. */
+function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(JSON.stringify(body));
+}
+
+/** Same reason, for the request side. Capped because this route is unauthenticated. */
+async function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const c of req) {
+    size += (c as Buffer).length;
+    if (size > 8192) throw new Error('request body too large');
+    chunks.push(c as Buffer);
+  }
+  if (!chunks.length) return {};
+  try {
+    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
 export async function handlePublic(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
   const p = url.pathname;
   const pageMatch = /^\/r\/([A-Za-z0-9_-]{20})$/.exec(p);
   const jsonMatch = /^\/public\/reports\/([A-Za-z0-9_-]{20})$/.exec(p);
+  const researchMatch = /^\/public\/reports\/([A-Za-z0-9_-]{20})\/research$/.exec(p);
+
+  // Start a company dossier from the shared report page.
+  //
+  // WHY THIS IS NOT /api/company-research. That route is behind the bearer gate,
+  // and this page is deliberately outside it — the opaque id IS the capability.
+  // Putting LAB_TOKEN in a public page to reach the authed route would hand a
+  // root shell on the lab to anyone holding a share link.
+  //
+  // The capability is scoped instead of borrowed: the companyId must already be
+  // one this report lists. Holding the link lets you research the businesses in
+  // it, and nothing else — an arbitrary id from elsewhere is refused.
+  if ((req.method ?? 'GET') === 'POST' && researchMatch) {
+    if (!db.configured()) return sendJson(res, 503, { error: 'reports are not configured' }), true;
+    const parent = await db.getReport(researchMatch[1]!);
+    if (!parent || parent.report_type !== 'business_search') {
+      return sendJson(res, 404, { error: 'report not found' }), true;
+    }
+    const body = await readBody(req);
+    const companyId = str(body.companyId || body.company_id).trim();
+    const listed = parent.source_search_report_id
+      ? await db.searchResult(parent.source_search_report_id)
+      : null;
+    const company = (listed?.companies ?? []).find((c) => String(c.id) === companyId);
+    if (!company) {
+      return sendJson(res, 404, { error: 'that company is not listed in this report', companyId }), true;
+    }
+    // One dossier per company per report. A second click — or a shared link
+    // opened by three people at once — should land on the run already going,
+    // not start a fourth costing four more rounds of deep research.
+    const existing = await db.findCompanyReport(companyId);
+    if (existing) return sendJson(res, 200, { report: envelope(req, existing) }), true;
+    const request = { companyId, requesterId: 'report:' + parent.public_id };
+    const report = await db.createReport({
+      type: 'company_research', title: str(company.name, 'Company') + ' intelligence report',
+      userId: request.requesterId, request, companyId,
+    });
+    void runCompanyResearch(report.public_id, report.id, company);
+    return sendJson(res, 202, { report: envelope(req, report) }), true;
+  }
+
   if ((req.method ?? 'GET') !== 'GET' || (!pageMatch && !jsonMatch)) return false;
   if (!db.configured()) {
     res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });

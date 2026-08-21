@@ -221,6 +221,26 @@ export async function getCompany(companyId: string): Promise<Record<string, unkn
   return out.rows[0] ?? null;
 }
 
+/**
+ * The dossier that already exists for this company, if there is one.
+ *
+ * The report page lets anyone holding the link press Research, so the same
+ * company can be asked for three times in a minute. Each run is four rounds of
+ * deep research against a worker that does them one at a time — so a repeat
+ * click joins the run already going rather than queueing another behind it.
+ * A failed run is not returned: that one deserves a retry.
+ */
+export async function findCompanyReport(companyId: string): Promise<PublishedReport | null> {
+  await migrate();
+  const out = await sql<PublishedReport>(
+    `select * from published_report
+     where company_id = $1 and report_type = 'company_research' and status <> 'failed'
+     order by id desc limit 1`,
+    [companyId],
+  );
+  return out.rows[0] ?? null;
+}
+
 export async function searchResult(reportId: string): Promise<{ report: Record<string, unknown>; companies: Record<string, unknown>[] } | null> {
   await migrate();
   const report = (await sql('select * from search_report where id = $1', [reportId])).rows[0];

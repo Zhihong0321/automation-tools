@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLedger, extractJson, validateFinal } from './intel.ts';
+import { buildLedger, extractJson, publishOutcome, validateFinal } from './intel.ts';
 import { companyPage, searchPage } from './reportui.ts';
 import type { PublishedReport } from './reportdb.ts';
 
@@ -69,4 +69,42 @@ test('both public report layouts include mobile viewport and report content', ()
   }
   assert.match(search, /Example Solar/);
   assert.match(deep, /Best contact routes/);
+});
+
+test('a run where no round produced output is failed, not partial', () => {
+  // The Joe's Kitchen case: the ask lane was busy on another report, aged out of
+  // the lab's live-worker table, and every round was refused before it queued.
+  const offline = [
+    'No mini worker is claiming agy.ask right now.',
+    'No mini worker is claiming chatgpt.ask right now.',
+    'No mini worker is claiming chatgpt.ask right now.',
+    'No mini worker is claiming chatgpt.ask right now.',
+    'No mini worker is claiming meta.ask right now.',
+    'No mini worker is claiming agy.ask right now.',
+  ];
+  const out = publishOutcome(0, offline);
+  assert.equal(out.status, 'failed');
+  assert.match(out.error ?? '', /no findings/);
+  // One offline engine is one fact however many rounds it turned away.
+  assert.equal((out.error ?? '').match(/No mini worker/g)?.length, 3);
+});
+
+test('outcome separates a clean run from one with gaps', () => {
+  assert.deepEqual(publishOutcome(6, []), { status: 'completed', error: null });
+  assert.equal(publishOutcome(5, ['Round 03 returned no JSON object.']).status, 'partial');
+});
+
+test('a failed report shows the reason and lights no round pips', () => {
+  const failed = report('company_research');
+  failed.status = 'failed';
+  failed.error = 'No research round produced any output, so this report has no findings.';
+  failed.result = {};
+  const html = companyPage(failed);
+  assert.match(html, /Research failed/);
+  assert.match(html, /no findings/);
+  assert.equal(html.match(/class="round on"/g), null);
+  // A genuine partial still reports what it managed to publish.
+  const partial = report('company_research');
+  partial.status = 'partial';
+  assert.equal(companyPage(partial).match(/class="round on"/g)?.length, 3);
 });
