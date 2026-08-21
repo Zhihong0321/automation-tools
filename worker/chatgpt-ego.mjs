@@ -355,12 +355,30 @@ emit({ ok: true, handedOff: r.done, space: task.id,
 `;
 }
 
+/**
+ * A session with no registry entry is a configuration gap, not a crash, and
+ * spaceFor throws it before any browser work happens. Left as a throw it reaches
+ * the broker as a *failed job*, and the gateway renders any failed job as a flat
+ * 502 with the stack trace as the message — which is how a missing one-line
+ * mapping came to look like a broken machine. Returned in the shape the gateway
+ * already reads ({ok:false, code}) it maps to 503 and names the session that
+ * needs a space.
+ */
+function configFailure(err) {
+  if (err.code !== 'no_space') throw err;
+  return { ok: false, code: err.code, error: err.message };
+}
+
 export async function ask({ id = DEFAULT_SESSION, prompt, space, timeoutMs = ASK_TIMEOUT_MS }) {
   if (!prompt?.trim()) throw Object.assign(new Error('no prompt'), { code: 'bad_request' });
-  return egoRun(askScript({ id, prompt, space, timeoutMs }), { timeoutMs });
+  let script;
+  try { script = askScript({ id, prompt, space, timeoutMs }); } catch (e) { return configFailure(e); }
+  return egoRun(script, { timeoutMs });
 }
 export async function probe({ id = DEFAULT_SESSION, space }) {
-  return egoRun(probeScript({ id, space }), { timeoutMs: 90_000 });
+  let script;
+  try { script = probeScript({ id, space }); } catch (e) { return configFailure(e); }
+  return egoRun(script, { timeoutMs: 90_000 });
 }
 export async function login({ id = DEFAULT_SESSION }) {
   return egoRun(loginScript({ id }), { timeoutMs: 90_000 });

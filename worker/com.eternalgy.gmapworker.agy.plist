@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd job for the agy lane, in the USER domain (a LaunchAgent).
+
+  WHY AN AGENT HERE, WHEN THE SCAN RUNS AS A DAEMON. The scan worker is a
+  LaunchDaemon on purpose: it starts at boot with nobody logged in, which is the
+  only way "always on" is true (see com.eternalgy.gmapworker.daemon.plist).
+  agy cannot follow it. The agy on this machine was signed in interactively and
+  keeps no OAuth token file under ~/.gemini/antigravity-cli — unlike the
+  container, where the whole paste-the-code apparatus exists precisely because
+  there is no keyring to fall back on. A process in the system domain has no
+  login session and no unlocked login keychain, so an agy started there may find
+  itself signed out, in the one context where nobody is watching the log.
+
+  What is verified is the session this file runs in: agy answers in ~10s from a
+  logged-in Aqua session, which is where a LaunchAgent runs.
+
+  THE PRICE, AND THE SETTING THAT PAYS IT. An agent starts at login, not at boot.
+  A mini that reboots at 3am and stops at the login window runs no agent, and the
+  failure is invisible — agy@mini simply stops being listed and calls to a bare
+  `agy` fall back to the container. So this file is only half the install:
+  Automatic login must be on (System Settings -> Users & Groups -> Automatic
+  login). It needs the account password, so it is a human's job, not a script's.
+  FileVault must stay off for it to work at all.
+
+  Install it with the sed line in README.md — launchd does not expand ~, so
+  __HOME__ and __NODE__ must be real paths before this file is loaded.
+
+  WORKER_TYPES pins this process to one lane rather than letting macmini.mjs
+  build its default two. The chatgpt lane wants a browser and a task space; this
+  one wants a CLI and nothing else, and an agy call that runs for minutes has no
+  business sitting in front of a 6-second ChatGPT ask.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.eternalgy.gmapworker.agy</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__HOME__/automation-tools/worker/macmini.mjs</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__HOME__/automation-tools</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/gmap-worker-agy.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/gmap-worker-agy.log</string>
+
+  <!--
+    No LAB_TOKEN here. macmini.mjs reads it from ~/.gmap-worker.env at chmod 600,
+    for the same reason the daemon does: a plist is readable by every process on
+    the box and that token is a root shell on the lab container.
+  -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>WORKER_NAME</key>
+    <string>macmini-agy</string>
+    <key>WORKER_TYPES</key>
+    <string>agy.ask,agy.probe</string>
+  </dict>
+</dict>
+</plist>

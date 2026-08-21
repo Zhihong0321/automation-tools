@@ -7,18 +7,25 @@ tool that already talks to an LLM only has to change a base URL.
 Base URL   https://ee-auto.up.railway.app/v1
 API key    the LAB_TOKEN of this service
 Models     agy | chatgpt | chatgpt:<session> | meta | meta:<session>
+Locations  <model>@mini | <model>@container      (agy and chatgpt run in both)
 Reference  https://ee-auto.up.railway.app/docs   (the same surface, laid out to read)
 ```
 
 | Engine | What it actually is | Typical |
 |---|---|---|
-| `agy` | the Antigravity CLI, signed in with a Google account, run with `-p` | ~14s for a one-line answer |
-| `chatgpt` | a signed-in ChatGPT session in a real Chrome, typed into and read back | ~15s for a short answer |
+| `agy` | the Antigravity CLI, signed in with a Google account, run with `-p` | ~14s container, ~9s mini |
+| `chatgpt` | a signed-in ChatGPT session in a real Chrome, typed into and read back | ~15s container, ~6s mini |
 | `meta` | a signed-in meta.ai session in a real Chrome, same way | ~10s for a short answer |
 
 None of the three is a hosted API. Every call is a real CLI run or a real browser
 doing what a person would do, and the limits at the bottom of this page follow
 from that.
+
+**Two locations.** `agy` and `chatgpt` each run in two places: in this container,
+and on a Mac mini at home that claims them off the [job queue](#jobs--work-sent-to-a-machine-at-home).
+They are different machines with different accounts, not replicas. `meta` is
+container-only. Suffix any model with `@mini` or `@container` to pin it; a bare
+name is pooled — see [Models](#models).
 
 ---
 
@@ -82,6 +89,12 @@ appending `/v1` to a base URL that already has it.
 | `meta:<id>` | that Meta AI session by name |
 | `meta@mini`, `meta:<id>@mini` | Meta AI on the residential Mac mini |
 | *(empty)*, `auto` | `DEFAULT_MODEL`, which is `agy` unless set |
+| `<any of the above>@container` | that engine here, in this container |
+| `agy@mini`, `chatgpt@mini` | that engine on the Mac mini. `@macmini` is accepted too |
+| `chatgpt:<id>@mini` | a ChatGPT account in the **mini's** registry — the two registries are separate, and a container session name means nothing there |
+
+An unknown suffix is a 404 (`Unknown location "@x". Use @mini or @container.`),
+and `meta@mini` is a 404 because the mini does not run it.
 
 `gpt-*` maps to ChatGPT because tools hard-code a model id far more often than
 they let you pick one. The response always names the model that actually ran, so
@@ -90,7 +103,23 @@ the substitution is never silent: check `.model` and `.agy_lab.engine`.
 A bare `chatgpt` or `meta` resolves to `CGPT_DEFAULT_SESSION` / `META_DEFAULT_SESSION`
 if set, otherwise the first session of that kind whose last probe said `ready`.
 Sessions of the two kinds are separate: `meta:` names never resolve against a
-ChatGPT profile, or the reverse.
+ChatGPT profile, or the reverse. A bare `chatgpt` that lands on the mini takes
+`MINI_DEFAULT_SESSION` (`mini-main`) instead, for the same reason.
+
+**Which location a bare name gets.** An explicit `@mini` / `@container` always
+wins. A bare name is pooled and **prefers the mini whenever a mini worker is
+live**, because the mini is the capacity that was added — sending pooled traffic
+to the container first would leave the new machine idle and keep the old
+bottleneck. It falls back to the container the moment the mini stops polling.
+`ROUTING_PREFER=container` inverts it.
+
+"Live" is not configuration: it is the job types the mini's lanes claimed when
+they last checked in, which `GET /v1/models` reports per entry as `ready` plus the
+`workers` claiming it. A pinned `@mini` call to an engine nothing is claiming is a
+503 up front (`No mini worker is claiming agy.ask right now.`) rather than a job
+that sits `pending` until it times out. The mini's own side of this — which
+process advertises what, and why they are separate — is
+[worker/README.md](worker/README.md).
 
 `@mini` and `@container` pin a location. A bare engine prefers a live mini
 worker and falls back to the container. For Meta AI the mini is the production
@@ -157,6 +186,17 @@ container.
 |---|---|---|
 | `ping` | none | `{hostname, platform, node, publicIp, uptimeSec, at}` |
 | `gmap.scan` | `{keyword, place?, max?, userId?}` | `{businesses[], found, capped, blocked, blockedReason, limitedView, saved}` |
+| `chatgpt.ask` | `{id, prompt, timeoutMs?}` | `{ok, answer, ms}` — what `chatgpt@mini` is underneath |
+| `chatgpt.probe` | `{id}` | `{status, detail}` |
+| `agy.ask` | `{prompt, tools?, timeoutMs?}` | `{engine, answer, ms}` — what `agy@mini` is underneath |
+| `agy.probe` | none | `{status, detail, sample}` |
+
+The four wrapper types are the transport for the mini's half of `/v1`; a caller
+that wants an answer should use `/v1/chat/completions` with `@mini` and let the
+gateway do the queueing. They are listed because a job that failed is read here,
+and because the worker reports engine failure *inside* a `done` job — `ok: false`
+with a `code`, which the gateway maps to 503 (`signed_out`, `no_space`), 504
+(`answer_timeout`) or 502.
 
 ```bash
 ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \
@@ -215,6 +255,13 @@ would be worse than being told no.
 |---|---|---|---|
 | `browser` | 1 | `chatgpt` + `meta` - the container has one Chrome | 2s between calls |
 | `agy` | 2 | `agy` | none |
+| `mini` | 2 | everything routed `@mini` | per engine, as above |
+
+The mini is its own lane rather than extra width on `browser`: it is a different
+machine with a different account and its own browser, so sharing would serialise
+two things that have no reason to wait for each other. Its ceiling is accounts,
+not browsers — ego lite runs each account in its own task space, and two side by
+side is what has been measured (8.9s for a pair, not 16.1s serial).
 
 Slots are per lane; spacing, caps and counters are per engine, because the lane is
 a machine limit and the account that gets rate-limited is not.
@@ -312,6 +359,14 @@ refuses instead. Fix it with `POST /api/cgpt/:id/login`.
 **Nothing re-logs-in on its own.** `GET /v1/models` reports each session's last
 probe; a monitor that cares should probe and re-login rather than wait for a 503.
 
+**The mini is a machine in a house, and it answers only while it is polling.**
+Nothing here can start it. If its worker is not running — the process died, the
+mini slept, the login session ended — `@mini` entries drop out of `/v1/models`,
+a pinned `@mini` call is a 503, and a bare name silently goes back to the
+container at container speed. That last one is the failure worth naming, because
+it looks like nothing at all: check `.model` in the response, which always says
+where the answer actually came from.
+
 ### Status codes
 
 | Code | Means |
@@ -341,6 +396,9 @@ In a stream the status line is already sent, so a failure arrives as a final
 | `AGY_ASK_TIMEOUT_MS` | 300000 | |
 | `CGPT_ASK_TIMEOUT_MS` | 180000 | |
 | `AGY_MAX_CONCURRENT` | 2 | agy runs in flight at once |
+| `MINI_MAX_CONCURRENT` | 2 | calls in flight on the mini - that lane's width |
+| `MINI_DEFAULT_SESSION` | `mini-main` | which of the mini's accounts a bare `chatgpt@mini` means |
+| `ROUTING_PREFER` | `mini` | where a bare model name goes when both locations are live |
 | `MAX_OPEN_BROWSERS` | 1 | Chrome profiles open at once - the browser lane's width |
 | `CGPT_MIN_GAP_MS`, `META_MIN_GAP_MS` | 2000 | spacing between calls to that account |
 | `AGY_MIN_GAP_MS` | 0 | |
