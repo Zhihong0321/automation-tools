@@ -30,7 +30,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { scan as gmapScan } from './gmap.mjs';
 import * as chatgpt from './chatgpt-ego.mjs';
-import * as meta from './meta-ego.mjs';
+import * as muse from './muse.mjs';
 import * as agy from './agy.mjs';
 
 // Config from a file the process owner can chmod 600, so the token is not in a
@@ -75,7 +75,7 @@ const LANES = (() => {
   if (pinned.length) return [{ suffix: '', types: pinned }];
   return [
     { suffix: '', types: ['ping', 'gmap.scan'] },
-    { suffix: '-ask', types: ['chatgpt.ask', 'chatgpt.probe', 'meta.ask', 'meta.probe', 'agy.ask', 'agy.probe'] },
+    { suffix: '-ask', types: ['chatgpt.ask', 'chatgpt.probe', 'meta.ask', 'meta.probe', 'muse.ask', 'muse.probe', 'agy.ask', 'agy.probe'] },
   ];
 })();
 
@@ -131,8 +131,15 @@ const handlers = {
   // second lane rather than a copy of the container's one.
   'chatgpt.ask': chatgpt.ask,
   'chatgpt.probe': chatgpt.probe,
-  'meta.ask': meta.ask,
-  'meta.probe': meta.probe,
+  // muse 1.2 through opencode, answering under the `meta.*` names. Meta AI was
+  // never activated here — no ego lite profile ever held a meta.ai cookie — and
+  // these are the type names the deployed gateway reaches (`meta@mini`). The
+  // engine behind the address changed; the address did not. See muse.mjs.
+  'meta.ask': muse.ask,
+  'meta.probe': muse.probe,
+  // The same engine under its own name, for callers that would rather say it.
+  'muse.ask': muse.ask,
+  'muse.probe': muse.probe,
   'agy.ask': agy.ask,
   'agy.probe': agy.probe,
 };
