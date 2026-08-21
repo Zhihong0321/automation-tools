@@ -196,15 +196,18 @@ export function classify(page, businesses, max) {
 }
 
 /**
- * @param {{keyword:string, place:string, max?:number}} payload
+ * @param {{keyword?:string, place?:string, searchMode?:string, originalPlace?:string, max?:number}} payload
  * @returns {Promise<{businesses:Array, found:number|null, capped:boolean, blocked:boolean, ...}>}
  */
 export async function scan(payload, job = null) {
-  const keyword = (payload?.keyword ?? '').trim();
-  const place = (payload?.place ?? '').trim();
-  if (!keyword) throw new Error('gmap.scan needs a keyword');
+  const locationOnly = payload?.searchMode === 'location_only';
+  const keyword = locationOnly ? '' : (payload?.keyword ?? '').trim();
+  const place = locationOnly
+    ? (payload?.originalPlace ?? payload?.place ?? payload?.keyword ?? '').trim()
+    : (payload?.place ?? '').trim();
+  if (!keyword && !place) throw new Error('gmap.scan needs a keyword or place');
   const max = Number(payload?.max) > 0 ? Number(payload.max) : 200;
-  const query = place ? keyword + ' ' + place : keyword;
+  const query = [keyword, place].filter(Boolean).join(' ');
 
   const profile = '/tmp/gmap-worker-profile';
   const chrome = launchChrome(profile);

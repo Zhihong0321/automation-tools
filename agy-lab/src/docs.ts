@@ -22,6 +22,7 @@ export function body(): string {
     --mono:"IBM Plex Mono",ui-monospace,Consolas,"SF Mono",monospace;
   }
   * { box-sizing:border-box; }
+  html, body { max-width:100%; overflow-x:clip; }
   body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans);
     font-size:15px; line-height:1.62; -webkit-font-smoothing:antialiased; }
   a { color:var(--accent); text-decoration:none; }
@@ -29,7 +30,7 @@ export function body(): string {
   a:focus-visible, summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:4px; }
   code { font-family:var(--mono); font-size:0.885em; }
 
-  .doc { display:grid; grid-template-columns:236px minmax(0,1fr); gap:0; max-width:1180px; margin:0 auto; }
+  .doc { display:grid; grid-template-columns:236px minmax(0,1fr); gap:0; width:100%; max-width:1180px; margin:0 auto; overflow:hidden; }
 
   /* --- side nav ------------------------------------------------------- */
   .nav { position:sticky; top:0; align-self:start; height:100vh; overflow-y:auto;
@@ -80,7 +81,7 @@ export function body(): string {
   .ep .tag { font-size:12px; color:var(--faint); margin-left:auto; font-family:var(--mono); }
 
   /* --- tables --------------------------------------------------------- */
-  .tbl { overflow-x:auto; margin:14px 0; border:1px solid var(--line); border-radius:10px; }
+  .tbl { max-width:100%; overflow-x:auto; margin:14px 0; border:1px solid var(--line); border-radius:10px; }
   table { border-collapse:collapse; width:100%; font-size:13.5px; }
   th, td { text-align:left; padding:9px 13px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
   th { font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.1em;
@@ -91,7 +92,7 @@ export function body(): string {
   .req { font-family:var(--mono); font-size:10px; letter-spacing:.08em; color:var(--warn); }
 
   /* --- code ----------------------------------------------------------- */
-  pre { background:var(--sunk); border:1px solid var(--line); border-radius:10px;
+  pre { max-width:100%; background:var(--sunk); border:1px solid var(--line); border-radius:10px;
     padding:14px 16px; overflow-x:auto; margin:14px 0; }
   pre code { font-size:12.6px; line-height:1.65; color:#c9d4e7; white-space:pre; }
   .cmt { color:var(--faint); }
@@ -113,6 +114,19 @@ export function body(): string {
   .pill.ok { color:var(--ok); border-color:rgba(95,212,160,.35); }
   .pill.no { color:var(--bad); border-color:rgba(255,139,128,.35); }
 
+  .flow { display:grid; grid-template-columns:repeat(4,1fr); gap:1px; margin:20px 0;
+    border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--line); }
+  .flow-step { position:relative; background:var(--panel); padding:15px; min-height:112px; }
+  .flow-step b { display:block; font-family:var(--mono); font-size:10px; letter-spacing:.12em;
+    text-transform:uppercase; color:var(--accent); margin-bottom:8px; }
+  .flow-step code { display:block; color:var(--ink); font-size:12px; line-height:1.5; }
+  .flow-step p { margin:6px 0 0; color:var(--muted); font-size:12.5px; line-height:1.45; }
+  .terminal { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:6px; margin:14px 0; }
+  .state { padding:9px 10px; border:1px solid var(--line); border-radius:7px; font-family:var(--mono);
+    font-size:10.5px; text-align:center; color:var(--muted); }
+  .state.done { color:var(--ok); border-color:rgba(95,212,160,.35); }
+  .state.bad { color:var(--bad); border-color:rgba(255,139,128,.35); }
+
   footer { border-top:1px solid var(--line); padding-top:18px; color:var(--faint); font-size:13px; }
 
   @media (max-width:900px) {
@@ -123,16 +137,20 @@ export function body(): string {
     .nav-label { display:none; }
     main { padding:26px 22px 70px; }
     h1 { font-size:28px; }
+    .flow { grid-template-columns:1fr 1fr; }
+    .terminal { grid-template-columns:repeat(2,1fr); }
   }
+  @media (max-width:560px) { .flow { grid-template-columns:1fr; } }
   @media (prefers-reduced-motion:reduce) { * { animation:none !important; transition:none !important; } }
 </style>
 
 <div class="doc">
 <aside class="nav">
-  <div class="brand"><span class="dot"></span>agy-lab</div>
-  <div class="brand-sub">gateway API</div>
+  <div class="brand"><span class="dot"></span>EE Auto</div>
+  <div class="brand-sub">business intelligence API</div>
   <nav>
     <a href="#start">Start here</a>
+    <a href="#intel">Pipeline reference</a>
     <a href="#engines">The three engines</a>
     <span class="nav-label">Gateway</span>
     <a href="#chat">Chat completions</a>
@@ -160,53 +178,179 @@ export function body(): string {
 
 <main>
 <header>
-  <p class="eyebrow">HTTP API &middot; three engines &middot; one token</p>
-  <h1>Gateway API</h1>
-  <p class="lede">A Google account's CLI, a signed-in ChatGPT and a signed-in Meta AI,
-  served over one HTTP surface in the OpenAI chat-completions shape. Point an
-  existing tool at it by changing a base URL.</p>
+  <p class="eyebrow">Business discovery &middot; company enrichment &middot; published reports</p>
+  <h1>EE Business Intelligence API</h1>
+  <p class="lede">Search a market, persist a ranked business list, enrich any returned
+  company through four research rounds, and give the requester a durable mobile report.
+  The lower-level model gateway is documented on the same page for operators.</p>
   <div class="facts">
-    <div class="fact"><span class="k">Base URL</span><code>https://ee-auto.up.railway.app/v1</code></div>
+    <div class="fact"><span class="k">Production origin</span><code>https://ee-auto.up.railway.app</code></div>
     <div class="fact"><span class="k">Auth</span><code>Authorization: Bearer LAB_TOKEN</code></div>
-    <div class="fact"><span class="k">Models</span><code>agy &middot; chatgpt &middot; meta</code></div>
+    <div class="fact"><span class="k">OpenAPI 3.1</span><code><a href="/openapi.json">/openapi.json</a></code></div>
+    <div class="fact"><span class="k">End-user workspace</span><code><a href="/research">/research</a></code></div>
   </div>
 </header>
 
 <section id="start">
   <h2>Start here</h2>
-  <p>Every route under <code>/v1</code> and <code>/api</code> takes the service's
-  <code>LAB_TOKEN</code> as a bearer token — the same header an OpenAI client already
-  sends, which is the whole reason the shape was chosen. <code>?token=</code> as a query
-  parameter works too, for a client that cannot set headers. <code>/healthz</code> and
-  this page are the only unauthenticated routes.</p>
+  <p>The product API is asynchronous. Creating work returns HTTP <code>202</code> with a
+  stable report id, an authenticated polling URL and a public viewing URL. Your client
+  does not keep the POST connection open while Google Maps or the research engines run.</p>
 
-<pre><code>curl -s https://ee-auto.up.railway.app/v1/chat/completions \
-  -H "Authorization: Bearer $LAB_TOKEN" -H 'content-type: application/json' \
-  -d '{"model":"meta","messages":[{"role":"user","content":"Capital of Malaysia? One word."}]}'</code></pre>
+  <div class="flow">
+    <div class="flow-step"><b>01 &middot; Discover</b><code>POST /api/business-search</code><p>Business keyword, location, or both.</p></div>
+    <div class="flow-step"><b>02 &middot; Poll</b><code>GET report.api_url</code><p>Wait for a terminal status and read <code>data.companies</code>.</p></div>
+    <div class="flow-step"><b>03 &middot; Enrich</b><code>POST /api/company-research</code><p>Pass one returned <code>company.id</code>.</p></div>
+    <div class="flow-step"><b>04 &middot; Publish</b><code>GET report.view_url</code><p>Send the permanent mobile report to the requester.</p></div>
+  </div>
 
-<pre><code>{
-  "id": "chatcmpl-3cb7efa5b1294c4ab2cf01f8e01da0d8",
-  "object": "chat.completion",
-  "model": "meta:metaai",
-  "choices": [{ "index": 0, "message": { "role": "assistant", "content": "Kuala Lumpur" },
-                "finish_reason": "stop" }],
-  "usage": { "prompt_tokens": 14, "completion_tokens": 3, "total_tokens": 17, "estimated": true },
-  "agy_lab": { "engine": "meta", "ms": 11568, "settled": true }
+<pre><code>export EE_AUTO_TOKEN='replace-with-service-token'
+
+curl -sS https://ee-auto.up.railway.app/api/business-search \
+  -H "Authorization: Bearer $EE_AUTO_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"keyword":"solar installer","place":"Kuala Lumpur","max":40,"requesterId":"crm-42"}'</code></pre>
+
+  <div class="call info"><span class="h">Authentication boundary</span>
+  <p>Everything under <code>/api</code> and <code>/v1</code> requires the bearer token.
+  <code>/r/:id</code> and <code>/public/reports/:id</code> are deliberately public through an
+  opaque 20-character id. Never append the token to a report link. The end-user
+  <a href="/research">research workspace</a> accepts a scoped <code>PORTAL_TOKEN</code>
+  which can call only business-intelligence routes.</p></div>
+
+  <h3>Lifecycle</h3>
+  <div class="terminal">
+    <div class="state">queued</div><div class="state">running</div><div class="state done">completed</div>
+    <div class="state done">partial</div><div class="state bad">failed</div>
+  </div>
+  <p><code>completed</code>, <code>partial</code> and <code>failed</code> are terminal. A
+  <code>partial</code> company report is still publishable: at least one round had a gap,
+  but only evidence-ledger fields were released. Read <code>report.error</code> and
+  <code>research_run.round_status</code> to see what happened.</p>
+</section>
+
+<section id="intel">
+  <h2>Pipeline reference</h2>
+
+  <h3>1. Create a business search</h3>
+  <div class="ep"><span class="m post">POST</span><code class="path">/api/business-search</code><span class="tag">Bearer &middot; returns 202</span></div>
+  <p>Supply at least one of <code>keyword</code> or <code>place</code>/<code>location</code>. Location-only searches are valid.</p>
+  <div class="tbl"><table><thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Meaning</th></tr></thead><tbody>
+    <tr><td><code>keyword</code></td><td>string</td><td>conditional</td><td>Business category, service or keyword. May be omitted when a location is supplied.</td></tr>
+    <tr><td><code>place</code></td><td>string</td><td>conditional</td><td>City, district, state or country. May be omitted when a keyword is supplied; <code>location</code> is an alias.</td></tr>
+    <tr><td><code>max</code></td><td>integer</td><td>no</td><td>1–200; defaults to 100.</td></tr>
+    <tr><td><code>requesterId</code></td><td>string</td><td>no</td><td>Your CRM/user/job correlation id. <code>userId</code> is accepted as an alias.</td></tr>
+    <tr><td><code>timeoutMs</code></td><td>integer</td><td>no</td><td>Worker deadline; defaults to 600000. It does not make the POST synchronous.</td></tr>
+  </tbody></table></div>
+<pre><code>curl -s https://ee-auto.up.railway.app/api/business-search \
+  -H "Authorization: Bearer $EE_AUTO_TOKEN" -H 'content-type: application/json' \
+  -d '{"keyword":"solar installer","place":"Kuala Lumpur","max":40,"requesterId":"crm-42"}'</code></pre>
+<pre><code>HTTP/1.1 202 Accepted
+{
+  "report": {
+    "id": "AbCdEfGhIjKlMnOpQrSt",
+    "type": "business_search",
+    "status": "queued",
+    "title": "solar installer in Kuala Lumpur",
+    "created_at": "2026-08-21T07:00:00.000Z",
+    "updated_at": "2026-08-21T07:00:00.000Z",
+    "completed_at": null,
+    "view_url": "https://ee-auto.up.railway.app/r/AbCdEfGhIjKlMnOpQrSt",
+    "api_url": "https://ee-auto.up.railway.app/api/business-search/AbCdEfGhIjKlMnOpQrSt",
+    "error": null
+  }
 }</code></pre>
 
-  <h3>With the OpenAI SDK</h3>
-<pre><code><span class="cmt"># python</span>
-from openai import OpenAI
-client = OpenAI(base_url="https://ee-auto.up.railway.app/v1", api_key=LAB_TOKEN, timeout=300)
-client.chat.completions.create(model="chatgpt", messages=[{"role": "user", "content": "..."}])</code></pre>
+  <h3>2. Poll the business search</h3>
+  <div class="ep"><span class="m get">GET</span><code class="path">/api/business-search/:reportId</code><span class="tag">Bearer &middot; returns 200</span></div>
+<pre><code>curl -sS "$SEARCH_API_URL" \
+  -H "Authorization: Bearer $EE_AUTO_TOKEN"</code></pre>
+<pre><code>{
+  "report": { "id":"AbCdEfGhIjKlMnOpQrSt", "status":"completed", "view_url":"https://.../r/AbCd...", "api_url":"https://.../api/business-search/AbCd...", "error":null, "...":"..." },
+  "data": {
+    "search": { "found":40, "blocked":false, "saved":{ "reportId":12, "companies":40, "linked":40 } },
+    "companies": [{
+      "id":"69", "place_id":"...", "name":"SOLS Energy Sdn Bhd",
+      "rating":4.4, "reviews":275, "category":"Solar energy company",
+      "address":"...", "phone":"018-399 9247",
+      "website":"https://www.solsenergy.com/", "maps_url":"https://www.google.com/maps/...", "rank":2
+    }]
+  },
+  "research_run": null
+}</code></pre>
+  <p>The important handoff is <code>data.companies[].id</code>. It is the persisted EE
+  company id—not a Google place id and not the 20-character report id.</p>
 
-<pre><code><span class="cmt">// typescript</span>
-const client = new OpenAI({ baseURL: 'https://ee-auto.up.railway.app/v1', apiKey: LAB_TOKEN, timeout: 300000 });
-await client.chat.completions.create({ model: 'agy', messages: [{ role: 'user', content: '...' }] });</code></pre>
+  <h3>3. Create company deep research</h3>
+  <div class="ep"><span class="m post">POST</span><code class="path">/api/company-research</code><span class="tag">Bearer &middot; returns 202</span></div>
+  <div class="tbl"><table><thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Meaning</th></tr></thead><tbody>
+    <tr><td><code>companyId</code></td><td>numeric string</td><td><span class="req">yes</span></td><td><code>data.companies[].id</code> from a business-search response. <code>company_id</code> is accepted as an alias.</td></tr>
+    <tr><td><code>requesterId</code></td><td>string</td><td>no</td><td>Your correlation id. <code>userId</code> is accepted as an alias.</td></tr>
+  </tbody></table></div>
+<pre><code>curl -s https://ee-auto.up.railway.app/api/company-research \
+  -H "Authorization: Bearer $EE_AUTO_TOKEN" -H 'content-type: application/json' \
+  -d '{"companyId":"69","requesterId":"crm-42"}'</code></pre>
 
-  <div class="call warn"><span class="h">Set a long client timeout</span>
-  <p>Answers take 9–30 seconds because each one is a CLI run or a browser typing into a
-  real page. An SDK default of 60s will cut off work that would have finished.</p></div>
+  <h3>4. Poll the company research</h3>
+  <div class="ep"><span class="m get">GET</span><code class="path">/api/company-research/:reportId</code><span class="tag">Bearer &middot; returns 200</span></div>
+<pre><code>{
+  "report": { "id":"XyZaBcDeFgHiJkLmNoPq", "status":"completed", "view_url":"https://.../r/XyZa...", "error":null, "...":"..." },
+  "data": {
+    "final": {
+      "entity": { "name":"SOLS Energy Sdn Bhd", "company_id":"69", "...":"..." },
+      "summary":"...", "contacts":[...], "people":[...], "signals":[...],
+      "outreach_angles":[...], "conflicts_and_unknowns":[],
+      "synthesis_mode":"gemini_validated"
+    }
+  },
+  "research_run": {
+    "round01": {...}, "round02": {...}, "round03": {...}, "round04": {...},
+    "validated_ledger": {...}, "final_report": {...},
+    "round_status": { "round01":"completed", "round02":"completed", "round03":"completed", "round04":"completed" }
+  }
+}</code></pre>
+  <p>The authenticated route exposes benchmark artifacts. The final report is always at
+  <code>data.final</code>; raw rounds are at <code>research_run.round01</code> through
+  <code>round04</code>. Only rows with direct HTTPS evidence enter the validated ledger.
+  If final Gemini synthesis changes a validated contact/person set or introduces a new URL,
+  it is rejected and <code>synthesis_mode</code> becomes <code>validated_ledger_fallback</code>.</p>
+
+  <h3>5. Publish or consume the final report</h3>
+  <div class="tbl"><table><thead><tr><th>Route</th><th>Auth</th><th>Use</th></tr></thead><tbody>
+    <tr><td><code>GET /api/reports</code></td><td>Bearer</td><td>Combined paginated library. Filter with <code>type</code>, <code>status</code>, <code>limit</code>, and <code>offset</code>.</td></tr>
+    <tr><td><code>GET /r/:reportId</code></td><td>none</td><td>Premium mobile HTML report for the requester.</td></tr>
+    <tr><td><code>GET /public/reports/:reportId</code></td><td>none</td><td>Final public JSON. Search reports return <code>companies</code>; deep reports return <code>final</code>. Raw rounds are excluded.</td></tr>
+    <tr><td><code>GET /api/company-research/:reportId</code></td><td>Bearer</td><td>Private final output plus raw benchmark rounds.</td></tr>
+  </tbody></table></div>
+
+  <h3>Reference polling helper</h3>
+<pre><code><span class="cmt">// Node 18+ / TypeScript</span>
+const origin = 'https://ee-auto.up.railway.app';
+const headers = { Authorization: 'Bearer ' + EE_AUTO_TOKEN, 'Content-Type': 'application/json' };
+
+async function waitForReport(apiUrl) {
+  for (;;) {
+    const response = await fetch(apiUrl, { headers });
+    if (!response.ok) throw new Error('EE API ' + response.status + ': ' + await response.text());
+    const body = await response.json();
+    if (['completed', 'partial'].includes(body.report.status)) return body;
+    if (body.report.status === 'failed') throw new Error(body.report.error || 'Research failed');
+    await new Promise(resolve =&gt; setTimeout(resolve, 5000));
+  }
+}
+
+const accepted = await fetch(origin + '/api/business-search', {
+  method: 'POST', headers,
+  body: JSON.stringify({ keyword:'solar installer', place:'Kuala Lumpur', max:40, requesterId:'crm-42' })
+}).then(r =&gt; r.json());
+
+const search = await waitForReport(accepted.report.api_url);
+const companyId = search.data.companies[0].id;</code></pre>
+
+  <div class="call warn"><span class="h">Operational expectation</span>
+  <p>Poll every 5–10 seconds; do not retry the POST just because work is still running.
+  A repeated POST creates a separate report. Keep the returned <code>report.id</code> and
+  <code>api_url</code> in your own request record.</p></div>
 </section>
 
 <section id="engines">
@@ -218,7 +362,7 @@ await client.chat.completions.create({ model: 'agy', messages: [{ role: 'user', 
     <tbody>
       <tr><td><code>agy</code></td><td>the Antigravity CLI in print mode (<code>agy -p</code>), signed in with a Google account</td><td class="num">11–25 s</td><td><span class="pill">one chunk</span></td></tr>
       <tr><td><code>chatgpt</code></td><td>a signed-in chatgpt.com session in a real Chrome, typed into and read back</td><td class="num">13–15 s</td><td><span class="pill ok">incremental</span></td></tr>
-      <tr><td><code>meta</code></td><td>a signed-in meta.ai session in the same Chrome, same way</td><td class="num">9–12 s</td><td><span class="pill ok">incremental</span></td></tr>
+      <tr><td><code>meta</code></td><td>OpenCode + Muse 1.2 on the Mac mini; currently public-web only when Meta pages require login</td><td class="num">5–45 s</td><td><span class="pill">one chunk</span></td></tr>
     </tbody>
   </table></div>
   <p>Timings are measurements from 2026-08-20, not estimates: one-line answers over the
@@ -715,6 +859,9 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
     <thead><tr><th>Variable</th><th>Default</th><th></th></tr></thead>
     <tbody>
       <tr><td><code>LAB_TOKEN</code></td><td class="num">&mdash;</td><td>required, 16+ characters; the key for everything under <code>/api</code> and <code>/v1</code></td></tr>
+      <tr><td><code>PORTAL_TOKEN</code></td><td class="num">unset</td><td>optional 16+ character end-user key; authorizes only report listing, business search, and company research routes</td></tr>
+      <tr><td><code>DATABASE_URL</code></td><td class="num">&mdash;</td><td>preferred durable Postgres connection for published reports; link the Railway database service</td></tr>
+      <tr><td><code>PG_PROXY_URL</code> &middot; <code>PG_DB_NAME</code> &middot; <code>PG_PROXY_TOKEN</code></td><td class="num">unset</td><td>HTTP database fallback; the token expires and is not preferred for production</td></tr>
       <tr><td><code>DEFAULT_MODEL</code></td><td class="num">agy</td><td>what an empty or <code>auto</code> model resolves to</td></tr>
       <tr><td><code>CGPT_DEFAULT_SESSION</code></td><td class="num">first ready</td><td>which account a bare <code>chatgpt</code> means</td></tr>
       <tr><td><code>META_DEFAULT_SESSION</code></td><td class="num">first ready</td><td>which account a bare <code>meta</code> means</td></tr>
@@ -754,7 +901,7 @@ export function page(): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Gateway API &middot; agy-lab</title>
+<title>EE Business Intelligence API</title>
 </head>
 <body>
 ` + body() + `

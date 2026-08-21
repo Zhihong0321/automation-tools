@@ -5,10 +5,12 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "node src/server.ts"
+    "start": "node src/server.ts",
+    "test": "node --test src/*.test.ts"
   },
   "engines": { "node": ">=24" },
   "dependencies": {
-    "patchright": "^1.61.1"
+    "patchright": "^1.61.1",
+    "pg": "^8.16.3"
   }
 }

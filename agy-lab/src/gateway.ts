@@ -413,6 +413,15 @@ async function runAsk(
   return { ...admitted.value, ...(admitted.queuedMs > 250 ? { queuedMs: admitted.queuedMs } : {}) };
 }
 
+/** Internal native call used by the durable business-intelligence orchestrator. */
+export async function askModel(
+  model: string,
+  prompt: string,
+  opts: { timeoutMs?: number; tools?: boolean } = {},
+): Promise<AskResult> {
+  return runAsk(resolveModel(model), prompt, opts);
+}
+
 async function engineAsk(
   route: Route,
   prompt: string,

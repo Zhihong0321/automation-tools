@@ -15,7 +15,7 @@ Reference  https://ee-auto.up.railway.app/docs   (the same surface, laid out to 
 |---|---|---|
 | `agy` | the Antigravity CLI, signed in with a Google account, run with `-p` | ~14s container, ~9s mini |
 | `chatgpt` | a signed-in ChatGPT session in a real Chrome, typed into and read back | ~15s container, ~6s mini |
-| `meta` | a signed-in meta.ai session in a real Chrome, same way | ~10s for a short answer |
+| `meta` | OpenCode + Muse 1.2 on the Mac mini; capability-gated when Meta pages require login | ~5–45s |
 
 None of the three is a hosted API. Every call is a real CLI run or a real browser
 doing what a person would do, and the limits at the bottom of this page follow
@@ -73,6 +73,9 @@ answers this thing can produce.
 | `POST /v1/chat/completions` | the OpenAI shape, `stream: true` supported |
 | `GET /v1/models` | what this box can currently route to, and whether each is signed in |
 | `POST /api/ask` | the native shape: `{model, prompt}` in, `{answer, ms}` out |
+| `POST /api/business-search` | start a Google Maps business-list report |
+| `POST /api/company-research` | start a multi-round company deep-research report |
+| `GET /r/:id` | mobile-first public report page; opaque share id, no bearer token |
 
 `/api/v1/chat/completions` is the same route, for a client that insists on
 appending `/v1` to a base URL that already has it.
@@ -143,6 +146,111 @@ the same fact appears as `finish_reason: "length"`.
 `tools: true` on either shape runs agy with `--dangerously-skip-permissions`, so
 it can touch the filesystem inside the container. Off by default, per call, never
 inherited.
+
+---
+
+## Business intelligence pipeline
+
+Human reference: <https://ee-auto.up.railway.app/docs>
+
+OpenAPI 3.1: <https://ee-auto.up.railway.app/openapi.json>
+
+End-user workspace: <https://ee-auto.up.railway.app/research>
+
+Both workflows are asynchronous. A POST returns HTTP `202` with a stable opaque
+report id, an authenticated `api_url` for polling, and a public mobile `view_url`.
+
+```
+POST business-search → poll api_url → data.companies[].id
+                     → POST company-research → poll api_url → data.final
+                                             → share view_url
+```
+
+Terminal statuses are `completed`, `partial`, and `failed`. `partial` is still
+publishable: one or more rounds had a gap, but only evidence-ledger fields were
+released. Poll every 5–10 seconds; repeating a POST creates a separate report.
+
+### 1. Search for a business list
+
+```bash
+curl -sS https://ee-auto.up.railway.app/api/business-search \
+  -H "Authorization: Bearer $EE_AUTO_TOKEN" -H 'content-type: application/json' \
+  -d '{"keyword":"solar installer","place":"Kuala Lumpur","max":40,"requesterId":"crm-42"}'
+```
+
+Request fields:
+
+At least one of `keyword` or `place`/`location` is required. A location-only
+request such as `{"place":"Petaling Jaya","max":25}` is valid.
+
+| Field | Required | Meaning |
+|---|---:|---|
+| `keyword` | conditional | business category, service, or keyword; omit when searching only by location |
+| `place` | conditional | city, district, state, or country; omit when searching only by keyword; `location` is an alias |
+| `max` | no | 1–200, default 100 |
+| `requesterId` | no | caller-owned correlation id; `userId` is an alias |
+| `timeoutMs` | no | worker deadline, default 600000; the POST remains asynchronous |
+
+```json
+{
+  "report": {
+    "id": "AbCdEfGhIjKlMnOpQrSt",
+    "type": "business_search",
+    "status": "queued",
+    "api_url": "https://ee-auto.up.railway.app/api/business-search/AbCdEfGhIjKlMnOpQrSt",
+    "view_url": "https://ee-auto.up.railway.app/r/AbCdEfGhIjKlMnOpQrSt"
+  }
+}
+```
+
+Poll `GET report.api_url` with the bearer token. Completed results are under
+`data.companies`. Each row includes `id`, `place_id`, `name`, `rating`, `reviews`,
+`category`, `address`, `phone`, `website`, `maps_url`, and `rank`.
+
+The `id` at `data.companies[].id` is the input to deep research. It is not the
+Google place id and not the 20-character report id.
+
+### 2. Deep-research one company
+
+```bash
+curl -sS https://ee-auto.up.railway.app/api/company-research \
+  -H "Authorization: Bearer $EE_AUTO_TOKEN" -H 'content-type: application/json' \
+  -d '{"companyId":"69","requesterId":"crm-42"}'
+```
+
+Poll the returned `report.api_url`. Final requester output is at `data.final`:
+`entity`, `summary`, `contacts`, `people`, `signals`, `outreach_angles`,
+`conflicts_and_unknowns`, and `synthesis_mode`.
+
+The authenticated response also includes `research_run.round01` through
+`round04`, `validated_ledger`, `final_report`, and `round_status` for benchmarking:
+
+- `round01`: Gemini discovery;
+- `round02`: split ChatGPT audits for contacts, people, and signals;
+- `round03`: capability-gated Meta/Muse social evidence;
+- `round04`: Gemini synthesis plus fidelity validation.
+
+Only rows with direct HTTPS evidence enter the validated ledger. If Round 04
+changes validated person/contact ids or introduces a URL, the synthesis is
+rejected and `synthesis_mode` is `validated_ledger_fallback`.
+
+| Route | Auth | Returns |
+|---|---|---|
+| `POST /api/business-search` | bearer | `202` and report envelope |
+| `GET /api/reports` | bearer | combined report library; filter by `type`, `status`, `limit`, `offset` |
+| `GET /api/business-search/:reportId` | bearer | status and `data.companies` |
+| `POST /api/company-research` | bearer | `202` and report envelope |
+| `GET /api/company-research/:reportId` | bearer | status, `data.final`, and raw benchmark rounds |
+| `GET /r/:reportId` | opaque id | mobile human report |
+| `GET /public/reports/:reportId` | opaque id | public final JSON, never raw rounds |
+
+The Railway service should be linked to Postgres through `DATABASE_URL`. The
+pg-proxy fallback is supported, but its short-lived bearer is not suitable as the
+permanent production connection.
+
+Set a separate 16+ character `PORTAL_TOKEN` before giving `/research` to end
+users. That token is accepted only by the business-search, company-research, and
+report-library routes; it cannot access the operator shell or model/session APIs.
 
 ---
 

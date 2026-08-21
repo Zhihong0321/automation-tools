@@ -19,11 +19,15 @@ import * as gateway from './gateway.ts';
 import * as jobs from './jobs.ts';
 import * as queue from './queue.ts';
 import * as log from './logstore.ts';
+import * as intel from './intel.ts';
 import { page } from './ui.ts';
 import { page as docsPage } from './docs.ts';
+import { document as openApiDocument } from './openapi.ts';
+import { page as portalPage } from './portal.ts';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const TOKEN = process.env.LAB_TOKEN ?? '';
+const PORTAL_TOKEN = process.env.PORTAL_TOKEN?.trim() ?? '';
 
 if (TOKEN.length < 16) {
   console.error('LAB_TOKEN is missing or shorter than 16 characters. Refusing to start.');
@@ -70,9 +74,13 @@ function json(res: http.ServerResponse, status: number, body: unknown): void {
 function authorized(req: http.IncomingMessage, url: URL): boolean {
   const header = req.headers.authorization ?? '';
   const supplied = header.startsWith('Bearer ') ? header.slice(7) : (url.searchParams.get('token') ?? '');
-  const a = crypto.createHash('sha256').update(supplied).digest();
-  const b = crypto.createHash('sha256').update(TOKEN).digest();
-  return crypto.timingSafeEqual(a, b);
+  const digest = (value: string): Buffer => crypto.createHash('sha256').update(value).digest();
+  if (crypto.timingSafeEqual(digest(supplied), digest(TOKEN))) return true;
+  const productRoute = url.pathname === '/api/reports'
+    || url.pathname.startsWith('/api/business-search')
+    || url.pathname.startsWith('/api/company-research');
+  return productRoute && PORTAL_TOKEN.length >= 16
+    && crypto.timingSafeEqual(digest(supplied), digest(PORTAL_TOKEN));
 }
 
 async function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
@@ -124,6 +132,21 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     return void res.end(docsPage());
   }
 
+  if (method === 'GET' && (p === '/research' || p === '/research/' || p === '/portal')) {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
+    return void res.end(portalPage());
+  }
+
+  if (method === 'GET' && p === '/openapi.json') {
+    return json(res, 200, openApiDocument);
+  }
+
+  // Published reports are deliberately outside the bearer-token gate. Their
+  // opaque 20-character id is the share capability, and the page contains only
+  // public business evidence. The authenticated API below creates and inspects
+  // them; requesters can send the /r/:id link without also leaking LAB_TOKEN.
+  if (await intel.handlePublic(req, res, url)) return;
+
   // /v1/* is the gateway - the OpenAI-shaped surface other tools point at. It sits
   // behind the same token because a bearer header is exactly what an OpenAI client
   // already sends, so pointing one here costs a base URL and nothing else.
@@ -150,6 +173,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       ? json(res, 401, { error: { message: 'bad or missing token', type: 'invalid_request_error', code: 'invalid_api_key' } })
       : json(res, 401, { error: 'bad or missing token' });
   }
+
+  // ---- business intelligence product API -------------------------------
+  if (await intel.handleApi(req, res, url, { json, readJson })) return;
 
   // ---- the gateway ------------------------------------------------------
   // Before everything else, because this is the surface that has consumers: a
