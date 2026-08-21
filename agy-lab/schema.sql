@@ -127,6 +127,9 @@ create index if not exists published_report_type_idx on published_report (report
 create index if not exists published_report_user_idx on published_report (user_id, created_at desc);
 create index if not exists published_report_search_idx on published_report (source_search_report_id);
 create index if not exists published_report_company_idx on published_report (company_id);
+create unique index if not exists published_report_auto_person_unique_idx
+  on published_report ((request->>'sourceReportId'), (request->>'personId'))
+  where report_type = 'person_research' and request->>'autoTriggered' = 'true';
 
 -- Every model round is retained independently for benchmarking. Each round is
 -- JSON rather than text so it can carry raw output, parsed fields, validation

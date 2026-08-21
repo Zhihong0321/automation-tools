@@ -296,7 +296,7 @@ export function buildPersonLedger(
       category: 'Current role', fact: `${name} is listed as ${role} at ${str(company.name, 'the company')}.`,
       evidence_class: first(person, ['evidence_class']) || 'first_party', evidence_url: roleUrl, _round: 'company_research',
     }] : [],
-    signals: [],
+    contacts: [], signals: [],
   };
   const all = [baseline, ...parsed];
   return {
@@ -306,10 +306,12 @@ export function buildPersonLedger(
       role_evidence_url: roleUrl,
       personal_profile_url: directUrl(person.personal_profile_url) ?? null,
     },
+    contacts: collectContacts(all),
     facts: collectPersonFacts(all),
     signals: collectSignals(all),
     validation: {
       policy: 'Public professional evidence only. Private or sensitive personal data, inferred contacts and uncited claims are excluded.',
+      contact_count: collectContacts(all).length,
       fact_count: collectPersonFacts(all).length,
       signal_count: collectSignals(all).length,
     },
@@ -318,6 +320,7 @@ export function buildPersonLedger(
 
 export function validatePersonFinal(final: Record<string, unknown>, ledger: Record<string, unknown>): string[] {
   const errors: string[] = [];
+  if (!sameSet(rows(final.contacts).map((row) => row.id), rows(ledger.contacts).map((row) => row.id))) errors.push('contact id set changed');
   if (!sameSet(rows(final.facts).map((row) => row.id), rows(ledger.facts).map((row) => row.id))) errors.push('fact id set changed');
   if (!sameSet(rows(final.signals).map((row) => row.id), rows(ledger.signals).map((row) => row.id))) errors.push('signal id set changed');
   const allowedUrls = new Set<string>();
@@ -335,6 +338,14 @@ export function validatePersonFinal(final: Record<string, unknown>, ledger: Reco
   };
   visit(final);
   return [...new Set(errors)];
+}
+
+/** P01 is the first person retained by the same evidence ledger used by the report UI. */
+export function highestRankedPerson(
+  company: Record<string, unknown>,
+  parsed: Record<string, unknown>[],
+): Record<string, unknown> | null {
+  return rows(buildLedger(company, parsed).people)[0] ?? null;
 }
 
 function companyBaseline(company: Record<string, unknown>): string {
@@ -406,12 +417,12 @@ ${privateHint}
 Research public professional business information only: the current role, public company/board affiliations, attributable interviews or talks, and dated business signals relevant to a commercial or partnership conversation.
 Never collect or return home address, non-business phone, family, private social accounts, age, ethnicity, religion, health, political views, private wealth, breach data, data-broker records, or personal contact details. Do not infer any fact, email, profile, title, date or affiliation.
 Every retained item requires a raw full https:// direct source URL. Company-controlled pages are first_party; independent issuer/news pages are independent; public professional platforms are social_platform. Search snippets and bare homepages are not evidence.
-Return exactly one compact JSON object inside a fenced code block with arrays facts and signals. Fact fields: category,fact,evidence_class,evidence_url,source_date. Signal fields: date,fact,evidence_class,evidence_url,outreach_use. Max 12 facts and 8 signals. No prose outside JSON.`;
+Return exactly one compact JSON object inside a fenced code block with arrays contacts, facts and signals. Contact fields: purpose,value_as_published,normalized_value,current_status,evidence_class,evidence_url,source_date,identity_match_note. Retain only professional/business contact routes directly published by the person, company, or a reputable organization; distinguish a company-wide route from a person-specific route. Fact fields: category,fact,evidence_class,evidence_url,source_date. Signal fields: date,fact,evidence_class,evidence_url,outreach_use. Max 12 contacts, 12 facts and 8 signals. No prose outside JSON.`;
 }
 
 function personSynthesisPrompt(ledger: Record<string, unknown>): string {
   return `Write a concise VIP qualification brief using only this validated public-professional ledger: ${JSON.stringify(ledger)}
-Return exactly one JSON object in a fenced code block with keys summary (max 120 words), research_angles (max 4 short strings), person, facts, signals. Copy person, facts and signals exactly, including every id and URL. Do not browse, add, remove, rename, infer, or introduce any new URL, fact, affiliation, contact detail, or sensitive personal data. No prose outside JSON.`;
+Return exactly one JSON object in a fenced code block with keys summary (max 120 words), research_angles (max 4 short strings), person, contacts, facts, signals. Copy person, contacts, facts and signals exactly, including every id and URL. Do not browse, add, remove, rename, infer, or introduce any new URL, fact, affiliation, contact detail, or sensitive personal data. No prose outside JSON.`;
 }
 
 async function ask(model: string, prompt: string, timeoutMs: number): Promise<{
@@ -502,10 +513,87 @@ async function runBusinessSearch(publicId: string, reportId: string, request: Re
   }
 }
 
-async function runCompanyResearch(publicId: string, reportId: string, company: Record<string, unknown>): Promise<void> {
+async function startAutoPersonResearch(
+  sourcePublicId: string,
+  company: Record<string, unknown>,
+  person: Record<string, unknown>,
+  companyRequest: Record<string, unknown>,
+): Promise<db.PublishedReport> {
+  const personId = first(person, ['id']);
+  const existing = await db.findPersonResearchReport(sourcePublicId, personId);
+  if (existing) {
+    if ((existing.status === 'queued' || existing.status === 'running') && !active.has(existing.public_id)) {
+      void runPersonResearch(existing.public_id, existing.id, company, person, null);
+    }
+    return existing;
+  }
+  const personSnapshot = {
+    id: personId,
+    name: first(person, ['name']),
+    role: first(person, ['role', 'current_role', 'position']),
+    role_url: first(person, ['role_url', 'role_evidence_url', 'evidence_url']),
+    relevance: first(person, ['relevance', 'why_relevant', 'outreach_relevance']),
+    evidence_class: first(person, ['evidence_class', 'source_type']),
+    personal_profile_url: directUrl(person.personal_profile_url) ?? null,
+  };
+  const request = {
+    sourceReportId: sourcePublicId,
+    personId,
+    requesterId: str(companyRequest.requesterId || companyRequest.userId) || null,
+    emailProvided: false,
+    autoTriggered: true,
+    selectionRule: 'company_report_p01',
+    personSnapshot,
+  };
+  let report: db.PublishedReport;
+  try {
+    report = await db.createReport({
+      type: 'person_research', title: first(person, ['name']) + ' VIP brief',
+      userId: str(request.requesterId) || null, request, companyId: String(company.id ?? '') || null,
+    });
+  } catch (err) {
+    const raced = await db.findPersonResearchReport(sourcePublicId, personId);
+    if (!raced) throw err;
+    report = raced;
+  }
+  if (report.status === 'queued' || report.status === 'running') {
+    void runPersonResearch(report.public_id, report.id, company, person, null);
+  }
+  return report;
+}
+
+async function runCompanyResearch(
+  publicId: string,
+  reportId: string,
+  company: Record<string, unknown>,
+  companyRequest: Record<string, unknown>,
+): Promise<void> {
   if (active.has(publicId)) return;
   active.add(publicId);
   const parsedForLedger: Record<string, unknown>[] = [];
+  let autoPersonResearch: Record<string, unknown> | null = null;
+  const triggerAutoPersonResearch = async (): Promise<void> => {
+    if (autoPersonResearch) return;
+    const topPerson = highestRankedPerson(company, parsedForLedger);
+    if (!topPerson) return;
+    try {
+      const child = await startAutoPersonResearch(publicId, company, topPerson, companyRequest);
+      autoPersonResearch = {
+        report_id: child.public_id,
+        person_id: first(topPerson, ['id']),
+        person_name: first(topPerson, ['name']),
+        selection_rule: 'company_report_p01',
+        started_before_company_completion: true,
+      };
+    } catch (err) {
+      autoPersonResearch = {
+        person_id: first(topPerson, ['id']),
+        person_name: first(topPerson, ['name']),
+        selection_rule: 'company_report_p01',
+        start_error: (err as Error).message ?? String(err),
+      };
+    }
+  };
   let hadFailure = false;
   try {
     await db.updateReport(publicId, { status: 'running', error: null });
@@ -537,6 +625,7 @@ async function runCompanyResearch(publicId: string, reportId: string, company: R
         hadFailure = true;
         object(round02.calls)[kind] = { error: (err as Error).message };
       }
+      if (kind === 'people') await triggerAutoPersonResearch();
     }
     const r2Ok = Object.values(object(round02.calls)).some((v) => object(v).parsed);
     await db.saveRound(reportId, 'round02', round02, r2Ok ? (hadFailure ? 'partial' : 'completed') : 'failed', { model: 'chatgpt@mini', split_calls: 3 });
@@ -569,6 +658,7 @@ async function runCompanyResearch(publicId: string, reportId: string, company: R
       r4Artifact = { error: (err as Error).message, fallback_used: true };
       await db.saveRound(reportId, 'round04', r4Artifact, 'failed_fallback_used', { model: 'agy@mini' });
     }
+    if (autoPersonResearch) finalReport = { ...finalReport, auto_person_research: autoPersonResearch };
     await db.saveFinal(reportId, ledger, finalReport);
     try {
       const cn = await translateChinese(finalReport);
@@ -615,7 +705,7 @@ async function runPersonResearch(
     try {
       const discovery = await ask('agy@mini', personDiscoveryPrompt(company, person, emailHint), 420_000);
       if (discovery.parsed) {
-        for (const row of [...rows(discovery.parsed.facts), ...rows(discovery.parsed.signals)]) row._round = 'person_discovery';
+        for (const row of [...rows(discovery.parsed.contacts), ...rows(discovery.parsed.facts), ...rows(discovery.parsed.signals)]) row._round = 'person_discovery';
         parsedForLedger.push(discovery.parsed);
         discoveryMetadata = { status: 'completed', model: discovery.model, engine: discovery.engine, ms: discovery.ms };
       } else hadFailure = true;
@@ -627,7 +717,7 @@ async function runPersonResearch(
 
     const ledger = buildPersonLedger(company, person, parsedForLedger);
     await db.savePersonResearchRun(reportId, {
-      discovery: { facts: ledger.facts, signals: ledger.signals },
+      discovery: { contacts: ledger.contacts, facts: ledger.facts, signals: ledger.signals },
       ledger,
       status: { discovery: discoveryMetadata.status },
       metadata: { discovery: discoveryMetadata },
@@ -645,7 +735,7 @@ async function runPersonResearch(
       synthesisMetadata = { status: 'failed', model: 'chatgpt@mini', error: (err as Error).message ?? String(err) };
     }
     await db.savePersonResearchRun(reportId, {
-      synthesis: { synthesis_mode: finalReport.synthesis_mode, fact_count: rows(finalReport.facts).length, signal_count: rows(finalReport.signals).length },
+      synthesis: { synthesis_mode: finalReport.synthesis_mode, contact_count: rows(finalReport.contacts).length, fact_count: rows(finalReport.facts).length, signal_count: rows(finalReport.signals).length },
       ledger,
       finalReport,
       status: { discovery: discoveryMetadata.status, synthesis: synthesisMetadata.status },
@@ -687,7 +777,8 @@ async function personResearchInput(report: db.PublishedReport): Promise<{ compan
   if (!sourceId || !personId || !report.company_id) return null;
   const [source, company] = await Promise.all([db.getReport(sourceId), db.getCompany(report.company_id)]);
   if (!source || source.report_type !== 'company_research' || !company) return null;
-  const person = rows(source.result?.people).find((row) => first(row, ['id']) === personId);
+  const person = rows(source.result?.people).find((row) => first(row, ['id']) === personId) ?? object(request.personSnapshot);
+  if (first(person, ['id']) !== personId || !first(person, ['name']) || !first(person, ['role', 'current_role', 'position'])) return null;
   return person ? { company, person } : null;
 }
 
@@ -705,7 +796,7 @@ async function ensureRunning(report: db.PublishedReport): Promise<void> {
   }
   if (report.company_id) {
     const company = await db.getCompany(report.company_id);
-    if (company) void runCompanyResearch(report.public_id, report.id, company);
+    if (company) void runCompanyResearch(report.public_id, report.id, company, object(report.request));
   }
 }
 
@@ -837,7 +928,7 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       type: 'company_research', title: str(company.name, 'Company') + ' intelligence report',
       userId: str(request.requesterId) || null, request, companyId,
     });
-    void runCompanyResearch(report.public_id, report.id, company);
+    void runCompanyResearch(report.public_id, report.id, company, request);
     ctx.json(res, 202, { report: envelope(req, report) });
     return true;
   }

@@ -91,6 +91,9 @@ export function migrate(): Promise<void> {
       create index if not exists published_report_user_idx on published_report (user_id, created_at desc);
       create index if not exists published_report_search_idx on published_report (source_search_report_id);
       create index if not exists published_report_company_idx on published_report (company_id);
+      create unique index if not exists published_report_auto_person_unique_idx
+        on published_report ((request->>'sourceReportId'), (request->>'personId'))
+        where report_type = 'person_research' and request->>'autoTriggered' = 'true';
       create table if not exists company_research_run (
         report_id bigint primary key references published_report(id) on delete cascade,
         round01 jsonb,
@@ -226,6 +229,20 @@ export async function updateReport(publicId: string, patch: {
 export async function getReport(publicId: string): Promise<PublishedReport | null> {
   await migrate();
   const out = await sql<PublishedReport>('select * from published_report where public_id = $1', [publicId]);
+  return out.rows[0] ?? null;
+}
+
+export async function findPersonResearchReport(sourceReportId: string, personId: string): Promise<PublishedReport | null> {
+  await migrate();
+  const out = await sql<PublishedReport>(
+    `select * from published_report
+     where report_type = 'person_research'
+       and request->>'autoTriggered' = 'true'
+       and request->>'sourceReportId' = $1
+       and request->>'personId' = $2
+     order by created_at desc limit 1`,
+    [sourceReportId, personId],
+  );
   return out.rows[0] ?? null;
 }
 

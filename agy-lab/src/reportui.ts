@@ -131,6 +131,8 @@ export function companyPage(report: PublishedReport, chinese: Record<string, unk
   const conflicts = arr(final.conflicts_and_unknowns);
   const outreach = strings(final.outreach_angles);
   const summary = value(final, 'summary', 'executive_summary');
+  const autoPerson = obj(final.auto_person_research);
+  const autoPersonReportId = /^[A-Za-z0-9_-]{20}$/.test(value(autoPerson, 'report_id')) ? value(autoPerson, 'report_id') : '';
   const stats = `<div class="metrics">
     <div class="metric"><strong>${contacts.length || '—'}</strong><span>Contact routes</span></div>
     <div class="metric"><strong>${people.length || '—'}</strong><span>Relevant people</span></div>
@@ -149,6 +151,7 @@ export function companyPage(report: PublishedReport, chinese: Record<string, unk
   const conflictRows = conflicts.map((row) => `<div class="signal"><div class="date">Review</div><div><strong>${esc(value(row, 'issue', 'field'))}</strong><div class="source">${esc(value(row, 'details', 'status', 'note'))}</div></div></div>`).join('');
   let body = stats;
   if (summary) body += `<section class="brief"><div class="brief-label">Executive brief</div><p>${esc(summary)}</p></section>`;
+  if (autoPersonReportId) body += `<section class="brief"><div class="brief-label">Automatic P01 brief</div><p>${esc(value(autoPerson, 'person_name') || 'Highest-ranked person')} is being researched in parallel. <a class="text-link" href="/r/${esc(autoPersonReportId)}">Open VIP report <span aria-hidden="true">↗</span></a></p></section>`;
   if (report.status === 'failed') body += `<section class="section"><div class="message error">${esc(report.error ?? 'Deep research failed.')}</div></section>`;
   else if (!contacts.length && !people.length && report.status !== 'completed' && report.status !== 'partial') body += '<section class="section"><div class="empty">The research rounds are running. Verified findings will appear here automatically.</div></section>';
   else {
@@ -165,6 +168,7 @@ export function companyPage(report: PublishedReport, chinese: Record<string, unk
 export function personPage(report: PublishedReport): string {
   const final = obj(report.result);
   const person = obj(final.person);
+  const contacts = arr(final.contacts);
   const facts = arr(final.facts);
   const signals = arr(final.signals);
   const angles = strings(final.research_angles);
@@ -173,11 +177,18 @@ export function personPage(report: PublishedReport): string {
   const company = value(person, 'company_name');
   const summary = value(final, 'summary');
   const stats = `<div class="metrics">
+    <div class="metric"><strong>${contacts.length || '—'}</strong><span>Business contacts</span></div>
     <div class="metric"><strong>${facts.length || '—'}</strong><span>Verified facts</span></div>
     <div class="metric"><strong>${signals.length || '—'}</strong><span>Business signals</span></div>
     <div class="metric"><strong>${esc(company || '—')}</strong><span>Company context</span></div>
-    <div class="metric"><strong>Public</strong><span>Evidence scope</span></div>
   </div>`;
+  const contactRows = contacts.map((row) => {
+    const raw = value(row, 'value_as_published', 'value', 'normalized_value');
+    const normalized = value(row, 'normalized_value') || raw;
+    const evidence = value(row, 'evidence_url', 'source_url');
+    const action = /@/.test(raw) ? `<a class="button" href="mailto:${esc(raw)}">Email</a>` : /\d/.test(raw) ? `<a class="button" href="tel:${esc(normalized.replace(/[^+\d]/g, ''))}">Call</a>` : link(raw, 'Open', 'button');
+    return `<div class="contact"><div class="label">${esc(value(row, 'purpose') || 'Business contact')}</div><div><div class="contact-value">${esc(raw)}</div><div class="source">${esc(value(row, 'evidence_class', 'current_status'))}${evidence ? ` · <a href="${esc(evidence)}" target="_blank" rel="noopener">view evidence ↗</a>` : ''}</div></div>${action}</div>`;
+  }).join('');
   const factRows = facts.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'category') || 'Professional fact')}</div><div><strong>${esc(value(row, 'fact', 'value', 'description'))}</strong><div class="source">${esc(value(row, 'evidence_class', 'source_type'))} ${link(value(row, 'evidence_url', 'source_url'), 'Source')}</div></div></div>`).join('');
   const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || 'Current')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${esc(value(row, 'evidence_class', 'source_type'))} ${link(value(row, 'evidence_url', 'source_url'), 'Source')}</div></div></div>`).join('');
   let body = stats;
@@ -186,6 +197,7 @@ export function personPage(report: PublishedReport): string {
   if (report.status === 'failed') body += `<section class="section"><div class="message error">${esc(report.error ?? 'The VIP brief failed.')}</div></section>`;
   else if (!facts.length && !signals.length && report.status !== 'completed' && report.status !== 'partial') body += '<section class="section"><div class="empty">Public-professional research is running. This report will refresh automatically.</div></section>';
   else {
+    body += `<section class="section"><div class="section-head"><h2>Published business contacts</h2><span class="section-note">Company-wide and person-specific routes are labeled separately.</span></div><div class="contact-list">${contactRows || '<div class="empty">No validated public business contacts.</div>'}</div></section>`;
     body += `<section class="section"><div class="section-head"><h2>Verified professional facts</h2><span class="section-note">No private or sensitive-person data is included.</span></div><div class="signal-list">${factRows || '<div class="empty">No additional validated facts.</div>'}</div></section>`;
     if (angles.length) body += `<section class="section"><div class="section-head"><h2>Research angles</h2><span class="section-note">Use as prompts for informed qualification, not as asserted facts.</span></div><div class="angles">${angles.map((item) => `<div class="angle">${esc(item)}</div>`).join('')}</div></section>`;
     body += `<section class="section"><div class="section-head"><h2>Business signals</h2><span class="section-note">Dated, source-linked signals only.</span></div><div class="signal-list">${signalRows || '<div class="empty">No validated business signals.</div>'}</div></section>`;

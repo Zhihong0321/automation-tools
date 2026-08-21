@@ -187,6 +187,7 @@ export const document = {
       },
       CompanyResearchRequest: {
         type: 'object', required: ['companyId'], additionalProperties: false,
+        description: 'Once the people audit identifies P01, a separate person_research report starts automatically in parallel with the remaining company rounds and translation.',
         properties: {
           companyId: { type: 'string', pattern: '^\\d+$', description: 'Persisted company id from data.companies[].id. company_id is accepted as an alias.' },
           requesterId: { type: 'string', description: 'Optional caller-owned correlation id. userId is accepted as an alias.' },
@@ -223,12 +224,14 @@ export const document = {
           entity: { type: 'object', additionalProperties: true }, summary: { type: ['string', 'null'] }, contacts: { type: 'array', items: { type: 'object', additionalProperties: true } },
           people: { type: 'array', items: { type: 'object', additionalProperties: true } }, signals: { type: 'array', items: { type: 'object', additionalProperties: true } },
           outreach_angles: { type: 'array', items: { type: 'string' } }, conflicts_and_unknowns: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          auto_person_research: { type: ['object', 'null'], additionalProperties: true, description: 'Separate automatically triggered P01 VIP report reference.' },
           synthesis_mode: { type: 'string', enum: ['gemini_validated', 'validated_ledger_fallback'] },
         }, additionalProperties: true,
       },
       FinalPersonReport: {
         type: 'object', properties: {
           person: { type: 'object', additionalProperties: true }, summary: { type: ['string', 'null'] },
+          contacts: { type: 'array', items: { type: 'object', additionalProperties: true } },
           facts: { type: 'array', items: { type: 'object', additionalProperties: true } }, signals: { type: 'array', items: { type: 'object', additionalProperties: true } },
           research_angles: { type: 'array', items: { type: 'string' } },
           synthesis_mode: { type: 'string', enum: ['chatgpt_validated', 'validated_ledger_fallback'] },

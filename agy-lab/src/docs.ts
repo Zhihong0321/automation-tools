@@ -318,6 +318,11 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
   <code>round04</code>. Only rows with direct HTTPS evidence enter the validated ledger.
   If final Gemini synthesis changes a validated contact/person set or introduces a new URL,
   it is rejected and <code>synthesis_mode</code> becomes <code>validated_ledger_fallback</code>.</p>
+  <p>As soon as the Round 02 people audit identifies the report's P01 person, the service
+  creates a separate <code>person_research</code> report and starts it immediately. It runs
+  concurrently while company signals, social checks, final synthesis, and Chinese translation
+  continue. The child report is idempotent by source report and person id, and appears as its own
+  line in the research library.</p>
 
   <h3>5. Create a VIP person brief</h3>
   <div class="ep"><span class="m post">POST</span><code class="path">/api/person-research</code><span class="tag">Bearer &middot; returns 202</span></div>
