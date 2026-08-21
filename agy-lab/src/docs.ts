@@ -302,6 +302,7 @@ data: [DONE]</code></pre>
       <tr><td><code>gpt-4o</code>, <code>gpt-*</code>, <code>o1*</code>, <code>o3*</code>, <code>o4*</code></td><td>the default ChatGPT session</td></tr>
       <tr><td><code>meta</code>, <code>metaai</code>, <code>meta.ai</code>, <code>llama-*</code></td><td>the default Meta AI session</td></tr>
       <tr><td><code>meta:&lt;id&gt;</code></td><td>that Meta AI session</td></tr>
+      <tr><td><code>meta@mini</code>, <code>meta:&lt;id&gt;@mini</code></td><td>Meta AI through the residential Mac mini</td></tr>
       <tr><td><em>empty</em>, <code>auto</code></td><td><code>DEFAULT_MODEL</code>, which is <code>agy</code> unless set</td></tr>
     </tbody>
   </table></div>
@@ -310,7 +311,8 @@ data: [DONE]</code></pre>
   <code>meta</code> resolves to <code>CGPT_DEFAULT_SESSION</code> / <code>META_DEFAULT_SESSION</code> if
   set, otherwise the first session of that kind whose last probe said <code>ready</code>. The two
   kinds never cross: a <code>meta:</code> name will not resolve against a ChatGPT profile, or the
-  reverse.</p>
+  reverse. <code>@mini</code> and <code>@container</code> pin a location; a bare engine prefers a
+  live mini worker and falls back to the container.</p>
 </section>
 
 <section id="ask">
@@ -464,26 +466,16 @@ data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"..."}}]}
 
 <section id="meta">
   <h2>Meta AI</h2>
-  <p>The same machinery as ChatGPT — a persistent profile, an ask that types into the real
-  editor — with one structural difference that cannot be worked around from inside the
-  container.</p>
-  <div class="call stop"><span class="h">The login cannot happen here</span>
-  <p>Measured from the container: meta.ai loads fine logged out, Facebook accepts the
-  password with no checkpoint, and then the hop back to Meta AI answers <em>"Meta AI isn't
-  available in your region."</em> The same account, the same sequence, from a home connection
-  in Malaysia: signs in and chats. The gate is on the address the login comes from.</p>
-  <p>It is evaluated once, at login. A session minted at a residential IP, exported and
-  imported here, answers prompts from this container with no region error — cookies replay
-  fine, only the login is refused. So: sign in locally with
-  <code>scripts/meta-login.mjs</code>, then
-  <code>POST /api/cgpt/&lt;id&gt;/import</code> with <code>{"kind":"meta"}</code> and the
-  storageState. <code>POST /api/cgpt/:id/login</code> refuses a meta session outright rather
-  than driving a login that cannot succeed.</p></div>
-  <p>Everything else works the way the ChatGPT engine does: <code>probe</code> (~0.7 s),
-  <code>ask</code>, <code>dom</code>, <code>frame</code>. Meta AI ships stable
-  <code>data-testid</code>s, so the selectors are steadier than ChatGPT's — with one trap:
-  <code>[data-testid="composer-input"]</code> is a zero-sized textarea mirror, not the
-  editor. Filling it reads back correct and types into nothing.</p>
+  <p>The same machinery as ChatGPT — a signed-in browser space, an ask that types into the
+  real editor — but it has to run from the residential Mac mini.</p>
+  <div class="call stop"><span class="h">The Railway address is region-blocked</span>
+  <p>Current live response from the container, even with the imported signed-in profile:
+  <em>"Meta AI isn't available yet in your country."</em> The gate now applies on ordinary
+  page loads, not only during login, so replaying cookies in Railway is no longer enough.</p>
+  <p>The mini worker claims <code>meta.ask</code> and drives a Meta task space through
+  ego-browser. Use <code>meta@mini</code> to pin it; a bare <code>meta</code> selects it
+  automatically while that worker is live. <code>meta@container</code> remains available for
+  diagnosis, but is not expected to answer while the address gate is active.</p></div>
 </section>
 
 <section id="jobs">
@@ -726,6 +718,7 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
       <tr><td><code>DEFAULT_MODEL</code></td><td class="num">agy</td><td>what an empty or <code>auto</code> model resolves to</td></tr>
       <tr><td><code>CGPT_DEFAULT_SESSION</code></td><td class="num">first ready</td><td>which account a bare <code>chatgpt</code> means</td></tr>
       <tr><td><code>META_DEFAULT_SESSION</code></td><td class="num">first ready</td><td>which account a bare <code>meta</code> means</td></tr>
+      <tr><td><code>MINI_META_DEFAULT_SESSION</code></td><td class="num">meta-main</td><td>which mini task-space registry entry a bare <code>meta@mini</code> means</td></tr>
       <tr><td><code>AGY_ASK_TIMEOUT_MS</code></td><td class="num">300000</td><td></td></tr>
       <tr><td><code>CGPT_ASK_TIMEOUT_MS</code></td><td class="num">180000</td><td></td></tr>
       <tr><td><code>META_ASK_TIMEOUT_MS</code></td><td class="num">= CGPT</td><td></td></tr>

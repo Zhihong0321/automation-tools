@@ -30,6 +30,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { scan as gmapScan } from './gmap.mjs';
 import * as chatgpt from './chatgpt-ego.mjs';
+import * as meta from './meta-ego.mjs';
 import * as agy from './agy.mjs';
 
 // Config from a file the process owner can chmod 600, so the token is not in a
@@ -74,7 +75,7 @@ const LANES = (() => {
   if (pinned.length) return [{ suffix: '', types: pinned }];
   return [
     { suffix: '', types: ['ping', 'gmap.scan'] },
-    { suffix: '-ask', types: ['chatgpt.ask', 'chatgpt.probe', 'agy.ask', 'agy.probe'] },
+    { suffix: '-ask', types: ['chatgpt.ask', 'chatgpt.probe', 'meta.ask', 'meta.probe', 'agy.ask', 'agy.probe'] },
   ];
 })();
 
@@ -130,6 +131,8 @@ const handlers = {
   // second lane rather than a copy of the container's one.
   'chatgpt.ask': chatgpt.ask,
   'chatgpt.probe': chatgpt.probe,
+  'meta.ask': meta.ask,
+  'meta.probe': meta.probe,
   'agy.ask': agy.ask,
   'agy.probe': agy.probe,
 };

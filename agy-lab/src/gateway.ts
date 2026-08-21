@@ -68,7 +68,7 @@ type Route = { location: Location } & (
 );
 
 /** The job type the mini's worker lane claims for an engine. */
-const jobTypeFor = (engine: 'agy' | 'chatgpt'): string => engine + '.ask';
+const jobTypeFor = (engine: queue.Engine): string => engine + '.ask';
 
 /**
  * Is a worker that serves this engine actually polling right now?
@@ -78,7 +78,7 @@ const jobTypeFor = (engine: 'agy' | 'chatgpt'): string => engine + '.ask';
  * than absent — a minute of waiting to be told something that was knowable
  * immediately.
  */
-function miniLive(engine: 'agy' | 'chatgpt'): boolean {
+function miniLive(engine: queue.Engine): boolean {
   return jobs.liveTypes().includes(jobTypeFor(engine));
 }
 
@@ -92,7 +92,6 @@ function miniLive(engine: 'agy' | 'chatgpt'): boolean {
  * idle and keep the old bottleneck. Falls back the moment the mini stops polling.
  */
 function defaultLocation(engine: 'agy' | 'chatgpt' | 'meta'): Location {
-  if (engine === 'meta') return 'container';
   const pref = process.env.ROUTING_PREFER?.trim().toLowerCase();
   if (pref === 'container') return 'container';
   if (pref === 'mini') return miniLive(engine) ? 'mini' : 'container';
@@ -164,9 +163,16 @@ export function resolveModel(raw: string): Route {
   // Meta before ChatGPT: "meta" is checked by exact name, and llama-* is the
   // model family a caller pointing at Meta AI is most likely to hard-code.
   if (name === 'meta' || name === 'metaai' || name === 'meta.ai' || /^llama/.test(name)) {
-    if (pinned === 'mini') throw fail(404, 'The mini does not run Meta AI.', 'model_not_found');
+    const location = pinned ?? defaultLocation('meta');
+    if (location === 'mini') {
+      if (!miniLive('meta')) {
+        throw fail(503, 'No mini worker is claiming meta.ask right now.', 'engine_unavailable');
+      }
+      const session = rest.join(':').trim() || process.env.MINI_META_DEFAULT_SESSION?.trim() || 'meta-main';
+      return { engine: 'meta', model: 'meta:' + session + '@mini', session, location };
+    }
     const session = rest.join(':').trim() || defaultSession('meta');
-    return { engine: 'meta', model: 'meta:' + session, session, location: 'container' };
+    return { engine: 'meta', model: 'meta:' + session, session, location };
   }
   if (name === 'chatgpt' || name === 'openai' || /^(gpt|o[134])/.test(name)) {
     const location = pinned ?? defaultLocation('chatgpt');
@@ -212,9 +218,9 @@ function models(): Record<string, unknown> {
   // thing this endpoint exists to make visible, so liveness is read per call and
   // the entry is emitted either way rather than being hidden when it is down.
   const miniWorkers = jobs.liveWorkers();
-  const miniEntry = (engine: 'agy' | 'chatgpt') => {
+  const miniEntry = (engine: queue.Engine) => {
     const live = miniLive(engine);
-    const id = engine === 'agy' ? 'agy@mini' : 'chatgpt@mini';
+    const id = engine + '@mini';
     return entry(id, {
       engine,
       location: 'mini',
@@ -231,8 +237,17 @@ function models(): Record<string, unknown> {
       ...named('chatgpt', cgpt, 'chatgpt'),
       ...(cgpt.length ? [entry('chatgpt', { engine: 'chatgpt', alias_for: 'chatgpt:' + defaultSession('chatgpt') })] : []),
       ...named('meta', metaSessions, 'meta'),
-      ...(metaSessions.length ? [entry('meta', { engine: 'meta', alias_for: 'meta:' + defaultSession('meta') })] : []),
+      ...(miniLive('meta')
+        ? [entry('meta', {
+            engine: 'meta',
+            location: 'mini',
+            alias_for: 'meta:' + (process.env.MINI_META_DEFAULT_SESSION?.trim() || 'meta-main') + '@mini',
+          })]
+        : metaSessions.length
+          ? [entry('meta', { engine: 'meta', location: 'container', alias_for: 'meta:' + defaultSession('meta') })]
+          : []),
       miniEntry('chatgpt'),
+      miniEntry('meta'),
       miniEntry('agy'),
     ],
   };
@@ -255,9 +270,8 @@ async function miniAsk(
   prompt: string,
   opts: { timeoutMs?: number; onDelta?: (chunk: string) => void } = {},
 ): Promise<AskResult> {
-  if (route.engine === 'meta') throw fail(404, 'The mini does not run Meta AI.', 'model_not_found');
   const timeoutMs = opts.timeoutMs ?? timeoutFor(route);
-  const session = route.engine === 'chatgpt' ? (route as { session: string }).session : undefined;
+  const session = route.engine === 'agy' ? undefined : (route as { session: string }).session;
 
   // Give the worker its full budget, then wait slightly longer than the job's own
   // timeout: expiring here first would report a timeout for work still running.
@@ -277,8 +291,9 @@ async function miniAsk(
   // can be `done` and still carry ok:false, e.g. a signed-out account.
   if (out.ok === false) {
     const code = out.code ?? 'engine_error';
-    const status = code === 'signed_out' || code === 'no_space' ? 503 : code === 'answer_timeout' ? 504 : 502;
-    throw fail(status, out.error ?? 'the mini could not answer: ' + code, code === 'signed_out' ? 'engine_unavailable' : 'engine_error');
+    const unavailable = code === 'signed_out' || code === 'no_space' || code === 'region_blocked';
+    const status = unavailable ? 503 : code === 'answer_timeout' ? 504 : 502;
+    throw fail(status, out.error ?? 'the mini could not answer: ' + code, unavailable ? 'engine_unavailable' : 'engine_error');
   }
   const answer = str(out.answer).trim();
   if (!answer) throw fail(502, 'the mini returned an empty answer', 'engine_error');

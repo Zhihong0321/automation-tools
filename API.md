@@ -80,6 +80,7 @@ appending `/v1` to a base URL that already has it.
 | `gpt-4o`, `gpt-*`, `o1*` … | the default ChatGPT session |
 | `meta`, `metaai`, `llama-*` | the default Meta AI session |
 | `meta:<id>` | that Meta AI session by name |
+| `meta@mini`, `meta:<id>@mini` | Meta AI on the residential Mac mini |
 | *(empty)*, `auto` | `DEFAULT_MODEL`, which is `agy` unless set |
 
 `gpt-*` maps to ChatGPT because tools hard-code a model id far more often than
@@ -90,6 +91,11 @@ A bare `chatgpt` or `meta` resolves to `CGPT_DEFAULT_SESSION` / `META_DEFAULT_SE
 if set, otherwise the first session of that kind whose last probe said `ready`.
 Sessions of the two kinds are separate: `meta:` names never resolve against a
 ChatGPT profile, or the reverse.
+
+`@mini` and `@container` pin a location. A bare engine prefers a live mini
+worker and falls back to the container. For Meta AI the mini is the production
+path: Railway is currently served the country-unavailable page even with a
+signed-in imported profile.
 
 ### The native shape
 
@@ -292,12 +298,11 @@ call against 10.4s for the same one right after a ChatGPT call. agy is a CLI and
 read back whole, and asking for one big JSON blob is the shape most likely to come
 back truncated. Ask for line records instead.
 
-**A Meta AI session cannot be re-logged-in from here.** meta.ai refuses a login
-from this container's address — "Meta AI isn't available in your region" — while
-the same account signs in fine from a residential connection, and a session minted
-there replays from here without complaint. So the session is minted locally and
-imported: `node scripts/meta-login.mjs --token $LAB_TOKEN` in the eter-browser
-project. Full measurements in [META-AI.md](META-AI.md).
+**Meta AI runs on the residential mini.** The Railway address is currently served
+"Meta AI isn't available yet in your country" even for the previously imported,
+signed-in profile. The mini worker claims `meta.ask` and drives a Meta task space
+through ego-browser. `meta@container` remains available for diagnosis, but it is
+not expected to answer while that address gate is active.
 
 **A signed-out ChatGPT session is a 503, deliberately.** The logged-out page still
 has a working composer, so a naive wrapper types into it and returns an anonymous
@@ -331,6 +336,7 @@ In a stream the status line is already sent, so a failure arrives as a final
 | `DEFAULT_MODEL` | `agy` | what an empty or `auto` model resolves to |
 | `CGPT_DEFAULT_SESSION` | first `ready` | which account a bare `chatgpt` means |
 | `META_DEFAULT_SESSION` | first `ready` | which account a bare `meta` means |
+| `MINI_META_DEFAULT_SESSION` | `meta-main` | which mini task-space registry entry a bare `meta@mini` means |
 | `META_ASK_TIMEOUT_MS` | `CGPT_ASK_TIMEOUT_MS` | |
 | `AGY_ASK_TIMEOUT_MS` | 300000 | |
 | `CGPT_ASK_TIMEOUT_MS` | 180000 | |
