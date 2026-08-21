@@ -120,24 +120,48 @@ inherited.
 
 ---
 
-## Business intelligence reports
+## Business intelligence pipeline
 
-Both product workflows are asynchronous. The POST immediately returns one stable
-share URL; that page shows progress while work runs and the completed report when
-it finishes.
+Human reference: <https://ee-auto.up.railway.app/docs>
 
-### Search for a business list
+OpenAPI 3.1: <https://ee-auto.up.railway.app/openapi.json>
+
+Both workflows are asynchronous. A POST returns HTTP `202` with a stable opaque
+report id, an authenticated `api_url` for polling, and a public mobile `view_url`.
+
+```
+POST business-search → poll api_url → data.companies[].id
+                     → POST company-research → poll api_url → data.final
+                                             → share view_url
+```
+
+Terminal statuses are `completed`, `partial`, and `failed`. `partial` is still
+publishable: one or more rounds had a gap, but only evidence-ledger fields were
+released. Poll every 5–10 seconds; repeating a POST creates a separate report.
+
+### 1. Search for a business list
 
 ```bash
-curl -s https://ee-auto.up.railway.app/api/business-search \
-  -H "Authorization: Bearer $LAB_TOKEN" -H 'content-type: application/json' \
+curl -sS https://ee-auto.up.railway.app/api/business-search \
+  -H "Authorization: Bearer $EE_AUTO_TOKEN" -H 'content-type: application/json' \
   -d '{"keyword":"solar installer","place":"Kuala Lumpur","max":40,"requesterId":"crm-42"}'
 ```
+
+Request fields:
+
+| Field | Required | Meaning |
+|---|---:|---|
+| `keyword` | yes | business category, service, or keyword |
+| `place` | no | city, district, state, or country; `location` is an alias |
+| `max` | no | 1–200, default 100 |
+| `requesterId` | no | caller-owned correlation id; `userId` is an alias |
+| `timeoutMs` | no | worker deadline, default 600000; the POST remains asynchronous |
 
 ```json
 {
   "report": {
     "id": "AbCdEfGhIjKlMnOpQrSt",
+    "type": "business_search",
     "status": "queued",
     "api_url": "https://ee-auto.up.railway.app/api/business-search/AbCdEfGhIjKlMnOpQrSt",
     "view_url": "https://ee-auto.up.railway.app/r/AbCdEfGhIjKlMnOpQrSt"
@@ -145,38 +169,49 @@ curl -s https://ee-auto.up.railway.app/api/business-search \
 }
 ```
 
-Poll the returned `api_url` or open `view_url`. Completed company rows expose
-their database `id`, which is the input to deep research.
+Poll `GET report.api_url` with the bearer token. Completed results are under
+`data.companies`. Each row includes `id`, `place_id`, `name`, `rating`, `reviews`,
+`category`, `address`, `phone`, `website`, `maps_url`, and `rank`.
 
-### Deep-research one company
+The `id` at `data.companies[].id` is the input to deep research. It is not the
+Google place id and not the 20-character report id.
+
+### 2. Deep-research one company
 
 ```bash
-curl -s https://ee-auto.up.railway.app/api/company-research \
-  -H "Authorization: Bearer $LAB_TOKEN" -H 'content-type: application/json' \
-  -d '{"companyId":"123","requesterId":"crm-42"}'
+curl -sS https://ee-auto.up.railway.app/api/company-research \
+  -H "Authorization: Bearer $EE_AUTO_TOKEN" -H 'content-type: application/json' \
+  -d '{"companyId":"69","requesterId":"crm-42"}'
 ```
 
-The run persists all benchmark artifacts independently:
+Poll the returned `report.api_url`. Final requester output is at `data.final`:
+`entity`, `summary`, `contacts`, `people`, `signals`, `outreach_angles`,
+`conflicts_and_unknowns`, and `synthesis_mode`.
+
+The authenticated response also includes `research_run.round01` through
+`round04`, `validated_ledger`, `final_report`, and `round_status` for benchmarking:
 
 - `round01`: Gemini discovery;
-- `round02`: three compact ChatGPT audits for contacts, people and signals;
+- `round02`: split ChatGPT audits for contacts, people, and signals;
 - `round03`: capability-gated Meta/Muse social evidence;
-- `round04`: Gemini final synthesis and fidelity validation.
+- `round04`: Gemini synthesis plus fidelity validation.
 
-Only candidate rows with raw direct HTTPS evidence URLs enter the validated
-ledger. If Round 04 changes the validated person/contact ID sets or introduces a
-new URL, it is rejected and the deterministic ledger is published instead.
+Only rows with direct HTTPS evidence enter the validated ledger. If Round 04
+changes validated person/contact ids or introduces a URL, the synthesis is
+rejected and `synthesis_mode` is `validated_ledger_fallback`.
 
 | Route | Auth | Returns |
 |---|---|---|
-| `GET /api/business-search/:id` | bearer | status, companies, view link |
-| `GET /api/company-research/:id` | bearer | status, final report, all raw rounds |
-| `GET /r/:id` | opaque share id | responsive human report |
-| `GET /public/reports/:id` | opaque share id | public final-report JSON, no raw rounds |
+| `POST /api/business-search` | bearer | `202` and report envelope |
+| `GET /api/business-search/:reportId` | bearer | status and `data.companies` |
+| `POST /api/company-research` | bearer | `202` and report envelope |
+| `GET /api/company-research/:reportId` | bearer | status, `data.final`, and raw benchmark rounds |
+| `GET /r/:reportId` | opaque id | mobile human report |
+| `GET /public/reports/:reportId` | opaque id | public final JSON, never raw rounds |
 
 The Railway service should be linked to Postgres through `DATABASE_URL`. The
-`PG_PROXY_URL`, `PG_DB_NAME` and `PG_PROXY_TOKEN` fallback is supported, but its
-short-lived bearer is not suitable as the permanent production connection.
+pg-proxy fallback is supported, but its short-lived bearer is not suitable as the
+permanent production connection.
 
 ---
 
