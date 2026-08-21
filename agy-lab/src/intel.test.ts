@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLedger, extractJson, validateFinal } from './intel.ts';
-import { companyPage, searchPage } from './reportui.ts';
+import { buildLedger, buildPersonLedger, extractJson, validateChineseTranslation, validateFinal, validatePersonFinal } from './intel.ts';
+import { companyPage, personPage, searchPage } from './reportui.ts';
 import type { PublishedReport } from './reportdb.ts';
 
 test('extractJson accepts fenced output and rejects prose without an object', () => {
@@ -43,7 +43,43 @@ test('final validation rejects changed people and newly invented URLs', () => {
   assert.ok(errors.some((e) => /new URL/.test(e)));
 });
 
-function report(type: 'business_search' | 'company_research'): PublishedReport {
+test('Chinese translation keeps evidence identifiers and contact routes canonical', () => {
+  const english = {
+    entity: { company_id: '7', name: 'Example Solar', maps_url: 'https://example.com/maps', phone: '+6012345' },
+    contacts: [{ id: 'contact_1', purpose: 'Main office', value_as_published: 'hello@example.com', normalized_value: 'hello@example.com', evidence_url: 'https://example.com/contact' }],
+    people: [{ id: 'person_1', name: 'A Person', role: 'Chief Executive', role_url: 'https://example.com/team' }],
+    signals: [{ id: 'signal_1', fact: 'Opened a new office.', evidence_url: 'https://example.com/news' }],
+    conflicts_and_unknowns: [], summary: 'A short summary.', outreach_angles: ['Ask about expansion.'],
+  };
+  const chinese = {
+    ...english, summary: '简短摘要。', outreach_angles: ['询问扩张计划。'],
+    contacts: [{ ...english.contacts[0], purpose: '总办公室' }],
+    people: [{ ...english.people[0], role: '首席执行官' }],
+    signals: [{ ...english.signals[0], fact: '开设了新办公室。' }],
+  };
+  assert.deepEqual(validateChineseTranslation(chinese, english), []);
+  chinese.contacts[0]!.evidence_url = 'https://example.com/changed';
+  assert.ok(validateChineseTranslation(chinese, english).some((error) => /canonical value changed/.test(error)));
+});
+
+test('VIP ledger retains public evidence and rejects a synthesis that invents a source', () => {
+  const company = { id: '7', name: 'Example Solar' };
+  const person = { id: 'person_1', name: 'A Person', role: 'CEO', role_url: 'https://example.com/team' };
+  const ledger = buildPersonLedger(company, person, [{
+    facts: [{ category: 'Interview', fact: 'Discussed clean-energy projects.', evidence_url: 'https://example.com/interview' }],
+    signals: [{ date: '2026-08-20', fact: 'Opened a new office.', evidence_url: 'https://example.com/news/opening' }],
+  }]);
+  assert.equal((ledger.facts as unknown[]).length, 2);
+  assert.equal((ledger.signals as unknown[]).length, 1);
+  assert.deepEqual(validatePersonFinal({ ...ledger }, ledger), []);
+  const errors = validatePersonFinal({
+    ...ledger,
+    facts: [{ id: 'new_fact', evidence_url: 'https://example.com/invented' }],
+  }, ledger);
+  assert.ok(errors.some((error) => /fact id set|new URL/.test(error)));
+});
+
+function report(type: 'business_search' | 'company_research' | 'person_research'): PublishedReport {
   return {
     id: '1', public_id: 'abcdefghijklmnopqrst', report_type: type, status: 'completed',
     title: 'Mobile report', user_id: null, request: {}, source_search_report_id: null,
@@ -69,4 +105,20 @@ test('both public report layouts include mobile viewport and report content', ()
   }
   assert.match(search, /Example Solar/);
   assert.match(deep, /Best contact routes/);
+  const bilingual = companyPage(deepReport, { ...deepReport.result, summary: '中文摘要' });
+  assert.match(bilingual, /中文报告/);
+  assert.match(bilingual, /中文摘要/);
+});
+
+test('VIP brief layout labels public-professional scope and evidence', () => {
+  const brief = report('person_research');
+  brief.title = 'A Person VIP brief';
+  brief.result = {
+    person: { name: 'A Person', current_role: 'CEO', company_name: 'Example Solar' },
+    facts: [{ category: 'Current role', fact: 'A Person is CEO.', evidence_url: 'https://example.com/team', evidence_class: 'first_party' }],
+  };
+  const html = personPage(brief);
+  assert.match(html, /VIP brief/);
+  assert.match(html, /No private or sensitive-person data is included/);
+  assert.match(html, /A Person is CEO/);
 });

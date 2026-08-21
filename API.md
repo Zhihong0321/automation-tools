@@ -193,6 +193,13 @@ Poll the returned `report.api_url`. Final requester output is at `data.final`:
 `entity`, `summary`, `contacts`, `people`, `signals`, `outreach_angles`,
 `conflicts_and_unknowns`, and `synthesis_mode`.
 
+Company dossiers are bilingual. `data.final` is the canonical English report;
+`data.final_cn` is the matching Simplified Chinese (`zh-CN`) translation. The
+Chinese version preserves source URLs, evidence IDs, email addresses, phone
+numbers and published contact values exactly. Translation status and model
+metadata are in `data.translation`; a missing `final_cn` means the report is
+`partial` and the English evidence report remains available.
+
 The authenticated response also includes `research_run.round01` through
 `round04`, `validated_ledger`, `final_report`, and `round_status` for benchmarking:
 
@@ -214,6 +221,11 @@ rejected and `synthesis_mode` is `validated_ledger_fallback`.
 | `GET /api/company-research/:reportId` | bearer | status, `data.final`, and raw benchmark rounds |
 | `GET /r/:reportId` | opaque id | mobile human report |
 | `GET /public/reports/:reportId` | opaque id | public final JSON, never raw rounds |
+
+Set `TRANSLATION_API_KEY` and optionally `TRANSLATION_BASE_URL` (defaults to
+the configured e-router `/v1` endpoint) and `TRANSLATION_MODEL` (defaults to
+`step-3.7-flash`) on the Railway service to enable the Chinese report
+translation. Keep these service variables out of the repository.
 
 The Railway service should be linked to Postgres through `DATABASE_URL`. The
 pg-proxy fallback is supported, but its short-lived bearer is not suitable as the

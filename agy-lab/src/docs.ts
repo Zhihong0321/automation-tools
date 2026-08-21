@@ -301,7 +301,9 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
       "summary":"...", "contacts":[...], "people":[...], "signals":[...],
       "outreach_angles":[...], "conflicts_and_unknowns":[],
       "synthesis_mode":"gemini_validated"
-    }
+    },
+    "final_cn": { "summary":"...", "contacts":[...], "people":[...], "signals":[...] },
+    "translation": { "language":"zh-CN", "model":"step-3.7-flash", "status":"completed" }
   },
   "research_run": {
     "round01": {...}, "round02": {...}, "round03": {...}, "round04": {...},
@@ -309,18 +311,34 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
     "round_status": { "round01":"completed", "round02":"completed", "round03":"completed", "round04":"completed" }
   }
 }</code></pre>
-  <p>The authenticated route exposes benchmark artifacts. The final report is always at
-  <code>data.final</code>; raw rounds are at <code>research_run.round01</code> through
+  <p>The authenticated route exposes benchmark artifacts. The canonical English report is at
+  <code>data.final</code>; the matching Simplified Chinese rendering is at <code>data.final_cn</code>.
+  Chinese translation preserves evidence IDs, source URLs, email addresses, phone numbers and published contact values exactly.
+  Raw rounds are at <code>research_run.round01</code> through
   <code>round04</code>. Only rows with direct HTTPS evidence enter the validated ledger.
   If final Gemini synthesis changes a validated contact/person set or introduces a new URL,
   it is rejected and <code>synthesis_mode</code> becomes <code>validated_ledger_fallback</code>.</p>
 
-  <h3>5. Publish or consume the final report</h3>
+  <h3>5. Create a VIP person brief</h3>
+  <div class="ep"><span class="m post">POST</span><code class="path">/api/person-research</code><span class="tag">Bearer &middot; returns 202</span></div>
+  <p>Start only from a validated person in a completed company report with <code>POST /api/person-research</code>. Use
+  <code>data.final.people[].id</code> as <code>personId</code>. An optional email is an
+  in-memory identity hint only: it is not written to the report request or public output.</p>
+<pre><code>curl -s https://ee-auto.up.railway.app/api/person-research \
+  -H "Authorization: Bearer $EE_AUTO_TOKEN" -H 'content-type: application/json' \
+  -d '{"companyResearchId":"XyZaBcDeFgHiJkLmNoPq","personId":"person_abc123","email":"owner@example.com"}'</code></pre>
+  <p>Poll <code>GET /api/person-research/:reportId</code>. The authenticated response includes
+  <code>research_run</code> from <code>person_research_run</code>, containing validated
+  public-professional evidence, the final brief, and execution metadata. It never retains the
+  optional email hint or raw model text.</p>
+
+  <h3>6. Publish or consume the final report</h3>
   <div class="tbl"><table><thead><tr><th>Route</th><th>Auth</th><th>Use</th></tr></thead><tbody>
     <tr><td><code>GET /api/reports</code></td><td>Bearer</td><td>Combined paginated library. Filter with <code>type</code>, <code>status</code>, <code>limit</code>, and <code>offset</code>.</td></tr>
     <tr><td><code>GET /r/:reportId</code></td><td>none</td><td>Premium mobile HTML report for the requester.</td></tr>
-    <tr><td><code>GET /public/reports/:reportId</code></td><td>none</td><td>Final public JSON. Search reports return <code>companies</code>; deep reports return <code>final</code>. Raw rounds are excluded.</td></tr>
+    <tr><td><code>GET /public/reports/:reportId</code></td><td>none</td><td>Final public JSON. Search reports return <code>companies</code>; deep reports return English <code>final</code> plus <code>final_cn</code> when Chinese translation is complete. Raw rounds are excluded.</td></tr>
     <tr><td><code>GET /api/company-research/:reportId</code></td><td>Bearer</td><td>Private final output plus raw benchmark rounds.</td></tr>
+    <tr><td><code>GET /api/person-research/:reportId</code></td><td>Bearer</td><td>Private VIP brief plus its validated-evidence audit record.</td></tr>
   </tbody></table></div>
 
   <h3>Reference polling helper</h3>
@@ -862,6 +880,9 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
       <tr><td><code>PORTAL_TOKEN</code></td><td class="num">unset</td><td>optional 16+ character end-user key; authorizes only report listing, business search, and company research routes</td></tr>
       <tr><td><code>DATABASE_URL</code></td><td class="num">&mdash;</td><td>preferred durable Postgres connection for published reports; link the Railway database service</td></tr>
       <tr><td><code>PG_PROXY_URL</code> &middot; <code>PG_DB_NAME</code> &middot; <code>PG_PROXY_TOKEN</code></td><td class="num">unset</td><td>HTTP database fallback; the token expires and is not preferred for production</td></tr>
+      <tr><td><code>TRANSLATION_BASE_URL</code></td><td class="num">e-router /v1</td><td>optional OpenAI-compatible endpoint override for the Chinese company-report copy</td></tr>
+      <tr><td><code>TRANSLATION_API_KEY</code></td><td class="num">&mdash;</td><td>required bearer key for Chinese company-report translation; set as a Railway secret only</td></tr>
+      <tr><td><code>TRANSLATION_MODEL</code></td><td class="num">step-3.7-flash</td><td>model for the Simplified Chinese company-report translation</td></tr>
       <tr><td><code>DEFAULT_MODEL</code></td><td class="num">agy</td><td>what an empty or <code>auto</code> model resolves to</td></tr>
       <tr><td><code>CGPT_DEFAULT_SESSION</code></td><td class="num">first ready</td><td>which account a bare <code>chatgpt</code> means</td></tr>
       <tr><td><code>META_DEFAULT_SESSION</code></td><td class="num">first ready</td><td>which account a bare <code>meta</code> means</td></tr>

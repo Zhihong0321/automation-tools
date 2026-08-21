@@ -108,7 +108,7 @@ comment on column company_data.reviews is 'Null when Maps served a signed-out li
 create table if not exists published_report (
   id                      bigserial primary key,
   public_id               text not null unique,
-  report_type             text not null check (report_type in ('business_search', 'company_research')),
+  report_type             text not null check (report_type in ('business_search', 'company_research', 'person_research')),
   status                  text not null default 'queued'
                                   check (status in ('queued', 'running', 'completed', 'partial', 'failed')),
   title                   text,
@@ -140,7 +140,24 @@ create table if not exists company_research_run (
   round04          jsonb,
   validated_ledger jsonb,
   final_report     jsonb,
+  -- The English final_report is canonical. This holds the separate zh-CN
+  -- rendering, preserving source URLs, identifiers and contact values exactly.
+  translated_report jsonb,
+  translation_metadata jsonb not null default '{}'::jsonb,
   round_status     jsonb not null default '{}'::jsonb,
+  engine_metadata  jsonb not null default '{}'::jsonb,
+  started_at       timestamptz,
+  completed_at     timestamptz,
+  updated_at       timestamptz not null default now()
+);
+
+create table if not exists person_research_run (
+  report_id        bigint primary key references published_report(id) on delete cascade,
+  discovery        jsonb,
+  synthesis        jsonb,
+  validated_ledger jsonb,
+  final_report     jsonb,
+  run_status       jsonb not null default '{}'::jsonb,
   engine_metadata  jsonb not null default '{}'::jsonb,
   started_at       timestamptz,
   completed_at     timestamptz,
@@ -152,3 +169,6 @@ comment on column company_research_run.round01 is 'Raw and parsed Gemini discove
 comment on column company_research_run.round02 is 'Raw and parsed ChatGPT audit artifacts, split by contacts/people/signals.';
 comment on column company_research_run.round03 is 'Raw and parsed Meta/Muse capability-gated social artifact.';
 comment on column company_research_run.round04 is 'Raw final Gemini synthesis plus fidelity validation.';
+comment on column person_research_run.discovery is 'Validated public-professional evidence discovered for the VIP brief; no email identity hint is retained.';
+comment on column person_research_run.synthesis is 'Final-synthesis acceptance metadata; raw model text is intentionally not retained.';
+comment on column company_research_run.translated_report is 'Chinese (zh-CN) translation of final_report. URLs, IDs and contact values remain canonical.';

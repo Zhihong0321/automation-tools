@@ -7,12 +7,17 @@ test('end-user portal combines discovery, deep research, and report library', ()
   assert.match(html, /width=device-width/);
   assert.match(html, /Find the companies worth knowing/);
   assert.match(html, /Research library/);
+  assert.match(html, />Reports<\/button>/);
   assert.match(html, /\/api\/business-search/);
   assert.match(html, /\/api\/company-research/);
+  assert.match(html, /person_research/);
+  assert.match(html, /VIP briefs/);
   assert.match(html, /\/api\/reports\?limit=/);
   assert.match(html, /Deep research →/);
   assert.match(html, /aria-label="Start deep research for /);
   assert.match(html, /Research underway/);
+  assert.match(html, /Open research report for /);
+  assert.match(html, /Open report any time to follow progress/);
   assert.match(html, /Enter a business, a location, or both/);
   assert.match(html, /if\(!keyword&&!place\)/);
   assert.doesNotMatch(html, /id="keyword" required/);
