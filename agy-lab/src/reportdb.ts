@@ -72,7 +72,7 @@ export function migrate(): Promise<void> {
       create table if not exists published_report (
         id bigserial primary key,
         public_id text not null unique,
-        report_type text not null check (report_type in ('business_search', 'company_research')),
+        report_type text not null check (report_type in ('business_search', 'company_research', 'person_research')),
         status text not null default 'queued'
           check (status in ('queued', 'running', 'completed', 'partial', 'failed')),
         title text,
@@ -99,12 +99,49 @@ export function migrate(): Promise<void> {
         round04 jsonb,
         validated_ledger jsonb,
         final_report jsonb,
+        translated_report jsonb,
+        translation_metadata jsonb not null default '{}'::jsonb,
         round_status jsonb not null default '{}'::jsonb,
         engine_metadata jsonb not null default '{}'::jsonb,
         started_at timestamptz,
         completed_at timestamptz,
         updated_at timestamptz not null default now()
+      );
+      create table if not exists person_research_run (
+        report_id bigint primary key references published_report(id) on delete cascade,
+        discovery jsonb,
+        synthesis jsonb,
+        validated_ledger jsonb,
+        final_report jsonb,
+        run_status jsonb not null default '{}'::jsonb,
+        engine_metadata jsonb not null default '{}'::jsonb,
+        started_at timestamptz,
+        completed_at timestamptz,
+        updated_at timestamptz not null default now()
       )
+    `);
+    await sql(`
+      do $$
+      declare report_type_constraint text;
+      begin
+        select conname into report_type_constraint
+        from pg_constraint
+        where conrelid = 'published_report'::regclass
+          and contype = 'c'
+          and pg_get_constraintdef(oid) like '%report_type%';
+        if report_type_constraint is not null then
+          execute format('alter table published_report drop constraint %I', report_type_constraint);
+        end if;
+        alter table published_report add constraint published_report_report_type_check
+          check (report_type in ('business_search', 'company_research', 'person_research'));
+      end $$;
+    `);
+    // Existing deployments already have company_research_run, so these must be
+    // additive migrations rather than part of the CREATE TABLE definition only.
+    await sql(`
+      alter table company_research_run add column if not exists translated_report jsonb;
+      alter table company_research_run add column if not exists translation_metadata jsonb not null default '{}'::jsonb;
+      comment on column company_research_run.translated_report is 'Chinese (zh-CN) translation of final_report. URLs, IDs and contact values remain canonical.';
     `);
   })().catch((err) => {
     migrated = null;
@@ -113,7 +150,7 @@ export function migrate(): Promise<void> {
   return migrated;
 }
 
-export type ReportType = 'business_search' | 'company_research';
+export type ReportType = 'business_search' | 'company_research' | 'person_research';
 export type ReportStatus = 'queued' | 'running' | 'completed' | 'partial' | 'failed';
 
 export interface PublishedReport {
@@ -299,9 +336,71 @@ export async function saveFinal(
   );
 }
 
+/** Store the Chinese render separately so the canonical English evidence ledger
+ * remains machine-readable and existing API consumers keep their current shape. */
+export async function saveTranslation(
+  reportId: string,
+  translatedReport: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  await initResearchRun(reportId);
+  await sql(
+    `update company_research_run set translated_report=$2::jsonb, translation_metadata=$3::jsonb,
+       updated_at=now() where report_id=$1`,
+    [reportId, JSON.stringify(translatedReport), JSON.stringify(metadata)],
+  );
+}
+
 export async function researchRun(reportId: string): Promise<Record<string, unknown> | null> {
   await migrate();
   return (await sql('select * from company_research_run where report_id=$1', [reportId])).rows[0] ?? null;
+}
+
+export async function initPersonResearchRun(reportId: string): Promise<void> {
+  await migrate();
+  await sql(
+    `insert into person_research_run (report_id, started_at)
+     values ($1, now()) on conflict (report_id) do nothing`,
+    [reportId],
+  );
+}
+
+export async function savePersonResearchRun(reportId: string, patch: {
+  discovery?: Record<string, unknown>;
+  synthesis?: Record<string, unknown>;
+  ledger?: Record<string, unknown>;
+  finalReport?: Record<string, unknown>;
+  status?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  completed?: boolean;
+}): Promise<void> {
+  await initPersonResearchRun(reportId);
+  await sql(
+    `update person_research_run set
+       discovery = case when $2::boolean then $3::jsonb else discovery end,
+       synthesis = case when $4::boolean then $5::jsonb else synthesis end,
+       validated_ledger = case when $6::boolean then $7::jsonb else validated_ledger end,
+       final_report = case when $8::boolean then $9::jsonb else final_report end,
+       run_status = case when $10::boolean then $11::jsonb else run_status end,
+       engine_metadata = case when $12::boolean then $13::jsonb else engine_metadata end,
+       completed_at = case when $14::boolean then now() else completed_at end,
+       updated_at = now() where report_id = $1`,
+    [
+      reportId,
+      Object.prototype.hasOwnProperty.call(patch, 'discovery'), JSON.stringify(patch.discovery ?? null),
+      Object.prototype.hasOwnProperty.call(patch, 'synthesis'), JSON.stringify(patch.synthesis ?? null),
+      Object.prototype.hasOwnProperty.call(patch, 'ledger'), JSON.stringify(patch.ledger ?? null),
+      Object.prototype.hasOwnProperty.call(patch, 'finalReport'), JSON.stringify(patch.finalReport ?? null),
+      Object.prototype.hasOwnProperty.call(patch, 'status'), JSON.stringify(patch.status ?? {}),
+      Object.prototype.hasOwnProperty.call(patch, 'metadata'), JSON.stringify(patch.metadata ?? {}),
+      patch.completed === true,
+    ],
+  );
+}
+
+export async function personResearchRun(reportId: string): Promise<Record<string, unknown> | null> {
+  await migrate();
+  return (await sql('select * from person_research_run where report_id=$1', [reportId])).rows[0] ?? null;
 }
 
 export async function close(): Promise<void> {

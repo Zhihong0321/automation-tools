@@ -1,4 +1,4 @@
-// Public OpenAPI contract for the two business-intelligence product workflows.
+// Public OpenAPI contract for business discovery, company dossiers and VIP briefs.
 // Keep this focused on requester-facing endpoints; the operational gateway and
 // worker routes remain documented in /docs but are not part of this product API.
 
@@ -7,12 +7,13 @@ export const document = {
   info: {
     title: 'EE Business Intelligence API',
     version: '1.0.0',
-    description: 'Asynchronous Google Maps business discovery and evidence-guarded company deep research, with durable public report links.',
+    description: 'Asynchronous Google Maps business discovery, evidence-guarded company research and public-professional VIP briefs, with durable public report links.',
   },
   servers: [{ url: 'https://ee-auto.up.railway.app', description: 'Production' }],
   tags: [
     { name: 'Business search', description: 'Discover and persist a ranked business list from Google Maps.' },
     { name: 'Company research', description: 'Enrich one persisted company through the four-round research workflow.' },
+    { name: 'Person research', description: 'Create a public-professional VIP brief from a validated person in a completed company report.' },
     { name: 'Published reports', description: 'Read final public output using an opaque report identifier.' },
   ],
   security: [{ bearerAuth: [] }],
@@ -24,7 +25,7 @@ export const document = {
         summary: 'Browse the combined report library',
         description: 'Returns business searches and company research reports newest first. This is the data source for the end-user research workspace.',
         parameters: [
-          { name: 'type', in: 'query', schema: { type: 'string', enum: ['business_search', 'company_research'] } },
+          { name: 'type', in: 'query', schema: { type: 'string', enum: ['business_search', 'company_research', 'person_research'] } },
           { name: 'status', in: 'query', schema: { $ref: '#/components/schemas/ReportStatus' } },
           { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 40 } },
           { name: 'offset', in: 'query', schema: { type: 'integer', minimum: 0, default: 0 } },
@@ -84,13 +85,34 @@ export const document = {
         operationId: 'getCompanyResearch',
         tags: ['Company research'],
         summary: 'Poll a company research report',
-        description: 'Authenticated response includes final output, validated ledger, raw round artifacts and round statuses for benchmarking.',
+        description: 'Authenticated response includes canonical English final output, final_cn when the zh-CN translation is ready, validated ledger, raw round artifacts and round statuses for benchmarking.',
         parameters: [{ $ref: '#/components/parameters/ReportId' }],
         responses: {
           '200': { description: 'Current research state', content: { 'application/json': { schema: { $ref: '#/components/schemas/CompanyResearchResponse' } } } },
           '401': { $ref: '#/components/responses/Unauthorized' },
           '404': { $ref: '#/components/responses/NotFound' },
         },
+      },
+    },
+    '/api/person-research': {
+      post: {
+        operationId: 'createPersonResearch',
+        tags: ['Person research'],
+        summary: 'Start a public-professional VIP brief',
+        description: 'Starts from a validated person in a completed company-research report. email is an optional in-memory identity hint; it is not persisted in the report request or published output.',
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PersonResearchRequest' } } } },
+        responses: {
+          '202': { description: 'VIP brief accepted', content: { 'application/json': { schema: { $ref: '#/components/schemas/AcceptedReport' } } } },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '404': { $ref: '#/components/responses/NotFound' },
+        },
+      },
+    },
+    '/api/person-research/{reportId}': {
+      get: {
+        operationId: 'getPersonResearch', tags: ['Person research'], summary: 'Poll a VIP brief',
+        parameters: [{ $ref: '#/components/parameters/ReportId' }],
+        responses: { '200': { description: 'Current VIP brief state', content: { 'application/json': { schema: { $ref: '#/components/schemas/PersonResearchResponse' } } } }, '404': { $ref: '#/components/responses/NotFound' } },
       },
     },
     '/public/reports/{reportId}': {
@@ -140,7 +162,7 @@ export const document = {
         type: 'object', required: ['id', 'type', 'status', 'title', 'created_at', 'updated_at', 'view_url', 'api_url'],
         properties: {
           id: { type: 'string', pattern: '^[A-Za-z0-9_-]{20}$' },
-          type: { type: 'string', enum: ['business_search', 'company_research'] },
+          type: { type: 'string', enum: ['business_search', 'company_research', 'person_research'] },
           status: { $ref: '#/components/schemas/ReportStatus' },
           title: { type: 'string' }, created_at: { type: 'string', format: 'date-time' }, updated_at: { type: 'string', format: 'date-time' },
           completed_at: { type: ['string', 'null'], format: 'date-time' }, view_url: { type: 'string', format: 'uri' }, api_url: { type: 'string', format: 'uri' },
@@ -170,6 +192,15 @@ export const document = {
           requesterId: { type: 'string', description: 'Optional caller-owned correlation id. userId is accepted as an alias.' },
         },
       },
+      PersonResearchRequest: {
+        type: 'object', required: ['companyResearchId', 'personId'], additionalProperties: false,
+        properties: {
+          companyResearchId: { type: 'string', pattern: '^[A-Za-z0-9_-]{20}$', description: 'Completed company-research report id. company_research_id is accepted as an alias.' },
+          personId: { type: 'string', minLength: 1, description: 'Validated person id from final.people[].id. person_id is accepted as an alias.' },
+          email: { type: 'string', format: 'email', description: 'Optional identity hint used only while the request runs. It is not persisted in the report request or published output.' },
+          requesterId: { type: 'string' }, userId: { type: 'string' },
+        },
+      },
       Company: {
         type: 'object', required: ['id', 'name'],
         properties: {
@@ -195,6 +226,14 @@ export const document = {
           synthesis_mode: { type: 'string', enum: ['gemini_validated', 'validated_ledger_fallback'] },
         }, additionalProperties: true,
       },
+      FinalPersonReport: {
+        type: 'object', properties: {
+          person: { type: 'object', additionalProperties: true }, summary: { type: ['string', 'null'] },
+          facts: { type: 'array', items: { type: 'object', additionalProperties: true } }, signals: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          research_angles: { type: 'array', items: { type: 'string' } },
+          synthesis_mode: { type: 'string', enum: ['chatgpt_validated', 'validated_ledger_fallback'] },
+        }, additionalProperties: true,
+      },
       ResearchRun: {
         type: ['object', 'null'], description: 'Authenticated benchmark record. Round artifacts may be null until that round is saved.',
         properties: {
@@ -205,16 +244,33 @@ export const document = {
           started_at: { type: ['string', 'null'], format: 'date-time' }, completed_at: { type: ['string', 'null'], format: 'date-time' }, updated_at: { type: 'string', format: 'date-time' },
         },
       },
+      PersonResearchRun: {
+        type: ['object', 'null'], description: 'Authenticated VIP-brief audit record. It retains validated public-professional evidence and execution metadata, never the optional email identity hint.',
+        properties: {
+          report_id: { type: 'string' }, discovery: { type: ['object', 'null'], additionalProperties: true }, synthesis: { type: ['object', 'null'], additionalProperties: true },
+          validated_ledger: { oneOf: [{ $ref: '#/components/schemas/FinalPersonReport' }, { type: 'null' }] }, final_report: { oneOf: [{ $ref: '#/components/schemas/FinalPersonReport' }, { type: 'null' }] },
+          run_status: { type: 'object', additionalProperties: true }, engine_metadata: { type: 'object', additionalProperties: true },
+          started_at: { type: ['string', 'null'], format: 'date-time' }, completed_at: { type: ['string', 'null'], format: 'date-time' }, updated_at: { type: 'string', format: 'date-time' },
+        },
+      },
       CompanyResearchResponse: {
         type: 'object', required: ['report', 'data'], properties: {
           report: { $ref: '#/components/schemas/ReportEnvelope' },
-          data: { type: 'object', properties: { report: { type: 'object', additionalProperties: true }, final: { oneOf: [{ $ref: '#/components/schemas/FinalCompanyReport' }, { type: 'null' }] } } },
+          data: { type: 'object', properties: { report: { type: 'object', additionalProperties: true }, final: { oneOf: [{ $ref: '#/components/schemas/FinalCompanyReport' }, { type: 'null' }] }, final_cn: { oneOf: [{ $ref: '#/components/schemas/FinalCompanyReport' }, { type: 'null' }], description: 'Simplified Chinese translation of final. Source URLs, IDs and published contact values are unchanged.' }, translation: { type: ['object', 'null'], additionalProperties: true } } },
           research_run: { $ref: '#/components/schemas/ResearchRun' },
         },
       },
+      PersonResearchResponse: {
+        type: 'object', required: ['report', 'data'], properties: {
+          report: { $ref: '#/components/schemas/ReportEnvelope' },
+          data: { type: 'object', properties: { report: { $ref: '#/components/schemas/ReportEnvelope' }, final: { oneOf: [{ $ref: '#/components/schemas/FinalPersonReport' }, { type: 'null' }] } } },
+          research_run: { $ref: '#/components/schemas/PersonResearchRun' },
+        },
+      },
       PublicSearchReportResponse: { type: 'object', required: ['report', 'companies'], properties: { report: { type: 'object', additionalProperties: true }, search: { type: ['object', 'null'], additionalProperties: true }, companies: { type: 'array', items: { $ref: '#/components/schemas/Company' } } } },
-      PublicCompanyReportResponse: { type: 'object', required: ['report', 'final'], properties: { report: { type: 'object', additionalProperties: true }, final: { oneOf: [{ $ref: '#/components/schemas/FinalCompanyReport' }, { type: 'null' }] } } },
-      PublicReportResponse: { oneOf: [{ $ref: '#/components/schemas/PublicSearchReportResponse' }, { $ref: '#/components/schemas/PublicCompanyReportResponse' }] },
+      PublicCompanyReportResponse: { type: 'object', required: ['report', 'final'], properties: { report: { type: 'object', additionalProperties: true }, final: { oneOf: [{ $ref: '#/components/schemas/FinalCompanyReport' }, { type: 'null' }] }, final_cn: { oneOf: [{ $ref: '#/components/schemas/FinalCompanyReport' }, { type: 'null' }] }, translation: { type: ['object', 'null'], additionalProperties: true } } },
+      PublicPersonReportResponse: { type: 'object', required: ['report', 'final'], properties: { report: { type: 'object', additionalProperties: true }, final: { oneOf: [{ $ref: '#/components/schemas/FinalPersonReport' }, { type: 'null' }] } } },
+      PublicReportResponse: { oneOf: [{ $ref: '#/components/schemas/PublicSearchReportResponse' }, { $ref: '#/components/schemas/PublicCompanyReportResponse' }, { $ref: '#/components/schemas/PublicPersonReportResponse' }] },
       Error: { type: 'object', required: ['error'], properties: { error: { type: 'string' }, companyId: { type: 'string' } } },
     },
   },

@@ -74,6 +74,7 @@ function researchScript(publicId: string): string {
 function shell(report: PublishedReport, body: string): string {
   const active = report.status === 'queued' || report.status === 'running';
   const isSearch = report.report_type === 'business_search';
+  const isPerson = report.report_type === 'person_research';
   const statusLabel = report.status === 'completed' ? 'Research complete'
     : report.status === 'partial' ? 'Complete · noted gaps'
     : report.status === 'failed' ? 'Research failed'
@@ -85,7 +86,7 @@ function shell(report: PublishedReport, body: string): string {
     : report.status === 'completed' ? 4
     : report.status === 'partial' ? 3
     : report.status === 'queued' ? 1 : 2;
-  const reportLabel = isSearch ? 'Market scan' : 'Company dossier';
+  const reportLabel = isSearch ? 'Market scan' : isPerson ? 'VIP brief' : 'Company dossier';
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -144,7 +145,32 @@ export function searchPage(report: PublishedReport, detail: { report?: Record<st
   return shell(report, body);
 }
 
-export function companyPage(report: PublishedReport): string {
+function chineseCompanyVersion(translated: Record<string, unknown>): string {
+  const contacts = arr(translated.contacts);
+  const people = arr(translated.people);
+  const signals = arr(translated.signals ?? translated.business_signals);
+  const conflicts = arr(translated.conflicts_and_unknowns);
+  const outreach = strings(translated.outreach_angles);
+  const summary = value(translated, 'summary', 'executive_summary');
+  const contactRows = contacts.map((row) => {
+    const raw = value(row, 'value_as_published', 'raw_value', 'value', 'normalized_value');
+    const evidence = value(row, 'evidence_url', 'evidence', 'source_url');
+    return `<div class="contact"><div class="label">${esc(value(row, 'purpose', 'channel', 'type') || '联系方式')}</div><div><div class="contact-value">${esc(raw)}</div><div class="source">${esc(value(row, 'status', 'current_status', 'evidence_class'))}${evidence ? ` · <a href="${esc(evidence)}" target="_blank" rel="noopener">查看来源 ↗</a>` : ''}</div></div></div>`;
+  }).join('');
+  const peopleRows = people.map((row, i) => `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), '来源')}</article>`).join('');
+  const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || '当前')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${esc(value(row, 'evidence_class', 'type', 'source_class'))} ${link(value(row, 'evidence_url', 'evidence', 'source_url'), '来源')}</div></div></div>`).join('');
+  const conflictRows = conflicts.map((row) => `<div class="signal"><div class="date">需核实</div><div><strong>${esc(value(row, 'issue', 'field'))}</strong><div class="source">${esc(value(row, 'details', 'status', 'note'))}</div></div></div>`).join('');
+  let body = `<section class="section" lang="zh-CN"><div class="section-head"><h2>中文报告</h2><span class="section-note">与英文版对应的简体中文翻译；来源、ID 和联系方式保持原样。</span></div></section>`;
+  if (summary) body += `<section class="brief" lang="zh-CN"><div class="brief-label">执行摘要</div><p>${esc(summary)}</p></section>`;
+  body += `<section class="section" lang="zh-CN"><div class="section-head"><h2>最佳联系渠道</h2><span class="section-note">仅展示经证据台账保留的联系方式。</span></div><div class="contact-list">${contactRows || '<div class="empty">暂无已验证的联系方式。</div>'}</div></section>`;
+  body += `<section class="section" lang="zh-CN"><div class="section-head"><h2>关键相关人员</h2><span class="section-note">当前职位均需有直接来源支持。</span></div><div class="people">${peopleRows || '<div class="empty">暂无已验证的相关人员。</div>'}</div></section>`;
+  if (outreach.length) body += `<section class="section" lang="zh-CN"><div class="section-head"><h2>沟通切入点</h2><span class="section-note">根据已验证研究得出的对话建议。</span></div><div class="angles">${outreach.map((item) => `<div class="angle">${esc(item)}</div>`).join('')}</div></section>`;
+  body += `<section class="section" lang="zh-CN"><div class="section-head"><h2>业务动态</h2><span class="section-note">可能形成沟通理由的时效性证据。</span></div><div class="signal-list">${signalRows || '<div class="empty">暂无已验证的业务动态。</div>'}</div></section>`;
+  if (conflictRows) body += `<section class="section" lang="zh-CN"><div class="section-head"><h2>冲突与未知项</h2></div><div class="message warning">${conflictRows}</div></section>`;
+  return body;
+}
+
+export function companyPage(report: PublishedReport, chinese: Record<string, unknown> | null = null): string {
   const final = obj(report.result);
   const entity = obj(final.entity);
   const contacts = arr(final.contacts);
@@ -179,6 +205,38 @@ export function companyPage(report: PublishedReport): string {
     if (outreach.length) body += `<section class="section"><div class="section-head"><h2>Outreach angles</h2><span class="section-note">Conversation starters derived from the validated research set.</span></div><div class="angles">${outreach.map((item) => `<div class="angle">${esc(item)}</div>`).join('')}</div></section>`;
     body += `<section class="section"><div class="section-head"><h2>Business signals</h2><span class="section-note">Time-sensitive evidence that may create a reason to engage.</span></div><div class="signal-list">${signalRows || '<div class="empty">No validated signals.</div>'}</div></section>`;
     if (conflictRows) body += `<section class="section"><div class="section-head"><h2>Conflicts and unknowns</h2></div><div class="message warning">${conflictRows}</div></section>`;
+  }
+  if (chinese) body += chineseCompanyVersion(chinese);
+  return shell(report, body);
+}
+
+export function personPage(report: PublishedReport): string {
+  const final = obj(report.result);
+  const person = obj(final.person);
+  const facts = arr(final.facts);
+  const signals = arr(final.signals);
+  const angles = strings(final.research_angles);
+  const name = value(person, 'name') || 'VIP brief';
+  const role = value(person, 'current_role', 'role');
+  const company = value(person, 'company_name');
+  const summary = value(final, 'summary');
+  const stats = `<div class="metrics">
+    <div class="metric"><strong>${facts.length || '—'}</strong><span>Verified facts</span></div>
+    <div class="metric"><strong>${signals.length || '—'}</strong><span>Business signals</span></div>
+    <div class="metric"><strong>${esc(company || '—')}</strong><span>Company context</span></div>
+    <div class="metric"><strong>Public</strong><span>Evidence scope</span></div>
+  </div>`;
+  const factRows = facts.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'category') || 'Professional fact')}</div><div><strong>${esc(value(row, 'fact', 'value', 'description'))}</strong><div class="source">${esc(value(row, 'evidence_class', 'source_type'))} ${link(value(row, 'evidence_url', 'source_url'), 'Source')}</div></div></div>`).join('');
+  const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || 'Current')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${esc(value(row, 'evidence_class', 'source_type'))} ${link(value(row, 'evidence_url', 'source_url'), 'Source')}</div></div></div>`).join('');
+  let body = stats;
+  body += `<section class="brief"><div class="brief-label">VIP profile</div><p>${esc([name, role, company].filter(Boolean).join(' · ') || 'Public-professional research only.')}</p></section>`;
+  if (summary) body += `<section class="brief"><div class="brief-label">Qualification readout</div><p>${esc(summary)}</p></section>`;
+  if (report.status === 'failed') body += `<section class="section"><div class="message error">${esc(report.error ?? 'The VIP brief failed.')}</div></section>`;
+  else if (!facts.length && !signals.length && report.status !== 'completed' && report.status !== 'partial') body += '<section class="section"><div class="empty">Public-professional research is running. This report will refresh automatically.</div></section>';
+  else {
+    body += `<section class="section"><div class="section-head"><h2>Verified professional facts</h2><span class="section-note">No private or sensitive-person data is included.</span></div><div class="signal-list">${factRows || '<div class="empty">No additional validated facts.</div>'}</div></section>`;
+    if (angles.length) body += `<section class="section"><div class="section-head"><h2>Research angles</h2><span class="section-note">Use as prompts for informed qualification, not as asserted facts.</span></div><div class="angles">${angles.map((item) => `<div class="angle">${esc(item)}</div>`).join('')}</div></section>`;
+    body += `<section class="section"><div class="section-head"><h2>Business signals</h2><span class="section-note">Dated, source-linked signals only.</span></div><div class="signal-list">${signalRows || '<div class="empty">No validated business signals.</div>'}</div></section>`;
   }
   return shell(report, body);
 }

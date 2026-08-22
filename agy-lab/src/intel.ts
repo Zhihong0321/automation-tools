@@ -30,7 +30,9 @@ function origin(req: http.IncomingMessage): string {
 
 function envelope(req: http.IncomingMessage, report: db.PublishedReport): Record<string, unknown> {
   const base = origin(req);
-  const resource = report.report_type === 'business_search' ? 'business-search' : 'company-research';
+  const resource = report.report_type === 'business_search'
+    ? 'business-search'
+    : report.report_type === 'person_research' ? 'person-research' : 'company-research';
   return {
     id: report.public_id,
     type: report.report_type,
@@ -240,10 +242,134 @@ export function publishOutcome(produced: number, failures: string[]): {
   if (reasons.length) {
     return {
       status: 'partial',
-      error: 'Report completed with one or more round/validation gaps; only validated fields are published.',
+      error: 'Report completed with one or more round, validation, or Chinese-translation gaps; only validated fields are published.',
     };
   }
   return { status: 'completed', error: null };
+}
+
+/**
+ * The translation is a presentation copy, never a new research pass. These
+ * values identify the evidence rows and/or lead a user to a source, so changing
+ * one would turn a harmless language operation into data corruption.
+ */
+export function validateChineseTranslation(
+  translated: Record<string, unknown>,
+  canonical: Record<string, unknown>,
+): string[] {
+  const errors: string[] = [];
+  for (const collection of ['contacts', 'people', 'signals', 'conflicts_and_unknowns']) {
+    if (rows(translated[collection]).length !== rows(canonical[collection]).length) errors.push(collection + ' row count changed');
+  }
+  if (!sameSet(rows(translated.contacts).map((row) => row.id), rows(canonical.contacts).map((row) => row.id))) errors.push('contact id set changed');
+  if (!sameSet(rows(translated.people).map((row) => row.id), rows(canonical.people).map((row) => row.id))) errors.push('people id set changed');
+  if (!sameSet(rows(translated.signals).map((row) => row.id), rows(canonical.signals).map((row) => row.id))) errors.push('signal id set changed');
+
+  const compareInvariant = (original: unknown, candidate: unknown, path = ''): void => {
+    if (Array.isArray(original)) {
+      if (!Array.isArray(candidate) || original.length !== candidate.length) {
+        errors.push('structure changed at ' + path);
+        return;
+      }
+      original.forEach((value, index) => compareInvariant(value, candidate[index], `${path}[${index}]`));
+      return;
+    }
+    if (!original || typeof original !== 'object') {
+      if (typeof original !== typeof candidate) errors.push('value type changed at ' + path);
+      return;
+    }
+    if (Array.isArray(candidate) || !candidate || typeof candidate !== 'object') {
+      errors.push('structure changed at ' + path);
+      return;
+    }
+    const originalKeys = Object.keys(original as Record<string, unknown>).sort();
+    const candidateKeys = Object.keys(candidate as Record<string, unknown>).sort();
+    if (!sameSet(originalKeys, candidateKeys)) errors.push('object keys changed at ' + path);
+    for (const [key, value] of Object.entries(original as Record<string, unknown>)) {
+      const translatedValue = (candidate as Record<string, unknown>)[key];
+      const isInvariant = key === 'id' || key.endsWith('_id') || key.endsWith('_url') ||
+        key === 'normalized_value' || key === 'value_as_published' || key === 'phone' || key === 'website' || key === 'maps_url';
+      if (isInvariant && JSON.stringify(value) !== JSON.stringify(translatedValue)) errors.push('canonical value changed at ' + (path ? path + '.' : '') + key);
+      else compareInvariant(value, translatedValue, path ? path + '.' + key : key);
+    }
+  };
+  compareInvariant(canonical, translated);
+  return [...new Set(errors)];
+}
+
+function collectPersonFacts(sources: Record<string, unknown>[]): Record<string, unknown>[] {
+  const found = new Map<string, Record<string, unknown>>();
+  for (const source of sources) {
+    for (const row of rows(source.facts)) {
+      const evidence = directUrl(first(row, ['evidence_url', 'source_url', 'url']));
+      const category = first(row, ['category', 'type']) || 'Professional fact';
+      const fact = first(row, ['fact', 'value', 'description']);
+      if (!evidence || !fact) continue;
+      const key = category.toLowerCase() + '|' + fact.toLowerCase().slice(0, 220) + '|' + evidence;
+      if (!found.has(key)) found.set(key, {
+        id: id('fact', [category, fact, evidence]), category, fact,
+        evidence_class: first(row, ['evidence_class', 'source_type', 'source_class']) || 'unclassified',
+        evidence_url: evidence,
+        source_date: row.source_date ?? row.visible_source_date ?? null,
+        introduced_by: first(row, ['introduced_by', '_round']) || null,
+      });
+    }
+  }
+  return [...found.values()].slice(0, 14);
+}
+
+export function buildPersonLedger(
+  company: Record<string, unknown>,
+  person: Record<string, unknown>,
+  parsed: Record<string, unknown>[],
+): Record<string, unknown> {
+  const roleUrl = directUrl(first(person, ['role_url', 'role_evidence_url', 'evidence_url']));
+  const name = first(person, ['name']);
+  const role = first(person, ['role', 'current_role', 'position']);
+  const baseline: Record<string, unknown> = {
+    facts: roleUrl && name && role ? [{
+      category: 'Current role', fact: `${name} is listed as ${role} at ${str(company.name, 'the company')}.`,
+      evidence_class: first(person, ['evidence_class']) || 'first_party', evidence_url: roleUrl, _round: 'company_research',
+    }] : [],
+    signals: [],
+  };
+  const all = [baseline, ...parsed];
+  return {
+    person: {
+      id: first(person, ['id']), name, current_role: role,
+      company_name: str(company.name), company_id: String(company.id ?? ''),
+      role_evidence_url: roleUrl,
+      personal_profile_url: directUrl(person.personal_profile_url) ?? null,
+    },
+    facts: collectPersonFacts(all),
+    signals: collectSignals(all),
+    validation: {
+      policy: 'Public professional evidence only. Private or sensitive personal data, inferred contacts and uncited claims are excluded.',
+      fact_count: collectPersonFacts(all).length,
+      signal_count: collectSignals(all).length,
+    },
+  };
+}
+
+export function validatePersonFinal(final: Record<string, unknown>, ledger: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+  if (!sameSet(rows(final.facts).map((row) => row.id), rows(ledger.facts).map((row) => row.id))) errors.push('fact id set changed');
+  if (!sameSet(rows(final.signals).map((row) => row.id), rows(ledger.signals).map((row) => row.id))) errors.push('signal id set changed');
+  const allowedUrls = new Set<string>();
+  const collectAllowed = (value: unknown): void => {
+    if (typeof value === 'string' && /^https:\/\//.test(value)) {
+      try { allowedUrls.add(new URL(value).href); } catch { /* validation below keeps malformed URLs out */ }
+    } else if (Array.isArray(value)) value.forEach(collectAllowed);
+    else if (value && typeof value === 'object') Object.values(value as Record<string, unknown>).forEach(collectAllowed);
+  };
+  collectAllowed(ledger);
+  const visit = (value: unknown): void => {
+    if (typeof value === 'string' && /^https:\/\//.test(value) && !allowedUrls.has(new URL(value).href)) errors.push('new URL: ' + value);
+    else if (Array.isArray(value)) value.forEach(visit);
+    else if (value && typeof value === 'object') Object.values(value as Record<string, unknown>).forEach(visit);
+  };
+  visit(final);
+  return [...new Set(errors)];
 }
 
 function companyBaseline(company: Record<string, unknown>): string {
@@ -286,6 +412,43 @@ function round04Prompt(ledger: Record<string, unknown>): string {
 Return exactly one JSON object in a fenced code block with keys summary (max 120 words), outreach_angles (max 5 short strings), entity, contacts, people, signals, conflicts_and_unknowns. Copy entity/contacts/people/signals/conflicts arrays exactly, including every id and URL. Do not browse, add, remove, rename, infer, resolve conflicts or introduce any number/name/URL not present in the ledger. No prose outside JSON.`;
 }
 
+function chineseTranslationPrompt(finalReport: Record<string, unknown>): string {
+  return `Translate this completed company deep-research report from English to Simplified Chinese (zh-CN).
+This is translation only, not research: do not add, omit, merge, reorder, infer, or correct any fact. Return exactly one JSON object in a fenced code block and preserve the identical object/array structure.
+Keep every id, *_id, URL, email address, phone number, normalized_value, value_as_published, rating, review count, date, code and proper company/person name exactly unchanged. Translate only explanatory prose and generic field values such as summary, purpose, role, relevance, fact, outreach_use, evidence_class, current_status, category, validation policy, and outreach_angles.
+CANONICAL ENGLISH REPORT: ${JSON.stringify(finalReport)}`;
+}
+
+function personBaseline(company: Record<string, unknown>, person: Record<string, unknown>): string {
+  return JSON.stringify({
+    company_name: company.name,
+    company_website: company.website ?? null,
+    person_id: person.id,
+    person_name: first(person, ['name']),
+    current_role: first(person, ['role', 'current_role', 'position']),
+    role_evidence_url: first(person, ['role_url', 'role_evidence_url', 'evidence_url']),
+    personal_profile_url: directUrl(person.personal_profile_url) ?? null,
+  });
+}
+
+function personDiscoveryPrompt(company: Record<string, unknown>, person: Record<string, unknown>, emailHint: string | null): string {
+  const privateHint = emailHint
+    ? 'A private email identity hint was supplied solely to distinguish this person from namesakes. Do not repeat, publish, search for, or return it.'
+    : 'No email identity hint was supplied.';
+  return `You are researching a confirmed business leader for a VIP qualification brief as of ${new Date().toISOString().slice(0, 10)}.
+TARGET BASELINE: ${personBaseline(company, person)}
+${privateHint}
+Research public professional business information only: the current role, public company/board affiliations, attributable interviews or talks, and dated business signals relevant to a commercial or partnership conversation.
+Never collect or return home address, non-business phone, family, private social accounts, age, ethnicity, religion, health, political views, private wealth, breach data, data-broker records, or personal contact details. Do not infer any fact, email, profile, title, date or affiliation.
+Every retained item requires a raw full https:// direct source URL. Company-controlled pages are first_party; independent issuer/news pages are independent; public professional platforms are social_platform. Search snippets and bare homepages are not evidence.
+Return exactly one compact JSON object inside a fenced code block with arrays facts and signals. Fact fields: category,fact,evidence_class,evidence_url,source_date. Signal fields: date,fact,evidence_class,evidence_url,outreach_use. Max 12 facts and 8 signals. No prose outside JSON.`;
+}
+
+function personSynthesisPrompt(ledger: Record<string, unknown>): string {
+  return `Write a concise VIP qualification brief using only this validated public-professional ledger: ${JSON.stringify(ledger)}
+Return exactly one JSON object in a fenced code block with keys summary (max 120 words), research_angles (max 4 short strings), person, facts, signals. Copy person, facts and signals exactly, including every id and URL. Do not browse, add, remove, rename, infer, or introduce any new URL, fact, affiliation, contact detail, or sensitive personal data. No prose outside JSON.`;
+}
+
 async function ask(model: string, prompt: string, timeoutMs: number): Promise<{
   raw: string; parsed: Record<string, unknown> | null; parse_error: string | null;
   model: string; engine: string; ms: number;
@@ -293,6 +456,39 @@ async function ask(model: string, prompt: string, timeoutMs: number): Promise<{
   const out = await gateway.askModel(model, prompt, { timeoutMs });
   const parsed = extractJson(out.answer);
   return { raw: out.answer, parsed: parsed.value, parse_error: parsed.error, model: out.model, engine: out.engine, ms: out.ms };
+}
+
+/** OpenAI-compatible translation endpoint, isolated from the research gateway. */
+async function translateChinese(finalReport: Record<string, unknown>): Promise<{
+  translated: Record<string, unknown>; model: string; ms: number;
+}> {
+  const baseUrl = (process.env.TRANSLATION_BASE_URL?.trim() || 'https://e-router.up.railway.app/v1').replace(/\/+$/, '');
+  const apiKey = process.env.TRANSLATION_API_KEY?.trim();
+  const model = process.env.TRANSLATION_MODEL?.trim() || 'step-3.7-flash';
+  if (!apiKey) throw new Error('Chinese translation is not configured; set TRANSLATION_API_KEY');
+  const started = Date.now();
+  const response = await fetch(baseUrl + '/chat/completions', {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + apiKey, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: 'You are a precise English-to-Simplified-Chinese JSON translator. Return only the requested JSON.' },
+        { role: 'user', content: chineseTranslationPrompt(finalReport) },
+      ],
+      temperature: 0,
+    }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (!response.ok) throw new Error('translation service returned HTTP ' + response.status);
+  const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> };
+  const raw = payload.choices?.[0]?.message?.content;
+  if (typeof raw !== 'string') throw new Error('translation service returned no message content');
+  const parsed = extractJson(raw);
+  if (!parsed.value) throw new Error('translation service returned invalid JSON: ' + parsed.error);
+  const errors = validateChineseTranslation(parsed.value, finalReport);
+  if (errors.length) throw new Error('translation validation failed: ' + errors.join('; '));
+  return { translated: parsed.value, model, ms: Date.now() - started };
 }
 
 async function runBusinessSearch(publicId: string, reportId: string, request: Record<string, unknown>): Promise<void> {
@@ -423,9 +619,95 @@ async function runCompanyResearch(publicId: string, reportId: string, company: R
       await db.saveRound(reportId, 'round04', r4Artifact, 'failed_fallback_used', { model: 'agy@mini' });
     }
     await db.saveFinal(reportId, ledger, finalReport);
+    try {
+      const cn = await translateChinese(finalReport);
+      await db.saveTranslation(reportId, cn.translated, {
+        language: 'zh-CN', model: cn.model, ms: cn.ms, status: 'completed',
+      });
+    } catch (err) {
+      // Do not silently label an English-only dossier as bilingual. The English
+      // evidence report stays publishable, but callers receive a visible gap and
+      // the durable run records why Chinese content is not present.
+      //
+      // Recorded as a `failures` entry rather than a `hadFailure` flag so it runs
+      // through publishOutcome with every other gap: a missing translation is a
+      // reason for `partial`, and only "no round produced anything" is `failed`.
+      failures.push('Chinese translation failed: ' + ((err as Error).message ?? String(err)));
+      await db.saveTranslation(reportId, {}, {
+        language: 'zh-CN', model: process.env.TRANSLATION_MODEL?.trim() || 'step-3.7-flash',
+        status: 'failed', error: (err as Error).message ?? String(err),
+      });
+    }
     const outcome = publishOutcome(produced, failures);
     await db.updateReport(publicId, {
       status: outcome.status, result: finalReport, error: outcome.error, completed: true,
+    });
+  } catch (err) {
+    await db.updateReport(publicId, { status: 'failed', error: (err as Error).message ?? String(err), completed: true }).catch(() => {});
+  } finally {
+    active.delete(publicId);
+  }
+}
+
+async function runPersonResearch(
+  publicId: string,
+  reportId: string,
+  company: Record<string, unknown>,
+  person: Record<string, unknown>,
+  emailHint: string | null,
+): Promise<void> {
+  if (active.has(publicId)) return;
+  active.add(publicId);
+  let hadFailure = false;
+  const parsedForLedger: Record<string, unknown>[] = [];
+  try {
+    await db.updateReport(publicId, { status: 'running', error: null });
+    await db.initPersonResearchRun(reportId);
+    let discoveryMetadata: Record<string, unknown> = { status: 'failed', model: 'agy@mini' };
+    try {
+      const discovery = await ask('agy@mini', personDiscoveryPrompt(company, person, emailHint), 420_000);
+      if (discovery.parsed) {
+        for (const row of [...rows(discovery.parsed.facts), ...rows(discovery.parsed.signals)]) row._round = 'person_discovery';
+        parsedForLedger.push(discovery.parsed);
+        discoveryMetadata = { status: 'completed', model: discovery.model, engine: discovery.engine, ms: discovery.ms };
+      } else hadFailure = true;
+      if (!discovery.parsed) discoveryMetadata = { status: 'invalid_output', model: discovery.model, engine: discovery.engine, ms: discovery.ms };
+    } catch (err) {
+      hadFailure = true;
+      discoveryMetadata = { status: 'failed', model: 'agy@mini', error: (err as Error).message ?? String(err) };
+    }
+
+    const ledger = buildPersonLedger(company, person, parsedForLedger);
+    await db.savePersonResearchRun(reportId, {
+      discovery: { facts: ledger.facts, signals: ledger.signals },
+      ledger,
+      status: { discovery: discoveryMetadata.status },
+      metadata: { discovery: discoveryMetadata },
+    });
+    let finalReport: Record<string, unknown> = { ...ledger, summary: null, research_angles: [], synthesis_mode: 'validated_ledger_fallback' };
+    let synthesisMetadata: Record<string, unknown> = { status: 'failed', model: 'chatgpt@mini' };
+    try {
+      const synthesis = await ask('chatgpt@mini', personSynthesisPrompt(ledger), 300_000);
+      const fidelityErrors = synthesis.parsed ? validatePersonFinal(synthesis.parsed, ledger) : [synthesis.parse_error ?? 'invalid final output'];
+      if (synthesis.parsed && !fidelityErrors.length) finalReport = { ...synthesis.parsed, synthesis_mode: 'chatgpt_validated' };
+      else hadFailure = true;
+      synthesisMetadata = { status: fidelityErrors.length ? 'rejected_fallback_used' : 'completed', model: synthesis.model, engine: synthesis.engine, ms: synthesis.ms, fidelity_errors: fidelityErrors };
+    } catch (err) {
+      hadFailure = true;
+      synthesisMetadata = { status: 'failed', model: 'chatgpt@mini', error: (err as Error).message ?? String(err) };
+    }
+    await db.savePersonResearchRun(reportId, {
+      synthesis: { synthesis_mode: finalReport.synthesis_mode, fact_count: rows(finalReport.facts).length, signal_count: rows(finalReport.signals).length },
+      ledger,
+      finalReport,
+      status: { discovery: discoveryMetadata.status, synthesis: synthesisMetadata.status },
+      metadata: { discovery: discoveryMetadata, synthesis: synthesisMetadata },
+      completed: true,
+    });
+    await db.updateReport(publicId, {
+      status: hadFailure ? 'partial' : 'completed', result: finalReport,
+      error: hadFailure ? 'VIP brief completed with a research or validation gap; only validated public-professional evidence is published.' : null,
+      completed: true,
     });
   } catch (err) {
     await db.updateReport(publicId, { status: 'failed', error: (err as Error).message ?? String(err), completed: true }).catch(() => {});
@@ -439,7 +721,26 @@ async function publicDetail(report: db.PublishedReport): Promise<Record<string, 
     const search = report.source_search_report_id ? await db.searchResult(report.source_search_report_id) : null;
     return { report, search: search?.report ?? report.result?.search ?? null, companies: search?.companies ?? report.result?.companies ?? [] };
   }
-  return { report, final: report.result };
+  const run = report.report_type === 'company_research' ? await db.researchRun(report.id) : null;
+  const chinese = object(run?.translated_report);
+  return {
+    report,
+    final: report.result,
+    // Kept separate from final so existing EN clients retain their exact shape.
+    final_cn: Object.keys(chinese).length ? chinese : null,
+    translation: report.report_type === 'company_research' ? object(run?.translation_metadata) : null,
+  };
+}
+
+async function personResearchInput(report: db.PublishedReport): Promise<{ company: Record<string, unknown>; person: Record<string, unknown> } | null> {
+  const request = object(report.request);
+  const sourceId = str(request.sourceReportId);
+  const personId = str(request.personId);
+  if (!sourceId || !personId || !report.company_id) return null;
+  const [source, company] = await Promise.all([db.getReport(sourceId), db.getCompany(report.company_id)]);
+  if (!source || source.report_type !== 'company_research' || !company) return null;
+  const person = rows(source.result?.people).find((row) => first(row, ['id']) === personId);
+  return person ? { company, person } : null;
 }
 
 /** A requester opening/polling a queued report also revives work after a deploy. */
@@ -447,6 +748,11 @@ async function ensureRunning(report: db.PublishedReport): Promise<void> {
   if ((report.status !== 'queued' && report.status !== 'running') || active.has(report.public_id)) return;
   if (report.report_type === 'business_search') {
     void runBusinessSearch(report.public_id, report.id, object(report.request));
+    return;
+  }
+  if (report.report_type === 'person_research') {
+    const input = await personResearchInput(report);
+    if (input) void runPersonResearch(report.public_id, report.id, input.company, input.person, null);
     return;
   }
   if (report.company_id) {
@@ -552,7 +858,12 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
   if (report.report_type === 'business_search') {
     const search = report.source_search_report_id ? await db.searchResult(report.source_search_report_id) : null;
     html = ui.searchPage(report, { report: search?.report ?? object(report.result?.search), companies: search?.companies ?? rows(report.result?.companies) });
-  } else html = ui.companyPage(report);
+  } else if (report.report_type === 'person_research') html = ui.personPage(report);
+  else {
+    const run = await db.researchRun(report.id);
+    const chinese = object(run?.translated_report);
+    html = ui.companyPage(report, Object.keys(chinese).length ? chinese : null);
+  }
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
   res.end(html);
   return true;
@@ -562,7 +873,7 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
 export async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL, ctx: Ctx): Promise<boolean> {
   const p = url.pathname;
   const method = req.method ?? 'GET';
-  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && p !== '/api/reports') return false;
+  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/person-research') && p !== '/api/reports') return false;
   if (!db.configured()) {
     ctx.json(res, 503, { error: 'report database is not configured; link DATABASE_URL to the Railway service' });
     return true;
@@ -571,7 +882,7 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
   if (method === 'GET' && p === '/api/reports') {
     const rawType = url.searchParams.get('type');
     const rawStatus = url.searchParams.get('status');
-    const type = rawType === 'business_search' || rawType === 'company_research' ? rawType : null;
+    const type = rawType === 'business_search' || rawType === 'company_research' || rawType === 'person_research' ? rawType : null;
     const allowedStatuses = new Set(['queued', 'running', 'completed', 'partial', 'failed']);
     const status = allowedStatuses.has(rawStatus ?? '') ? rawStatus as db.ReportStatus : null;
     const limit = Math.min(Math.max(Math.round(Number(url.searchParams.get('limit') ?? 40) || 40), 1), 100);
@@ -590,6 +901,12 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
           contacts: rows(result.contacts).length,
           people: rows(result.people).length,
           signals: rows(result.signals ?? result.business_signals).length,
+        } : report.report_type === 'person_research' ? {
+          company_id: report.company_id,
+          person: object(result.person),
+          summary: str(result.summary) || null,
+          facts: rows(result.facts).length,
+          signals: rows(result.signals).length,
         } : {
           keyword: str(object(report.request).keyword) || null,
           place: str(object(report.request).place) || null,
@@ -642,17 +959,53 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     return true;
   }
 
-  const one = /^\/api\/(business-search|company-research)\/([A-Za-z0-9_-]{20})$/.exec(p);
+  if (method === 'POST' && p === '/api/person-research') {
+    const body = await ctx.readJson(req);
+    const sourceReportId = str(body.companyResearchId || body.company_research_id).trim();
+    const personId = str(body.personId || body.person_id).trim();
+    const email = str(body.email).trim();
+    if (!/^[A-Za-z0-9_-]{20}$/.test(sourceReportId) || !personId) {
+      ctx.json(res, 400, { error: 'companyResearchId and personId from a completed company report are required' });
+      return true;
+    }
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      ctx.json(res, 400, { error: 'email must be a valid optional identity hint' });
+      return true;
+    }
+    const source = await db.getReport(sourceReportId);
+    if (!source || source.report_type !== 'company_research' || (source.status !== 'completed' && source.status !== 'partial') || !source.company_id) {
+      ctx.json(res, 404, { error: 'completed company research report not found', companyResearchId: sourceReportId });
+      return true;
+    }
+    const person = rows(source.result?.people).find((row) => first(row, ['id']) === personId);
+    const company = await db.getCompany(source.company_id);
+    if (!person || !company) {
+      ctx.json(res, 404, { error: 'validated person or source company not found', personId });
+      return true;
+    }
+    const request = { sourceReportId, personId, requesterId: str(body.requesterId || body.userId) || null, emailProvided: Boolean(email) };
+    const report = await db.createReport({
+      type: 'person_research', title: first(person, ['name']) + ' VIP brief',
+      userId: str(request.requesterId) || null, request, companyId: source.company_id,
+    });
+    void runPersonResearch(report.public_id, report.id, company, person, email || null);
+    ctx.json(res, 202, { report: envelope(req, report) });
+    return true;
+  }
+
+  const one = /^\/api\/(business-search|company-research|person-research)\/([A-Za-z0-9_-]{20})$/.exec(p);
   if (method === 'GET' && one) {
     const report = await db.getReport(one[2]!);
-    const expected = one[1] === 'business-search' ? 'business_search' : 'company_research';
+    const expected = one[1] === 'business-search' ? 'business_search' : one[1] === 'person-research' ? 'person_research' : 'company_research';
     if (!report || report.report_type !== expected) {
       ctx.json(res, 404, { error: 'report not found' });
       return true;
     }
     await ensureRunning(report);
     const detail = await publicDetail(report);
-    const run = report.report_type === 'company_research' ? await db.researchRun(report.id) : null;
+    const run = report.report_type === 'company_research'
+      ? await db.researchRun(report.id)
+      : report.report_type === 'person_research' ? await db.personResearchRun(report.id) : null;
     ctx.json(res, 200, { report: envelope(req, report), data: detail, research_run: run });
     return true;
   }
