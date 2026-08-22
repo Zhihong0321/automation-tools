@@ -693,7 +693,9 @@ async function runCompanyResearch(
     await db.initResearchRun(reportId);
 
     try {
-      const r1 = await ask('agy@mini', round01Prompt(company), 420_000);
+      // Do not pin to the mini: it is opportunistic capacity and can be offline.
+      // The gateway chooses a live mini when present and otherwise a ready container.
+      const r1 = await ask('agy', round01Prompt(company), 420_000);
       if (r1.parsed) {
         for (const row of [...rows(r1.parsed.contacts), ...rows(r1.parsed.people), ...rows(r1.parsed.candidate_people), ...rows(r1.parsed.signals)]) row._round = 'round01';
         parsedForLedger.push(r1.parsed);
@@ -701,14 +703,14 @@ async function runCompanyResearch(
       await db.saveRound(reportId, 'round01', r1, r1.parsed ? 'completed' : 'invalid_output', { model: r1.model, engine: r1.engine, ms: r1.ms });
     } catch (err) {
       hadFailure = true;
-      await db.saveRound(reportId, 'round01', { error: (err as Error).message }, 'failed', { model: 'agy@mini' });
+      await db.saveRound(reportId, 'round01', { error: (err as Error).message }, 'failed', { model: 'agy' });
     }
 
     const r1Context = parsedForLedger[0] ?? { contacts: [], people: [], signals: [] };
     const round02: Record<string, unknown> = { calls: {} };
     for (const kind of ['contacts', 'people', 'signals'] as const) {
       try {
-        const call = await ask('chatgpt@mini', round02Prompt(kind, company, r1Context), 300_000);
+        const call = await ask('chatgpt', round02Prompt(kind, company, r1Context), 300_000);
         object(round02.calls)[kind] = call;
         if (call.parsed) {
           for (const row of [...rows(call.parsed[kind]), ...(kind === 'people' ? rows(call.parsed.candidate_people) : [])]) row._round = 'round02';
@@ -721,10 +723,10 @@ async function runCompanyResearch(
       if (kind === 'people') await triggerAutoPersonResearch();
     }
     const r2Ok = Object.values(object(round02.calls)).some((v) => object(v).parsed);
-    await db.saveRound(reportId, 'round02', round02, r2Ok ? (hadFailure ? 'partial' : 'completed') : 'failed', { model: 'chatgpt@mini', split_calls: 3 });
+    await db.saveRound(reportId, 'round02', round02, r2Ok ? (hadFailure ? 'partial' : 'completed') : 'failed', { model: 'chatgpt', split_calls: 3 });
 
     try {
-      const r3 = await ask('meta@mini', round03Prompt(company), 240_000);
+      const r3 = await ask('meta', round03Prompt(company), 240_000);
       const access = str(r3.parsed?.access_mode);
       if (r3.parsed && access === 'live_meta_pages') {
         for (const row of [...rows(r3.parsed.contacts), ...rows(r3.parsed.people), ...rows(r3.parsed.signals)]) row._round = 'round03';
@@ -733,14 +735,14 @@ async function runCompanyResearch(
       await db.saveRound(reportId, 'round03', r3, r3.parsed ? 'completed' : 'invalid_output', { model: r3.model, engine: r3.engine, ms: r3.ms, access_mode: access || null });
     } catch (err) {
       hadFailure = true;
-      await db.saveRound(reportId, 'round03', { error: (err as Error).message }, 'failed', { model: 'meta@mini' });
+      await db.saveRound(reportId, 'round03', { error: (err as Error).message }, 'failed', { model: 'meta' });
     }
 
     const ledger = buildLedger(company, parsedForLedger);
     let finalReport: Record<string, unknown> = { ...ledger, summary: null, outreach_angles: [], synthesis_mode: 'validated_ledger_fallback' };
     let r4Artifact: Record<string, unknown>;
     try {
-      const r4 = await ask('agy@mini', round04Prompt(ledger), 420_000);
+      const r4 = await ask('agy', round04Prompt(ledger), 420_000);
       const fidelityErrors = r4.parsed ? validateFinal(r4.parsed, ledger) : [r4.parse_error ?? 'invalid final output'];
       if (r4.parsed && !fidelityErrors.length) finalReport = { ...r4.parsed, synthesis_mode: 'gemini_validated' };
       else hadFailure = true;
@@ -749,7 +751,7 @@ async function runCompanyResearch(
     } catch (err) {
       hadFailure = true;
       r4Artifact = { error: (err as Error).message, fallback_used: true };
-      await db.saveRound(reportId, 'round04', r4Artifact, 'failed_fallback_used', { model: 'agy@mini' });
+      await db.saveRound(reportId, 'round04', r4Artifact, 'failed_fallback_used', { model: 'agy' });
     }
     if (autoPersonResearch) finalReport = { ...finalReport, auto_person_research: autoPersonResearch };
     await db.saveFinal(reportId, ledger, finalReport);
@@ -794,9 +796,9 @@ async function runPersonResearch(
   try {
     await db.updateReport(publicId, { status: 'running', error: null });
     await db.initPersonResearchRun(reportId);
-    let discoveryMetadata: Record<string, unknown> = { status: 'failed', model: 'agy@mini' };
+    let discoveryMetadata: Record<string, unknown> = { status: 'failed', model: 'agy' };
     try {
-      const discovery = await ask('agy@mini', personDiscoveryPrompt(company, person, emailHint), 420_000);
+      const discovery = await ask('agy', personDiscoveryPrompt(company, person, emailHint), 420_000);
       if (discovery.parsed) {
         for (const row of [...rows(discovery.parsed.contacts), ...rows(discovery.parsed.facts), ...rows(discovery.parsed.signals)]) row._round = 'person_discovery';
         parsedForLedger.push(discovery.parsed);
@@ -805,7 +807,7 @@ async function runPersonResearch(
       if (!discovery.parsed) discoveryMetadata = { status: 'invalid_output', model: discovery.model, engine: discovery.engine, ms: discovery.ms };
     } catch (err) {
       hadFailure = true;
-      discoveryMetadata = { status: 'failed', model: 'agy@mini', error: (err as Error).message ?? String(err) };
+      discoveryMetadata = { status: 'failed', model: 'agy', error: (err as Error).message ?? String(err) };
     }
 
     const ledger = buildPersonLedger(company, person, parsedForLedger);
@@ -816,16 +818,16 @@ async function runPersonResearch(
       metadata: { discovery: discoveryMetadata },
     });
     let finalReport: Record<string, unknown> = { ...ledger, summary: null, research_angles: [], synthesis_mode: 'validated_ledger_fallback' };
-    let synthesisMetadata: Record<string, unknown> = { status: 'failed', model: 'chatgpt@mini' };
+    let synthesisMetadata: Record<string, unknown> = { status: 'failed', model: 'chatgpt' };
     try {
-      const synthesis = await ask('chatgpt@mini', personSynthesisPrompt(ledger), 300_000);
+      const synthesis = await ask('chatgpt', personSynthesisPrompt(ledger), 300_000);
       const fidelityErrors = synthesis.parsed ? validatePersonFinal(synthesis.parsed, ledger) : [synthesis.parse_error ?? 'invalid final output'];
       if (synthesis.parsed && !fidelityErrors.length) finalReport = { ...synthesis.parsed, synthesis_mode: 'chatgpt_validated' };
       else hadFailure = true;
       synthesisMetadata = { status: fidelityErrors.length ? 'rejected_fallback_used' : 'completed', model: synthesis.model, engine: synthesis.engine, ms: synthesis.ms, fidelity_errors: fidelityErrors };
     } catch (err) {
       hadFailure = true;
-      synthesisMetadata = { status: 'failed', model: 'chatgpt@mini', error: (err as Error).message ?? String(err) };
+      synthesisMetadata = { status: 'failed', model: 'chatgpt', error: (err as Error).message ?? String(err) };
     }
     await db.savePersonResearchRun(reportId, {
       synthesis: { synthesis_mode: finalReport.synthesis_mode, contact_count: rows(finalReport.contacts).length, fact_count: rows(finalReport.facts).length, signal_count: rows(finalReport.signals).length },
