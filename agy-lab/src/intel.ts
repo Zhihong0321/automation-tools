@@ -84,19 +84,105 @@ export function unwrapUrl(value: string): string {
   return text;
 }
 
-function directUrl(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  try {
-    const url = new URL(unwrapUrl(value));
-    if (url.protocol !== 'https:') return null;
-    if (/google\.[^/]+\/search|bing\.com\/search|duckduckgo\.com/i.test(url.href)) return null;
-    // A bare domain is usually the exact failure mode where a model names an
-    // organisation instead of the page that supports the field.
-    if ((url.pathname === '/' || !url.pathname) && !/google\.com\/maps/i.test(url.href)) return null;
-    return url.href;
-  } catch {
-    return null;
+/**
+ * Formatting normalises. Integrity rejects. Never the same code path.
+ *
+ * A Markdown-wrapped URL is a formatting defect: `unwrapUrl` repairs it
+ * losslessly, so it must never be fatal. Making it fatal cost person report
+ * `LSSBGcICBys3tdJgVCSG` a good summary over a bracket -- a cosmetic defect
+ * traded for a substantive one, since the report went `partial` and the link was
+ * no better for it. The wrappers are third-party models and their output shape
+ * is not ours to control, so the consumer repairs what is repairable and rejects
+ * only what is not: an invented URL, a dropped person, a changed ID set.
+ *
+ * Only a string that is *entirely* a Markdown link and unwraps to a parseable
+ * https URL is rewritten. Prose that merely contains a link, and a plain
+ * `[label]` that is not a URL, are left exactly as the model wrote them.
+ */
+export function normaliseUrls<T>(value: T): T {
+  if (typeof value === 'string') {
+    const candidate = unwrapUrl(value);
+    if (candidate === value.trim() || !/^https:\/\//.test(candidate)) return value;
+    try { new URL(candidate); } catch { return value; }
+    return candidate as unknown as T;
   }
+  if (Array.isArray(value)) return value.map((entry) => normaliseUrls(entry)) as unknown as T;
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, normaliseUrls(entry)]),
+    ) as unknown as T;
+  }
+  return value;
+}
+
+/**
+ * How strong the evidence behind a row is. Never a reason to delete the row.
+ *
+ * This used to be a gate. `directUrl` returned null for anything that was not
+ * https with a path, and every collector did `if (!evidence) continue`, so the
+ * row vanished with no log, no gap entry and no count. On one measured run that
+ * silently binned 14 of 37 researched rows -- 38% -- including four sourced from
+ * the company's own website, plus SEDA, MyHIJAU, CTOS, JobStreet and China Press.
+ * Round 01's prompt names those exact registries and spends a four-minute model
+ * call collecting them; the gate then deleted the results.
+ *
+ * The concern behind it was real: a model that writes "source: seda.gov.my" may
+ * have named an organisation rather than opened a page. But deleting fails
+ * SILENTLY, and that is the whole problem -- a report missing 38% of its findings
+ * looks complete, while a weak citation looks like a bug. So the code optimised
+ * for never looking wrong instead of for being useful, and it did that invisibly,
+ * on every run, to the person paying for the research.
+ *
+ * The https-only half had no argument at all. Nothing here is executed; a URL is
+ * written to a JSON field. It cost 6 of 15 real company websites, because
+ * Malaysian SME sites are routinely http.
+ *
+ * So: classify, never discard. The reader decides what to trust, which is the
+ * only sound place for that decision to live. `candidate_people` has always
+ * worked this way -- keep the row, stamp it needs_direct_role_evidence. This is
+ * that same idiom, applied to every kind of row.
+ */
+export type EvidenceStrength =
+  | 'direct_page'      // https, and a real path: the strongest thing we get
+  | 'domain_only'      // https homepage -- names a source without pinning the page
+  | 'insecure_page'    // http with a path
+  | 'insecure_domain'  // http homepage
+  | 'search_result'    // a search-engine URL: proves a query ran, not a fact
+  | 'unsourced';       // the round gave no URL at all
+
+/** Ranked worst-to-best, for sorting and for "how much of this report is solid". */
+export const EVIDENCE_ORDER: EvidenceStrength[] =
+  ['unsourced', 'search_result', 'insecure_domain', 'domain_only', 'insecure_page', 'direct_page'];
+
+export function classifyEvidence(value: unknown): { url: string | null; strength: EvidenceStrength } {
+  if (typeof value !== 'string' || !value.trim()) return { url: null, strength: 'unsourced' };
+  let url: URL;
+  try {
+    url = new URL(unwrapUrl(value));
+  } catch {
+    // Not parseable as a URL at all. Keep whatever the round said -- it may be a
+    // publication name a human can follow -- but call it what it is.
+    return { url: null, strength: 'unsourced' };
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return { url: null, strength: 'unsourced' };
+  const bare = url.pathname === '/' || !url.pathname;
+  const insecure = url.protocol !== 'https:';
+  if (/google\.[^/]+\/search|bing\.com\/search|duckduckgo\.com/i.test(url.href)) {
+    return { url: url.href, strength: 'search_result' };
+  }
+  if (/google\.com\/maps/i.test(url.href)) return { url: url.href, strength: 'direct_page' };
+  if (bare) return { url: url.href, strength: insecure ? 'insecure_domain' : 'domain_only' };
+  return { url: url.href, strength: insecure ? 'insecure_page' : 'direct_page' };
+}
+
+/**
+ * The strict form, for the few places that genuinely need a usable link rather
+ * than a classification -- a Messenger link we are about to publish as a contact
+ * route, say. Everything that builds ledger rows uses classifyEvidence instead.
+ */
+function directUrl(value: unknown): string | null {
+  const { url, strength } = classifyEvidence(value);
+  return url && strength !== 'unsourced' && strength !== 'search_result' ? url : null;
 }
 
 function id(prefix: string, parts: unknown[]): string {
@@ -112,9 +198,10 @@ function collectContacts(sources: Record<string, unknown>[]): Record<string, unk
   const found = new Map<string, Record<string, unknown>>();
   for (const source of sources) {
     for (const row of rows(source.contacts)) {
-      const evidence = directUrl(first(row, ['evidence_url', 'source_url', 'url']));
+      const cited = classifyEvidence(first(row, ['evidence_url', 'source_url', 'url']));
       const raw = first(row, ['value_as_published', 'value', 'raw_value', 'contact']);
-      if (!evidence || !raw) continue;
+      // The contact value is the row. Weak evidence downgrades it; it never deletes it.
+      if (!raw) continue;
       const normalized = first(row, ['normalized_value', 'normalized']) || raw;
       const purpose = first(row, ['purpose', 'channel', 'type']) || 'Business contact';
       const key = normalized.toLowerCase() + '|' + purpose.toLowerCase();
@@ -123,7 +210,9 @@ function collectContacts(sources: Record<string, unknown>[]): Record<string, unk
         normalized_value: normalized,
         current_status: first(row, ['current_status', 'status']) || 'published',
         evidence_class: first(row, ['evidence_class', 'source_type']) || 'unclassified',
-        evidence_url: evidence,
+        evidence_url: cited.url,
+        evidence_strength: cited.strength,
+        evidence_as_cited: cited.url ? null : first(row, ['evidence_url', 'source_url', 'url']) || null,
         source_date: row.source_date ?? row.visible_source_date ?? null,
         introduced_by: first(row, ['introduced_by', '_round']) || null,
       });
@@ -180,10 +269,12 @@ function collectPeople(sources: Record<string, unknown>[]): Record<string, unkno
   const found = new Map<string, Record<string, unknown>>();
   for (const source of sources) {
     for (const row of rows(source.people)) {
-      const evidence = directUrl(first(row, ['role_evidence_url', 'evidence_url', 'role_url', 'source_url']));
+      const cited = classifyEvidence(first(row, ['role_evidence_url', 'evidence_url', 'role_url', 'source_url']));
       const name = first(row, ['name']);
       const role = first(row, ['current_role', 'role', 'position']);
-      if (!evidence || !name || !role) continue;
+      // A named person with a stated role is the row. How well it is sourced is
+      // a property of the row, not a condition of its existence.
+      if (!name || !role) continue;
       const key = personKey(name);
       const existing = found.get(key);
       if (!existing) {
@@ -191,8 +282,10 @@ function collectPeople(sources: Record<string, unknown>[]): Record<string, unkno
           id: id('person', [name, role]), name, role,
           relevance: first(row, ['relevance', 'why_relevant', 'outreach_relevance']),
           evidence_class: first(row, ['evidence_class', 'source_type']) || 'unclassified',
-          role_url: evidence,
-          personal_profile_url: directUrl(row.personal_profile_url) ?? null,
+          role_url: cited.url,
+          evidence_strength: cited.strength,
+          evidence_as_cited: cited.url ? null : first(row, ['role_evidence_url', 'evidence_url', 'role_url', 'source_url']) || null,
+          personal_profile_url: classifyEvidence(row.personal_profile_url).url,
           source_date: row.source_date ?? row.visible_source_date ?? null,
           introduced_by: first(row, ['introduced_by', '_round']) || null,
           also_described_as: [] as string[],
@@ -201,7 +294,7 @@ function collectPeople(sources: Record<string, unknown>[]): Record<string, unkno
         continue;
       }
       // A profile URL found on the second sighting is still a profile URL.
-      if (!existing.personal_profile_url) existing.personal_profile_url = directUrl(row.personal_profile_url) ?? null;
+      if (!existing.personal_profile_url) existing.personal_profile_url = classifyEvidence(row.personal_profile_url).url;
       const alts = existing.also_described_as as string[];
       const promote = seniorityScore(role) > num(existing.seniority, 0);
       // Whichever title loses goes to `also_described_as` -- including the one
@@ -210,7 +303,8 @@ function collectPeople(sources: Record<string, unknown>[]): Record<string, unkno
       if (promote) {
         existing.role = role;
         existing.seniority = seniorityScore(role);
-        existing.role_url = evidence;
+        existing.role_url = cited.url;
+        existing.evidence_strength = cited.strength;
         existing.evidence_class = first(row, ['evidence_class', 'source_type']) || existing.evidence_class;
       }
       const seen = new Set([String(existing.role).toLowerCase(), ...alts.map((r) => r.toLowerCase())]);
@@ -259,14 +353,16 @@ function collectSignals(sources: Record<string, unknown>[]): Record<string, unkn
   const found = new Map<string, Record<string, unknown>>();
   for (const source of sources) {
     for (const row of rows(source.signals ?? source.business_signals ?? source.independent_signals)) {
-      const evidence = directUrl(first(row, ['evidence_url', 'source_url', 'url']));
+      const cited = classifyEvidence(first(row, ['evidence_url', 'source_url', 'url']));
       const fact = first(row, ['fact', 'signal', 'description']);
-      if (!evidence || !fact) continue;
-      const key = fact.toLowerCase().slice(0, 180) + '|' + evidence;
+      if (!fact) continue;
+      const key = fact.toLowerCase().slice(0, 180) + '|' + (cited.url ?? 'unsourced');
       if (!found.has(key)) found.set(key, {
-        id: id('signal', [fact, evidence]), date: row.date ?? row.visible_source_date ?? null,
+        id: id('signal', [fact, cited.url ?? 'unsourced']), date: row.date ?? row.visible_source_date ?? null,
         fact, evidence_class: first(row, ['evidence_class', 'source_type', 'source_class']) || 'unclassified',
-        evidence_url: evidence,
+        evidence_url: cited.url,
+        evidence_strength: cited.strength,
+        evidence_as_cited: cited.url ? null : first(row, ['evidence_url', 'source_url', 'url']) || null,
         outreach_use: first(row, ['outreach_use', 'relevance']),
         introduced_by: first(row, ['introduced_by', '_round']) || null,
       });
@@ -301,10 +397,32 @@ export function buildLedger(
     },
     contacts, people, candidate_people: candidatePeople, signals, conflicts_and_unknowns: conflicts,
     validation: {
-      policy: 'Contacts, verified people and signals require a raw direct HTTPS evidence URL. Candidate people have a named public source but require direct role verification. Final synthesis may not add rows.',
+      policy: 'Every row the research returned is retained and carries an evidence_strength; nothing is discarded for weak sourcing. direct_page is an https page that supports the field; domain_only names a source without pinning the page; insecure_* is the same over http; search_result proves a query ran, not a fact; unsourced means the round cited nothing. Candidate people are named by a public source but lack direct role evidence. Final synthesis may not add rows.',
       contact_count: contacts.length, people_count: people.length, candidate_people_count: candidatePeople.length, signal_count: signals.length,
+      evidence_breakdown: evidenceBreakdown(contacts, people, signals),
     },
   };
+}
+
+/**
+ * How the retained rows break down by evidence strength.
+ *
+ * This exists because the old behaviour was dishonest in a specific way: rows
+ * were deleted for weak evidence, and the report then presented itself as
+ * complete. Nothing counted what had gone. Now nothing is deleted, so the report
+ * owes the reader a straight account of what it is made of.
+ */
+export function evidenceBreakdown(...groups: Record<string, unknown>[][]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const strength of EVIDENCE_ORDER) out[strength] = 0;
+  for (const group of groups) {
+    for (const row of group) {
+      const key = String(row.evidence_strength ?? 'unsourced');
+      out[key] = (out[key] ?? 0) + 1;
+    }
+  }
+  for (const key of Object.keys(out)) if (!out[key]) delete out[key];
+  return out;
 }
 
 function sameSet(a: unknown[], b: unknown[]): boolean {
@@ -326,7 +444,7 @@ export function validateFinal(final: Record<string, unknown>, ledger: Record<str
   if (!sameSet(finalCandidates.map((r) => r.id), ledgerCandidates.map((r) => r.id))) errors.push('candidate people id set changed');
   const allowedUrls = new Set<string>();
   const collectAllowed = (value: unknown): void => {
-    if (typeof value === 'string' && /^https:\/\//.test(unwrapUrl(value))) {
+    if (typeof value === 'string' && /^https?:\/\//.test(unwrapUrl(value))) {
       try { allowedUrls.add(new URL(unwrapUrl(value)).href); } catch { /* malformed URLs are caught by the ledger filter */ }
     } else if (Array.isArray(value)) value.forEach(collectAllowed);
     else if (value && typeof value === 'object') Object.values(value as Record<string, unknown>).forEach(collectAllowed);
@@ -335,14 +453,15 @@ export function validateFinal(final: Record<string, unknown>, ledger: Record<str
   const visit = (value: unknown): void => {
     if (typeof value === 'string') {
       // Unwrap first: a Markdown-wrapped URL does not start with "https://" and
-      // used to slip through this check entirely.
+      // used to slip through this check entirely. Wrapping itself is not an
+      // error here -- `normaliseUrls` has already repaired it, and the URL a
+      // model wrapped is still the URL it cited.
       const candidate = unwrapUrl(value);
-      if (/^https:\/\//.test(candidate)) {
+      if (/^https?:\/\//.test(candidate)) {
         let href: string | null = null;
         try { href = new URL(candidate).href; } catch { href = null; }
         if (!href) errors.push('malformed URL: ' + value);
         else if (!allowedUrls.has(href)) errors.push('new URL: ' + value);
-        else if (candidate !== value.trim()) errors.push('URL is not a raw https:// string: ' + value);
       }
       return;
     }
@@ -449,15 +568,17 @@ function collectPersonFacts(sources: Record<string, unknown>[]): Record<string, 
   const found = new Map<string, Record<string, unknown>>();
   for (const source of sources) {
     for (const row of rows(source.facts)) {
-      const evidence = directUrl(first(row, ['evidence_url', 'source_url', 'url']));
+      const cited = classifyEvidence(first(row, ['evidence_url', 'source_url', 'url']));
       const category = first(row, ['category', 'type']) || 'Professional fact';
       const fact = first(row, ['fact', 'value', 'description']);
-      if (!evidence || !fact) continue;
-      const key = category.toLowerCase() + '|' + fact.toLowerCase().slice(0, 220) + '|' + evidence;
+      if (!fact) continue;
+      const key = category.toLowerCase() + '|' + fact.toLowerCase().slice(0, 220) + '|' + (cited.url ?? 'unsourced');
       if (!found.has(key)) found.set(key, {
-        id: id('fact', [category, fact, evidence]), category, fact,
+        id: id('fact', [category, fact, cited.url ?? 'unsourced']), category, fact,
         evidence_class: first(row, ['evidence_class', 'source_type', 'source_class']) || 'unclassified',
-        evidence_url: evidence,
+        evidence_url: cited.url,
+        evidence_strength: cited.strength,
+        evidence_as_cited: cited.url ? null : first(row, ['evidence_url', 'source_url', 'url']) || null,
         source_date: row.source_date ?? row.visible_source_date ?? null,
         introduced_by: first(row, ['introduced_by', '_round']) || null,
       });
@@ -493,10 +614,11 @@ export function buildPersonLedger(
     facts: collectPersonFacts(all),
     signals: collectSignals(all),
     validation: {
-      policy: 'Public professional evidence only. Private or sensitive personal data, inferred contacts and uncited claims are excluded.',
+      policy: 'Public professional evidence only; private or sensitive personal data is excluded. Every row the research returned is retained and carries an evidence_strength rather than being discarded for weak sourcing -- the reader decides what to trust.',
       contact_count: collectContacts(all).length,
       fact_count: collectPersonFacts(all).length,
       signal_count: collectSignals(all).length,
+      evidence_breakdown: evidenceBreakdown(collectContacts(all), collectPersonFacts(all), collectSignals(all)),
     },
   };
 }
@@ -508,7 +630,7 @@ export function validatePersonFinal(final: Record<string, unknown>, ledger: Reco
   if (!sameSet(rows(final.signals).map((row) => row.id), rows(ledger.signals).map((row) => row.id))) errors.push('signal id set changed');
   const allowedUrls = new Set<string>();
   const collectAllowed = (value: unknown): void => {
-    if (typeof value === 'string' && /^https:\/\//.test(unwrapUrl(value))) {
+    if (typeof value === 'string' && /^https?:\/\//.test(unwrapUrl(value))) {
       try { allowedUrls.add(new URL(unwrapUrl(value)).href); } catch { /* validation below keeps malformed URLs out */ }
     } else if (Array.isArray(value)) value.forEach(collectAllowed);
     else if (value && typeof value === 'object') Object.values(value as Record<string, unknown>).forEach(collectAllowed);
@@ -517,14 +639,15 @@ export function validatePersonFinal(final: Record<string, unknown>, ledger: Reco
   const visit = (value: unknown): void => {
     if (typeof value === 'string') {
       // Unwrap first: a Markdown-wrapped URL does not start with "https://" and
-      // used to slip through this check entirely.
+      // used to slip through this check entirely. Wrapping itself is not an
+      // error here -- `normaliseUrls` has already repaired it, and the URL a
+      // model wrapped is still the URL it cited.
       const candidate = unwrapUrl(value);
-      if (/^https:\/\//.test(candidate)) {
+      if (/^https?:\/\//.test(candidate)) {
         let href: string | null = null;
         try { href = new URL(candidate).href; } catch { href = null; }
         if (!href) errors.push('malformed URL: ' + value);
         else if (!allowedUrls.has(href)) errors.push('new URL: ' + value);
-        else if (candidate !== value.trim()) errors.push('URL is not a raw https:// string: ' + value);
       }
       return;
     }
@@ -575,7 +698,7 @@ export function round01Prompt(company: Record<string, unknown>): string {
 IMMUTABLE GOOGLE MAPS INPUT: ${companyBaseline(company)}
 ${FETCH_POLICY}
 Find complete public company contacts, verified decision-relevant people, and separately retain named people who need verification. Search these sources separately: SSM/e-Info, CTOS/CreditScan, MyHIJAU, SEDA, CIDB, Maukerja, Hiredly, Ricebowl, JobStreet, Jora, LinkedIn company and people pages, official team/careers/testimonial pages, and reputable award, association, tender and news pages.
-Rules: contacts, people and signals require a raw full https:// direct evidence URL; company pages are first_party; do not infer emails/profiles/dates; no negative claims from search absence; do not explain conflicts without evidence; source date is null unless visibly published. Put a person in people only when their current role has direct URL evidence. Put a person in candidate_people when a named public source identifies them but that direct role evidence is missing; provide source_name, and source_url when known. Candidates are leads to verify, not confirmed roles.
+Rules: report everything you find and let the pipeline grade it -- never withhold a real finding because its source is only a homepage, is http rather than https, or is a registry you could not deep-link into. Give the most specific URL you actually used, as a raw https:// or http:// string and never a Markdown link; if you genuinely have no URL, name the source in evidence_url and return the row anyway. Company pages are first_party; do not infer emails/profiles/dates; no negative claims from search absence; do not explain conflicts without evidence; source date is null unless visibly published. Put a person in people only when their current role has direct URL evidence. Put a person in candidate_people when a named public source identifies them but that direct role evidence is missing; provide source_name, and source_url when known. Candidates are leads to verify, not confirmed roles.
 Return exactly one compact JSON object in one fenced code block with arrays contacts, people, candidate_people, signals, conflicts_and_unknowns. Contact fields: purpose,value_as_published,normalized_value,current_status,evidence_class,evidence_url,source_date. People: name,current_role,relevance,evidence_class,role_evidence_url,personal_profile_url,source_date. Candidate people: name,current_role,source_name,source_url,relevance,verification_note. Signals: date,fact,evidence_class,evidence_url,outreach_use. Max 20 contacts, 12 people, 24 candidate_people, 10 signals. No prose outside JSON.`;
 }
 
@@ -589,7 +712,7 @@ function round02Prompt(kind: 'contacts' | 'people' | 'signals', company: Record<
 COMPANY BASELINE: ${companyBaseline(company)}
 ROUND 01 PARSED LEADS: ${JSON.stringify(r1).slice(0, 28_000)}
 Focus only on ${kind}. Confirm, correct, reject and add missed evidence. For contacts inspect subscription/campaign/careers/vendor pages. For people inspect SSM/e-Info, CTOS/CreditScan, MyHIJAU, SEDA, CIDB, job boards, LinkedIn people/company pages, official team pages, awards and associations. Prioritize CEO, commercial, partnerships, procurement, operations and HR, but retain directors, registry contacts, team members and employees as candidate_people when the named source is public but the current role lacks direct evidence. For signals use direct issuer or specific company pages.
-Return exactly one compact JSON object inside one fenced code block with ${schemas[kind]}. Every URL in contacts, people and signals must be a literal raw full https:// string inside JSON, never a Markdown link label. Candidate people require source_name and use source_url only when known. No inferred emails or personal URLs. Search snippets and crawl dates are not evidence. Use null when unknown. Max ${kind === 'contacts' ? 20 : kind === 'people' ? '12 people plus 24 candidate_people' : 10} rows and no prose outside JSON.`;
+Return exactly one compact JSON object inside one fenced code block with ${schemas[kind]}. Every URL must be a literal raw URL string inside JSON, never a Markdown link label. Report what you find and let the pipeline grade its sourcing: do not drop a real finding because its source is a homepage or is http. Candidate people require source_name and use source_url only when known. No inferred emails or personal URLs. Search snippets and crawl dates are not evidence. Use null when unknown. Max ${kind === 'contacts' ? 20 : kind === 'people' ? '12 people plus 24 candidate_people' : 10} rows and no prose outside JSON.`;
 }
 
 
@@ -866,7 +989,7 @@ ${privateHint}
 ${FETCH_POLICY}
 Research public professional business information only: the current role, public company/board affiliations, attributable interviews or talks, and dated business signals relevant to a commercial or partnership conversation.
 Never collect or return home address, non-business phone, family, private social accounts, age, ethnicity, religion, health, political views, private wealth, breach data, data-broker records, or personal contact details. Do not infer any fact, email, profile, title, date or affiliation.
-Every retained item requires a raw full https:// direct source URL. Company-controlled pages are first_party; independent issuer/news pages are independent; public professional platforms are social_platform. Search snippets and bare homepages are not evidence.
+Report every public professional item you find and let the pipeline grade its sourcing -- do not withhold a real finding because its source is only a homepage or is http rather than https. Give the most specific URL you actually used, as a raw URL string and never a Markdown link. Company-controlled pages are first_party; independent issuer/news pages are independent; public professional platforms are social_platform.
 Return exactly one compact JSON object inside a fenced code block with arrays contacts, facts and signals. Contact fields: purpose,value_as_published,normalized_value,current_status,evidence_class,evidence_url,source_date,identity_match_note. Retain only professional/business contact routes directly published by the person, company, or a reputable organization; distinguish a company-wide route from a person-specific route. Fact fields: category,fact,evidence_class,evidence_url,source_date. Signal fields: date,fact,evidence_class,evidence_url,outreach_use. Max 12 contacts, 12 facts and 8 signals. No prose outside JSON.`;
 }
 
@@ -1102,9 +1225,12 @@ async function runCompanyResearch(
     let r4Artifact: Record<string, unknown>;
     try {
       const r4 = await ask('agy', round04Prompt(ledger), 420_000);
-      const fidelityErrors = r4.parsed ? validateFinal(r4.parsed, ledger) : [r4.parse_error ?? 'invalid final output'];
-      if (r4.parsed && !fidelityErrors.length) {
-        finalReport = { ...r4.parsed, synthesis_mode: 'gemini_validated' };
+      // Repair formatting, then judge integrity, then publish the repaired
+      // object -- not the raw one, and not nothing.
+      const r4Final = r4.parsed ? normaliseUrls(r4.parsed) : null;
+      const fidelityErrors = r4Final ? validateFinal(r4Final, ledger) : [r4.parse_error ?? 'invalid final output'];
+      if (r4Final && !fidelityErrors.length) {
+        finalReport = { ...r4Final, synthesis_mode: 'gemini_validated' };
         produced += 1;
       } else failures.push('Final synthesis rejected: ' + fidelityErrors.join(', ') + '.');
       r4Artifact = { ...r4, fidelity_errors: fidelityErrors, fallback_used: fidelityErrors.length > 0 };
@@ -1185,8 +1311,11 @@ async function runPersonResearch(
     let synthesisMetadata: Record<string, unknown> = { status: 'failed', model: 'chatgpt' };
     try {
       const synthesis = await ask('chatgpt', personSynthesisPrompt(ledger), 300_000);
-      const fidelityErrors = synthesis.parsed ? validatePersonFinal(synthesis.parsed, ledger) : [synthesis.parse_error ?? 'invalid final output'];
-      if (synthesis.parsed && !fidelityErrors.length) finalReport = { ...synthesis.parsed, synthesis_mode: 'chatgpt_validated' };
+      // Repair formatting, then judge integrity, then publish the repaired
+      // object -- not the raw one, and not nothing.
+      const personFinal = synthesis.parsed ? normaliseUrls(synthesis.parsed) : null;
+      const fidelityErrors = personFinal ? validatePersonFinal(personFinal, ledger) : [synthesis.parse_error ?? 'invalid final output'];
+      if (personFinal && !fidelityErrors.length) finalReport = { ...personFinal, synthesis_mode: 'chatgpt_validated' };
       else hadFailure = true;
       synthesisMetadata = { status: fidelityErrors.length ? 'rejected_fallback_used' : 'completed', model: synthesis.model, engine: synthesis.engine, ms: synthesis.ms, fidelity_errors: fidelityErrors };
     } catch (err) {

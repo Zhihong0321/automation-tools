@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLedger, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, publishOutcome, round01Prompt, seniorityScore, unwrapUrl, validateChineseTranslation, validateFinal, validatePersonFinal } from './intel.ts';
+import { buildLedger, classifyEvidence, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, normaliseUrls, publishOutcome, round01Prompt, seniorityScore, unwrapUrl, validateChineseTranslation, validateFinal, validatePersonFinal } from './intel.ts';
 import { companyPage, personPage, searchPage } from './reportui.ts';
 import type { PublishedReport } from './reportdb.ts';
 
@@ -51,7 +51,12 @@ test('Round 03 contributes nothing from a page it is not confident about', () =>
   assert.equal((ledger.contacts as Record<string, unknown>[])[0].introduced_by, 'round03');
 });
 
-test('ledger retains only direct evidence URLs and immutable Maps phone', () => {
+test('the ledger grades evidence and discards nothing', () => {
+  // The old rule deleted any row whose evidence was a homepage or http. On one
+  // measured production run that binned 14 of 37 researched rows -- silently,
+  // including four from the company's own site plus SEDA, MyHIJAU and CTOS.
+  // Deciding what to believe is the reader's job, so every row survives and
+  // carries a grade instead.
   const company = {
     id: '7', name: 'Example Solar', phone: '012-345 6789',
     maps_url: 'https://www.google.com/maps/place/Example/data=!4m2!3m1!1sabc',
@@ -59,14 +64,44 @@ test('ledger retains only direct evidence URLs and immutable Maps phone', () => 
   const ledger = buildLedger(company, [{
     contacts: [
       { purpose: 'Careers', value: 'jobs@example.com', source_url: 'https://example.com/careers' },
-      { purpose: 'Bad', value: 'invented@example.com', source_url: 'https://example.com/' },
+      { purpose: 'Homepage', value: 'hello@example.com', source_url: 'https://example.com/' },
+      { purpose: 'Insecure', value: 'sales@example.com', source_url: 'http://example.com/contact' },
+      { purpose: 'Uncited', value: 'nourl@example.com' },
     ],
     people: [{ name: 'A Person', role: 'CEO', role_url: 'https://example.com/team' }],
   }]);
   const contacts = ledger.contacts as Record<string, unknown>[];
-  assert.equal(contacts.length, 2);
-  assert.equal(contacts.some((r) => r.value_as_published === 'invented@example.com'), false);
+  const strength = (v: string) => contacts.find((r) => r.value_as_published === v)?.evidence_strength;
+
+  // Four researched contacts plus the immutable Maps phone. Nothing dropped.
+  assert.equal(contacts.length, 5);
+  assert.equal(strength('jobs@example.com'), 'direct_page');
+  assert.equal(strength('hello@example.com'), 'domain_only');
+  assert.equal(strength('sales@example.com'), 'insecure_page');
+  assert.equal(strength('nourl@example.com'), 'unsourced');
   assert.equal((ledger.people as unknown[]).length, 1);
+
+  // And the report says out loud what it is made of, so the weak rows are
+  // visible as weak rather than invisible as deleted.
+  const breakdown = (ledger.validation as Record<string, unknown>).evidence_breakdown as Record<string, number>;
+  assert.equal(breakdown.domain_only, 1);
+  assert.equal(breakdown.insecure_page, 1);
+  assert.equal(breakdown.unsourced, 1);
+});
+
+test('classifyEvidence grades every shape a round can return', () => {
+  assert.equal(classifyEvidence('https://seda.gov.my/directory/x').strength, 'direct_page');
+  assert.equal(classifyEvidence('https://www.seda.gov.my').strength, 'domain_only');
+  assert.equal(classifyEvidence('https://www.seda.gov.my/').strength, 'domain_only');
+  assert.equal(classifyEvidence('http://www.sungate.energy/').strength, 'insecure_domain');
+  assert.equal(classifyEvidence('http://xsolar.my/about').strength, 'insecure_page');
+  assert.equal(classifyEvidence('https://www.google.com/search?q=x').strength, 'search_result');
+  assert.equal(classifyEvidence('China Press, 3 March').strength, 'unsourced');
+  assert.equal(classifyEvidence(null).strength, 'unsourced');
+  // A Markdown-wrapped URL is still that URL.
+  assert.equal(classifyEvidence('[https://seda.gov.my/a](https://seda.gov.my/a)').url, 'https://seda.gov.my/a');
+  // A Maps place URL stays strong even though its path looks odd.
+  assert.equal(classifyEvidence('https://www.google.com/maps/place/X/data=!4m2').strength, 'direct_page');
 });
 
 test('ledger keeps named source people as candidates without weakening validated people', () => {
@@ -196,21 +231,38 @@ test('round 01 forbids the shell, which is what denied it permission', () => {
   assert.match(prompt, /Never use the shell, terminal, bash, curl or wget/);
 });
 
-test('a Markdown-wrapped URL is still that URL, and is not raw output', () => {
+test('a Markdown-wrapped URL is repaired, not rejected', () => {
   const raw = 'https://goldenbullaward.com/winner/inhome-solar-sdn-bhd/';
   assert.equal(unwrapUrl('[' + raw + '](' + raw + ')'), raw);
   assert.equal(unwrapUrl('[' + raw + ']'), raw);
   assert.equal(unwrapUrl(raw), raw);
 
-  // A VIP brief published 17 evidence links wrapped like this and validation
-  // passed, because the check only looked at strings starting with https://.
+  // A VIP brief published 17 evidence links wrapped like this, and the fix for
+  // it rejected the whole synthesis instead -- costing a real report its
+  // summary over a bracket. Formatting is repaired and published.
   const ledger = { facts: [{ id: 'fact_1', evidence_url: raw }], contacts: [], signals: [] };
   const wrapped = { facts: [{ id: 'fact_1', evidence_url: '[' + raw + '](' + raw + ')' }], contacts: [], signals: [] };
-  const errors = validatePersonFinal(wrapped, ledger);
-  assert.ok(errors.some((e) => e.includes('not a raw https:// string')), errors.join(' | '));
+  const repaired = normaliseUrls(wrapped);
+  assert.deepEqual(repaired, { facts: [{ id: 'fact_1', evidence_url: raw }], contacts: [], signals: [] });
+  assert.deepEqual(validatePersonFinal(repaired, ledger), []);
 
   // The same URL emitted raw is still accepted.
   assert.deepEqual(validatePersonFinal({ facts: [{ id: 'fact_1', evidence_url: raw }], contacts: [], signals: [] }, ledger), []);
+
+  // Integrity still rejects: repairing the wrapper does not admit a URL that is
+  // not in the ledger, in either validator.
+  const invented = 'https://example.com/invented';
+  const forgedPerson = normaliseUrls({ facts: [{ id: 'fact_1', evidence_url: '[' + invented + '](' + invented + ')' }], contacts: [], signals: [] });
+  assert.ok(validatePersonFinal(forgedPerson, ledger).some((e) => e.startsWith('new URL:')));
+  const companyLedger = { contacts: [{ id: 'c_1', evidence_url: raw }], people: [], candidate_people: [] };
+  const forgedCompany = normaliseUrls({ contacts: [{ id: 'c_1', evidence_url: '[' + invented + '](' + invented + ')' }], people: [], candidate_people: [] });
+  assert.ok(validateFinal(forgedCompany, companyLedger).some((e) => e.startsWith('new URL:')));
+
+  // Prose that merely contains a link, and a bracketed non-URL, are untouched.
+  assert.deepEqual(
+    normaliseUrls({ summary: 'See [the award page](' + raw + ') for detail.', note: '[redacted]', count: 3, missing: null }),
+    { summary: 'See [the award page](' + raw + ') for detail.', note: '[redacted]', count: 3, missing: null },
+  );
 });
 
 function report(type: 'business_search' | 'company_research' | 'person_research'): PublishedReport {
