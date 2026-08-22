@@ -232,19 +232,21 @@ export async function updateReport(publicId: string, patch: {
  * A research run lives in this process. When the container restarts mid-run --
  * a deploy, an OOM, the 502s the workers logged on 22 Aug -- nothing is left to
  * finish the work or to write a terminal status, so the report sits at `running`
- * with `error: null` forever. Report uWB08Id1cdfIaqskF8VB did exactly that:
- * round 01 failed at 04:36 and two hours later it still read `running`.
+ * with `error: null` and no caller polling `api_url` ever gets the terminal
+ * status the docs promise it.
  *
- * That breaks the documented contract. Callers are told to poll `api_url` until
- * the status is completed, partial or failed; a run nothing will ever finish
- * never gives them one, so they poll until they give up.
+ * Two modes, because "stale" and "dead" are not the same claim:
  *
- * Called at boot (the restart that stranded them is the same restart that runs
- * this) and on an interval, for a run whose owner died without the process
- * going down with it. `updated_at` is the liveness signal: every round writes
- * one, so a run still working never looks stale.
+ *   staleMinutes 0 at boot. This process has just started and owns no run, so
+ *   anything still non-terminal was stranded by the restart. No age test needed.
+ *
+ *   staleMinutes > 0 on the interval, for a run whose owner died without taking
+ *   the process with it -- and never touching a run this process is still
+ *   working on, which is what activePublicIds excludes. That guard matters:
+ *   one company report legitimately ran 2h18m waiting behind a serial worker
+ *   lane, and an age test alone would have killed it at 45 minutes.
  */
-export async function reapAbandoned(staleMinutes = 45): Promise<number> {
+export async function reapAbandoned(staleMinutes: number, activePublicIds: string[] = []): Promise<number> {
   await migrate();
   const out = await sql<{ public_id: string }>(
     `update published_report
@@ -253,9 +255,10 @@ export async function reapAbandoned(staleMinutes = 45): Promise<number> {
             completed_at = now(),
             updated_at = now()
       where status in ('queued','running')
-        and updated_at < now() - ($1 || ' minutes')::interval
+        and updated_at < now() - make_interval(mins => $1::int)
+        and not (public_id = any($2::text[]))
       returning public_id`,
-    [String(Math.max(1, Math.floor(staleMinutes)))],
+    [Math.max(0, Math.floor(staleMinutes)), activePublicIds],
   );
   return out.rowCount ?? 0;
 }
@@ -372,6 +375,12 @@ export async function saveRound(
      where report_id = $1`,
     [reportId, JSON.stringify(artifact), [round], status, JSON.stringify(engine)],
   );
+  // Heartbeat the published report too. Rounds used to write only to
+  // company_research_run, so published_report.updated_at stayed frozen at the
+  // moment the run started and could not tell a working run from a dead one --
+  // and one company report legitimately took 2h18m waiting on a serial worker
+  // lane. Anything that reaps on staleness needs this to be true first.
+  await sql('update published_report set updated_at = now() where id = $1', [reportId]);
 }
 
 export async function saveFinal(

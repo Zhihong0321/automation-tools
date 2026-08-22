@@ -403,11 +403,11 @@ server.on('error', (err: NodeJS.ErrnoException) => {
  * `running` forever. See reportdb.reapAbandoned -- the restart that stranded
  * these runs is the same restart that gets here.
  */
-function reapAbandonedRuns(): void {
+function reapAbandonedRuns(staleMinutes: number): void {
   if (!reportdb.configured()) return;
-  void reportdb.reapAbandoned()
-    .then((n) => { if (n) console.log('  reaped ' + n + ' abandoned run(s) left by a restart'); })
-    .catch((err: Error) => console.warn('  could not reap abandoned runs: ' + err.message));
+  void reportdb.reapAbandoned(staleMinutes, intel.activeReports())
+    .then((n) => { if (n) console.log('reaped ' + n + ' abandoned run(s) that no process was still working on'); })
+    .catch((err: Error) => console.warn('could not reap abandoned runs: ' + err.message));
 }
 
 server.listen(PORT, '0.0.0.0', () => {
@@ -415,10 +415,14 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('  HOME     ' + agy.HOME);
   console.log('  agy      ' + (fs.existsSync(agy.BIN) ? agy.BIN : 'not installed yet - POST /api/install'));
   console.log('  appData  ' + agy.APP_DATA);
-  reapAbandonedRuns();
-  // And again on an interval, for a run whose owner died without taking the
-  // process with it. unref so this timer never holds the process open.
-  setInterval(reapAbandonedRuns, 15 * 60_000).unref();
+  // Age 0 at boot: this process owns no run yet, so anything non-terminal was
+  // stranded by the restart that just happened.
+  reapAbandonedRuns(0);
+  // On the interval an age test IS needed, and a generous one -- a company
+  // report can legitimately run for hours behind a busy serial worker lane, and
+  // rounds heartbeat published_report.updated_at so a working run stays fresh.
+  // unref so this timer never holds the process open.
+  setInterval(() => reapAbandonedRuns(180), 15 * 60_000).unref();
 });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

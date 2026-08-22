@@ -15,6 +15,11 @@ export interface Ctx {
 }
 
 const active = new Set<string>();
+
+/** Runs this process is working on right now, so the reaper never kills one. */
+export function activeReports(): string[] {
+  return [...active];
+}
 const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback);
 const num = (v: unknown, fallback: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
 const object = (v: unknown): Record<string, unknown> =>
