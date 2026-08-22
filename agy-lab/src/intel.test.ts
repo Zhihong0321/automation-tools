@@ -26,24 +26,39 @@ test('Round 03 admits only what Facebook published, and only off a trusted page'
   };
   const built = facebookLedgerRows(page, discovered);
   const purposes = built.contacts.map((c) => c.purpose);
-  assert.deepEqual(purposes, ['Facebook Page phone', 'Facebook Page email', 'Messenger — company page']);
-  // The owner's link was derived from his profile URL, not published by him, so
-  // it is not evidence and must not reach the ledger.
-  assert.ok(!purposes.some((p) => String(p).startsWith('Messenger — Lim')));
-  assert.equal(built.people.length, 1);
+  assert.deepEqual(purposes, ['Facebook Page phone', 'Facebook Page email', 'Messenger — company page', 'Messenger — Lim Wei Kang']);
+  // The owner's Messenger link was derived from his profile URL rather than
+  // published. It is still a link that opens a chat with him, so it is kept and
+  // labelled derived instead of being discarded.
+  const derived = built.contacts.find((c) => String(c.purpose).startsWith('Messenger — Lim'))!;
+  assert.equal(derived.derived, true);
+  assert.equal(derived.evidence_class, 'facebook_link_derived_from_profile');
+  // Both named humans survive. Siti has no stated role; that is said on her row
+  // rather than being a reason to delete her.
+  assert.equal(built.people.length, 2);
   assert.equal(built.people[0].personal_profile_url, 'https://www.facebook.com/lim.wk.5');
-  // A name with no stated role is a real finding and a useless ledger row.
-  assert.match(built.gaps.join(' '), /Siti/);
+  const siti = built.people.find((p) => p.name === 'Siti')!;
+  assert.equal(siti.role_stated, false);
+  assert.match(String(siti.role), /Role not stated/);
   assert.match(String(built.signals[0].fact), /418 followers and 2 reviews/);
 });
 
-test('Round 03 contributes nothing from a page it is not confident about', () => {
+test('Round 03 grades an unconfident page match instead of binning it', () => {
+  // This used to return empty for a `weak` match: the page's phone, email,
+  // Messenger link, follower count and every person on it were thrown away
+  // because the match was not certain. A weak match that really is this company
+  // is a real finding; whether to believe it is the reader's call.
   const weak = facebookLedgerRows(
     { confidence: 'weak', facebook_url: 'https://www.facebook.com/SomeOtherShop', phone: '011-000 0000' },
     { people: [{ name: 'Someone', role: 'Director', profile_url: 'https://www.facebook.com/someone.1' }] },
   );
-  assert.equal(weak.pageUrl, null);
-  assert.deepEqual([weak.contacts.length, weak.people.length, weak.signals.length], [0, 0, 0]);
+  assert.equal(weak.pageUrl, 'https://www.facebook.com/SomeOtherShop');
+  assert.equal(weak.contacts.length, 1);
+  assert.equal(weak.people.length, 1);
+  assert.equal(weak.contacts[0].evidence_class, 'facebook_page_unconfirmed_match');
+  assert.equal(weak.contacts[0].facebook_match_confidence, 'weak');
+  // And the risk is stated plainly rather than handled by deletion.
+  assert.match(weak.gaps.join(' '), /may belong to a different business/);
   // And the rows it does build survive the ledger's own evidence filter.
   const strong = facebookLedgerRows({ confidence: 'likely', facebook_url: 'https://www.facebook.com/RealShop', phone: '016-712 7666' }, null);
   const ledger = buildLedger({ id: '9', name: 'Real Shop' }, [{ contacts: strong.contacts, people: strong.people, signals: strong.signals }]);
@@ -263,6 +278,18 @@ test('a Markdown-wrapped URL is repaired, not rejected', () => {
     normaliseUrls({ summary: 'See [the award page](' + raw + ') for detail.', note: '[redacted]', count: 3, missing: null }),
     { summary: 'See [the award page](' + raw + ') for detail.', note: '[redacted]', count: 3, missing: null },
   );
+});
+
+test('an imperfect Chinese translation is delivered, not binned', async () => {
+  // One mismatched row used to throw, and the reader got no Chinese report at
+  // all. The translation is built by copying the English report and replacing
+  // text in place, so ids, URLs and phone numbers carry over structurally.
+  const canonical = { contacts: [{ id: 'c1', value_as_published: 'a@b.com' }], people: [], signals: [], summary: 'Hello' };
+  const errors = validateChineseTranslation({ ...canonical, summary: '你好' }, canonical);
+  assert.deepEqual(errors, []);
+  // A genuine discrepancy is still reported -- it is just no longer fatal.
+  const broken = validateChineseTranslation({ ...canonical, contacts: [] }, canonical);
+  assert.ok(broken.length > 0);
 });
 
 function report(type: 'business_search' | 'company_research' | 'person_research'): PublishedReport {

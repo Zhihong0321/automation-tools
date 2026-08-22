@@ -102,7 +102,7 @@ export function unwrapUrl(value: string): string {
 export function normaliseUrls<T>(value: T): T {
   if (typeof value === 'string') {
     const candidate = unwrapUrl(value);
-    if (candidate === value.trim() || !/^https:\/\//.test(candidate)) return value;
+    if (candidate === value.trim() || !/^https?:\/\//.test(candidate)) return value;
     try { new URL(candidate); } catch { return value; }
     return candidate as unknown as T;
   }
@@ -747,12 +747,20 @@ async function runJob(type: string, payload: Record<string, unknown>, timeoutMs:
  * `derived`; that is arithmetic, not evidence, so it never enters the ledger.
  */
 function messengerContact(row: Record<string, unknown>, purpose: string, evidenceUrl: string | null): Record<string, unknown> | null {
-  if (!evidenceUrl || str(row.messenger_source) !== 'detected') return null;
   const link = str(row.messenger_url).trim();
-  if (!link) return null;
+  if (!evidenceUrl || !link) return null;
+  // `detected` means the page published the link; `derived` means fb-recon built
+  // it from the profile URL. The derived one used to be discarded as "arithmetic,
+  // not evidence" -- but it is a working Messenger route to this business, and
+  // deleting a usable contact because of how it was obtained helps nobody. It is
+  // labelled instead, and the label says exactly what it is.
+  const detected = str(row.messenger_source) === 'detected';
   return {
     purpose, value_as_published: link, normalized_value: link,
-    current_status: 'published', evidence_class: 'facebook_page_published',
+    current_status: 'published',
+    evidence_class: detected ? 'facebook_page_published' : 'facebook_link_derived_from_profile',
+    evidence_strength: detected ? 'direct_page' : 'domain_only',
+    derived: !detected,
     evidence_url: evidenceUrl, _round: 'round03',
   };
 }
@@ -770,16 +778,30 @@ export function facebookLedgerRows(page: Record<string, unknown>, discovered: Re
   const people: Record<string, unknown>[] = [];
   const signals: Record<string, unknown>[] = [];
   const gaps: string[] = [];
-  const pageUrl = directUrl(page.facebook_url);
-  if (!pageUrl || !FB_TRUSTED.has(str(page.confidence))) return { contacts, people, signals, gaps, pageUrl: null };
+  const pageUrl = classifyEvidence(page.facebook_url).url;
+  if (!pageUrl) return { contacts, people, signals, gaps, pageUrl: null };
+  // Confidence grades the rows; it does not decide whether they exist. This used
+  // to return empty for a `weak` match, so a page the crawler found -- with its
+  // phone, email, Messenger link, follower count and every person on it -- was
+  // thrown away wholesale because the match was not certain. A `weak` match that
+  // is really this company is a real finding, and whether to believe it is the
+  // reader's call, not this function's.
+  const confidence = str(page.confidence) || 'weak';
+  const confirmed = FB_TRUSTED.has(confidence);
+  const fbStrength: EvidenceStrength = confirmed ? 'direct_page' : 'domain_only';
+  const fbClass = confirmed ? 'facebook_page' : 'facebook_page_unconfirmed_match';
+  if (!confirmed) {
+    gaps.push('Facebook page match is confidence "' + confidence + '": these rows may belong to a different business.');
+  }
 
   const contact = (purpose: string, value: unknown): void => {
     const raw = str(value).trim();
     if (!raw) return;
     contacts.push({
       purpose, value_as_published: raw, normalized_value: raw,
-      current_status: 'published', evidence_class: 'facebook_page',
-      evidence_url: pageUrl, _round: 'round03',
+      current_status: 'published', evidence_class: fbClass,
+      evidence_url: pageUrl, evidence_strength: fbStrength,
+      facebook_match_confidence: confidence, _round: 'round03',
     });
   };
   contact('Facebook Page phone', page.phone);
@@ -796,7 +818,8 @@ export function facebookLedgerRows(page: Record<string, unknown>, discovered: Re
   if (audience) {
     signals.push({
       date: null, fact: 'Facebook Page shows ' + audience + '.',
-      evidence_class: 'facebook_page', evidence_url: pageUrl,
+      evidence_class: fbClass, evidence_url: pageUrl, evidence_strength: fbStrength,
+      facebook_match_confidence: confidence,
       outreach_use: 'Gauges how active and how public this business is on Facebook.',
       _round: 'round03',
     });
@@ -807,15 +830,17 @@ export function facebookLedgerRows(page: Record<string, unknown>, discovered: Re
     const name = str(person.name).trim();
     const role = str(person.role).trim();
     if (!name) continue;
-    // The ledger requires a stated role. A name without one is a real finding and
-    // a useless ledger row, so it is recorded as a gap rather than dropped in
-    // silence — "nobody found" and "nobody titled" are different answers.
-    if (!role) { gaps.push('Facebook names ' + name + ' with no stated role.'); continue; }
-    const profileUrl = directUrl(person.profile_url);
+    // A named human at this company is a finding whether or not Facebook stated a
+    // title for them. This used to drop them and log a gap; the name is the part
+    // that matters and the missing title is now said out loud on the row itself.
+    const profileUrl = classifyEvidence(person.profile_url).url;
     people.push({
-      name, role,
+      name, role: role || 'Role not stated on Facebook',
+      role_stated: Boolean(role),
       relevance: str(person.source).trim() || null,
       evidence_class: 'facebook_' + (str(person.confidence) || 'weak'),
+      evidence_strength: role ? fbStrength : 'domain_only',
+      facebook_match_confidence: confidence,
       role_evidence_url: companyUrl,
       personal_profile_url: profileUrl,
       _round: 'round03',
@@ -1009,7 +1034,7 @@ async function ask(model: string, prompt: string, timeoutMs: number): Promise<{
 
 /** OpenAI-compatible translation endpoint, isolated from the research gateway. */
 export async function translateChinese(finalReport: Record<string, unknown>): Promise<{
-  translated: Record<string, unknown>; model: string; ms: number;
+  translated: Record<string, unknown>; model: string; ms: number; validation_errors: string[];
 }> {
   const baseUrl = (process.env.TRANSLATION_BASE_URL?.trim() || 'https://e-router.up.railway.app/v1').replace(/\/+$/, '');
   const apiKey = process.env.TRANSLATION_API_KEY?.trim();
@@ -1027,9 +1052,14 @@ export async function translateChinese(finalReport: Record<string, unknown>): Pr
     const texts = await translationResponse(baseUrl, apiKey, model, batch.map((entry) => entry.text));
     batch.forEach((entry, index) => putTranslation(translated, entry.path, texts[index]!));
   }
+  // A validation failure used to throw, which meant one bad field destroyed the
+  // whole Chinese report and the reader got nothing. The translation is built by
+  // copying the English report and replacing text in place, so every id, URL,
+  // phone number and email is already carried over structurally -- a validation
+  // error flags a discrepancy worth knowing about, not a document worth binning.
+  // So it ships, and it ships carrying the list of what did not check out.
   const errors = validateChineseTranslation(translated, finalReport);
-  if (errors.length) throw new Error('translation validation failed: ' + errors.join('; '));
-  return { translated, model, ms: Date.now() - started };
+  return { translated, model, ms: Date.now() - started, validation_errors: errors };
 }
 
 async function runBusinessSearch(publicId: string, reportId: string, request: Record<string, unknown>): Promise<void> {
@@ -1144,7 +1174,15 @@ async function runCompanyResearch(
   const triggerAutoPersonResearch = async (): Promise<void> => {
     if (autoPersonResearch) return;
     const topPerson = highestRankedPerson(company, parsedForLedger);
-    if (!topPerson) return;
+    if (!topPerson) {
+      // Say so. This used to return in silence, so a company report simply had no
+      // VIP brief and nothing anywhere explained why.
+      autoPersonResearch = {
+        selection_rule: 'company_report_p01',
+        not_started: 'No person had been validated at the time the people audit finished, so there was no P01 to research.',
+      };
+      return;
+    }
     try {
       const child = await startAutoPersonResearch(publicId, company, topPerson, companyRequest);
       autoPersonResearch = {
@@ -1232,7 +1270,25 @@ async function runCompanyResearch(
       if (r4Final && !fidelityErrors.length) {
         finalReport = { ...r4Final, synthesis_mode: 'gemini_validated' };
         produced += 1;
-      } else failures.push('Final synthesis rejected: ' + fidelityErrors.join(', ') + '.');
+      } else {
+        // The rows stay canonical -- an integrity failure means the model altered
+        // the record, and the ledger is what we trust. But its PROSE is not the
+        // record, and deleting the summary as collateral left the reader with a
+        // wall of rows and no reading of them. Keep it, labelled unverified,
+        // beside the errors that made it unverified.
+        if (r4Final) {
+          finalReport = {
+            ...finalReport,
+            summary: r4Final.summary ?? null,
+            outreach_angles: r4Final.outreach_angles ?? [],
+            synthesis_mode: 'validated_ledger_with_unverified_summary',
+            synthesis_warning: 'Rows below are the validated ledger. The summary and outreach angles come from a synthesis that failed fidelity checks and are unverified: '
+              + fidelityErrors.join('; '),
+            synthesis_fidelity_errors: fidelityErrors,
+          };
+        }
+        failures.push('Final synthesis rejected: ' + fidelityErrors.join(', ') + '.');
+      }
       r4Artifact = { ...r4, fidelity_errors: fidelityErrors, fallback_used: fidelityErrors.length > 0 };
       await db.saveRound(reportId, 'round04', r4Artifact, fidelityErrors.length ? 'rejected_fallback_used' : 'completed', { model: r4.model, engine: r4.engine, ms: r4.ms });
     } catch (err) {
@@ -1245,8 +1301,15 @@ async function runCompanyResearch(
     try {
       const cn = await translateChinese(finalReport);
       await db.saveTranslation(reportId, cn.translated, {
-        language: 'zh-CN', model: cn.model, ms: cn.ms, status: 'completed',
+        language: 'zh-CN', model: cn.model, ms: cn.ms,
+        status: cn.validation_errors.length ? 'completed_with_discrepancies' : 'completed',
+        ...(cn.validation_errors.length ? { validation_errors: cn.validation_errors } : {}),
       });
+      // Publishing an imperfect translation is not the same as publishing a clean
+      // one, so the report says so -- but the Chinese text is delivered either way.
+      if (cn.validation_errors.length) {
+        failures.push('Chinese translation published with discrepancies: ' + cn.validation_errors.join('; '));
+      }
     } catch (err) {
       // Do not silently label an English-only dossier as bilingual. The English
       // evidence report stays publishable, but callers receive a visible gap and
@@ -1315,8 +1378,24 @@ async function runPersonResearch(
       // object -- not the raw one, and not nothing.
       const personFinal = synthesis.parsed ? normaliseUrls(synthesis.parsed) : null;
       const fidelityErrors = personFinal ? validatePersonFinal(personFinal, ledger) : [synthesis.parse_error ?? 'invalid final output'];
-      if (personFinal && !fidelityErrors.length) finalReport = { ...personFinal, synthesis_mode: 'chatgpt_validated' };
-      else hadFailure = true;
+      if (personFinal && !fidelityErrors.length) {
+        finalReport = { ...personFinal, synthesis_mode: 'chatgpt_validated' };
+      } else {
+        hadFailure = true;
+        // Same as the company report: keep the validated rows, keep the prose,
+        // and say which of the two is unverified rather than binning the prose.
+        if (personFinal) {
+          finalReport = {
+            ...finalReport,
+            summary: personFinal.summary ?? null,
+            research_angles: personFinal.research_angles ?? [],
+            synthesis_mode: 'validated_ledger_with_unverified_summary',
+            synthesis_warning: 'Facts and contacts below are the validated ledger. The summary and research angles come from a synthesis that failed fidelity checks and are unverified: '
+              + fidelityErrors.join('; '),
+            synthesis_fidelity_errors: fidelityErrors,
+          };
+        }
+      }
       synthesisMetadata = { status: fidelityErrors.length ? 'rejected_fallback_used' : 'completed', model: synthesis.model, engine: synthesis.engine, ms: synthesis.ms, fidelity_errors: fidelityErrors };
     } catch (err) {
       hadFailure = true;
