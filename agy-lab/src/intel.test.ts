@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLedger, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, publishOutcome, validateChineseTranslation, validateFinal, validatePersonFinal } from './intel.ts';
+import { buildLedger, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, publishOutcome, round01Prompt, seniorityScore, validateChineseTranslation, validateFinal, validatePersonFinal } from './intel.ts';
 import { companyPage, personPage, searchPage } from './reportui.ts';
 import type { PublishedReport } from './reportdb.ts';
 
@@ -149,6 +149,51 @@ test('automatic VIP selection uses the company report P01 person', () => {
   }]);
   assert.equal(selected?.name, 'Founder One');
   assert.equal(selected?.role, 'Founder & CEO');
+});
+
+test('one person listed under several titles is one person, at their most senior title', () => {
+  // The Eternalgy report carried "Gan Lai Soon" three times because the key was
+  // name+role and the rounds transcribed the title three ways.
+  const ledger = buildLedger({ id: '807', name: 'Eternalgy Sdn Bhd' }, [{
+    people: [
+      { name: 'Gan Lai Soon', role: 'Director', role_url: 'https://myhijau.my/listing/eternalgy' },
+      { name: 'Gan Lai Soon', role: 'CEO & Founder; Director', role_url: 'https://goldenbullaward.com/winners/eternalgy' },
+      { name: 'Gan Lai Soon', role: 'CEO & Founder / Director', role_url: 'https://example.com/award' },
+      { name: 'Adam Hafiz', role: 'Solar PV Designer', role_url: 'https://linkedin.com/in/adam' },
+    ],
+  }]);
+  const people = ledger.people as Array<Record<string, unknown>>;
+  assert.equal(people.filter((p) => p.name === 'Gan Lai Soon').length, 1);
+  assert.equal(people[0]!.name, 'Gan Lai Soon');
+  assert.equal(people[0]!.role, 'CEO & Founder; Director');
+  // Nothing sourced is discarded -- the other transcriptions are kept beside it.
+  assert.ok((people[0]!.also_described_as as string[]).includes('Director'));
+});
+
+test('P01 is the most senior person, not the first one mentioned', () => {
+  const selected = highestRankedPerson({ id: '9', name: 'Example Solar' }, [{
+    people: [
+      { name: 'Junior Ops', role: 'Site Manager', role_url: 'https://example.com/team/ops' },
+      { name: 'Tech Person', role: 'Technical Officer', role_url: 'https://example.com/team/tech' },
+      { name: 'The Boss', role: 'Managing Director', role_url: 'https://example.com/team/md' },
+    ],
+  }]);
+  assert.equal(selected?.name, 'The Boss');
+});
+
+test('seniority ranks a chief executive above a manager above an engineer', () => {
+  assert.ok(seniorityScore('CEO & Founder') > seniorityScore('General Manager'));
+  assert.ok(seniorityScore('General Manager') > seniorityScore('Lead Electrical Engineer'));
+  // Punctuation and spacing must not change the reading.
+  assert.equal(seniorityScore('CEO & Founder; Director'), seniorityScore('CEO / Founder'));
+});
+
+test('round 01 forbids the shell, which is what denied it permission', () => {
+  // A launchd worker has nobody to approve a shell command, so agy must be told
+  // to use its own URL reader instead of choosing curl and killing the round.
+  const prompt = round01Prompt({ id: '1', name: 'Example Solar', website: 'https://example.com' });
+  assert.match(prompt, /read_url_content/);
+  assert.match(prompt, /Never use the shell, terminal, bash, curl or wget/);
 });
 
 function report(type: 'business_search' | 'company_research' | 'person_research'): PublishedReport {

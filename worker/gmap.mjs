@@ -152,9 +152,17 @@ const EXTRACT = `(() => {
     const parts = catAddr ? catAddr.split(/\s*\u00b7\s*/).map((s) => s.trim()).filter(Boolean) : [];
 
     const phone = /(\\+?\\d[\\d\\s-]{6,}\\d)/.exec(text.replace(/\\(\\d[\\d,]*\\)/g, ''));
-    const site = [...card.querySelectorAll('a[href]')].find(
-      (a) => !/google\\.[a-z.]+\\/maps|^\\/maps/.test(a.href) && /^https?:/.test(a.href),
-    );
+    // A business's own website is never on a Google host. The old test ruled out
+    // /maps only, so the "search Google for X" link -- which Maps renders inside
+    // cards that have no website at all -- passed as the website and was carried
+    // into company research as if it were the company's homepage. Five of the ten
+    // rows in the 22 Aug Taman Molek scan were exactly that.
+    const site = [...card.querySelectorAll('a[href]')].find((a) => {
+      if (!/^https?:/.test(a.href)) return false;
+      let host = '';
+      try { host = new URL(a.href).hostname.toLowerCase(); } catch (err) { return false; }
+      return !/(^|\\.)google\\.[a-z.]+$/.test(host) && !/(^|\\.)goo\\.gl$/.test(host);
+    });
 
     return {
       name: link?.getAttribute('aria-label') || lines[0] || null,

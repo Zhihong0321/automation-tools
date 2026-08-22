@@ -108,6 +108,50 @@ function collectContacts(sources: Record<string, unknown>[]): Record<string, unk
   return [...found.values()].slice(0, 24);
 }
 
+/**
+ * Seniority, for choosing P01.
+ *
+ * `people[0]` is the person the pipeline sends to VIP research, so the order of
+ * this list is a decision, not a presentation detail. It used to be insertion
+ * order -- whoever Round 01 happened to mention first -- which was right on the
+ * Eternalgy report only by luck.
+ *
+ * Matched longest-title-first so "chief executive" is not scored by the "chief"
+ * of a lesser title, and against a spaced, punctuation-free string so
+ * "CEO & Founder; Director" and "CEO / Founder" reduce to the same thing.
+ */
+const SENIORITY: Array<[RegExp, number]> = [
+  [/\bchief executive|\bceo\b|\bmanaging director|\bgroup managing/, 100],
+  [/\bfounder|\bco founder|\bproprietor|\bowner\b/, 95],
+  [/\bchairman|\bchairperson|\bpresident\b/, 90],
+  [/\bchief \w+ officer|\bcto\b|\bcfo\b|\bcoo\b|\bcmo\b/, 85],
+  [/\bdirector\b|\bpartner\b/, 75],
+  [/\bgeneral manager|\bhead of\b|\bvice president|\bvp\b/, 65],
+  [/\bmanager\b|\blead\b|\bprincipal\b/, 45],
+  [/\bengineer\b|\bofficer\b|\bexecutive\b|\bdesigner\b/, 25],
+];
+
+export function seniorityScore(role: string): number {
+  const flat = ' ' + role.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() + ' ';
+  for (const [pattern, score] of SENIORITY) if (pattern.test(flat)) return score;
+  return 10;
+}
+
+/** A person is one human, however many ways the rounds spelled their title. */
+function personKey(name: string): string {
+  return name.toLowerCase().normalize('NFKD').replace(/[^a-z\s]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * One row per human, ranked by seniority.
+ *
+ * Keyed on name alone. The old key was name+role, so the Eternalgy report
+ * carried "Gan Lai Soon" three times -- as "CEO & Founder; Director", as
+ * "CEO & Founder / Director" and as "Director" -- three rows, one person, and a
+ * P01 choice that was really a choice of transcription. When the same person
+ * arrives twice, the more senior title and the better-classified evidence win,
+ * and the alternate titles are kept so nothing sourced is thrown away.
+ */
 function collectPeople(sources: Record<string, unknown>[]): Record<string, unknown>[] {
   const found = new Map<string, Record<string, unknown>>();
   for (const source of sources) {
@@ -116,19 +160,42 @@ function collectPeople(sources: Record<string, unknown>[]): Record<string, unkno
       const name = first(row, ['name']);
       const role = first(row, ['current_role', 'role', 'position']);
       if (!evidence || !name || !role) continue;
-      const key = name.toLowerCase() + '|' + role.toLowerCase();
-      if (!found.has(key)) found.set(key, {
-        id: id('person', [name, role]), name, role,
-        relevance: first(row, ['relevance', 'why_relevant', 'outreach_relevance']),
-        evidence_class: first(row, ['evidence_class', 'source_type']) || 'unclassified',
-        role_url: evidence,
-        personal_profile_url: directUrl(row.personal_profile_url) ?? null,
-        source_date: row.source_date ?? row.visible_source_date ?? null,
-        introduced_by: first(row, ['introduced_by', '_round']) || null,
-      });
+      const key = personKey(name);
+      const existing = found.get(key);
+      if (!existing) {
+        found.set(key, {
+          id: id('person', [name, role]), name, role,
+          relevance: first(row, ['relevance', 'why_relevant', 'outreach_relevance']),
+          evidence_class: first(row, ['evidence_class', 'source_type']) || 'unclassified',
+          role_url: evidence,
+          personal_profile_url: directUrl(row.personal_profile_url) ?? null,
+          source_date: row.source_date ?? row.visible_source_date ?? null,
+          introduced_by: first(row, ['introduced_by', '_round']) || null,
+          also_described_as: [] as string[],
+          seniority: seniorityScore(role),
+        });
+        continue;
+      }
+      // A profile URL found on the second sighting is still a profile URL.
+      if (!existing.personal_profile_url) existing.personal_profile_url = directUrl(row.personal_profile_url) ?? null;
+      const alts = existing.also_described_as as string[];
+      const promote = seniorityScore(role) > num(existing.seniority, 0);
+      // Whichever title loses goes to `also_described_as` -- including the one
+      // being displaced, which is the half that is easy to drop on the floor.
+      const demoted = promote ? String(existing.role) : role;
+      if (promote) {
+        existing.role = role;
+        existing.seniority = seniorityScore(role);
+        existing.role_url = evidence;
+        existing.evidence_class = first(row, ['evidence_class', 'source_type']) || existing.evidence_class;
+      }
+      const seen = new Set([String(existing.role).toLowerCase(), ...alts.map((r) => r.toLowerCase())]);
+      if (!seen.has(demoted.toLowerCase())) alts.push(demoted);
     }
   }
-  return [...found.values()].slice(0, 16);
+  return [...found.values()]
+    .sort((a, b) => num(b.seniority, 0) - num(a.seniority, 0))
+    .slice(0, 16);
 }
 
 /**
@@ -436,9 +503,29 @@ function companyBaseline(company: Record<string, unknown>): string {
   });
 }
 
-function round01Prompt(company: Record<string, unknown>): string {
+/**
+ * How a research round is allowed to fetch a page.
+ *
+ * `agy` can read a URL two ways: its built-in `read_url_content` tool, which needs
+ * no approval, or a shell command, which does. A worker started by launchd has
+ * nobody at the keyboard, so a shell request is auto-denied and the whole round
+ * dies with "user denied permission to run command" -- that single line accounted
+ * for most of the failed Round 01s in the report history.
+ *
+ * The prompt used to leave the method open, so the model picked one at random and
+ * lost the coin flip more often than not. Naming the tool is what makes the round
+ * deterministic. The alternative fix, --dangerously-skip-permissions, hands an
+ * unrestricted shell to a model on a home network and is not worth it to read a
+ * company's About page.
+ */
+const FETCH_POLICY = 'Fetch every page with your built-in URL reading tool (read_url_content). '
+  + 'Never use the shell, terminal, bash, curl or wget to fetch a page: a shell command here requires '
+  + 'an interactive approval that nobody can give, so the attempt is denied and this entire round fails.';
+
+export function round01Prompt(company: Record<string, unknown>): string {
   return `You are Round 01 of a business lead-enrichment test. Research this exact company as of ${new Date().toISOString().slice(0, 10)}.
 IMMUTABLE GOOGLE MAPS INPUT: ${companyBaseline(company)}
+${FETCH_POLICY}
 Find complete public company contacts, verified decision-relevant people, and separately retain named people who need verification. Search these sources separately: SSM/e-Info, CTOS/CreditScan, MyHIJAU, SEDA, CIDB, Maukerja, Hiredly, Ricebowl, JobStreet, Jora, LinkedIn company and people pages, official team/careers/testimonial pages, and reputable award, association, tender and news pages.
 Rules: contacts, people and signals require a raw full https:// direct evidence URL; company pages are first_party; do not infer emails/profiles/dates; no negative claims from search absence; do not explain conflicts without evidence; source date is null unless visibly published. Put a person in people only when their current role has direct URL evidence. Put a person in candidate_people when a named public source identifies them but that direct role evidence is missing; provide source_name, and source_url when known. Candidates are leads to verify, not confirmed roles.
 Return exactly one compact JSON object in one fenced code block with arrays contacts, people, candidate_people, signals, conflicts_and_unknowns. Contact fields: purpose,value_as_published,normalized_value,current_status,evidence_class,evidence_url,source_date. People: name,current_role,relevance,evidence_class,role_evidence_url,personal_profile_url,source_date. Candidate people: name,current_role,source_name,source_url,relevance,verification_note. Signals: date,fact,evidence_class,evidence_url,outreach_use. Max 20 contacts, 12 people, 24 candidate_people, 10 signals. No prose outside JSON.`;
@@ -720,6 +807,7 @@ function personDiscoveryPrompt(company: Record<string, unknown>, person: Record<
   return `You are researching a confirmed business leader for a VIP qualification brief as of ${new Date().toISOString().slice(0, 10)}.
 TARGET BASELINE: ${personBaseline(company, person)}
 ${privateHint}
+${FETCH_POLICY}
 Research public professional business information only: the current role, public company/board affiliations, attributable interviews or talks, and dated business signals relevant to a commercial or partnership conversation.
 Never collect or return home address, non-business phone, family, private social accounts, age, ethnicity, religion, health, political views, private wealth, breach data, data-broker records, or personal contact details. Do not infer any fact, email, profile, title, date or affiliation.
 Every retained item requires a raw full https:// direct source URL. Company-controlled pages are first_party; independent issuer/news pages are independent; public professional platforms are social_platform. Search snippets and bare homepages are not evidence.

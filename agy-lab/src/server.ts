@@ -20,6 +20,7 @@ import * as jobs from './jobs.ts';
 import * as queue from './queue.ts';
 import * as log from './logstore.ts';
 import * as intel from './intel.ts';
+import * as reportdb from './reportdb.ts';
 import { page } from './ui.ts';
 import { page as docsPage } from './docs.ts';
 import { document as openApiDocument } from './openapi.ts';
@@ -397,11 +398,27 @@ server.on('error', (err: NodeJS.ErrnoException) => {
   process.exit(1);
 });
 
+/**
+ * Nothing survives a restart mid-run, so say so instead of leaving the report at
+ * `running` forever. See reportdb.reapAbandoned -- the restart that stranded
+ * these runs is the same restart that gets here.
+ */
+function reapAbandonedRuns(): void {
+  if (!reportdb.configured()) return;
+  void reportdb.reapAbandoned()
+    .then((n) => { if (n) console.log('  reaped ' + n + ' abandoned run(s) left by a restart'); })
+    .catch((err: Error) => console.warn('  could not reap abandoned runs: ' + err.message));
+}
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log('agy-lab listening on :' + PORT);
   console.log('  HOME     ' + agy.HOME);
   console.log('  agy      ' + (fs.existsSync(agy.BIN) ? agy.BIN : 'not installed yet - POST /api/install'));
   console.log('  appData  ' + agy.APP_DATA);
+  reapAbandonedRuns();
+  // And again on an interval, for a run whose owner died without taking the
+  // process with it. unref so this timer never holds the process open.
+  setInterval(reapAbandonedRuns, 15 * 60_000).unref();
 });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

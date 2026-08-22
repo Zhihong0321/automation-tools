@@ -226,6 +226,40 @@ export async function updateReport(publicId: string, patch: {
   return out.rows[0];
 }
 
+/**
+ * Mark abandoned runs failed.
+ *
+ * A research run lives in this process. When the container restarts mid-run --
+ * a deploy, an OOM, the 502s the workers logged on 22 Aug -- nothing is left to
+ * finish the work or to write a terminal status, so the report sits at `running`
+ * with `error: null` forever. Report uWB08Id1cdfIaqskF8VB did exactly that:
+ * round 01 failed at 04:36 and two hours later it still read `running`.
+ *
+ * That breaks the documented contract. Callers are told to poll `api_url` until
+ * the status is completed, partial or failed; a run nothing will ever finish
+ * never gives them one, so they poll until they give up.
+ *
+ * Called at boot (the restart that stranded them is the same restart that runs
+ * this) and on an interval, for a run whose owner died without the process
+ * going down with it. `updated_at` is the liveness signal: every round writes
+ * one, so a run still working never looks stale.
+ */
+export async function reapAbandoned(staleMinutes = 45): Promise<number> {
+  await migrate();
+  const out = await sql<{ public_id: string }>(
+    `update published_report
+        set status = 'failed',
+            error = 'This run was abandoned before it finished, most likely because the service restarted while it was working. Start it again.',
+            completed_at = now(),
+            updated_at = now()
+      where status in ('queued','running')
+        and updated_at < now() - ($1 || ' minutes')::interval
+      returning public_id`,
+    [String(Math.max(1, Math.floor(staleMinutes)))],
+  );
+  return out.rowCount ?? 0;
+}
+
 export async function getReport(publicId: string): Promise<PublishedReport | null> {
   await migrate();
   const out = await sql<PublishedReport>('select * from published_report where public_id = $1', [publicId]);
