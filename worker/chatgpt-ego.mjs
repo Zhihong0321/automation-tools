@@ -35,23 +35,30 @@ const PATH_WITH_LOCAL = `${process.env.HOME}/.local/bin:${process.env.PATH ?? ''
 // on the same stream. A sentinel makes our one result line unambiguous.
 const MARK = '@@EGO_RESULT@@';
 
-// A task space inherits whatever browser profile is ACTIVE in ego lite when it is
-// created, and the profile cannot be chosen after the fact — a `profileName` /
-// `profileId` option is accepted and silently ignored. So a space made under the
-// wrong profile has the wrong cookie jar permanently, and the only fix is a space
-// created under the right one. CGPT_SPACE pins an existing space by numeric id for
-// exactly that case; a digit-only string resolves as an id, anything else as a name.
+// A task space is bound to a browser profile when it is created, and the profile
+// IS choosable — `ego.createTaskSpace(name, profileId)` takes it as a positional
+// second argument and honours it. What does not honour it is the convenience
+// wrapper `useOrCreateTaskSpace(nameOrId)`, which takes one argument and creates
+// on whatever profile is default; passing it a `{ profileId }` object looks like
+// it is being ignored, but the object was never a parameter of that function.
+// (This file previously recorded the opposite as fact and built the registry
+// around it. It was wrong; `ego.listProfiles()` and `ego.createTaskSpace` are the
+// real surface. Verified: createTaskSpace('x', 'Profile 2') -> ZhiHong 三专.)
+//
+// So a space made under the wrong profile still has the wrong cookie jar, but it
+// is no longer unfixable: create it on the right profile instead of adopting a
+// default one. CGPT_SPACE still pins an existing space by numeric id; a digit-only
+// string resolves as an id, anything else as a name.
 const REGISTRY = `${process.env.HOME}/.gmap-worker/spaces.json`;
 
 /**
  * Resolve a session id to a task space.
  *
- * A space inherits whatever browser profile is DEFAULT in ego lite at the moment
- * it is created, and the profile cannot be set afterwards — `profileId` /
- * `profileName` are accepted and silently ignored by both `useOrCreateTaskSpace`
- * and `newTaskSpace`. So a space is the only durable handle on "which account",
- * and its numeric id has to be recorded when it is made under the right profile.
- * That is what the registry is: session id -> space, written once per account.
+ * The registry is session id -> { space, profile, profileId }. `space` is the
+ * durable name, `profile` is the display name the guard checks, and `profileId`
+ * ("Profile 2", "Default", ...) is what `ego.createTaskSpace` needs to put a NEW
+ * space on the right account. With profileId present a missing space is created
+ * correctly; without it, the old behaviour stands and a miss fails the guard.
  *
  * PREFER A NAME OVER A NUMERIC ID. Space ids do not survive a browser restart:
  * after the mini rebooted, listTaskSpaces() came back empty and the id 12 this
@@ -66,17 +73,71 @@ const REGISTRY = `${process.env.HOME}/.gmap-worker/spaces.json`;
  * A miss in the registry is still an error rather than a default.
  */
 function spaceFor(id, override) {
-  if (override) return typeof override === 'object' ? override : { space: override, profile: null };
-  if (process.env.CGPT_SPACE) return { space: Number(process.env.CGPT_SPACE), profile: process.env.CGPT_PROFILE ?? null };
+  if (override) return typeof override === 'object' ? override : { space: override, profile: null, profileId: null };
+  if (process.env.CGPT_SPACE) {
+    return {
+      space: Number(process.env.CGPT_SPACE),
+      profile: process.env.CGPT_PROFILE ?? null,
+      profileId: process.env.CGPT_PROFILE_ID ?? null,
+    };
+  }
   try {
     const reg = JSON.parse(readFileSync(REGISTRY, 'utf8'));
     const e = reg[id];
-    if (e !== undefined) return typeof e === 'object' ? e : { space: e, profile: null };
+    if (e !== undefined) {
+      return typeof e === 'object'
+        ? { profileId: null, ...e }
+        : { space: e, profile: null, profileId: null };
+    }
   } catch { /* no registry yet — fall through to the throw */ }
   throw Object.assign(
     new Error(`no task space for session "${id}" — add it to ${REGISTRY}, or pass CGPT_SPACE`),
     { code: 'no_space' },
   );
+}
+
+/**
+ * The browser-side snippet that lands us in the right space on the right account.
+ *
+ * Order matters. Look for the space by name first: if it exists it already has the
+ * account's cookie jar and recreating it would be wrong. Only when it is absent do
+ * we create one, and then we create it ON THE NAMED PROFILE via
+ * `ego.createTaskSpace(name, profileId)` rather than letting the convenience
+ * wrapper adopt whatever profile happens to be default.
+ *
+ * The guard stays, and stays fatal. Creating on the right profile makes the wrong
+ * one much less likely; it does not make verifying it optional, because the
+ * profile is the only thing that identifies which account will answer.
+ */
+function spaceScript({ space, profile, profileId }) {
+  const wanted = typeof space === 'number' ? space : JSON.stringify(space);
+  const create = profileId
+    ? `
+  let task = null;
+  {
+    const existing = (await listTaskSpaces()).find(
+      (x) => x.id === ${wanted} || x.name === ${wanted} || x.taskId === ${wanted});
+    task = existing
+      ? await useOrCreateTaskSpace(existing.id)
+      : await ego.createTaskSpace(${wanted}, ${JSON.stringify(profileId)});
+  }`
+    : `
+  const task = await useOrCreateTaskSpace(${wanted});`;
+
+  const guard = profile
+    ? `
+  {
+    const all = await listTaskSpaces();
+    const found = all.find((x) => x.id === task.id);
+    if (!found || found.profileName !== ${JSON.stringify(profile)}) {
+      emit({ ok: false, code: 'wrong_profile', space: task.id,
+             expected: ${JSON.stringify(profile)}, actual: found ? found.profileName : null });
+      throw new Error('wrong profile');
+    }
+  }`
+    : '';
+
+  return create + guard;
 }
 
 /**
@@ -183,7 +244,7 @@ const readExpr = (b) => "(() => {" +
 `;
 
 function askScript({ id, prompt, space: override, timeoutMs }) {
-  const { space, profile } = spaceFor(id, override);
+  const resolved = spaceFor(id, override);
   return `
 ${READ_SRC}
 const t0 = Date.now();
@@ -193,20 +254,7 @@ const phase = (n) => { phases[n] = Date.now() - mark; mark = Date.now(); };
 const emit = (o) => cliLog(${JSON.stringify(MARK)} + JSON.stringify(o));
 
 try {
-  const task = await useOrCreateTaskSpace(${typeof space === 'number' ? space : JSON.stringify(space)});
-  // A numeric id that no longer exists does NOT fail — a digit-only string falls
-  // back to name matching and CREATES a space on whatever profile is default,
-  // which answers as the wrong account without erroring. The profile is the only
-  // thing that identifies the account, so verify it before typing anything.
-  ${profile ? `{
-    const all = await listTaskSpaces();
-    const found = all.find((x) => x.id === task.id);
-    if (!found || found.profileName !== ${JSON.stringify(profile)}) {
-      emit({ ok: false, code: 'wrong_profile', space: task.id,
-             expected: ${JSON.stringify(profile)}, actual: found ? found.profileName : null });
-      throw new Error('wrong profile');
-    }
-  }` : ''}
+  ${spaceScript(resolved)}
   phase('space');
 
   await openOrReuseTab(${JSON.stringify(TEMP_CHAT_URL)}, { wait: true, timeout: 30 });
@@ -309,25 +357,12 @@ try {
 }
 
 function probeScript({ id, space: override }) {
-  const { space, profile } = spaceFor(id, override);
+  const resolved = spaceFor(id, override);
   return `
 const t0 = Date.now();
 const emit = (o) => cliLog(${JSON.stringify(MARK)} + JSON.stringify(o));
 try {
-  const task = await useOrCreateTaskSpace(${typeof space === 'number' ? space : JSON.stringify(space)});
-  // A numeric id that no longer exists does NOT fail — a digit-only string falls
-  // back to name matching and CREATES a space on whatever profile is default,
-  // which answers as the wrong account without erroring. The profile is the only
-  // thing that identifies the account, so verify it before typing anything.
-  ${profile ? `{
-    const all = await listTaskSpaces();
-    const found = all.find((x) => x.id === task.id);
-    if (!found || found.profileName !== ${JSON.stringify(profile)}) {
-      emit({ ok: false, code: 'wrong_profile', space: task.id,
-             expected: ${JSON.stringify(profile)}, actual: found ? found.profileName : null });
-      throw new Error('wrong profile');
-    }
-  }` : ''}
+  ${spaceScript(resolved)}
   await openOrReuseTab(${JSON.stringify(TEMP_CHAT_URL)}, { wait: true, timeout: 30 });
   // Sample only after the app hydrates. A load event is not readiness: the marketing
   // shell paints first, and reading signals there reports a signed-in account as
@@ -352,13 +387,22 @@ try {
 
 /** Hand the space to the user so they can sign in by hand, once. */
 function loginScript({ id }) {
-  const space = spaceFor(id);
+  // `spaceFor` returns a record, and this used to hand the whole record to
+  // useOrCreateTaskSpace as if it were a name -- so login opened a space called
+  // `[object Object]`/the JSON text rather than the session's own. It now takes
+  // the same path as ask and probe.
+  //
+  // The guard is deliberately dropped here and only here: login is what you run
+  // when the space does not exist or is signed out, so refusing to proceed until
+  // the account checks out would make it impossible to ever get the account in.
+  // Creating on `profileId` is what puts the sign-in in the right cookie jar.
+  const resolved = spaceFor(id);
   return `
 const emit = (o) => cliLog(${JSON.stringify(MARK)} + JSON.stringify(o));
-const task = await useOrCreateTaskSpace(${JSON.stringify(space)});
+${spaceScript({ ...resolved, profile: null })}
 await openOrReuseTab('https://chatgpt.com/', { wait: true, timeout: 30 });
 const r = await handOffTaskSpace(task.id);
-emit({ ok: true, handedOff: r.done, space: task.id,
+emit({ ok: true, handedOff: r.done, space: task.id, profile: ${JSON.stringify(resolved.profile ?? null)},
        next: 'sign in to ChatGPT in that space, then run: probe' });
 `;
 }

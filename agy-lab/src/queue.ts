@@ -79,8 +79,11 @@ const laneConcurrency = (lane: Lane): number =>
     : lane === 'mini'
       // ego lite runs each account in its own task space, so the mini's ceiling is
       // accounts, not browsers — unlike the container, where it is literally one
-      // Chrome. Two is what has actually been measured running side by side.
-      ? Math.max(1, int('MINI_MAX_CONCURRENT', 2))
+      // Chrome. Three is the number of ChatGPT accounts actually signed in on that
+      // machine and claimed by a lane of its own: Zhihong PRO, 三专, gan gemini.
+      // Raise this only alongside a fourth lane in the worker's LANES; a width
+      // wider than the lanes behind it just moves the queue one hop later.
+      ? Math.max(1, int('MINI_MAX_CONCURRENT', 3))
       : Math.max(1, int('MAX_OPEN_BROWSERS', 1));
 
 interface LaneState {

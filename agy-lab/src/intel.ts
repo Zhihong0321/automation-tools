@@ -1259,21 +1259,46 @@ async function runCompanyResearch(
 
     const r1Context = parsedForLedger[0] ?? { contacts: [], people: [], signals: [] };
     const round02: Record<string, unknown> = { calls: {} };
-    for (const kind of ['contacts', 'people', 'signals'] as const) {
+    const KINDS = ['contacts', 'people', 'signals'] as const;
+    // The three audits read the same Round 01 context and write nothing the other
+    // two read: they were serial only because they were written as a loop. They
+    // now go out together.
+    //
+    // This is safe now and was not before. The mini runs one ChatGPT lane per
+    // signed-in account -- three of them -- so three calls land on three accounts
+    // in three ego lite task spaces. Sent concurrently into a single lane they
+    // would have queued, and queue.ts refuses on ESTIMATED WAIT rather than making
+    // a caller sit: the third call would have come back 429 instead of slow. Width
+    // has to exist before fan-out is an improvement.
+    const settled = await Promise.all(KINDS.map(async (kind) => {
       try {
-        const call = await ask('chatgpt', round02Prompt(kind, company, r1Context), 300_000);
-        object(round02.calls)[kind] = call;
-        if (call.parsed) {
-          for (const row of [...rows(call.parsed[kind]), ...(kind === 'people' ? rows(call.parsed.candidate_people) : [])]) row._round = 'round02';
-          parsedForLedger.push(call.parsed);
-          produced += 1;
-        } else failures.push(call.parse_error ?? 'Round 02 ' + kind + ' returned no JSON object.');
+        return { kind, call: await ask('chatgpt', round02Prompt(kind, company, r1Context), 300_000) };
       } catch (err) {
-        failures.push((err as Error).message ?? String(err));
-        object(round02.calls)[kind] = { error: (err as Error).message };
+        return { kind, error: err as Error };
       }
-      if (kind === 'people') await triggerAutoPersonResearch();
+    }));
+    // Collected in KINDS order, not completion order. `buildLedger` dedupes across
+    // sources and first-seen wins, so letting whichever call finished first land
+    // first would make the published rows depend on network timing.
+    for (const outcome of settled) {
+      const { kind } = outcome;
+      if (outcome.error) {
+        failures.push(outcome.error.message ?? String(outcome.error));
+        object(round02.calls)[kind] = { error: outcome.error.message };
+        continue;
+      }
+      const call = outcome.call;
+      object(round02.calls)[kind] = call;
+      if (call.parsed) {
+        for (const row of [...rows(call.parsed[kind]), ...(kind === 'people' ? rows(call.parsed.candidate_people) : [])]) row._round = 'round02';
+        parsedForLedger.push(call.parsed);
+        produced += 1;
+      } else failures.push(call.parse_error ?? 'Round 02 ' + kind + ' returned no JSON object.');
     }
+    // Was triggered the moment the people audit landed, to overlap the signals
+    // call. All three now finish together, so there is no longer an earlier
+    // moment to seize -- it still starts before the company report completes.
+    await triggerAutoPersonResearch();
     const r2Ok = Object.values(object(round02.calls)).some((v) => object(v).parsed);
     await db.saveRound(reportId, 'round02', round02, r2Ok ? (failures.length ? 'partial' : 'completed') : 'failed', { model: 'chatgpt', split_calls: 3 });
 
