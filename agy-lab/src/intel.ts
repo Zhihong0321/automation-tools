@@ -401,10 +401,180 @@ Focus only on ${kind}. Confirm, correct, reject and add missed evidence. For con
 Return exactly one compact JSON object inside one fenced code block with ${schemas[kind]}. Every URL must be a literal raw full https:// string inside JSON, never a Markdown link label. No inferred emails or personal URLs. Search snippets and crawl dates are not evidence. Use null when unknown. Max ${kind === 'contacts' ? 20 : kind === 'people' ? 12 : 10} rows and no prose outside JSON.`;
 }
 
-function round03Prompt(company: Record<string, unknown>): string {
-  return `You are Meta/Muse Round 03 for ${str(company.name)}. First determine whether this exact run can inspect live current Facebook or Instagram pages. Supplied company baseline: ${companyBaseline(company)}
-Return exactly one compact JSON object in a fenced code block: {"access_mode":"live_meta_pages|public_web_only|no_live_access","access_evidence":"...","contacts":[],"people":[],"signals":[],"search_gaps":[]}.
-Only fill evidence arrays when access_mode is live_meta_pages and each row has a directly observed raw https:// Meta evidence URL. Otherwise leave all evidence arrays empty. Never use model memory, snippets, guessed handles or supplied candidate URLs as evidence.`;
+
+// ---------------------------------------------------------------- Round 03
+//
+// Round 03 used to be a Meta/Muse ask: a model was asked whether it could see
+// live Facebook pages and, if it said yes, what was on them. Both halves of that
+// answer came from the same place, so the round could not be audited — and it
+// mostly replied `no_live_access` with empty arrays, which is the honest answer
+// to a question that should never have been put to a model. The muse engine
+// behind it is retired.
+//
+// It is the fb-recon crawler on the mini now. A deterministic read-only browser
+// visits the pages, and every row below carries the facebook.com URL it was read
+// from — the evidence standard the ledger always claimed, now actually met.
+
+// Only a confirmed or likely page match contributes rows. A `weak` match is a
+// plausible page that may belong to a different business, and attaching its phone
+// number to this company is precisely the poisoning this round exists to prevent.
+const FB_TRUSTED = new Set(['confirmed', 'likely']);
+
+async function runJob(type: string, payload: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> {
+  const job = jobs.create(type, payload, timeoutMs);
+  const settled = await jobs.wait(job.id, timeoutMs + 5_000);
+  if (!settled || settled.status !== 'done') throw new Error(settled?.error ?? type + ' did not finish');
+  return object(settled.result);
+}
+
+/**
+ * A Messenger link is a contact point only when the page published one. fb-recon
+ * also *derives* a link from the profile URL for convenience and labels it
+ * `derived`; that is arithmetic, not evidence, so it never enters the ledger.
+ */
+function messengerContact(row: Record<string, unknown>, purpose: string, evidenceUrl: string | null): Record<string, unknown> | null {
+  if (!evidenceUrl || str(row.messenger_source) !== 'detected') return null;
+  const link = str(row.messenger_url).trim();
+  if (!link) return null;
+  return {
+    purpose, value_as_published: link, normalized_value: link,
+    current_status: 'published', evidence_class: 'facebook_page_published',
+    evidence_url: evidenceUrl, _round: 'round03',
+  };
+}
+
+/**
+ * Turn what the crawler saw into ledger rows. Pure on purpose: this is where the
+ * evidence policy is actually enforced, so it has to be provable without a
+ * worker, a queue or a browser in the way.
+ */
+export function facebookLedgerRows(page: Record<string, unknown>, discovered: Record<string, unknown> | null): {
+  contacts: Record<string, unknown>[]; people: Record<string, unknown>[];
+  signals: Record<string, unknown>[]; gaps: string[]; pageUrl: string | null;
+} {
+  const contacts: Record<string, unknown>[] = [];
+  const people: Record<string, unknown>[] = [];
+  const signals: Record<string, unknown>[] = [];
+  const gaps: string[] = [];
+  const pageUrl = directUrl(page.facebook_url);
+  if (!pageUrl || !FB_TRUSTED.has(str(page.confidence))) return { contacts, people, signals, gaps, pageUrl: null };
+
+  const contact = (purpose: string, value: unknown): void => {
+    const raw = str(value).trim();
+    if (!raw) return;
+    contacts.push({
+      purpose, value_as_published: raw, normalized_value: raw,
+      current_status: 'published', evidence_class: 'facebook_page',
+      evidence_url: pageUrl, _round: 'round03',
+    });
+  };
+  contact('Facebook Page phone', page.phone);
+  contact('Facebook Page email', page.email);
+  const pageMessenger = messengerContact(page, 'Messenger — company page', pageUrl);
+  if (pageMessenger) contacts.push(pageMessenger);
+
+  // Followers and reviews are the one thing a Page states about itself that is
+  // worth a signal row: it is what "are they actually active here" looks like.
+  const audience = [
+    str(page.followers).trim() ? str(page.followers).trim() + ' followers' : '',
+    num(page.reviews, 0) > 0 ? String(num(page.reviews, 0)) + ' reviews' : '',
+  ].filter(Boolean).join(' and ');
+  if (audience) {
+    signals.push({
+      date: null, fact: 'Facebook Page shows ' + audience + '.',
+      evidence_class: 'facebook_page', evidence_url: pageUrl,
+      outreach_use: 'Gauges how active and how public this business is on Facebook.',
+      _round: 'round03',
+    });
+  }
+
+  const companyUrl = directUrl(discovered?.company_url) ?? pageUrl;
+  for (const person of rows(discovered?.people)) {
+    const name = str(person.name).trim();
+    const role = str(person.role).trim();
+    if (!name) continue;
+    // The ledger requires a stated role. A name without one is a real finding and
+    // a useless ledger row, so it is recorded as a gap rather than dropped in
+    // silence — "nobody found" and "nobody titled" are different answers.
+    if (!role) { gaps.push('Facebook names ' + name + ' with no stated role.'); continue; }
+    const profileUrl = directUrl(person.profile_url);
+    people.push({
+      name, role,
+      relevance: str(person.source).trim() || null,
+      evidence_class: 'facebook_' + (str(person.confidence) || 'weak'),
+      role_evidence_url: companyUrl,
+      personal_profile_url: profileUrl,
+      _round: 'round03',
+    });
+    const personMessenger = messengerContact(person, 'Messenger — ' + name, profileUrl ?? companyUrl);
+    if (personMessenger) contacts.push(personMessenger);
+  }
+
+  return { contacts, people, signals, gaps, pageUrl };
+}
+
+async function round03Facebook(company: Record<string, unknown>): Promise<{
+  artifact: Record<string, unknown>; parsed: Record<string, unknown> | null; status: string;
+}> {
+  const empty = { contacts: [], people: [], signals: [], search_gaps: [] as string[] };
+  // A type no lane is claiming would leave a job pending until it timed out.
+  // Saying so up front costs the run nothing and reads honestly in the report.
+  if (!jobs.liveTypes().includes('fb.company')) {
+    return {
+      artifact: { access_mode: 'no_live_access', access_evidence: 'No mini worker is claiming fb.company; nothing visited Facebook for this run.', ...empty },
+      parsed: null,
+      status: 'skipped',
+    };
+  }
+
+  const lead = {
+    name: str(company.name), address: str(company.address), phone: str(company.phone),
+    website: str(company.website), category: str(company.category),
+  };
+  const lookup = await runJob('fb.company', { ...lead, timeoutMs: 300_000 }, 300_000);
+  const page = object(lookup.result);
+
+  // Named humans — but only off a page the crawler confirmed. `discover` is the
+  // expensive half of this round, so it never runs against an unconfirmed page.
+  let discovery: Record<string, unknown> | null = null;
+  const gaps: string[] = [];
+  const trusted = directUrl(page.facebook_url) && FB_TRUSTED.has(str(page.confidence));
+  if (trusted && jobs.liveTypes().includes('fb.discover')) {
+    try {
+      discovery = await runJob('fb.discover', { name: lead.name, address: lead.address, timeoutMs: 420_000 }, 420_000);
+    } catch (err) {
+      gaps.push('fb.discover failed: ' + ((err as Error).message ?? String(err)));
+    }
+  } else if (trusted) {
+    gaps.push('No mini worker is claiming fb.discover; people were not searched for.');
+  }
+
+  const built = facebookLedgerRows(page, discovery ? object(discovery.result) : null);
+  if (!built.pageUrl) {
+    return {
+      artifact: {
+        access_mode: 'no_live_access',
+        access_evidence: directUrl(page.facebook_url)
+          ? 'A Facebook page was found, but only at confidence "' + str(page.confidence) + '", which is below the bar for evidence.'
+          : 'No Facebook page for this business could be confirmed.',
+        company_lookup: lookup, ...empty,
+      },
+      parsed: null,
+      status: 'completed',
+    };
+  }
+
+  const searchGaps = [...gaps, ...built.gaps];
+  return {
+    artifact: {
+      access_mode: 'live_facebook_pages',
+      access_evidence: 'fb-recon crawled ' + built.pageUrl + ' read-only at confidence "' + str(page.confidence) + '".',
+      company_lookup: lookup, people_lookup: discovery,
+      contacts: built.contacts, people: built.people, signals: built.signals, search_gaps: searchGaps,
+    },
+    parsed: { access_mode: 'live_facebook_pages', contacts: built.contacts, people: built.people, signals: built.signals },
+    status: 'completed',
+  };
 }
 
 function round04Prompt(ledger: Record<string, unknown>): string {
@@ -582,23 +752,21 @@ async function runCompanyResearch(publicId: string, reportId: string, company: R
     await db.saveRound(reportId, 'round02', round02, r2Ok ? (failures.length ? 'partial' : 'completed') : 'failed', { model: 'chatgpt@mini', split_calls: 3 });
 
     try {
-      const r3 = await ask('meta@mini', round03Prompt(company), 240_000);
-      const access = str(r3.parsed?.access_mode);
-      if (r3.parsed) {
-        // Answering "no live access" is this round doing its job, so it counts
-        // as output; only an unparseable answer is a failure. Neither was
-        // recorded before, which let a round 03 that returned prose leave the
-        // run looking clean.
-        produced += 1;
-        if (access === 'live_meta_pages') {
-          for (const row of [...rows(r3.parsed.contacts), ...rows(r3.parsed.people), ...rows(r3.parsed.signals)]) row._round = 'round03';
-          parsedForLedger.push(r3.parsed);
-        }
-      } else failures.push(r3.parse_error ?? 'Round 03 returned no JSON object.');
-      await db.saveRound(reportId, 'round03', r3, r3.parsed ? 'completed' : 'invalid_output', { model: r3.model, engine: r3.engine, ms: r3.ms, access_mode: access || null });
+      const r3started = Date.now();
+      const r3 = await round03Facebook(company);
+      // Reaching a verdict is this round doing its job, so a confirmed "this
+      // business has no Facebook page" counts as output exactly as a page full of
+      // contacts does. Only a lane that was not there to ask produces nothing.
+      if (r3.status !== 'skipped') produced += 1;
+      if (r3.parsed) parsedForLedger.push(r3.parsed);
+      else if (r3.status === 'skipped') failures.push(str(r3.artifact.access_evidence));
+      await db.saveRound(reportId, 'round03', r3.artifact, r3.status, {
+        model: 'fb.company@mini', engine: 'fb-recon', ms: Date.now() - r3started,
+        access_mode: str(r3.artifact.access_mode) || null,
+      });
     } catch (err) {
       failures.push((err as Error).message ?? String(err));
-      await db.saveRound(reportId, 'round03', { error: (err as Error).message }, 'failed', { model: 'meta@mini' });
+      await db.saveRound(reportId, 'round03', { error: (err as Error).message }, 'failed', { model: 'fb.company@mini' });
     }
 
     const ledger = buildLedger(company, parsedForLedger);

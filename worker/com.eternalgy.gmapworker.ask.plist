@@ -28,9 +28,9 @@
   override a variable already present in the environment. This line is what keeps
   the two lanes from collapsing onto each other.
 
-  PATH carries the nvm bin directory because `opencode` (the muse engine) is
-  installed beside node there, and ~/.local/bin because ego-browser and agy are
-  installed there. A launchd job inherits neither.
+  PATH carries the nvm bin directory because this lane's wrappers are installed
+  beside node there, and ~/.local/bin because ego-browser and agy are installed
+  there. A launchd job inherits neither.
 -->
 <plist version="1.0">
 <dict>
@@ -72,7 +72,7 @@
     <key>WORKER_NAME</key>
     <string>macmini-ask</string>
     <key>WORKER_TYPES</key>
-    <string>chatgpt.ask,chatgpt.probe,meta.ask,meta.probe,muse.ask,muse.probe,agy.ask,agy.probe</string>
+    <string>chatgpt.ask,chatgpt.probe,agy.ask,agy.probe</string>
   </dict>
 </dict>
 </plist>

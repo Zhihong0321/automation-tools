@@ -118,7 +118,9 @@ function defaultSession(kind: sessions.Kind): string {
     throw fail(
       503,
       kind === 'meta'
-        ? 'No Meta AI session exists yet. Sign in on a residential connection and POST the storageState to /api/cgpt/<id>/import with {"kind":"meta"} - the login cannot be driven from this container.'
+        // The engine is retired, so pointing a caller at the import flow would be
+        // sending them to set up something nothing routes to. Say what happened.
+        ? 'The Meta AI engine is retired: the container address is region-blocked and no mini worker claims meta.ask. Use agy or chatgpt, or fb.* for Facebook research.'
         : 'No ChatGPT session exists yet. Create one with POST /api/cgpt, then /login.',
       'no_session',
     );
@@ -166,7 +168,7 @@ export function resolveModel(raw: string): Route {
     const location = pinned ?? defaultLocation('meta');
     if (location === 'mini') {
       if (!miniLive('meta')) {
-        throw fail(503, 'No mini worker is claiming meta.ask right now.', 'engine_unavailable');
+        throw fail(503, 'The Meta AI engine is retired; no mini worker claims meta.ask. Use agy or chatgpt, or fb.* for Facebook research.', 'engine_unavailable');
       }
       const session = rest.join(':').trim() || process.env.MINI_META_DEFAULT_SESSION?.trim() || 'meta-main';
       return { engine: 'meta', model: 'meta:' + session + '@mini', session, location };

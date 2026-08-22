@@ -1,5 +1,12 @@
 # Business intelligence research strategy lab
 
+> **Superseded in part, 22 Aug 2026.** Round 03 is no longer Meta/Muse. Its
+> finding here — `public_web_only`, zero enrichment yield, no way to inspect a live
+> Meta page — is exactly why: that round now runs the read-only `fb.*` crawler on
+> the Mac mini, which visits the pages with a real Facebook session and returns the
+> URL every field was read from. The Meta/Muse engine is removed. Everything below
+> stands as the record of what was measured on 21 Aug, including the prompts.
+
 ## Scope
 
 This is a manual prompt-and-evidence experiment. It does not implement the

@@ -28,21 +28,22 @@ POST /api/jobs/<id>/result                          {ok, result, error}
 | `chatgpt.probe` | `{id}` | whether that account is still signed in |
 | `agy.ask` | `{prompt, tools?, timeoutMs?}` | `agy.mjs` — `agy -p`, ~10s for a one-line answer |
 | `agy.probe` | none | one real model call, so "installed" is never mistaken for "signed in" |
-| `meta.ask` / `muse.ask` | `{prompt, model?, timeoutMs?}` | `muse.mjs` — `opencode run` pinned to muse 1.2, ~3–5s |
-| `meta.probe` / `muse.probe` | none | one real model call, same reasoning as `agy.probe` |
 | `fb.company` | `{name, city?, phone?, website?, address?, category?, budget?}` | `fb.mjs` → `fbw`, an ego lite crawl, 16–55s — 16s and no model call when the deterministic scorer settles it |
 | `fb.person` | `{person, company, city?}` | that person's profile, if it is publicly linked to the company |
 | `fb.discover` | `{name, city?}` | named humans on a company's public surface, 60–120s |
 | `fb.probe` | none | whether ego lite still holds a Facebook session — one page load, no model call |
 
-**`meta.*` is muse now.** Meta AI was never activated on this machine: no ego
-lite profile ever held a `meta.ai` or `facebook.com` cookie, so every route to it
-ended at an interactive Facebook login. `muse.mjs` answers the same model through
-opencode's provider — no browser, no profile, no session to keep signed in — and
-it answers under the `meta.*` names because those are what the deployed gateway
-reaches (`meta@mini` in `GET /v1/models`). The engine changed; the address did
-not. `meta-ego.mjs` is left in the tree unused, with its tests, as the record of
-the browser route.
+**`meta.*` and `muse.*` are gone.** Meta AI was never activated on this machine:
+no ego lite profile ever held a `meta.ai` or `facebook.com` cookie, so every route
+to it ended at an interactive Facebook login. The muse 1.2 stand-in that answered
+under the `meta.*` names through opencode is retired and `muse.mjs` is deleted.
+Nothing here claims those types now, which is exactly how the gateway finds out:
+`meta@mini` stops being listed `ready` by `GET /v1/models`, and a pinned call is
+refused up front rather than queueing a job no lane will take. `meta-ego.mjs` is
+left in the tree unused, with its test, as the record of the browser route.
+
+The Facebook work that Meta was originally wanted for is `fb.*` below — a
+read-only crawler with an evidence trail, not a model asked what it can see.
 
 The cloud gateway reaches these through the queue: `chatgpt@mini` and `agy@mini`
 in `GET /v1/models` are exactly `chatgpt.ask` and `agy.ask`, and an engine is
@@ -57,16 +58,18 @@ See [API.md](../API.md).
 checking in under its own name — so a lane that dies is visible in `GET /api/jobs`
 instead of being covered for by its neighbour still polling.
 
-With `WORKER_TYPES` unset there are two lanes: `<name>` for `ping` and `gmap.scan`,
-and `<name>-ask` for the four wrapper types. Set, it collapses the process to a
-single lane taking exactly those types — which is how this machine actually runs,
-one process per engine:
+With `WORKER_TYPES` unset there are four lanes: `<name>` for `ping` and
+`gmap.scan`, `<name>-ask` for the four wrapper types, `<name>-fb` for `fb.*` and
+`<name>-x` for `x.*`. Set, it collapses the process to a single lane taking
+exactly those types — which is how this machine actually runs, one process per
+engine:
 
 | Process | `WORKER_NAME` | `WORKER_TYPES` | Kept alive by |
 |---|---|---|---|
 | the scan | `$(hostname)` | `ping,gmap.scan` | the LaunchDaemon, at boot |
-| the ask lane | `macmini-ask` | the six wrapper types plus `muse.*` | the LaunchAgent, at login |
+| the ask lane | `macmini-ask` | `chatgpt.ask,chatgpt.probe,agy.ask,agy.probe` | the LaunchAgent, at login |
 | the fb lane | `macmini-fb` | `fb.company,fb.person,fb.discover,fb.probe` | the LaunchAgent, at login |
+| the x lane | `macmini-x` | `x.subject,x.company,x.probe` | the LaunchAgent, at login |
 
 Pinning the daemon matters as much as pinning the wrappers: a claim with no
 `types` asks for **any** job, so an unpinned scan daemon will happily take a

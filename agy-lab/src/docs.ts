@@ -161,7 +161,7 @@ export function body(): string {
     <span class="nav-label">Engines</span>
     <a href="#agy">agy</a>
     <a href="#chatgpt">ChatGPT</a>
-    <a href="#meta">Meta AI</a>
+    <a href="#meta">Meta AI &mdash; retired</a>
     <span class="nav-label">Home worker</span>
     <a href="#jobs">Jobs</a>
     <a href="#social">Social research</a>
@@ -317,8 +317,10 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
   <p>The authenticated route exposes benchmark artifacts. The canonical English report is at
   <code>data.final</code>; the matching Simplified Chinese rendering is at <code>data.final_cn</code>.
   Chinese translation preserves evidence IDs, source URLs, email addresses, phone numbers and published contact values exactly.
-  Raw rounds are at <code>research_run.round01</code> through
-  <code>round04</code>. Only rows with direct HTTPS evidence enter the validated ledger.
+  Raw rounds are at <code>research_run.round01</code> through <code>round04</code>:
+  Gemini discovery, three split ChatGPT audits, the <a href="#social">Facebook crawl</a>,
+  then Gemini synthesis with fidelity validation. Only rows with direct HTTPS evidence
+  enter the validated ledger.
   If final Gemini synthesis changes a validated contact/person set or introduces a new URL,
   it is rejected and <code>synthesis_mode</code> becomes <code>validated_ledger_fallback</code>.</p>
 
@@ -383,13 +385,12 @@ const companyId = search.data.companies[0].id;</code></pre>
     <tbody>
       <tr><td><code>agy</code></td><td>the Antigravity CLI in print mode (<code>agy -p</code>), signed in with a Google account</td><td class="num">11–25 s</td><td><span class="pill">one chunk</span></td></tr>
       <tr><td><code>chatgpt</code></td><td>a signed-in chatgpt.com session in a real Chrome, typed into and read back</td><td class="num">13–15 s</td><td><span class="pill ok">incremental</span></td></tr>
-      <tr><td><code>meta</code></td><td>OpenCode + Muse 1.2 on the Mac mini; currently public-web only when Meta pages require login</td><td class="num">5–45 s</td><td><span class="pill">one chunk</span></td></tr>
     </tbody>
   </table></div>
   <p>Timings are measurements from 2026-08-20, not estimates: one-line answers over the
-  public URL. A 4,751-character multi-line prompt answered in 9.3 s on <code>meta</code> and
-  12.7 s on <code>chatgpt</code> — prompt size costs almost nothing, because the text goes in
-  through one insert rather than keystroke by keystroke.</p>
+  public URL. A 4,751-character multi-line prompt answered in 12.7 s on <code>chatgpt</code>
+  — prompt size costs almost nothing, because the text goes in through one insert rather
+  than keystroke by keystroke.</p>
 </section>
 
 <section id="chat">
@@ -428,9 +429,8 @@ const companyId = search.data.companies[0].id;</code></pre>
       <tr><td><code>agy_lab</code></td><td>Non-standard block: <code>engine</code>, <code>ms</code>, <code>settled</code> (browser engines), <code>ignored</code>.</td></tr>
     </tbody>
   </table></div>
-  <p>Every call to a browser engine starts a new chat — a temporary chat on ChatGPT, a new
-  thread on Meta AI. There is no server-side conversation to continue, so send the history
-  you want considered.</p>
+  <p>Every call to a browser engine starts a new chat — a temporary chat on ChatGPT. There
+  is no server-side conversation to continue, so send the history you want considered.</p>
 </section>
 
 <section id="stream">
@@ -465,19 +465,16 @@ data: [DONE]</code></pre>
       <tr><td><code>chatgpt</code>, <code>openai</code></td><td>the default ChatGPT session</td></tr>
       <tr><td><code>chatgpt:&lt;id&gt;</code></td><td>that ChatGPT session — one per account</td></tr>
       <tr><td><code>gpt-4o</code>, <code>gpt-*</code>, <code>o1*</code>, <code>o3*</code>, <code>o4*</code></td><td>the default ChatGPT session</td></tr>
-      <tr><td><code>meta</code>, <code>metaai</code>, <code>meta.ai</code>, <code>llama-*</code></td><td>the default Meta AI session</td></tr>
-      <tr><td><code>meta:&lt;id&gt;</code></td><td>that Meta AI session</td></tr>
-      <tr><td><code>meta@mini</code>, <code>meta:&lt;id&gt;@mini</code></td><td>Meta AI through the residential Mac mini</td></tr>
       <tr><td><em>empty</em>, <code>auto</code></td><td><code>DEFAULT_MODEL</code>, which is <code>agy</code> unless set</td></tr>
     </tbody>
   </table></div>
-  <p><code>gpt-*</code> and <code>llama-*</code> map to the signed-in accounts because tools hard-code
-  a model id far more often than they let you choose one. A bare <code>chatgpt</code> or
-  <code>meta</code> resolves to <code>CGPT_DEFAULT_SESSION</code> / <code>META_DEFAULT_SESSION</code> if
-  set, otherwise the first session of that kind whose last probe said <code>ready</code>. The two
-  kinds never cross: a <code>meta:</code> name will not resolve against a ChatGPT profile, or the
-  reverse. <code>@mini</code> and <code>@container</code> pin a location; a bare engine prefers a
-  live mini worker and falls back to the container.</p>
+  <p><code>gpt-*</code> maps to the signed-in ChatGPT account because tools hard-code a model
+  id far more often than they let you choose one. A bare <code>chatgpt</code> resolves to
+  <code>CGPT_DEFAULT_SESSION</code>, otherwise the first session whose last probe said
+  <code>ready</code>. <code>@mini</code> and <code>@container</code> pin a location; a bare
+  engine prefers a live mini worker and falls back to the container. <code>meta</code> and
+  <code>llama-*</code> still parse, for callers that have not been updated, but nothing
+  claims them &mdash; see <a href="#meta">Meta AI &mdash; retired</a>.</p>
 </section>
 
 <section id="ask">
@@ -509,7 +506,7 @@ data: [DONE]</code></pre>
   <div class="tbl"><table>
     <thead><tr><th>Lane</th><th>Runs at once</th><th>Engines</th><th>Spacing</th></tr></thead>
     <tbody>
-      <tr><td><code>browser</code></td><td class="num">1</td><td><code>chatgpt</code> + <code>meta</code> — the container has one Chrome</td><td class="num">2 s between calls</td></tr>
+      <tr><td><code>browser</code></td><td class="num">1</td><td><code>chatgpt</code> — the container has one Chrome</td><td class="num">2 s between calls</td></tr>
       <tr><td><code>agy</code></td><td class="num">2</td><td><code>agy</code></td><td class="num">none</td></tr>
     </tbody>
   </table></div>
@@ -630,17 +627,30 @@ data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"..."}}]}
 </section>
 
 <section id="meta">
-  <h2>Meta AI</h2>
-  <p>The same machinery as ChatGPT — a signed-in browser space, an ask that types into the
-  real editor — but it has to run from the residential Mac mini.</p>
-  <div class="call stop"><span class="h">The Railway address is region-blocked</span>
-  <p>Current live response from the container, even with the imported signed-in profile:
-  <em>"Meta AI isn't available yet in your country."</em> The gate now applies on ordinary
-  page loads, not only during login, so replaying cookies in Railway is no longer enough.</p>
-  <p>The mini worker claims <code>meta.ask</code> and drives a Meta task space through
-  ego-browser. Use <code>meta@mini</code> to pin it; a bare <code>meta</code> selects it
-  automatically while that worker is live. <code>meta@container</code> remains available for
-  diagnosis, but is not expected to answer while the address gate is active.</p></div>
+  <h2>Meta AI &mdash; retired</h2>
+  <p><b>There is no Meta engine any more.</b> Do not route to <code>meta</code>,
+  <code>meta:&lt;id&gt;</code>, <code>meta@mini</code> or <code>llama-*</code>; nothing
+  answers on any of them.</p>
+  <div class="call stop"><span class="h">Both routes to it are gone</span>
+  <p><b>The container is region-blocked.</b> Railway's address is served
+  <em>"Meta AI isn't available yet in your country."</em> even with an imported signed-in
+  profile. The gate applies on ordinary page loads, not only at login, so replaying cookies
+  there was never going to be enough.</p>
+  <p><b>The mini no longer claims it.</b> Meta AI was never activated on that machine — no
+  browser profile there ever held a <code>meta.ai</code> cookie — and the muse 1.2 stand-in
+  that answered under the <code>meta.*</code> job types through OpenCode has been removed.
+  No lane claims <code>meta.ask</code>, so <code>meta@mini</code> is refused up front rather
+  than queueing a job nothing will take.</p></div>
+  <p>The container's session machinery still understands a <code>meta</code> profile kind,
+  so an imported storageState is not rejected — but no traffic is routed to it and none
+  should be. The measurements behind the region gate are kept in
+  <code>META-AI.md</code>.</p>
+  <div class="call"><span class="h">What replaced it</span>
+  <p>Meta was wanted for one thing this API actually needed: what a company's Facebook
+  presence says about it. That is <a href="#social"><code>fb.*</code></a> now — a read-only
+  crawler that visits the pages and returns the facebook.com URL every field was read from,
+  rather than a model asked to describe what it can see. Company research Round 03 was
+  re-pointed onto it.</p></div>
 </section>
 
 <section id="jobs">
@@ -742,12 +752,41 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
   have no Facebook page, and most are not discussed on X at all.</p>
 
   <h3><code>fb.*</code> &mdash; the business's own Facebook presence</h3>
-  <p>A read-only crawler drives the browser and a model picks which rung of a search ladder
-  to try next. The read-only contract &mdash; URL allowlist, click whitelist, never types
-  into a field &mdash; is enforced inside the crawler rather than asked of the model.
-  <code>fb.company</code> finds the Page or Place, <code>fb.person</code> finds a named
-  person attached to it, <code>fb.discover</code> finds humans attached to a company you
-  only have a name for. A lead is 16&ndash;120s.</p>
+  <p>A read-only crawler drives the browser and a model decides only <i>which rung of a
+  search ladder to try next and when to stop</i>. The split is deliberate: the read-only
+  contract &mdash; URL allowlist, click whitelist, never types into a field &mdash; lives
+  inside the crawler, so it is enforced code rather than a hope about model behaviour. The
+  model's entire tool surface is search / detail / posts, capped by a crawl budget.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Mode</th><th>Given</th><th>Finds</th></tr></thead>
+    <tbody>
+      <tr><td><code>fb.company</code></td><td>a business name, plus whatever the lead carries</td><td>its Page or Place: phone, email, website, address, followers, reviews</td></tr>
+      <tr><td><code>fb.person</code></td><td>a person's name <b>and</b> their company</td><td>that person's profile, if it is publicly linked to the company</td></tr>
+      <tr><td><code>fb.discover</code></td><td>a company name only</td><td>named humans on its public surface, in <code>result.people[]</code></td></tr>
+      <tr><td><code>fb.probe</code></td><td>nothing</td><td>whether the browser still holds a Facebook session</td></tr>
+    </tbody>
+  </table></div>
+  <div class="call"><span class="h">Half of the leads never reach a model</span>
+  <p>An exact phone or website-domain match settles a company outright, and the deterministic
+  scorer takes it: <code>meta.engine: "deterministic"</code>, <code>cost_usd: 0</code>,
+  <code>turns: 0</code>, about 16 s instead of 40. The record is the same shape either way,
+  so a caller never has to branch on which path ran. Model-ranked leads cost $0.05&ndash;0.15
+  and carry <code>runners_up</code> explaining what lost.</p></div>
+  <div class="call"><span class="h">Messenger links say where they came from</span>
+  <p>A result with a profile carries <code>messenger_url</code> and
+  <code>messenger_source</code>. <code>detected</code> means the page published an
+  <code>m.me</code> link itself &mdash; the account stating it takes messages.
+  <code>derived</code> means it was computed from the profile URL and is a <b>guess</b> that
+  messages are accepted. Neither is verified: whether a link opens a normal thread or lands
+  in Message Requests depends on the recipient's settings, and that is not observable
+  read-only. The crawler cannot follow the link it emits &mdash; <code>m.me</code> fails its
+  URL allowlist and <code>/messages/</code> is on its denylist &mdash; so this hands a human
+  a link to click, it does not open conversations. Only a <code>detected</code> link is
+  admitted to a research ledger.</p></div>
+  <p>A lead is 16&ndash;120 s. <code>budget</code> is the cost dial: one unit is one page
+  load plus a round of model context, default 10, two are enough for a company carrying a
+  phone. This is also company research <b>Round 03</b> &mdash; the round that used to ask
+  Meta AI what it could see now crawls the pages and reports the URL each field came from.</p>
 
   <h3><code>x.*</code> &mdash; what X is saying, asked through Grok</h3>
   <p>This one never visits x.com. It drives <b>grok.com</b> in the browser and lets Grok read
@@ -814,7 +853,7 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
     <thead><tr><th>Route</th><th>Does</th></tr></thead>
     <tbody>
       <tr><td><code>GET /api/cgpt</code></td><td>every session, its kind, last probe, and whether its browser is open</td></tr>
-      <tr><td><code>POST /api/cgpt/:id/import</code></td><td>apply a Playwright storageState — cookies through CDP, localStorage per origin. How a Meta AI session gets here at all.</td></tr>
+      <tr><td><code>POST /api/cgpt/:id/import</code></td><td>apply a Playwright storageState — cookies through CDP, localStorage per origin. How a session minted on another machine gets here at all.</td></tr>
       <tr><td><code>GET /api/cgpt/:id/export</code></td><td>lift the session out, unredacted. Treat the response as the credential it is.</td></tr>
       <tr><td><code>POST /api/cgpt/:id/open</code> &middot; <code>/close</code> &middot; <code>/goto</code></td><td>hold a browser open on a URL, release it, or drive it somewhere</td></tr>
       <tr><td><code>POST /api/cgpt/:id/delete</code></td><td>remove the profile and its manifest entry</td></tr>
@@ -912,8 +951,8 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
     </tbody>
   </table></div>
   <div class="call stop"><span class="h">This token is a root shell</span>
-  <p><code>/api/exec</code> runs arbitrary commands in a container holding live Google,
-  ChatGPT and Meta sessions, and <code>/api/cgpt/:id/export</code> hands out the cookies.
+  <p><code>/api/exec</code> runs arbitrary commands in a container holding live Google and
+  ChatGPT sessions, and <code>/api/cgpt/:id/export</code> hands out the cookies.
   <code>LAB_TOKEN</code> is not an API key in the ordinary sense — treat it as SSH access.
   The service refuses to start if it is shorter than 16 characters.</p></div>
 </section>
@@ -940,12 +979,12 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
 
 <section id="limits">
   <h2>Limits</h2>
-  <h3>One browser, shared by two engines</h3>
+  <h3>One browser, one slot</h3>
   <p><code>MAX_OPEN_BROWSERS=1</code>, least-recently-used eviction, closed after five idle
-  minutes. ChatGPT and Meta AI compete for that one slot: calls serialise, and alternating
-  between them evicts the other profile. Measured, that costs about a second — 9.6 s for a
-  warm Meta AI call against 10.4 s for the same one straight after a ChatGPT call. agy is a
-  CLI and runs alongside. This is a pipeline back-end, not a fan-out one — send work at it
+  minutes. Every ChatGPT account competes for that one slot: calls serialise, and
+  alternating between accounts evicts the other profile — measured at about a second,
+  9.6 s for a warm call against 10.4 s for the same one straight after a different
+  account. agy is a CLI and runs alongside. This is a pipeline back-end, not a fan-out one — send work at it
   as fast as you like and the <a href="#queue">queue</a> will hold it, but the throughput
   ceiling is roughly one browser answer every fifteen seconds.</p>
 
@@ -981,18 +1020,15 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
       <tr><td><code>TRANSLATION_MODEL</code></td><td class="num">step-3.7-flash</td><td>model for the Simplified Chinese company-report translation</td></tr>
       <tr><td><code>DEFAULT_MODEL</code></td><td class="num">agy</td><td>what an empty or <code>auto</code> model resolves to</td></tr>
       <tr><td><code>CGPT_DEFAULT_SESSION</code></td><td class="num">first ready</td><td>which account a bare <code>chatgpt</code> means</td></tr>
-      <tr><td><code>META_DEFAULT_SESSION</code></td><td class="num">first ready</td><td>which account a bare <code>meta</code> means</td></tr>
-      <tr><td><code>MINI_META_DEFAULT_SESSION</code></td><td class="num">meta-main</td><td>which mini task-space registry entry a bare <code>meta@mini</code> means</td></tr>
       <tr><td><code>AGY_ASK_TIMEOUT_MS</code></td><td class="num">300000</td><td></td></tr>
       <tr><td><code>CGPT_ASK_TIMEOUT_MS</code></td><td class="num">180000</td><td></td></tr>
-      <tr><td><code>META_ASK_TIMEOUT_MS</code></td><td class="num">= CGPT</td><td></td></tr>
       <tr><td><code>AGY_MAX_CONCURRENT</code></td><td class="num">2</td><td>agy runs in flight at once</td></tr>
       <tr><td><code>MAX_OPEN_BROWSERS</code></td><td class="num">1</td><td>Chrome profiles open at once — the browser lane's width</td></tr>
-      <tr><td><code>CGPT_MIN_GAP_MS</code> &middot; <code>META_MIN_GAP_MS</code></td><td class="num">2000</td><td>spacing between calls to that account</td></tr>
+      <tr><td><code>CGPT_MIN_GAP_MS</code></td><td class="num">2000</td><td>spacing between calls to that account</td></tr>
       <tr><td><code>AGY_MIN_GAP_MS</code></td><td class="num">0</td><td></td></tr>
       <tr><td><code>QUEUE_MAX_DEPTH</code></td><td class="num">10</td><td>waiting calls before 429; <code>CGPT_MAX_QUEUE</code> etc. override per engine</td></tr>
       <tr><td><code>QUEUE_MAX_WAIT_MS</code></td><td class="num">300000</td><td>longest wait the gateway will promise; past it, 429</td></tr>
-      <tr><td><code>CGPT_HOURLY_LIMIT</code> &middot; <code>META_HOURLY_LIMIT</code> &middot; <code>AGY_HOURLY_LIMIT</code></td><td class="num">off</td><td>calls per rolling hour, per engine</td></tr>
+      <tr><td><code>CGPT_HOURLY_LIMIT</code> &middot; <code>AGY_HOURLY_LIMIT</code></td><td class="num">off</td><td>calls per rolling hour, per engine</td></tr>
       <tr><td><code>LOG_MEMORY</code></td><td class="num">1000</td><td>records kept in memory for <code>/api/logs</code></td></tr>
       <tr><td><code>LOG_PROMPTS</code></td><td class="num">on</td><td><code>0</code> drops prompt previews from the log</td></tr>
       <tr><td><code>BROWSER_IDLE_MS</code></td><td class="num">300000</td><td>close a profile nobody has touched</td></tr>

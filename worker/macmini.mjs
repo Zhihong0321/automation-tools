@@ -34,7 +34,6 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { scan as gmapScan } from './gmap.mjs';
 import * as chatgpt from './chatgpt-ego.mjs';
-import * as muse from './muse.mjs';
 import * as agy from './agy.mjs';
 import * as fb from './fb.mjs';
 import * as x from './x.mjs';
@@ -84,7 +83,7 @@ const LANES = (() => {
   if (pinned.length) return [{ suffix: '', types: pinned }];
   return [
     { suffix: '', types: ['ping', 'gmap.scan'] },
-    { suffix: '-ask', types: ['chatgpt.ask', 'chatgpt.probe', 'meta.ask', 'meta.probe', 'muse.ask', 'muse.probe', 'agy.ask', 'agy.probe'] },
+    { suffix: '-ask', types: ['chatgpt.ask', 'chatgpt.probe', 'agy.ask', 'agy.probe'] },
     // Its own lane for the same reason `-ask` is not the scan lane, one step
     // further out: a lead takes 1-2 minutes of paced page loads, so it would sit
     // in front of every wrapper call if it shared theirs -- and it holds ego
@@ -152,15 +151,12 @@ const handlers = {
   // second lane rather than a copy of the container's one.
   'chatgpt.ask': chatgpt.ask,
   'chatgpt.probe': chatgpt.probe,
-  // muse 1.2 through opencode, answering under the `meta.*` names. Meta AI was
-  // never activated here — no ego lite profile ever held a meta.ai cookie — and
-  // these are the type names the deployed gateway reaches (`meta@mini`). The
-  // engine behind the address changed; the address did not. See muse.mjs.
-  'meta.ask': muse.ask,
-  'meta.probe': muse.probe,
-  // The same engine under its own name, for callers that would rather say it.
-  'muse.ask': muse.ask,
-  'muse.probe': muse.probe,
+  // No `meta.*` / `muse.*` here any more. Meta AI was never activated on this
+  // machine (no ego lite profile ever held a meta.ai cookie), and the muse 1.2
+  // stand-in that answered under those names is retired. A lane that no longer
+  // claims a type is how the gateway learns it is gone: `meta@mini` stops being
+  // listed `ready` in GET /v1/models and a pinned call 503s up front instead of
+  // queueing a job nothing will ever take.
   'agy.ask': agy.ask,
   'agy.probe': agy.probe,
   // Facebook lead enrichment through fb-recon: the Claude CLI picks which rung

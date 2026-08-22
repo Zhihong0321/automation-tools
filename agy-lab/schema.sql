@@ -167,7 +167,7 @@ create table if not exists person_research_run (
 comment on column published_report.public_id is 'Opaque share id used by the public /r/:id report URL.';
 comment on column company_research_run.round01 is 'Raw and parsed Gemini discovery artifact.';
 comment on column company_research_run.round02 is 'Raw and parsed ChatGPT audit artifacts, split by contacts/people/signals.';
-comment on column company_research_run.round03 is 'Raw and parsed Meta/Muse capability-gated social artifact.';
+comment on column company_research_run.round03 is 'Facebook evidence from the read-only fb-recon crawler: access_mode, the raw fb.company / fb.discover envelopes, and the ledger rows built from them.';
 comment on column company_research_run.round04 is 'Raw final Gemini synthesis plus fidelity validation.';
 comment on column person_research_run.discovery is 'Validated public-professional evidence discovered for the VIP brief; no email identity hint is retained.';
 comment on column person_research_run.synthesis is 'Final-synthesis acceptance metadata; raw model text is intentionally not retained.';

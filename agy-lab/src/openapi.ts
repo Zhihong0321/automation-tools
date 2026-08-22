@@ -237,8 +237,11 @@ export const document = {
       ResearchRun: {
         type: ['object', 'null'], description: 'Authenticated benchmark record. Round artifacts may be null until that round is saved.',
         properties: {
-          report_id: { type: 'string' }, round01: { type: ['object', 'null'], additionalProperties: true }, round02: { type: ['object', 'null'], additionalProperties: true },
-          round03: { type: ['object', 'null'], additionalProperties: true }, round04: { type: ['object', 'null'], additionalProperties: true },
+          report_id: { type: 'string' },
+          round01: { type: ['object', 'null'], additionalProperties: true, description: 'Gemini discovery.' },
+          round02: { type: ['object', 'null'], additionalProperties: true, description: 'Three split ChatGPT audits: contacts, people, signals.' },
+          round03: { type: ['object', 'null'], additionalProperties: true, description: 'Facebook evidence from the read-only fb-recon crawler on the home worker. access_mode is live_facebook_pages or no_live_access; rows carry the facebook.com URL each field was read from. Status is skipped when no worker is claiming fb.company.' },
+          round04: { type: ['object', 'null'], additionalProperties: true, description: 'Gemini synthesis, rejected and replaced by the ledger if it invents a row or a URL.' },
           validated_ledger: { type: ['object', 'null'], additionalProperties: true }, final_report: { oneOf: [{ $ref: '#/components/schemas/FinalCompanyReport' }, { type: 'null' }] },
           round_status: { type: 'object', additionalProperties: { type: 'string' } }, engine_metadata: { type: 'object', additionalProperties: true },
           started_at: { type: ['string', 'null'], format: 'date-time' }, completed_at: { type: ['string', 'null'], format: 'date-time' }, updated_at: { type: 'string', format: 'date-time' },

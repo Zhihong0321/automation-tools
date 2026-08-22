@@ -1,13 +1,14 @@
-# The gateway — agy, ChatGPT and Meta AI as one API
+# The gateway — agy and ChatGPT as one API
 
-Three engines behind one HTTP surface, in the OpenAI chat-completions shape, so a
-tool that already talks to an LLM only has to change a base URL.
+Two engines behind one HTTP surface, in the OpenAI chat-completions shape, so a
+tool that already talks to an LLM only has to change a base URL. Behind the same
+token sit the research pipelines and the workers at home that do the crawling.
 
 ```
 Base URL   https://ee-auto.up.railway.app/v1
 API key    the LAB_TOKEN of this service
-Models     agy | chatgpt | chatgpt:<session> | meta | meta:<session>
-Locations  <model>@mini | <model>@container      (agy and chatgpt run in both)
+Models     agy | chatgpt | chatgpt:<session>
+Locations  <model>@mini | <model>@container      (both engines run in both)
 Reference  https://ee-auto.up.railway.app/docs   (the same surface, laid out to read)
 ```
 
@@ -15,17 +16,20 @@ Reference  https://ee-auto.up.railway.app/docs   (the same surface, laid out to 
 |---|---|---|
 | `agy` | the Antigravity CLI, signed in with a Google account, run with `-p` | ~14s container, ~9s mini |
 | `chatgpt` | a signed-in ChatGPT session in a real Chrome, typed into and read back | ~15s container, ~6s mini |
-| `meta` | OpenCode + Muse 1.2 on the Mac mini; capability-gated when Meta pages require login | ~5–45s |
 
-None of the three is a hosted API. Every call is a real CLI run or a real browser
-doing what a person would do, and the limits at the bottom of this page follow
-from that.
+Neither is a hosted API. Every call is a real CLI run or a real browser doing what
+a person would do, and the limits at the bottom of this page follow from that.
 
-**Two locations.** `agy` and `chatgpt` each run in two places: in this container,
-and on a Mac mini at home that claims them off the [job queue](#jobs--work-sent-to-a-machine-at-home).
-They are different machines with different accounts, not replicas. `meta` is
-container-only. Suffix any model with `@mini` or `@container` to pin it; a bare
-name is pooled — see [Models](#models).
+> **`meta` is retired.** There is no Meta AI engine any more — not in the
+> container, not on the mini. See [Meta AI — retired](#meta-ai--retired). The
+> Facebook work it was wanted for is [`fb.*`](#facebook-lead-enrichment--fb),
+> which crawls the pages instead of asking a model what it can see.
+
+**Two locations.** Both engines run in two places: in this container, and on a Mac
+mini at home that claims them off the [job queue](#jobs--work-sent-to-a-machine-at-home).
+They are different machines with different accounts, not replicas. Suffix any
+model with `@mini` or `@container` to pin it; a bare name is pooled — see
+[Models](#models).
 
 ---
 
@@ -88,26 +92,23 @@ appending `/v1` to a base URL that already has it.
 | `chatgpt`, `openai` | the default ChatGPT session |
 | `chatgpt:<id>` | that ChatGPT session by name — one per account |
 | `gpt-4o`, `gpt-*`, `o1*` … | the default ChatGPT session |
-| `meta`, `metaai`, `llama-*` | the default Meta AI session |
-| `meta:<id>` | that Meta AI session by name |
-| `meta@mini`, `meta:<id>@mini` | Meta AI on the residential Mac mini |
 | *(empty)*, `auto` | `DEFAULT_MODEL`, which is `agy` unless set |
 | `<any of the above>@container` | that engine here, in this container |
 | `agy@mini`, `chatgpt@mini` | that engine on the Mac mini. `@macmini` is accepted too |
 | `chatgpt:<id>@mini` | a ChatGPT account in the **mini's** registry — the two registries are separate, and a container session name means nothing there |
 
-An unknown suffix is a 404 (`Unknown location "@x". Use @mini or @container.`),
-and `meta@mini` is a 404 because the mini does not run it.
+An unknown suffix is a 404 (`Unknown location "@x". Use @mini or @container.`).
+`meta`, `meta:<id>` and `llama-*` still parse, so an un-updated caller gets a clear
+refusal rather than a routing error, but nothing claims them.
 
 `gpt-*` maps to ChatGPT because tools hard-code a model id far more often than
 they let you pick one. The response always names the model that actually ran, so
 the substitution is never silent: check `.model` and `.agy_lab.engine`.
 
-A bare `chatgpt` or `meta` resolves to `CGPT_DEFAULT_SESSION` / `META_DEFAULT_SESSION`
-if set, otherwise the first session of that kind whose last probe said `ready`.
-Sessions of the two kinds are separate: `meta:` names never resolve against a
-ChatGPT profile, or the reverse. A bare `chatgpt` that lands on the mini takes
-`MINI_DEFAULT_SESSION` (`mini-main`) instead, for the same reason.
+A bare `chatgpt` resolves to `CGPT_DEFAULT_SESSION` if set, otherwise the first
+session whose last probe said `ready`. A bare `chatgpt` that lands on the mini
+takes `MINI_DEFAULT_SESSION` (`mini-main`) instead, because the two registries are
+separate.
 
 **Which location a bare name gets.** An explicit `@mini` / `@container` always
 wins. A bare name is pooled and **prefers the mini whenever a mini worker is
@@ -125,9 +126,7 @@ process advertises what, and why they are separate — is
 [worker/README.md](worker/README.md).
 
 `@mini` and `@container` pin a location. A bare engine prefers a live mini
-worker and falls back to the container. For Meta AI the mini is the production
-path: Railway is currently served the country-unavailable page even with a
-signed-in imported profile.
+worker and falls back to the container.
 
 ### The native shape
 
@@ -234,12 +233,27 @@ The authenticated response also includes `research_run.round01` through
 
 - `round01`: Gemini discovery;
 - `round02`: split ChatGPT audits for contacts, people, and signals;
-- `round03`: capability-gated Meta/Muse social evidence;
+- `round03`: Facebook evidence, crawled read-only by the `fb.*` worker;
 - `round04`: Gemini synthesis plus fidelity validation.
 
 Only rows with direct HTTPS evidence enter the validated ledger. If Round 04
 changes validated person/contact ids or introduces a URL, the synthesis is
 rejected and `synthesis_mode` is `validated_ledger_fallback`.
+
+**Round 03 changed.** It used to ask Meta/Muse whether it could see live Meta
+pages and, if it said yes, what was on them — a model reporting on its own
+capability, which is unauditable and mostly answered `no_live_access` with empty
+arrays. It is now the [`fb.*` crawler](#facebook-lead-enrichment--fb) on the mini.
+Three consequences worth planning for:
+
+- It costs **crawl jobs, not a model call**: one `fb.company`, plus one
+  `fb.discover` when a page is confirmed. Budget 1–4 minutes for the round and
+  give `/api/company-research` room accordingly.
+- `round_status.round03` is `skipped` when no worker is claiming `fb.company` —
+  distinct from `failed`. The run continues on the other three rounds.
+- `round03.access_mode` is now `live_facebook_pages` or `no_live_access`, and
+  `round03.company_lookup` / `round03.people_lookup` hold the raw worker
+  envelopes, so every ledger row can be traced back to the crawl that produced it.
 
 | Route | Auth | Returns |
 |---|---|---|
@@ -312,8 +326,8 @@ container.
 | `agy.ask` | `{prompt, tools?, timeoutMs?}` | `{engine, answer, ms}` — what `agy@mini` is underneath |
 | `agy.probe` | none | `{status, detail, sample}` |
 | `fb.company` | `{name, city?, phone?, website?, address?, category?, budget?, timeoutMs?}` | `{engine, mode, lead, result, meta}` — the business's own Facebook Page |
-| `fb.person` | `{person, company, city?, budget?}` | the same envelope; that person's profile if it is publicly linked to the company |
-| `fb.discover` | `{name, city?, budget?}` | the same envelope, with `result.people[]` |
+| `fb.person` | `{person, company, city?, budget?}` | the same envelope; that person's profile, with `messenger_url` + `messenger_source`, if it is publicly linked to the company |
+| `fb.discover` | `{name, city?, budget?}` | the same envelope, with `result.people[]` — each carrying `messenger_url` + `messenger_source` |
 | `fb.probe` | none | `{status, detail, ms}` — whether ego lite still holds a Facebook session |
 | `x.subject` | `{subject, since?, lang?, max?, budget?, timeoutMs?}` | `{engine, mode, lead, result, meta}` — what X is saying about the subject |
 | `x.company` | `{name, city?, website?, phone?, category?, since?, budget?}` | the same envelope, shaped around a lead rather than a topic |
@@ -363,6 +377,29 @@ Takes a lead that came out of a Maps scan and finds its Facebook presence. Lives
 the mini for the same reason the scan does: the Facebook session is a login a human
 performed once, in a browser profile on that machine, and there is no token to ship.
 
+**How it is built, because it decides what you can trust.** A deterministic
+read-only crawler drives the browser; a model decides only *which rung of a search
+ladder to try next and when to stop*. That split is the point. The read-only
+contract — a URL allowlist, a click whitelist, never typing into a field — lives
+inside the crawler, so it is enforced code rather than a hope about model
+behaviour. The model's whole tool surface is search / detail / posts, capped by a
+crawl budget it cannot raise. Nothing in this worker can like, follow, comment or
+message.
+
+| Mode | Given | Finds |
+|---|---|---|
+| `fb.company` | a business name, plus whatever else the lead carries | its Page or Place — phone, email, website, address, category, followers, reviews |
+| `fb.person` | a person's name **and** their company | that person's profile, if it is publicly linked to the company |
+| `fb.discover` | a company name only | named humans on its public surface, in `result.people[]` |
+| `fb.probe` | nothing | whether the browser still holds a Facebook session |
+
+Facebook's own search shapes the ladder. People search matches *names only* — it
+ignores a company token entirely — so "person + company" as one query does not
+work, and `fb.person` resolves the company first and reads post text, which *is*
+full-text. `places` beats `pages` for a local business: same query, all local
+results with category, reviews and city, where `pages` will happily put a Florida
+LLC in the top three for a Johor query.
+
 ```bash
 ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \
      -H 'content-type: application/json' \
@@ -377,6 +414,7 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
  "result":{"found":true,"confidence":"confirmed",
            "facebook_url":"https://www.facebook.com/Riomation2u",
            "phone":"016-712 7666","email":"riomation.services@gmail.com",
+           "messenger_url":"https://m.me/Riomation2u","messenger_source":"derived",
            "followers":"418","reviews":2,
            "matched_on":["phone","brand","city"],
            "runners_up":[],
@@ -413,9 +451,34 @@ Only one lead runs at a time — ego lite has a single crawl space and the worke
 a lock for the length of a run, which is why `fb.*` has its own lane. A second job
 arriving early fails with `busy` and is worth retrying rather than reporting.
 
+**A Messenger link, and where it came from.** Any result with a profile carries
+`messenger_url` beside `messenger_source`:
+
+- `detected` — the page published an `m.me` link itself. That is the account
+  stating it takes messages.
+- `derived` — nobody published one, so it was computed from the profile URL
+  (`/<vanity>` → `m.me/<vanity>`, `profile.php?id=N` → `m.me/N`). It costs no crawl
+  call and it is a **guess** that messages are accepted.
+
+Neither is *verified*, and the distinction is why both are labelled. Whether a link
+opens a normal thread or drops into the recipient's Message Requests depends on
+that person's privacy settings, which is not observable read-only: `m.me` fails the
+crawler's URL allowlist and `/messages/` sits on its denylist, so the worker can
+never follow the link it emits. It hands a human a link to click; it does not open
+conversations. `m.me/j/<code>` — a group-chat invite — is rejected outright, and a
+research ledger admits only a `detected` link.
+
 **`fb.probe` before a batch.** A lapsed Facebook session fails every lead with
 `logged_out`, and the fix is a human signing in on the mini — so it is worth one cheap
 page load to find that out first.
+
+**This is also Round 03.** [Company research](#business-intelligence-pipeline) calls
+`fb.company` — and, on a confirmed page, `fb.discover` — for its Facebook round.
+Only a `confirmed` or `likely` match contributes rows: a `weak` match is a plausible
+page that may belong to a different business, and attaching its phone number to this
+company is exactly the poisoning the round exists to prevent. Every row carries the
+facebook.com URL it was read from, which is what the ledger's evidence policy has
+always demanded and, before this, never actually got.
 
 ### X research — `x.*`
 
@@ -521,7 +584,7 @@ would be worse than being told no.
 
 | Lane | At once | Engines | Spacing |
 |---|---|---|---|
-| `browser` | 1 | `chatgpt` + `meta` - the container has one Chrome | 2s between calls |
+| `browser` | 1 | `chatgpt` - the container has one Chrome | 2s between calls |
 | `agy` | 2 | `agy` | none |
 | `mini` | 2 | everything routed `@mini` | per engine, as above |
 
@@ -591,33 +654,26 @@ than as nothing at all. `LOG_PROMPTS=0` keeps sizes and drops previews.
 - **History is flattened into one prompt.** No engine here takes a message array:
   system messages come first verbatim, then `User:` / `Assistant:` turns. A single
   user message is passed through unlabelled.
-- **Every browser call starts a new chat** — a temporary chat on ChatGPT, a new
-  thread on Meta AI. There is no server-side conversation to continue, so send the
-  history you want considered.
+- **Every browser call starts a new chat** — a temporary chat on ChatGPT. There is
+  no server-side conversation to continue, so send the history you want considered.
 
-Streaming is real for the two browser engines (the answer is polled as it renders,
-~1.5s granularity) and single-shot for agy, which prints only when it is done.
+Streaming is real for ChatGPT (the answer is polled as it renders, ~1.5s
+granularity) and single-shot for agy, which prints only when it is done.
 
 ---
 
 ## Limits that will bite you
 
-**One browser at a time, across both browser engines.** `MAX_OPEN_BROWSERS=1`,
-LRU-evicted, closed after five minutes idle. ChatGPT and Meta AI share that one
-slot: calls to them serialise, and alternating between them evicts the other
-profile, which costs about a second per call - measured 9.6s for a warm Meta AI
-call against 10.4s for the same one right after a ChatGPT call. agy is a CLI and runs up to
-`AGY_MAX_CONCURRENT` (2) alongside. This is a pipeline back-end, not a fan-out one.
+**One browser at a time.** `MAX_OPEN_BROWSERS=1`, LRU-evicted, closed after five
+minutes idle. Every ChatGPT account shares that one slot: calls serialise, and
+alternating between accounts evicts the other profile, which costs about a second
+per call - measured 9.6s for a warm call against 10.4s for the same one right
+after a different account. agy is a CLI and runs up to `AGY_MAX_CONCURRENT` (2)
+alongside. This is a pipeline back-end, not a fan-out one.
 
 **Answers are read from `innerText`.** A long fenced code block does not always
 read back whole, and asking for one big JSON blob is the shape most likely to come
 back truncated. Ask for line records instead.
-
-**Meta AI runs on the residential mini.** The Railway address is currently served
-"Meta AI isn't available yet in your country" even for the previously imported,
-signed-in profile. The mini worker claims `meta.ask` and drives a Meta task space
-through ego-browser. `meta@container` remains available for diagnosis, but it is
-not expected to answer while that address gate is active.
 
 **A signed-out ChatGPT session is a 503, deliberately.** The logged-out page still
 has a working composer, so a naive wrapper types into it and returns an anonymous
@@ -651,6 +707,38 @@ In a stream the status line is already sent, so a failure arrives as a final
 
 ---
 
+## Meta AI — retired
+
+**There is no Meta engine.** Do not route to `meta`, `meta:<id>`, `meta@mini` or
+`llama-*`. They parse, so an old caller gets a clean refusal rather than a
+confusing routing error, but nothing answers on any of them.
+
+Both routes to it are gone, for different reasons:
+
+- **The container is region-blocked.** Railway's address is served *"Meta AI isn't
+  available yet in your country"* even with an imported, signed-in profile. The
+  gate applies on ordinary page loads, not only at login, so replaying cookies
+  there was never going to work. The measurements are in `META-AI.md`.
+- **The mini never had it, and its stand-in is deleted.** Meta AI was never
+  activated on that machine — no browser profile there ever held a `meta.ai`
+  cookie — so a muse 1.2 engine answered under the `meta.*` job types through
+  OpenCode instead. That worker (`worker/muse.mjs`) is removed and no lane claims
+  `meta.ask` or `muse.ask`. A pinned `meta@mini` is refused up front rather than
+  queueing a job nothing will take.
+
+The container still understands a `meta` session *kind*, so importing a
+storageState is not rejected — but no traffic is routed to it and none should be.
+
+**What replaced it.** Meta was wanted for one thing this API actually needed: what
+a company's Facebook presence says about it. That is
+[`fb.*`](#facebook-lead-enrichment--fb) — a read-only crawler that visits the
+pages and reports the facebook.com URL every field was read from, instead of a
+model asked to describe what it can see. Company research **Round 03** was
+re-pointed onto it, so the round now produces auditable rows rather than an
+`access_mode` explaining why it produced none.
+
+---
+
 ## Environment
 
 | Variable | Default | |
@@ -658,9 +746,6 @@ In a stream the status line is already sent, so a failure arrives as a final
 | `LAB_TOKEN` | — | required; the API key for everything under `/api` and `/v1` |
 | `DEFAULT_MODEL` | `agy` | what an empty or `auto` model resolves to |
 | `CGPT_DEFAULT_SESSION` | first `ready` | which account a bare `chatgpt` means |
-| `META_DEFAULT_SESSION` | first `ready` | which account a bare `meta` means |
-| `MINI_META_DEFAULT_SESSION` | `meta-main` | which mini task-space registry entry a bare `meta@mini` means |
-| `META_ASK_TIMEOUT_MS` | `CGPT_ASK_TIMEOUT_MS` | |
 | `AGY_ASK_TIMEOUT_MS` | 300000 | |
 | `CGPT_ASK_TIMEOUT_MS` | 180000 | |
 | `AGY_MAX_CONCURRENT` | 2 | agy runs in flight at once |
@@ -668,7 +753,7 @@ In a stream the status line is already sent, so a failure arrives as a final
 | `MINI_DEFAULT_SESSION` | `mini-main` | which of the mini's accounts a bare `chatgpt@mini` means |
 | `ROUTING_PREFER` | `mini` | where a bare model name goes when both locations are live |
 | `MAX_OPEN_BROWSERS` | 1 | Chrome profiles open at once - the browser lane's width |
-| `CGPT_MIN_GAP_MS`, `META_MIN_GAP_MS` | 2000 | spacing between calls to that account |
+| `CGPT_MIN_GAP_MS` | 2000 | spacing between calls to that account |
 | `AGY_MIN_GAP_MS` | 0 | |
 | `QUEUE_MAX_DEPTH` | 10 | waiting calls before 429; `CGPT_MAX_QUEUE` etc. override per engine |
 | `QUEUE_MAX_WAIT_MS` | 300000 | longest wait the gateway will promise |

@@ -1,12 +1,54 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLedger, buildPersonLedger, extractJson, publishOutcome, validateChineseTranslation, validateFinal, validatePersonFinal } from './intel.ts';
+import { buildLedger, buildPersonLedger, extractJson, facebookLedgerRows, publishOutcome, validateChineseTranslation, validateFinal, validatePersonFinal } from './intel.ts';
 import { companyPage, personPage, searchPage } from './reportui.ts';
 import type { PublishedReport } from './reportdb.ts';
 
 test('extractJson accepts fenced output and rejects prose without an object', () => {
   assert.deepEqual(extractJson('```json\n{"contacts":[]}\n```').value, { contacts: [] });
   assert.match(extractJson('No usable data').error ?? '', /no JSON/);
+});
+
+test('Round 03 admits only what Facebook published, and only off a trusted page', () => {
+  const page = {
+    found: true, confidence: 'confirmed', facebook_url: 'https://www.facebook.com/Riomation2u',
+    phone: '016-712 7666', email: 'riomation.services@gmail.com', followers: '418', reviews: 2,
+    messenger_url: 'https://m.me/Riomation2u', messenger_source: 'detected',
+  };
+  const discovered = {
+    company_url: 'https://www.facebook.com/Riomation2u',
+    people: [
+      { name: 'Lim Wei Kang', role: 'Owner', confidence: 'likely', source: 'Page post signed by the owner',
+        profile_url: 'https://www.facebook.com/lim.wk.5', messenger_url: 'https://m.me/lim.wk.5', messenger_source: 'derived' },
+      { name: 'Siti', role: null, confidence: 'weak', source: 'named in a comment',
+        profile_url: null, messenger_url: null, messenger_source: null },
+    ],
+  };
+  const built = facebookLedgerRows(page, discovered);
+  const purposes = built.contacts.map((c) => c.purpose);
+  assert.deepEqual(purposes, ['Facebook Page phone', 'Facebook Page email', 'Messenger — company page']);
+  // The owner's link was derived from his profile URL, not published by him, so
+  // it is not evidence and must not reach the ledger.
+  assert.ok(!purposes.some((p) => String(p).startsWith('Messenger — Lim')));
+  assert.equal(built.people.length, 1);
+  assert.equal(built.people[0].personal_profile_url, 'https://www.facebook.com/lim.wk.5');
+  // A name with no stated role is a real finding and a useless ledger row.
+  assert.match(built.gaps.join(' '), /Siti/);
+  assert.match(String(built.signals[0].fact), /418 followers and 2 reviews/);
+});
+
+test('Round 03 contributes nothing from a page it is not confident about', () => {
+  const weak = facebookLedgerRows(
+    { confidence: 'weak', facebook_url: 'https://www.facebook.com/SomeOtherShop', phone: '011-000 0000' },
+    { people: [{ name: 'Someone', role: 'Director', profile_url: 'https://www.facebook.com/someone.1' }] },
+  );
+  assert.equal(weak.pageUrl, null);
+  assert.deepEqual([weak.contacts.length, weak.people.length, weak.signals.length], [0, 0, 0]);
+  // And the rows it does build survive the ledger's own evidence filter.
+  const strong = facebookLedgerRows({ confidence: 'likely', facebook_url: 'https://www.facebook.com/RealShop', phone: '016-712 7666' }, null);
+  const ledger = buildLedger({ id: '9', name: 'Real Shop' }, [{ contacts: strong.contacts, people: strong.people, signals: strong.signals }]);
+  assert.equal((ledger.contacts as Record<string, unknown>[]).length, 1);
+  assert.equal((ledger.contacts as Record<string, unknown>[])[0].introduced_by, 'round03');
 });
 
 test('ledger retains only direct evidence URLs and immutable Maps phone', () => {
