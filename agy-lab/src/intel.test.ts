@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLedger, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, publishOutcome, round01Prompt, seniorityScore, validateChineseTranslation, validateFinal, validatePersonFinal } from './intel.ts';
+import { buildLedger, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, publishOutcome, round01Prompt, seniorityScore, unwrapUrl, validateChineseTranslation, validateFinal, validatePersonFinal } from './intel.ts';
 import { companyPage, personPage, searchPage } from './reportui.ts';
 import type { PublishedReport } from './reportdb.ts';
 
@@ -194,6 +194,23 @@ test('round 01 forbids the shell, which is what denied it permission', () => {
   const prompt = round01Prompt({ id: '1', name: 'Example Solar', website: 'https://example.com' });
   assert.match(prompt, /read_url_content/);
   assert.match(prompt, /Never use the shell, terminal, bash, curl or wget/);
+});
+
+test('a Markdown-wrapped URL is still that URL, and is not raw output', () => {
+  const raw = 'https://goldenbullaward.com/winner/inhome-solar-sdn-bhd/';
+  assert.equal(unwrapUrl('[' + raw + '](' + raw + ')'), raw);
+  assert.equal(unwrapUrl('[' + raw + ']'), raw);
+  assert.equal(unwrapUrl(raw), raw);
+
+  // A VIP brief published 17 evidence links wrapped like this and validation
+  // passed, because the check only looked at strings starting with https://.
+  const ledger = { facts: [{ id: 'fact_1', evidence_url: raw }], contacts: [], signals: [] };
+  const wrapped = { facts: [{ id: 'fact_1', evidence_url: '[' + raw + '](' + raw + ')' }], contacts: [], signals: [] };
+  const errors = validatePersonFinal(wrapped, ledger);
+  assert.ok(errors.some((e) => e.includes('not a raw https:// string')), errors.join(' | '));
+
+  // The same URL emitted raw is still accepted.
+  assert.deepEqual(validatePersonFinal({ facts: [{ id: 'fact_1', evidence_url: raw }], contacts: [], signals: [] }, ledger), []);
 });
 
 function report(type: 'business_search' | 'company_research' | 'person_research'): PublishedReport {

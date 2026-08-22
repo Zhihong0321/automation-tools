@@ -65,10 +65,28 @@ export function extractJson(raw: string): { value: Record<string, unknown> | nul
   }
 }
 
+/**
+ * A URL a model wrapped in Markdown is still that URL.
+ *
+ * Every prompt says to emit raw https:// strings and never a Markdown link, and
+ * the models mostly comply -- but one VIP brief published 17 evidence links as
+ * `[https://host/path](https://host/path)`. Those are dead links in the report
+ * UI. Unwrapping here is the permissive half; validateFinal / validatePersonFinal
+ * are the strict half, and they now see through the same wrapper.
+ */
+export function unwrapUrl(value: string): string {
+  const text = value.trim();
+  const linked = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(text);
+  if (linked) return linked[2]!.trim();
+  const bracketed = /^\[([^\]]+)\]$/.exec(text);
+  if (bracketed) return bracketed[1]!.trim();
+  return text;
+}
+
 function directUrl(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   try {
-    const url = new URL(value);
+    const url = new URL(unwrapUrl(value));
     if (url.protocol !== 'https:') return null;
     if (/google\.[^/]+\/search|bing\.com\/search|duckduckgo\.com/i.test(url.href)) return null;
     // A bare domain is usually the exact failure mode where a model names an
@@ -307,15 +325,27 @@ export function validateFinal(final: Record<string, unknown>, ledger: Record<str
   if (!sameSet(finalCandidates.map((r) => r.id), ledgerCandidates.map((r) => r.id))) errors.push('candidate people id set changed');
   const allowedUrls = new Set<string>();
   const collectAllowed = (value: unknown): void => {
-    if (typeof value === 'string' && /^https:\/\//.test(value)) {
-      try { allowedUrls.add(new URL(value).href); } catch { /* malformed URLs are caught by the ledger filter */ }
+    if (typeof value === 'string' && /^https:\/\//.test(unwrapUrl(value))) {
+      try { allowedUrls.add(new URL(unwrapUrl(value)).href); } catch { /* malformed URLs are caught by the ledger filter */ }
     } else if (Array.isArray(value)) value.forEach(collectAllowed);
     else if (value && typeof value === 'object') Object.values(value as Record<string, unknown>).forEach(collectAllowed);
   };
   collectAllowed(ledger);
   const visit = (value: unknown): void => {
-    if (typeof value === 'string' && /^https:\/\//.test(value) && !allowedUrls.has(new URL(value).href)) errors.push('new URL: ' + value);
-    else if (Array.isArray(value)) value.forEach(visit);
+    if (typeof value === 'string') {
+      // Unwrap first: a Markdown-wrapped URL does not start with "https://" and
+      // used to slip through this check entirely.
+      const candidate = unwrapUrl(value);
+      if (/^https:\/\//.test(candidate)) {
+        let href: string | null = null;
+        try { href = new URL(candidate).href; } catch { href = null; }
+        if (!href) errors.push('malformed URL: ' + value);
+        else if (!allowedUrls.has(href)) errors.push('new URL: ' + value);
+        else if (candidate !== value.trim()) errors.push('URL is not a raw https:// string: ' + value);
+      }
+      return;
+    }
+    if (Array.isArray(value)) value.forEach(visit);
     else if (value && typeof value === 'object') Object.values(value as Record<string, unknown>).forEach(visit);
   };
   visit(final);
@@ -477,15 +507,27 @@ export function validatePersonFinal(final: Record<string, unknown>, ledger: Reco
   if (!sameSet(rows(final.signals).map((row) => row.id), rows(ledger.signals).map((row) => row.id))) errors.push('signal id set changed');
   const allowedUrls = new Set<string>();
   const collectAllowed = (value: unknown): void => {
-    if (typeof value === 'string' && /^https:\/\//.test(value)) {
-      try { allowedUrls.add(new URL(value).href); } catch { /* validation below keeps malformed URLs out */ }
+    if (typeof value === 'string' && /^https:\/\//.test(unwrapUrl(value))) {
+      try { allowedUrls.add(new URL(unwrapUrl(value)).href); } catch { /* validation below keeps malformed URLs out */ }
     } else if (Array.isArray(value)) value.forEach(collectAllowed);
     else if (value && typeof value === 'object') Object.values(value as Record<string, unknown>).forEach(collectAllowed);
   };
   collectAllowed(ledger);
   const visit = (value: unknown): void => {
-    if (typeof value === 'string' && /^https:\/\//.test(value) && !allowedUrls.has(new URL(value).href)) errors.push('new URL: ' + value);
-    else if (Array.isArray(value)) value.forEach(visit);
+    if (typeof value === 'string') {
+      // Unwrap first: a Markdown-wrapped URL does not start with "https://" and
+      // used to slip through this check entirely.
+      const candidate = unwrapUrl(value);
+      if (/^https:\/\//.test(candidate)) {
+        let href: string | null = null;
+        try { href = new URL(candidate).href; } catch { href = null; }
+        if (!href) errors.push('malformed URL: ' + value);
+        else if (!allowedUrls.has(href)) errors.push('new URL: ' + value);
+        else if (candidate !== value.trim()) errors.push('URL is not a raw https:// string: ' + value);
+      }
+      return;
+    }
+    if (Array.isArray(value)) value.forEach(visit);
     else if (value && typeof value === 'object') Object.values(value as Record<string, unknown>).forEach(visit);
   };
   visit(final);
@@ -762,7 +804,13 @@ async function translationResponse(
 ): Promise<string[]> {
   const prompt = `Translate each English string below to Simplified Chinese (zh-CN), in order. This is translation only: do not add, omit, merge, reorder, infer, or correct anything. Preserve all proper names, identifiers, URLs, email addresses, phone numbers, dates, codes, and numbers exactly if present. Return exactly one JSON object in a fenced code block: {"translations":["...same count and order..."]}.\nINPUT: ${JSON.stringify(texts)}`;
   let lastError = 'translation request failed';
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // Four tries, and the waits are seconds rather than milliseconds. 1s and 2s
+  // are shorter than a Railway service takes to come back from a cold start, so
+  // the old backoff gave up while the router was still waking: three of five
+  // Chinese translations in the history died on a 503 that a slightly more
+  // patient caller would have ridden out.
+  const BACKOFF_MS = [2_000, 8_000, 20_000];
+  for (let attempt = 0; attempt < 4; attempt++) {
     try {
       const response = await fetch(baseUrl + '/chat/completions', {
         method: 'POST', headers: { authorization: 'Bearer ' + apiKey, 'content-type': 'application/json' },
@@ -774,7 +822,9 @@ async function translationResponse(
       if (!response.ok) {
         lastError = 'translation service returned HTTP ' + response.status;
         if (response.status === 429 || response.status >= 500) {
-          await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
+          const wait = BACKOFF_MS[attempt];
+          if (wait === undefined) break;
+          await new Promise((resolve) => setTimeout(resolve, wait));
           continue;
         }
         throw new Error(lastError);
