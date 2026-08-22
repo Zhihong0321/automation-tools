@@ -6,8 +6,9 @@ back. Two things keep the work here rather than in the container:
 - **A home IP.** A Google Maps scan from a datacenter address comes back thin
   instead of coming back an error, so a scan run in Railway is quietly incomplete.
 - **Logins that already exist here.** The ChatGPT accounts are signed in inside
-  ego lite's profiles on this machine, and this machine's `agy` was signed in
-  interactively — no OAuth-paste apparatus, no keyring the container does not have.
+  ego lite's profiles on this machine, this machine's `agy` was signed in
+  interactively, and Facebook was signed in by hand in the crawler's own task
+  space — no OAuth-paste apparatus, no keyring the container does not have.
 
 It only ever makes outbound requests. Nothing needs to be opened on the router.
 
@@ -29,6 +30,10 @@ POST /api/jobs/<id>/result                          {ok, result, error}
 | `agy.probe` | none | one real model call, so "installed" is never mistaken for "signed in" |
 | `meta.ask` / `muse.ask` | `{prompt, model?, timeoutMs?}` | `muse.mjs` — `opencode run` pinned to muse 1.2, ~3–5s |
 | `meta.probe` / `muse.probe` | none | one real model call, same reasoning as `agy.probe` |
+| `fb.company` | `{name, city?, phone?, website?, address?, category?, budget?}` | `fb.mjs` → `fbw`, an ego lite crawl, 16–55s — 16s and no model call when the deterministic scorer settles it |
+| `fb.person` | `{person, company, city?}` | that person's profile, if it is publicly linked to the company |
+| `fb.discover` | `{name, city?}` | named humans on a company's public surface, 60–120s |
+| `fb.probe` | none | whether ego lite still holds a Facebook session — one page load, no model call |
 
 **`meta.*` is muse now.** Meta AI was never activated on this machine: no ego
 lite profile ever held a `meta.ai` or `facebook.com` cookie, so every route to it
@@ -61,6 +66,7 @@ one process per engine:
 |---|---|---|---|
 | the scan | `$(hostname)` | `ping,gmap.scan` | the LaunchDaemon, at boot |
 | the ask lane | `macmini-ask` | the six wrapper types plus `muse.*` | the LaunchAgent, at login |
+| the fb lane | `macmini-fb` | `fb.company,fb.person,fb.discover,fb.probe` | the LaunchAgent, at login |
 
 Pinning the daemon matters as much as pinning the wrappers: a claim with no
 `types` asks for **any** job, so an unpinned scan daemon will happily take a
@@ -87,6 +93,12 @@ human performed once, in a browser profile on this machine:
   answering as the wrong account.
 - **agy** — signed in interactively, on this machine, once. `worker/agy.mjs` only
   runs the binary at `~/.local/bin/agy`.
+- **Facebook** — signed in by hand once, in the `facebook read-only crawler` task
+  space inside ego lite. `fb-recon` never types, stores or reads a password; when
+  the session lapses the fix is `./fb login` on this machine, which hands you the
+  browser to sign in yourself. `fb.probe` is how the cloud finds out.
+- **Claude** — `fbw` runs the Claude CLI on an OAuth login in the **login
+  keychain**, which is the second reason the fb lane cannot be a daemon.
 
 ---
 
@@ -201,6 +213,77 @@ goes back to the container.
 it — ego lite is a GUI app and cannot run in the system domain either — with
 `WORKER_NAME` and `WORKER_TYPES` changed.
 
+### The fb lane — an agent for two reasons
+
+ego lite is a GUI app, so this lane hits the same wall as the ask lane. It also
+runs the Claude CLI, whose credential is an OAuth login in the login keychain —
+which a system-domain process cannot unlock. Either reason alone rules out the
+daemon.
+
+```bash
+sed -e "s|__HOME__|$HOME|g" -e "s|__NODE__|$(which node)|g" \
+    worker/com.eternalgy.gmapworker.fb.plist \
+    > ~/Library/LaunchAgents/com.eternalgy.gmapworker.fb.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.eternalgy.gmapworker.fb.plist
+tail -f ~/Library/Logs/gmap-worker-fb.log
+```
+
+Stop it with `launchctl bootout gui/$(id -u)/com.eternalgy.gmapworker.fb`.
+
+Prove the engine before routing anything to it — `fb.mjs` runs standalone, and a
+failure you can see beats one in a log:
+
+```bash
+node worker/fb.mjs probe
+node worker/fb.mjs company '{"name":"Riomation2u","city":"Johor Bahru","budget":4}'
+```
+
+### The x lane — an agent for three reasons
+
+The two above, plus one this lane has alone. grok.com puts an age-confirmation
+modal in the way, once per ego lite task space, and x-recon will not click it: an
+age attestation is a statement about a person, not a checkbox a job may tick. That
+gate is cleared by a human at this machine or not at all, so there is no version of
+this lane that runs somewhere nobody is sitting.
+
+It drives a *different* ego lite task space from the fb lane — `grok x-search`
+against the crawl space — so the two do not contend for a browser and can be in
+flight at once.
+
+```bash
+sed -e "s|__HOME__|$HOME|g" -e "s|__NODE__|$(which node)|g" \
+    worker/com.eternalgy.gmapworker.x.plist \
+    > ~/Library/LaunchAgents/com.eternalgy.gmapworker.x.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.eternalgy.gmapworker.x.plist
+tail -f ~/Library/Logs/gmap-worker-x.log
+```
+
+Stop it with `launchctl bootout gui/$(id -u)/com.eternalgy.gmapworker.x`.
+
+Prove the engine before routing anything to it. `probe` is the one to read first,
+because it distinguishes the two things that look alike from the outside — a lapsed
+sign-in (`logged_out`) and a signed-in account behind an unanswered dialog
+(`gated`). They need different humans doing different things.
+
+```bash
+node worker/x.mjs probe
+node worker/x.mjs subject '{"subject":"Grok 5 launch","budget":1}'
+```
+
+**Budget buys wall clock here, not money.** One Grok ask is 40–120s and the default
+is four per lead, so give jobs a `timeoutMs` of at least `600000` — the handler's
+own default — and expect a full ladder to run six minutes.
+
+**Test it with a scrubbed environment, not your shell's.** `fbw` shells out to
+`claude`, and an interactive terminal on this machine carries desktop-app
+variables that launchd does not — including one that overrides the API base URL.
+Run it the way launchd will:
+
+```bash
+env -i HOME="$HOME" USER="$USER" PATH="$(dirname $(which node)):$HOME/.local/bin:/usr/bin:/bin" \
+    node worker/fb.mjs probe
+```
+
 **Check what `$(which node)` actually resolved to.** launchd needs an absolute path, so
 that sed bakes one in permanently. If Node came from nvm rather than brew it will be
 version-specific — `~/.nvm/versions/node/v24.13.1/bin/node` — and the day that version is
@@ -233,6 +316,11 @@ sleeping does.
 | nothing at all in the log after a reboot | the job was installed as an agent, not a daemon, and nobody logged in. |
 | a job goes back to `pending` on its own | its lease expired — the worker died mid-job. Three of those and the job fails with a message saying so. |
 | the worker stops coming back after a Node upgrade | the plist holds the absolute path baked in at install. Re-run the `sed` line above. |
+| `fb.*` fails `logged_out: ego lite is not signed in to Facebook` | the crawl space's Facebook session lapsed. `./fb login` on the mini and sign in by hand; nothing here stores a credential to refresh. |
+| `fb.*` fails `busy: another fb-recon run holds the browser lock` | a lead is already running, or a previous one was killed hard and left `fb-recon/worker/runs/.lock` behind. Remove the directory only after checking nothing is running. |
+| `fb.*` fails `busy: the crawl space is under a human's control` | somebody clicked in the crawl space's window. The crawler will not fight you for the browser. Re-run when you are done. |
+| `fb.*` fails with a 403 mentioning `provider:11111` | `claude` read `~/.claude/settings.json`, which points at a proxy that does not serve `claude-sonnet-5`. `fbw` passes `--setting-sources project,local` to skip that file; a failure here means the flag was lost. |
+| every `fb.*` job fails only under launchd, never from your terminal | the desktop app exports variables a launchd job does not — the base-URL override above is the usual one. Reproduce with the `env -i` line in the install section. |
 | `chatgpt@mini` fails `task space not found: <n>` after a reboot | task space ids do not survive a browser restart. Register the space by NAME in `~/.gmap-worker/spaces.json` (`"space": "chatgpt-pro"`), not by number — `useOrCreateTaskSpace` then rebuilds it on demand, and the login lives in the profile's cookie jar, which does survive. The profile guard keeps the rebuild honest. |
 | `agy@mini` or `chatgpt@mini` is missing from `/v1/models` | no lane is claiming that type. Either the process is dead, or it is running code older than the handler — a worker only advertises the types it had when it started, so restart it after a `git pull`. |
 | a job fails with `logged_out: agy is not signed in` | agy's own Google session expired. Sign in again interactively on this machine; nothing in the worker stores a credential to refresh. |
@@ -249,6 +337,9 @@ sleeping does.
 | `WORKER_TYPES` | empty | comma-separated. Empty gives the two default lanes; set, it pins the process to one lane taking exactly these types. See [Lanes](#lanes) |
 | `WORKER_ENV_FILE` | `~/.gmap-worker.env` | |
 | `AGY_BIN` | `~/.local/bin/agy` | |
+| `FBW_BIN` | `~/project/gmap-recon/fb-recon/worker/fbw` | the fb-recon worker; it lives in its own repo |
+| `FB_BIN` | `~/project/gmap-recon/fb-recon/fb` | the crawler itself, used only by `fb.probe` |
+| `FB_TIMEOUT_MS` | 300000 | ceiling for one lead; the payload's `timeoutMs` wins when set |
 | `AGY_TIMEOUT_MS` | 300000 | ceiling for one `agy.ask`; the payload's `timeoutMs` wins when it is set |
 | `CGPT_ASK_TIMEOUT_MS` | 180000 | how long to wait for a ChatGPT answer to stop growing |
 | `CGPT_TRACE` | off | `1` narrates the answer-wait, phase by phase |

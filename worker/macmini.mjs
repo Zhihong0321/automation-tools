@@ -36,6 +36,8 @@ import { scan as gmapScan } from './gmap.mjs';
 import * as chatgpt from './chatgpt-ego.mjs';
 import * as muse from './muse.mjs';
 import * as agy from './agy.mjs';
+import * as fb from './fb.mjs';
+import * as x from './x.mjs';
 
 // Config from a file the process owner can chmod 600, so the token is not in a
 // launchd plist that every process on the box can read.
@@ -83,6 +85,18 @@ const LANES = (() => {
   return [
     { suffix: '', types: ['ping', 'gmap.scan'] },
     { suffix: '-ask', types: ['chatgpt.ask', 'chatgpt.probe', 'meta.ask', 'meta.probe', 'muse.ask', 'muse.probe', 'agy.ask', 'agy.probe'] },
+    // Its own lane for the same reason `-ask` is not the scan lane, one step
+    // further out: a lead takes 1-2 minutes of paced page loads, so it would sit
+    // in front of every wrapper call if it shared theirs -- and it holds ego
+    // lite's single crawl space for that whole time, which the scan lane's
+    // Chrome does not care about but a `chatgpt.ask` in the same process would.
+    { suffix: '-fb', types: ['fb.company', 'fb.person', 'fb.discover', 'fb.probe'] },
+    // Its own lane again, and for a stronger version of the fb reason: one Grok
+    // ask is 40-120s and a lead may spend four of them, so an x.* job can hold a
+    // lane for six minutes. It drives a DIFFERENT ego lite task space from fb.*
+    // ("grok x-search" vs the crawl space), so the two do not contend for a
+    // browser and can be in flight at once.
+    { suffix: '-x', types: ['x.subject', 'x.company', 'x.probe'] },
   ];
 })();
 
@@ -149,6 +163,22 @@ const handlers = {
   'muse.probe': muse.probe,
   'agy.ask': agy.ask,
   'agy.probe': agy.probe,
+  // Facebook lead enrichment through fb-recon: the Claude CLI picks which rung
+  // of the search ladder to try, a read-only crawler drives ego lite. Same
+  // reason as gmap.scan for living here -- the Facebook session is a login a
+  // human performed once in a profile on this machine, not a token to ship.
+  'fb.company': fb.company,
+  'fb.person': fb.person,
+  'fb.discover': fb.discover,
+  'fb.probe': fb.probe,
+  // X research through x-recon: the Claude CLI decides what to ask Grok and how
+  // much of the answer to believe, a grok.com driver does the asking. Lives here
+  // for the gmap.scan reason plus one of its own -- grok.com's age modal can only
+  // ever be dismissed by a human at the machine, so this work is bound to a box
+  // with a person near it.
+  'x.subject': x.subject,
+  'x.company': x.company,
+  'x.probe': x.probe,
 };
 
 // ---------------------------------------------------------------- the client

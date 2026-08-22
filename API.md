@@ -311,6 +311,13 @@ container.
 | `chatgpt.probe` | `{id}` | `{status, detail}` |
 | `agy.ask` | `{prompt, tools?, timeoutMs?}` | `{engine, answer, ms}` — what `agy@mini` is underneath |
 | `agy.probe` | none | `{status, detail, sample}` |
+| `fb.company` | `{name, city?, phone?, website?, address?, category?, budget?, timeoutMs?}` | `{engine, mode, lead, result, meta}` — the business's own Facebook Page |
+| `fb.person` | `{person, company, city?, budget?}` | the same envelope; that person's profile if it is publicly linked to the company |
+| `fb.discover` | `{name, city?, budget?}` | the same envelope, with `result.people[]` |
+| `fb.probe` | none | `{status, detail, ms}` — whether ego lite still holds a Facebook session |
+| `x.subject` | `{subject, since?, lang?, max?, budget?, timeoutMs?}` | `{engine, mode, lead, result, meta}` — what X is saying about the subject |
+| `x.company` | `{name, city?, website?, phone?, category?, since?, budget?}` | the same envelope, shaped around a lead rather than a topic |
+| `x.probe` | none | `{status, detail, account, ms}` — `ready`, `gated` or `logged_out` on grok.com |
 
 The four wrapper types are the transport for the mini's half of `/v1`; a caller
 that wants an answer should use `/v1/chat/completions` with `@mini` and let the
@@ -349,6 +356,146 @@ null.
 `company_data`, `search_report` and the link between them, deduped on Google's place
 id. `saved` reports what landed; if it is null, `saveError` says why and the rows
 still come back in the response.
+
+### Facebook lead enrichment — `fb.*`
+
+Takes a lead that came out of a Maps scan and finds its Facebook presence. Lives on
+the mini for the same reason the scan does: the Facebook session is a login a human
+performed once, in a browser profile on that machine, and there is no token to ship.
+
+```bash
+ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \
+     -H 'content-type: application/json' \
+     -d '{"type":"fb.company","timeoutMs":300000,
+          "payload":{"name":"Riomation2u","city":"Johor Bahru","phone":"016-712 7666","budget":6}}' \
+     | jq -r .job.id)
+curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
+```
+
+```json
+{"engine":"fb-recon","mode":"company",
+ "result":{"found":true,"confidence":"confirmed",
+           "facebook_url":"https://www.facebook.com/Riomation2u",
+           "phone":"016-712 7666","email":"riomation.services@gmail.com",
+           "followers":"418","reviews":2,
+           "matched_on":["phone","brand","city"],
+           "runners_up":[],
+           "searches_run":["places \"Riomation2u Johor Bahru\"","detail …"],
+           "reasoning":"…"},
+ "meta":{"cost_usd":0.075,"crawl_calls":2,"budget":4,"duration_s":31,"model":"claude-sonnet-5"}}
+```
+
+**Read `confidence`, not `found`.** It is `confirmed | likely | weak | none`, and the
+worker is instructed never to inflate it — a `weak` honestly labelled is usable, a
+wrong `likely` attached to a lead poisons the pipeline. `found: false` is a normal
+outcome: plenty of real businesses have no Facebook presence, and `fb.discover`
+returning zero people is the common case rather than a failure.
+
+**`matched_on`, `runners_up` and `searches_run` are the audit trail.** They say which
+rungs of the search ladder ran, what evidence decided it, and why the second-best
+candidate lost. A result without them is not reviewable.
+
+**Read `meta.engine`.** A lead the deterministic scorer can settle outright — an exact
+phone or website-domain match, or brand plus city with no rival — never reaches a model
+at all: `engine: "deterministic"`, `cost_usd: 0`, `turns: 0`, and about 16s instead of
+40. Roughly half of leads carrying a phone or website land there. The rest come back
+`engine` absent, having been ranked by the model, and carry `runners_up` explaining what
+lost. A record is the same shape either way.
+
+**`budget` is the cost dial.** Each unit is one crawl call — a page load plus a round
+of model context — and it defaults to 10. Two calls settle a company whose lead carries
+a phone or a website; a `discover` run uses five or more. A model-ranked lead costs
+$0.05–0.15.
+
+**Give it room.** A company lookup takes 16–55s and a discover run 60–120s, all of it
+page loads the crawler paces on purpose, so pass a `timeoutMs` well above the default.
+Only one lead runs at a time — ego lite has a single crawl space and the worker holds
+a lock for the length of a run, which is why `fb.*` has its own lane. A second job
+arriving early fails with `busy` and is worth retrying rather than reporting.
+
+**`fb.probe` before a batch.** A lapsed Facebook session fails every lead with
+`logged_out`, and the fix is a human signing in on the mini — so it is worth one cheap
+page load to find that out first.
+
+### X research — `x.*`
+
+Finds what X (x.com) is saying about a subject, or about a lead. It runs on the mini
+for the gmap.scan reason — the grok.com session is a login a human performed once, in a
+browser profile on that machine — plus one of its own, in *Read `gated`* below.
+
+**Nothing here ever visits x.com.** Grok reads X on our behalf, so no session this job
+opens is ever on a page with a Like button; there is no code path by which it can
+repost, follow or reply. What that costs is directness, which is what the citation
+fields below exist to price.
+
+```bash
+ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \
+     -H 'content-type: application/json' \
+     -d '{"type":"x.subject","timeoutMs":600000,
+          "payload":{"subject":"Grok 5 launch","since":"2026-06-01","budget":2}}' \
+     | jq -r .job.id)
+curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
+```
+
+```json
+{"engine":"x-recon","mode":"subject",
+ "result":{"found":true,"confidence":"likely","coverage":"moderate","sentiment":"mixed",
+           "summary":"…",
+           "threads":[{"url":"https://x.com/…/status/…","author":"@…","date":"2026-06-11",
+                       "topic":"benchmark claims","stance":"negative","replies":212,
+                       "cited":true,"excerpt":"…"}],
+           "accounts":[{"handle":"@…","why":"…"}],
+           "searches_run":["search \"Grok 5 launch\"","threads \"Grok 5 launch\""],
+           "reasoning":"…"},
+ "meta":{"cost_usd":0.061,"asks":2,"budget":4,"duration_s":190,"model":"claude-sonnet-5"}}
+```
+
+**Read `cited`, not just `url`.** Grok is a language model reading X, not a database of
+X, and it will occasionally produce a plausible status URL it never opened. Grok is
+asked the question a person would ask and answers in prose; the driver then separates
+the permalinks it *rendered as links* — posts it actually opened — from those appearing
+only in its text, and `cited` reflects that split rather than Grok's own claim. An
+uncited thread is not automatically wrong, but a result where `cited` is 0 of 12 is one
+to distrust, and the worker is told never to let uncited threads carry the confidence
+rating alone.
+
+**Read `confidence`, not `found`.** Same contract as `fb.*`: `confirmed | likely | weak
+| none`, never inflated. And `found: false` is the *common* answer on `x.company` —
+most local businesses are neither on X nor discussed on X, so a padded record there is
+the only outcome that actually costs anything.
+
+**Read `gated`.** `x.probe` has a third state the other probes do not, and the
+distinction matters because the remedy differs: `logged_out` means nobody is signed in
+to grok.com, while `gated` means the session is fine but grok.com is showing a dialog —
+in practice its age confirmation, sometimes a cookie banner. **x-recon will not click
+either.** An age attestation is a statement about a person, not a checkbox a job may
+tick, so a human clears it on the mini (`./x login`) once per ego lite task space. A
+run that meets one fails with code `gated`, not `logged_out`; treating them alike sends
+someone to fix the wrong thing.
+
+The gate appears on *send*, not on load, so a clean `x.probe` is good evidence and not
+a guarantee — on a task space nobody has asked a question in yet, the first ask is the
+real test.
+
+**`budget` buys wall clock, not money.** Each unit is one Grok ask at 40–120 seconds,
+and it defaults to 4 — so a lead working the whole ladder can run six minutes. This is
+by far the slowest job type here: pass `timeoutMs` of at least `600000`, which is also
+the handler's own default. Measured: a two-ask subject lands in ~180s for $0.41.
+
+**The empty case is free.** A subject with no threads and no accounts on rung 1 is
+settled by the deterministic pre-pass with no model call at all — `engine:
+"deterministic"`, `cost_usd: 0`, one ask. A failed parse or a truncated stream is
+deliberately *not* treated as absence: that is evidence the ask went wrong, and it goes
+to the model instead.
+
+**`searches_run` and `reasoning` are the audit trail**, and each run keeps the
+`chat_url` of the Grok conversation itself in its run directory on the mini — open it
+and read the exchange when an answer looks wrong. That separates a bad answer from a
+bad question.
+
+Only one x job runs at a time; a second arriving early fails with `busy` and is worth
+retrying. `x.*` has its own lane and drives a different ego lite task space from
+`fb.*`, so the two do not contend for a browser.
 
 **In memory, and leased.** Jobs live in a Map and are lost on redeploy — about six
 minutes of exposure, accepted while the transport is still being proven. Each job

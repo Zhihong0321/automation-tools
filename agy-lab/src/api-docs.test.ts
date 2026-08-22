@@ -18,6 +18,24 @@ test('served docs explain the complete search-to-research handoff', () => {
   assert.doesNotMatch(html, /eternalgy2026/i);
 });
 
+test('served docs introduce the social research workers and their honesty contract', () => {
+  const html = page();
+  // The X worker reaches x.com only through Grok, and the page has to say so: a reader
+  // who thinks this crawls X will reason wrongly about rate limits, sessions and risk.
+  assert.match(html, /Social\s+research/);
+  assert.match(html, /grok\.com/);
+  assert.match(html, /never\s+visits\s+x\.com/);
+  assert.match(html, /x\.subject/);
+  assert.match(html, /x\.probe/);
+  assert.match(html, /fb\.company/);
+  // `cited` is the only check on a fabricated permalink. If this guidance ever falls
+  // out of the page, callers start trusting urls Grok never opened.
+  assert.match(html, /Read\s+<code>cited<\/code>/);
+  // gated and logged_out send a human to different fixes; collapsing them is the bug.
+  assert.match(html, /<code>gated<\/code>/);
+  assert.match(html, /age\s+attestation/);
+});
+
 test('OpenAPI contract exposes each research workflow and resolves local references', () => {
   assert.equal(document.openapi, '3.1.0');
   assert.ok(document.paths['/api/business-search'].post);

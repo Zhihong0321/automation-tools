@@ -164,6 +164,7 @@ export function body(): string {
     <a href="#meta">Meta AI</a>
     <span class="nav-label">Home worker</span>
     <a href="#jobs">Jobs</a>
+    <a href="#social">Social research</a>
     <span class="nav-label">Operating it</span>
     <a href="#sessions">Sessions</a>
     <a href="#observe">Observation layer</a>
@@ -182,7 +183,9 @@ export function body(): string {
   <h1>EE Business Intelligence API</h1>
   <p class="lede">Search a market, persist a ranked business list, enrich any returned
   company through four research rounds, and give the requester a durable mobile report.
-  The lower-level model gateway is documented on the same page for operators.</p>
+  Social research runs alongside it: Facebook presence, and what X (x.com) is saying,
+  read through Grok. The lower-level model gateway is documented on the same page for
+  operators.</p>
   <div class="facts">
     <div class="fact"><span class="k">Production origin</span><code>https://ee-auto.up.railway.app</code></div>
     <div class="fact"><span class="k">Auth</span><code>Authorization: Bearer LAB_TOKEN</code></div>
@@ -678,6 +681,13 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
     <tr><th>type</th><th>payload</th><th>returns</th></tr>
     <tr><td><code>ping</code></td><td>none</td><td><code>{hostname, platform, node, publicIp, uptimeSec, at}</code></td></tr>
     <tr><td><code>gmap.scan</code></td><td><code>{keyword, place?, max?, userId?}</code></td><td><code>{businesses[], found, capped, blocked, blockedReason, limitedView, saved}</code></td></tr>
+    <tr><td><code>fb.company</code></td><td><code>{name, city?, phone?, website?, category?, budget?}</code></td><td><code>{engine, mode, lead, result, meta}</code> &mdash; the business's own Facebook Page</td></tr>
+    <tr><td><code>fb.person</code></td><td><code>{person, company, city?, budget?}</code></td><td>the same envelope; that person's profile if it is publicly linked to the company</td></tr>
+    <tr><td><code>fb.discover</code></td><td><code>{name, city?, budget?}</code></td><td>the same envelope, with <code>result.people[]</code></td></tr>
+    <tr><td><code>fb.probe</code></td><td>none</td><td><code>{status, detail, ms}</code> &mdash; whether ego lite still holds a Facebook session</td></tr>
+    <tr><td><code>x.subject</code></td><td><code>{subject, since?, lang?, max?, budget?}</code></td><td><code>{engine, mode, lead, result, meta}</code> &mdash; what X (x.com) is saying about the subject</td></tr>
+    <tr><td><code>x.company</code></td><td><code>{name, city?, website?, phone?, since?, budget?}</code></td><td>the same envelope, shaped around a lead rather than a topic</td></tr>
+    <tr><td><code>x.probe</code></td><td>none</td><td><code>{status, detail, account, ms}</code> &mdash; <code>ready</code>, <code>gated</code> or <code>logged_out</code> on grok.com</td></tr>
   </table>
   <pre><code>ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \
      -H 'content-type: application/json' \
@@ -705,9 +715,94 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
   is still <code>running</code> past its <code>timeoutMs</code> goes back to
   <code>pending</code>, up to three times, then fails with a message saying so. A queue
   that strands work silently is worse than one that loses it visibly.</p></div>
+  <div class="call"><span class="h">The social research types run on the mini</span>
+  <p><code>fb.*</code> and <code>x.*</code> enrich a lead that came out of a scan &mdash; its
+  Facebook presence, and what X is saying about it. Both live on the mini for the
+  <code>gmap.scan</code> reason: the session is a login a human performed once in a browser
+  profile on that machine, and there is no token to ship. Both are documented in
+  <a href="#social">Social research</a> below.</p></div>
   <p>The long poll is not written to <a href="#logs">the request log</a>. One request every
   25 s forever would be ~3,500 records a day burying everything else; result posts and
   failures are still recorded.</p>
+</section>
+
+<section id="social">
+  <h2>Social research &mdash; Facebook, and X through Grok</h2>
+  <p>Two job families that take a lead out of a Maps scan and find what the social web
+  already says about it. Both run on the machine at home, for the same reason
+  <code>gmap.scan</code> does: the session is a login a human performed once, in a browser
+  profile on that machine, and there is no token to ship to a container.</p>
+  <p>Both answer in the same envelope &mdash; <code>{engine, mode, lead, result, meta}</code>
+  &mdash; and both put a <code>confidence</code> of
+  <code>confirmed&nbsp;|&nbsp;likely&nbsp;|&nbsp;weak&nbsp;|&nbsp;none</code> on the result.
+  <b>Read that, not <code>found</code>.</b> The workers are instructed never to inflate it,
+  because a <code>weak</code> honestly labelled is usable downstream and a wrong
+  <code>likely</code> attached to a lead poisons everything built on it.
+  <code>found: false</code> is a normal outcome, not a failure: plenty of real businesses
+  have no Facebook page, and most are not discussed on X at all.</p>
+
+  <h3><code>fb.*</code> &mdash; the business's own Facebook presence</h3>
+  <p>A read-only crawler drives the browser and a model picks which rung of a search ladder
+  to try next. The read-only contract &mdash; URL allowlist, click whitelist, never types
+  into a field &mdash; is enforced inside the crawler rather than asked of the model.
+  <code>fb.company</code> finds the Page or Place, <code>fb.person</code> finds a named
+  person attached to it, <code>fb.discover</code> finds humans attached to a company you
+  only have a name for. A lead is 16&ndash;120s.</p>
+
+  <h3><code>x.*</code> &mdash; what X is saying, asked through Grok</h3>
+  <p>This one never visits x.com. It drives <b>grok.com</b> in the browser and lets Grok read
+  X on our behalf, which buys a property a crawler cannot have: <b>no session it opens is
+  ever on a page with a Like button</b>, so there is no code path by which it can repost,
+  follow or reply.</p>
+  <p>Grok is asked the question a person would ask &mdash; <i>what is being said on X about
+  this, who is talking, what are the threads arguing about</i> &mdash; and answers in prose.
+  A model then turns that reply into the record. The prompt is a frozen template inside the
+  driver and the caller supplies only a subject string, so <b>&ldquo;search x.com and nothing
+  else&rdquo; is a property of the code</b>, not a hope about model behaviour.</p>
+
+  <div class="call"><span class="h">Read <code>cited</code>, not just <code>url</code></span>
+  <p>Grok is a language model reading X, not a database of X, and it will occasionally
+  produce a plausible status URL it never opened. The driver separates the permalinks Grok
+  <i>rendered as links</i> &mdash; posts it actually opened, read off the page rather than
+  off Grok's say-so &mdash; from those appearing only in its prose, and <code>cited</code>
+  reflects that split. An uncited thread is not automatically wrong, but a result where
+  <code>cited</code> is 0 of 12 is one to distrust, and the worker is told never to let
+  uncited threads carry the confidence rating alone.</p></div>
+
+  <pre><code>ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \
+     -H 'content-type: application/json' \
+     -d '{"type":"x.subject","timeoutMs":600000,
+          "payload":{"subject":"Grok 5 launch","since":"2026-06-01","budget":2}}' \
+     | jq -r .job.id)
+curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result</code></pre>
+
+  <p><code>result.threads[]</code> carries <code>url</code>, <code>author</code>,
+  <code>date</code>, <code>topic</code>, <code>stance</code>, <code>replies</code>,
+  <code>excerpt</code> and <code>cited</code>; <code>result.accounts[]</code> carries the
+  handles worth knowing about and why. <code>searches_run</code> and <code>reasoning</code>
+  are the audit trail, and each run keeps the URL of the Grok conversation itself on the
+  mini &mdash; open it and read the exchange when an answer looks wrong. That separates a
+  bad answer from a bad question.</p>
+
+  <div class="call"><span class="h">Three things that will bite you</span>
+  <p><b>It is slow.</b> One Grok ask is 40&ndash;120s and the default budget is four of them,
+  so a lead can run six minutes. Pass <code>timeoutMs</code> of <code>600000</code>; that is
+  also the handler's own default. Measured: a two-ask subject lands in ~180s for $0.41.</p>
+  <p><b><code>gated</code> is not <code>logged_out</code>.</b> <code>x.probe</code> answers
+  <code>ready</code>, <code>gated</code> or <code>logged_out</code>, and the remedies differ.
+  <code>gated</code> means the grok.com session is fine but a dialog &mdash; in practice an
+  age confirmation &mdash; is in the way, and the driver will not click it: an age
+  attestation is a statement about a person, not a checkbox a job may tick. A human clears
+  it on the mini, once per browser task space, and it is a <b>two-step</b> dialog whose
+  second step is easy to miss. It appears on send rather than on load, so a clean probe is
+  evidence and not a guarantee.</p>
+  <p><b>The empty case is free.</b> A subject with no post links at all on the first ask is
+  settled without a model call &mdash; <code>engine: "deterministic"</code>,
+  <code>cost_usd: 0</code>. A truncated or empty answer is deliberately <i>not</i> treated as
+  absence: that is evidence the ask went wrong, and it goes to the model instead.</p></div>
+
+  <p>Each family has its own lane and its own browser space, running one job at a time; a
+  second arriving early fails with <code>busy</code> and is worth retrying.</p>
 </section>
 
 <section id="sessions">
