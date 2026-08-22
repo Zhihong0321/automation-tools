@@ -80,10 +80,43 @@ const LANES = (() => {
   // pins a machine to one kind of work — the reason to reach for it now is to
   // run the wrappers on one box and the scan on another.
   const pinned = (process.env.WORKER_TYPES ?? '').split(',').map((t) => t.trim()).filter(Boolean);
-  if (pinned.length) return [{ suffix: '', types: pinned }];
+  // WORKER_SESSIONS widens a pinned worker without unpinning it. A pin is one
+  // lane by definition, and that is still right for `gmap.scan`; it stopped being
+  // right for `chatgpt.ask` the moment the machine had three signed-in accounts.
+  // The ask job is pinned in its plist precisely so it does not inherit the scan
+  // daemon's WORKER_TYPES from ~/.gmap-worker.env, so unpinning it is not an
+  // option -- it has to widen in place.
+  //
+  // First session keeps the full pinned type list, including the non-chatgpt
+  // types a pinned worker is also carrying (agy). The rest take only the ChatGPT
+  // types, because those are the only ones a second account can answer: agy is
+  // one CLI against one credential no matter how many lanes ask it.
+  const sessions = (process.env.WORKER_SESSIONS ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+  if (pinned.length) {
+    if (sessions.length < 2) return [{ suffix: '', types: pinned, session: sessions[0] }];
+    const chatgptOnly = pinned.filter((t) => t.startsWith('chatgpt.'));
+    return sessions.map((session, i) => (i === 0
+      ? { suffix: '', types: pinned, session }
+      : { suffix: '-' + (i + 1), types: chatgptOnly, session }));
+  }
   return [
     { suffix: '', types: ['ping', 'gmap.scan'] },
-    { suffix: '-ask', types: ['chatgpt.ask', 'chatgpt.probe', 'agy.ask', 'agy.probe'] },
+    // Three ChatGPT lanes, one per signed-in account, because that is what the
+    // machine actually has: Profile 3 (Zhihong PRO), Profile 2 (三专) and
+    // Profile 5 (gan gemini) are three separate ChatGPT logins in three separate
+    // ego lite task spaces. One lane meant Round 02's three audit calls queued
+    // behind each other on one account while the other two sat idle.
+    //
+    // `session` is the lane's identity, not the job's: nothing upstream knows or
+    // should know which account answers, so the lane supplies it when the payload
+    // does not. A job that names its own `id` still wins -- that is how a caller
+    // pins a specific account on purpose.
+    //
+    // agy stays on the first lane alone. It is one CLI against one credential on
+    // this box; giving it three claim loops would just race the same binary.
+    { suffix: '-ask', types: ['chatgpt.ask', 'chatgpt.probe', 'agy.ask', 'agy.probe'], session: 'mini-main' },
+    { suffix: '-ask2', types: ['chatgpt.ask', 'chatgpt.probe'], session: 'mini-2' },
+    { suffix: '-ask3', types: ['chatgpt.ask', 'chatgpt.probe'], session: 'mini-3' },
     // Its own lane for the same reason `-ask` is not the scan lane, one step
     // further out: a lead takes 1-2 minutes of paced page loads, so it would sit
     // in front of every wrapper call if it shared theirs -- and it holds ego
@@ -235,7 +268,7 @@ function beat(name, types) {
   return () => clearInterval(timer);
 }
 
-async function run(name, job) {
+async function run(name, job, session) {
   const handler = handlers[job.type];
   const at = Date.now();
   if (!handler) {
@@ -247,7 +280,12 @@ async function run(name, job) {
   }
   say('job ' + job.id + ' type=' + job.type + ' — running');
   try {
-    const result = await handler(job.payload, job);
+    // The lane's session is a default, never an override: a payload that names an
+    // `id` has chosen its account deliberately.
+    const payload = session && job.type.startsWith('chatgpt.')
+      ? { ...(job.payload ?? {}), id: job.payload?.id ?? session }
+      : job.payload;
+    const result = await handler(payload, job);
     await report(name, job.id, true, result, null);
     // A scan that ran fine but did not persist is the one failure that is
     // invisible from here: the caller gets its rows and the job says done. The
@@ -289,8 +327,8 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
  * The backoff is per lane. A lane whose engine is sick should not slow the one
  * beside it that is fine.
  */
-async function lane(name, types) {
-  say('lane "' + name + '" -> ' + LAB + ' (' + types.join(', ') + ')');
+async function lane(name, types, session) {
+  say('lane "' + name + '" -> ' + LAB + ' (' + types.join(', ') + ')' + (session ? ' as ' + session : ''));
   let backoff = 0;
   while (!stopping) {
     try {
@@ -299,7 +337,7 @@ async function lane(name, types) {
       if (job) {
         const stop = beat(name, types);
         try {
-          await run(name, job);
+          await run(name, job, session);
         } finally {
           stop();
         }
@@ -319,4 +357,4 @@ async function lane(name, types) {
 say('worker "' + NAME + '" -> ' + LAB);
 // Promise.all rather than await in sequence: the lanes are the concurrency. If
 // one ever settles the process should end, which is what a rejection here does.
-await Promise.all(LANES.map((l) => lane(NAME + l.suffix, l.types)));
+await Promise.all(LANES.map((l) => lane(NAME + l.suffix, l.types, l.session)));

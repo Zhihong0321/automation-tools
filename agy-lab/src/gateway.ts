@@ -63,8 +63,13 @@ type Location = queue.Location;
 
 type Route = { location: Location } & (
   | { engine: 'agy'; model: string }
-  | { engine: 'chatgpt'; model: string; session: string }
-  | { engine: 'meta'; model: string; session: string }
+  // `pinnedSession` records whether the CALLER named the account, as in
+  // `chatgpt:mini-2@mini`, or whether `session` is just the default this resolver
+  // filled in. On the mini that difference decides who picks the account: a
+  // default must not, because the worker now has one lane per signed-in account
+  // and the lane is the thing that knows which one is free.
+  | { engine: 'chatgpt'; model: string; session: string; pinnedSession?: boolean }
+  | { engine: 'meta'; model: string; session: string; pinnedSession?: boolean }
 );
 
 /** The job type the mini's worker lane claims for an engine. */
@@ -185,8 +190,12 @@ export function resolveModel(raw: string): Route {
       // The mini's accounts live in ITS registry, not this container's session
       // store, so defaultSession() must not be consulted for them — it would name
       // a container profile the mini has never heard of.
-      const session = rest.join(':').trim() || process.env.MINI_DEFAULT_SESSION?.trim() || 'mini-main';
-      return { engine: 'chatgpt', model: 'chatgpt:' + session + '@mini', session, location };
+      const explicit = rest.join(':').trim();
+      const session = explicit || process.env.MINI_DEFAULT_SESSION?.trim() || 'mini-main';
+      return {
+        engine: 'chatgpt', model: 'chatgpt:' + session + '@mini', session, location,
+        pinnedSession: Boolean(explicit),
+      };
     }
     const session = rest.join(':').trim() || defaultSession('chatgpt');
     return { engine: 'chatgpt', model: 'chatgpt:' + session, session, location };
@@ -277,7 +286,17 @@ async function miniAsk(
 
   // Give the worker its full budget, then wait slightly longer than the job's own
   // timeout: expiring here first would report a timeout for work still running.
-  const job = jobs.create(jobTypeFor(route.engine), { id: session, prompt, timeoutMs }, timeoutMs);
+  // Send `id` ONLY when the caller pinned the account. Stamping the resolver's
+  // default on every job is what made three concurrent `chatgpt@mini` calls all
+  // name `mini-main`: three lanes, three accounts, and every job addressed to the
+  // same one. They fought over a single ego lite task space and two of three came
+  // back `compose_failed`. Omitted, each lane answers as its own account.
+  const pinned = route.engine !== 'agy' && (route as { pinnedSession?: boolean }).pinnedSession === true;
+  const job = jobs.create(
+    jobTypeFor(route.engine),
+    { ...(pinned ? { id: session } : {}), prompt, timeoutMs },
+    timeoutMs,
+  );
   const settled = await jobs.wait(job.id, timeoutMs + 5_000);
 
   if (!settled) throw fail(502, 'the mini job vanished before it finished', 'engine_error');
