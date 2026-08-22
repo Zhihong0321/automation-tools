@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLedger, classifyEvidence, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, normaliseUrls, publishOutcome, round01Prompt, seniorityScore, unwrapUrl, validateChineseTranslation, validateFinal, validatePersonFinal } from './intel.ts';
+import { buildLedger, classifyEvidence, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, normaliseUrls, publishOutcome, round01Prompt, seniorityScore, translateChinese, unwrapUrl, validateChineseTranslation, validateFinal, validatePersonFinal } from './intel.ts';
 import { companyPage, personPage, searchPage } from './reportui.ts';
 import type { PublishedReport } from './reportdb.ts';
 
@@ -290,6 +290,47 @@ test('an imperfect Chinese translation is delivered, not binned', async () => {
   // A genuine discrepancy is still reported -- it is just no longer fatal.
   const broken = validateChineseTranslation({ ...canonical, contacts: [] }, canonical);
   assert.ok(broken.length > 0);
+});
+
+test('the Chinese translation sends its batches at once, not one after another', async () => {
+  // This is the regression that mattered: seven independent batches were awaited
+  // in a loop, one full round trip each, and the endpoint is a stateless
+  // completion API that nothing in the queue governs. If somebody puts the
+  // `for (... ) { await ... }` back, peak concurrency drops to 1 and this fails.
+  const summary: Record<string, string> = {};
+  for (let i = 0; i < 90; i++) summary['field_' + i] = 'text ' + i;
+  const finalReport = { contacts: [], people: [], signals: [], notes: summary };
+
+  let inflight = 0;
+  let peak = 0;
+  const realFetch = globalThis.fetch;
+  const previousKey = process.env.TRANSLATION_API_KEY;
+  process.env.TRANSLATION_API_KEY = 'test-key';
+  globalThis.fetch = (async (_url: string, init: { body: string }) => {
+    inflight++;
+    peak = Math.max(peak, inflight);
+    const sent = JSON.parse(init.body) as { messages: Array<{ content: string }> };
+    const input = JSON.parse(sent.messages[1]!.content.split('INPUT: ')[1]!) as string[];
+    // Long enough that a serial implementation cannot overlap by luck.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    inflight--;
+    return {
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: '```json\n' + JSON.stringify({ translations: input.map((t) => 'ZH:' + t) }) + '\n```' } }] }),
+    };
+  }) as unknown as typeof globalThis.fetch;
+
+  try {
+    const out = await translateChinese(finalReport);
+    // Three batches of 30, and every one of them mapped back to its own path.
+    assert.equal(peak, 3, 'expected all three batches in flight together, saw peak ' + peak);
+    assert.equal((out.translated.notes as Record<string, string>).field_0, 'ZH:text 0');
+    assert.equal((out.translated.notes as Record<string, string>).field_89, 'ZH:text 89');
+  } finally {
+    globalThis.fetch = realFetch;
+    if (previousKey === undefined) delete process.env.TRANSLATION_API_KEY;
+    else process.env.TRANSLATION_API_KEY = previousKey;
+  }
 });
 
 function report(type: 'business_search' | 'company_research' | 'person_research'): PublishedReport {

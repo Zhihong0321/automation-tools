@@ -1045,13 +1045,34 @@ export async function translateChinese(finalReport: Record<string, unknown>): Pr
   const entries = translationEntries(finalReport);
   // Small batches avoid provider 503s on lengthy evidence ledgers while
   // retaining a deterministic one-to-one mapping to the canonical report.
+  const batches: TranslationEntry[][] = [];
   for (let offset = 0; offset < entries.length; offset += 30) {
     // Large enough to avoid provider request-rate throttling, still far below
     // the one-shot report payload that triggered upstream 503s.
-    const batch = entries.slice(offset, offset + 30);
-    const texts = await translationResponse(baseUrl, apiKey, model, batch.map((entry) => entry.text));
-    batch.forEach((entry, index) => putTranslation(translated, entry.path, texts[index]!));
+    batches.push(entries.slice(offset, offset + 30));
   }
+  // The batches are independent: each carries its own texts and writes to its own
+  // paths, and the endpoint is a stateless OpenAI-compatible completion. Running
+  // them one after another was costing a full round trip per batch -- ~137s on a
+  // report with seven batches -- for no isolation the parallel version does not
+  // also have. Nothing in the queue governs this lane; it is not a browser and it
+  // is not somebody's logged-in account.
+  //
+  // Bounded rather than unbounded, because the 503s that motivated small batches
+  // in the first place were rate pressure, and firing twenty requests at once is
+  // exactly that pressure in a different shape.
+  const width = Math.max(1, Number(process.env.TRANSLATION_CONCURRENCY) || 4);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = next++;
+      const batch = batches[index];
+      if (!batch) return;
+      const texts = await translationResponse(baseUrl, apiKey, model, batch.map((entry) => entry.text));
+      batch.forEach((entry, at) => putTranslation(translated, entry.path, texts[at]!));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(width, batches.length) }, worker));
   // A validation failure used to throw, which meant one bad field destroyed the
   // whole Chinese report and the reader got nothing. The translation is built by
   // copying the English report and replacing text in place, so every id, URL,
@@ -1205,6 +1226,22 @@ async function runCompanyResearch(
     await db.updateReport(publicId, { status: 'running', error: null });
     await db.initResearchRun(reportId);
 
+    // Round 03 takes the same company record the run was started with and crawls
+    // Facebook on the mini's job queue. It reads nothing Round 01 or Round 02
+    // produce, and it runs on a different machine down a different lane -- so
+    // awaiting it in file order was buying nothing and costing its whole duration
+    // (159s on the run this was measured against). Started here, it overlaps the
+    // Gemini and ChatGPT rounds and is collected below, before the ledger is
+    // built. `catch` is attached immediately so a rejection while nobody is
+    // awaiting it cannot become an unhandled rejection.
+    // Stamped inside the chain, not at collection: the round finishes while
+    // Round 01 is still running, and `Date.now()` at the point we get round to
+    // awaiting it would report the overlap as if Facebook had been slow.
+    const r3started = Date.now();
+    const r3Pending = round03Facebook(company)
+      .then((value) => ({ ok: true as const, value, ms: Date.now() - r3started }))
+      .catch((error: unknown) => ({ ok: false as const, error: error as Error, ms: Date.now() - r3started }));
+
     try {
       // Do not pin to the mini: it is opportunistic capacity and can be offline.
       // The gateway chooses a live mini when present and otherwise a ready container.
@@ -1240,9 +1277,10 @@ async function runCompanyResearch(
     const r2Ok = Object.values(object(round02.calls)).some((v) => object(v).parsed);
     await db.saveRound(reportId, 'round02', round02, r2Ok ? (failures.length ? 'partial' : 'completed') : 'failed', { model: 'chatgpt', split_calls: 3 });
 
-    try {
-      const r3started = Date.now();
-      const r3 = await round03Facebook(company);
+    // Collected, not started, here: by now it has usually already finished.
+    const r3Settled = await r3Pending;
+    if (r3Settled.ok) {
+      const r3 = r3Settled.value;
       // Reaching a verdict is this round doing its job, so a confirmed "this
       // business has no Facebook page" counts as output exactly as a page full of
       // contacts does. Only a lane that was not there to ask produces nothing.
@@ -1250,12 +1288,12 @@ async function runCompanyResearch(
       if (r3.parsed) parsedForLedger.push(r3.parsed);
       else if (r3.status === 'skipped') failures.push(str(r3.artifact.access_evidence));
       await db.saveRound(reportId, 'round03', r3.artifact, r3.status, {
-        model: 'fb.company@mini', engine: 'fb-recon', ms: Date.now() - r3started,
+        model: 'fb.company@mini', engine: 'fb-recon', ms: r3Settled.ms,
         access_mode: str(r3.artifact.access_mode) || null,
       });
-    } catch (err) {
-      failures.push((err as Error).message ?? String(err));
-      await db.saveRound(reportId, 'round03', { error: (err as Error).message }, 'failed', { model: 'fb.company@mini' });
+    } else {
+      failures.push(r3Settled.error.message ?? String(r3Settled.error));
+      await db.saveRound(reportId, 'round03', { error: r3Settled.error.message }, 'failed', { model: 'fb.company@mini' });
     }
 
     const ledger = buildLedger(company, parsedForLedger);
