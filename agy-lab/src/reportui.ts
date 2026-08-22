@@ -151,13 +151,18 @@ export function companyPage(report: PublishedReport, chinese: Record<string, unk
     const action = /@/.test(raw) ? `<a class="button" href="mailto:${esc(raw)}">Email</a>` : /\d/.test(raw) ? `<a class="button" href="tel:${esc((normalized || raw).replace(/[^+\d]/g, ''))}">Call</a>` : link(raw, 'Open', 'button');
     return `<div class="contact"><div class="label">${esc(value(row, 'purpose', 'channel', 'type') || 'Contact')}</div><div><div class="contact-value">${esc(raw)}</div><div class="source">${esc(value(row, 'status', 'current_status', 'evidence_class'))}${evidence ? ` · <a href="${esc(evidence)}" target="_blank" rel="noopener">view evidence ↗</a>` : ''}</div></div>${action}</div>`;
   }).join('');
-  const peopleRows = people.map((row, i) => `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), 'Evidence')}</article>`).join('');
+  const autoPersonName = value(autoPerson, 'person_name').trim().toLocaleLowerCase();
+  const peopleRows = people.map((row, i) => {
+    const personName = value(row, 'name');
+    const isAutoPerson = Boolean(autoPersonReportId) && personName.trim().toLocaleLowerCase() === autoPersonName;
+    const vipLink = isAutoPerson ? ` <a class="text-link" href="/r/${esc(autoPersonReportId)}">VIP brief <span aria-hidden="true">↗</span></a>` : '';
+    return `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(personName)}${vipLink}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), 'Evidence')}</article>`;
+  }).join('');
   const candidateRows = candidatePeople.map((row) => `<article class="person"><span class="priority">VERIFY</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role'))}</div></div><p>${esc(value(row, 'verification_note', 'relevance'))}</p>${link(value(row, 'source_url'), 'Source')}</article>`).join('');
   const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || 'Current')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${esc(value(row, 'evidence_class', 'type', 'source_class'))} ${link(value(row, 'evidence_url', 'evidence', 'source_url'), 'Source')}</div></div></div>`).join('');
   const conflictRows = conflicts.map((row) => `<div class="signal"><div class="date">Review</div><div><strong>${esc(value(row, 'issue', 'field'))}</strong><div class="source">${esc(value(row, 'details', 'status', 'note'))}</div></div></div>`).join('');
   let body = stats;
   if (summary) body += `<section class="brief"><div class="brief-label">Executive brief</div><p>${esc(summary)}</p></section>`;
-  if (autoPersonReportId) body += `<section class="brief"><div class="brief-label">Automatic P01 brief</div><p>${esc(value(autoPerson, 'person_name') || 'Highest-ranked person')} is being researched in parallel. <a class="text-link" href="/r/${esc(autoPersonReportId)}">Open VIP report <span aria-hidden="true">↗</span></a></p></section>`;
   if (report.status === 'failed') body += `<section class="section"><div class="message error">${esc(report.error ?? 'Deep research failed.')}</div></section>`;
   else if (!contacts.length && !people.length && !candidatePeople.length && report.status !== 'completed' && report.status !== 'partial') body += '<section class="section"><div class="empty">The research rounds are running. Verified findings will appear here automatically.</div></section>';
   else {
