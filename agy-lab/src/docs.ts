@@ -301,11 +301,11 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
   "data": {
     "final": {
       "entity": { "name":"SOLS Energy Sdn Bhd", "company_id":"69", "...":"..." },
-      "summary":"...", "contacts":[...], "people":[...], "signals":[...],
+      "summary":"...", "contacts":[...], "people":[...], "candidate_people":[...], "signals":[...],
       "outreach_angles":[...], "conflicts_and_unknowns":[],
       "synthesis_mode":"gemini_validated"
     },
-    "final_cn": { "summary":"...", "contacts":[...], "people":[...], "signals":[...] },
+    "final_cn": { "summary":"...", "contacts":[...], "people":[...], "candidate_people":[...], "signals":[...] },
     "translation": { "language":"zh-CN", "model":"step-3.7-flash", "status":"completed" }
   },
   "research_run": {
@@ -319,10 +319,16 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
   Chinese translation preserves evidence IDs, source URLs, email addresses, phone numbers and published contact values exactly.
   Raw rounds are at <code>research_run.round01</code> through <code>round04</code>:
   Gemini discovery, three split ChatGPT audits, the <a href="#social">Facebook crawl</a>,
-  then Gemini synthesis with fidelity validation. Only rows with direct HTTPS evidence
-  enter the validated ledger.
+  then Gemini synthesis with fidelity validation. Contacts, people and signals need direct HTTPS
+  evidence to enter the validated ledger; <code>candidate_people</code> retains named public-source
+  leads separately and never qualifies for VIP research until verified.
   If final Gemini synthesis changes a validated contact/person set or introduces a new URL,
   it is rejected and <code>synthesis_mode</code> becomes <code>validated_ledger_fallback</code>.</p>
+  <p>As soon as the Round 02 people audit identifies the report's P01 person, the service
+  creates a separate <code>person_research</code> report and starts it immediately. It runs
+  concurrently while company signals, social checks, final synthesis, and Chinese translation
+  continue. The child report is idempotent by source report and person id, and appears as its own
+  line in the research library.</p>
 
   <h3>5. Create a VIP person brief</h3>
   <div class="ep"><span class="m post">POST</span><code class="path">/api/person-research</code><span class="tag">Bearer &middot; returns 202</span></div>

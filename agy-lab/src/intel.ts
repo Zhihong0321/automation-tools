@@ -131,6 +131,39 @@ function collectPeople(sources: Record<string, unknown>[]): Record<string, unkno
   return [...found.values()].slice(0, 16);
 }
 
+/**
+ * Recall is useful before verification.  V1 surfaced registry contacts and
+ * LinkedIn employees even when it could not attach a role page; silently
+ * discarding them made a thin report look like a thin company.  These rows are
+ * deliberately separate from `people`: they never qualify as verified people,
+ * cannot trigger VIP research, and the UI labels them as leads to verify.
+ */
+function collectCandidatePeople(sources: Record<string, unknown>[]): Record<string, unknown>[] {
+  const found = new Map<string, Record<string, unknown>>();
+  for (const source of sources) {
+    for (const row of rows(source.candidate_people)) {
+      const name = first(row, ['name']);
+      const role = first(row, ['current_role', 'role', 'position']) || 'Role not independently confirmed';
+      const sourceName = first(row, ['source_name', 'source', 'evidence_note']);
+      const sourceUrl = directUrl(first(row, ['source_url', 'role_evidence_url', 'evidence_url', 'role_url']));
+      // A candidate must still say where it came from.  A URL is preferred, but
+      // V1's useful registry and employee leads frequently had only a named source.
+      if (!name || (!sourceName && !sourceUrl)) continue;
+      const key = name.toLowerCase() + '|' + role.toLowerCase();
+      if (!found.has(key)) found.set(key, {
+        id: id('candidate_person', [name, role, sourceName || sourceUrl]), name, role,
+        source_name: sourceName || new URL(sourceUrl!).hostname,
+        source_url: sourceUrl,
+        relevance: first(row, ['relevance', 'why_relevant', 'outreach_relevance']),
+        verification_status: 'needs_direct_role_evidence',
+        verification_note: first(row, ['verification_note', 'reason']) || 'Candidate from a named public source; current role needs direct verification.',
+        introduced_by: first(row, ['introduced_by', '_round']) || null,
+      });
+    }
+  }
+  return [...found.values()].slice(0, 24);
+}
+
 function collectSignals(sources: Record<string, unknown>[]): Record<string, unknown>[] {
   const found = new Map<string, Record<string, unknown>>();
   for (const source of sources) {
@@ -166,6 +199,7 @@ export function buildLedger(
   const all = [baseline, ...parsed];
   const contacts = collectContacts(all);
   const people = collectPeople(all);
+  const candidatePeople = collectCandidatePeople(all);
   const signals = collectSignals(all);
   const conflicts = parsed.flatMap((p) => rows(p.conflicts ?? p.conflicts_and_unknowns)).slice(0, 12);
   return {
@@ -174,10 +208,10 @@ export function buildLedger(
       address: company.address, phone: company.phone, website: company.website,
       maps_url: company.maps_url, rating: company.rating, reviews: company.reviews,
     },
-    contacts, people, signals, conflicts_and_unknowns: conflicts,
+    contacts, people, candidate_people: candidatePeople, signals, conflicts_and_unknowns: conflicts,
     validation: {
-      policy: 'Only rows with a raw direct HTTPS evidence URL are retained. Final synthesis may not add rows.',
-      contact_count: contacts.length, people_count: people.length, signal_count: signals.length,
+      policy: 'Contacts, verified people and signals require a raw direct HTTPS evidence URL. Candidate people have a named public source but require direct role verification. Final synthesis may not add rows.',
+      contact_count: contacts.length, people_count: people.length, candidate_people_count: candidatePeople.length, signal_count: signals.length,
     },
   };
 }
@@ -192,10 +226,13 @@ export function validateFinal(final: Record<string, unknown>, ledger: Record<str
   const errors: string[] = [];
   const finalContacts = rows(final.contacts);
   const finalPeople = rows(final.people);
+  const finalCandidates = rows(final.candidate_people);
   const ledgerContacts = rows(ledger.contacts);
   const ledgerPeople = rows(ledger.people);
+  const ledgerCandidates = rows(ledger.candidate_people);
   if (!sameSet(finalContacts.map((r) => r.id), ledgerContacts.map((r) => r.id))) errors.push('contact id set changed');
   if (!sameSet(finalPeople.map((r) => r.id), ledgerPeople.map((r) => r.id))) errors.push('people id set changed');
+  if (!sameSet(finalCandidates.map((r) => r.id), ledgerCandidates.map((r) => r.id))) errors.push('candidate people id set changed');
   const allowedUrls = new Set<string>();
   const collectAllowed = (value: unknown): void => {
     if (typeof value === 'string' && /^https:\/\//.test(value)) {
@@ -258,11 +295,12 @@ export function validateChineseTranslation(
   canonical: Record<string, unknown>,
 ): string[] {
   const errors: string[] = [];
-  for (const collection of ['contacts', 'people', 'signals', 'conflicts_and_unknowns']) {
+  for (const collection of ['contacts', 'people', 'candidate_people', 'signals', 'conflicts_and_unknowns']) {
     if (rows(translated[collection]).length !== rows(canonical[collection]).length) errors.push(collection + ' row count changed');
   }
   if (!sameSet(rows(translated.contacts).map((row) => row.id), rows(canonical.contacts).map((row) => row.id))) errors.push('contact id set changed');
   if (!sameSet(rows(translated.people).map((row) => row.id), rows(canonical.people).map((row) => row.id))) errors.push('people id set changed');
+  if (!sameSet(rows(translated.candidate_people).map((row) => row.id), rows(canonical.candidate_people).map((row) => row.id))) errors.push('candidate people id set changed');
   if (!sameSet(rows(translated.signals).map((row) => row.id), rows(canonical.signals).map((row) => row.id))) errors.push('signal id set changed');
 
   const compareInvariant = (original: unknown, candidate: unknown, path = ''): void => {
@@ -287,14 +325,21 @@ export function validateChineseTranslation(
     if (!sameSet(originalKeys, candidateKeys)) errors.push('object keys changed at ' + path);
     for (const [key, value] of Object.entries(original as Record<string, unknown>)) {
       const translatedValue = (candidate as Record<string, unknown>)[key];
-      const isInvariant = key === 'id' || key.endsWith('_id') || key.endsWith('_url') ||
-        key === 'normalized_value' || key === 'value_as_published' || key === 'phone' || key === 'website' || key === 'maps_url';
+      const isInvariant = translationInvariantKey(key);
       if (isInvariant && JSON.stringify(value) !== JSON.stringify(translatedValue)) errors.push('canonical value changed at ' + (path ? path + '.' : '') + key);
       else compareInvariant(value, translatedValue, path ? path + '.' + key : key);
     }
   };
   compareInvariant(canonical, translated);
   return [...new Set(errors)];
+}
+
+function translationInvariantKey(key: string): boolean {
+  return key === 'id' || key.endsWith('_id') || key.endsWith('_url') ||
+    key === 'normalized_value' || key === 'value_as_published' || key === 'phone' ||
+    key === 'website' || key === 'maps_url' || key === 'name' || key === 'company_name' ||
+    key === 'person_name' || key === 'address' || key === 'date' || key === 'source_date' ||
+    key === 'introduced_by' || key === 'synthesis_mode';
 }
 
 function collectPersonFacts(sources: Record<string, unknown>[]): Record<string, unknown>[] {
@@ -331,7 +376,7 @@ export function buildPersonLedger(
       category: 'Current role', fact: `${name} is listed as ${role} at ${str(company.name, 'the company')}.`,
       evidence_class: first(person, ['evidence_class']) || 'first_party', evidence_url: roleUrl, _round: 'company_research',
     }] : [],
-    signals: [],
+    contacts: [], signals: [],
   };
   const all = [baseline, ...parsed];
   return {
@@ -341,10 +386,12 @@ export function buildPersonLedger(
       role_evidence_url: roleUrl,
       personal_profile_url: directUrl(person.personal_profile_url) ?? null,
     },
+    contacts: collectContacts(all),
     facts: collectPersonFacts(all),
     signals: collectSignals(all),
     validation: {
       policy: 'Public professional evidence only. Private or sensitive personal data, inferred contacts and uncited claims are excluded.',
+      contact_count: collectContacts(all).length,
       fact_count: collectPersonFacts(all).length,
       signal_count: collectSignals(all).length,
     },
@@ -353,6 +400,7 @@ export function buildPersonLedger(
 
 export function validatePersonFinal(final: Record<string, unknown>, ledger: Record<string, unknown>): string[] {
   const errors: string[] = [];
+  if (!sameSet(rows(final.contacts).map((row) => row.id), rows(ledger.contacts).map((row) => row.id))) errors.push('contact id set changed');
   if (!sameSet(rows(final.facts).map((row) => row.id), rows(ledger.facts).map((row) => row.id))) errors.push('fact id set changed');
   if (!sameSet(rows(final.signals).map((row) => row.id), rows(ledger.signals).map((row) => row.id))) errors.push('signal id set changed');
   const allowedUrls = new Set<string>();
@@ -372,6 +420,14 @@ export function validatePersonFinal(final: Record<string, unknown>, ledger: Reco
   return [...new Set(errors)];
 }
 
+/** P01 is the first person retained by the same evidence ledger used by the report UI. */
+export function highestRankedPerson(
+  company: Record<string, unknown>,
+  parsed: Record<string, unknown>[],
+): Record<string, unknown> | null {
+  return rows(buildLedger(company, parsed).people)[0] ?? null;
+}
+
 function companyBaseline(company: Record<string, unknown>): string {
   return JSON.stringify({
     id: String(company.id ?? ''), name: company.name, category: company.category,
@@ -383,22 +439,22 @@ function companyBaseline(company: Record<string, unknown>): string {
 function round01Prompt(company: Record<string, unknown>): string {
   return `You are Round 01 of a business lead-enrichment test. Research this exact company as of ${new Date().toISOString().slice(0, 10)}.
 IMMUTABLE GOOGLE MAPS INPUT: ${companyBaseline(company)}
-Find complete public company contacts and decision-relevant people. Inspect exact official contact, campaign/subscription, careers, team, partner/vendor, legal and reputable independent pages.
-Rules: every retained row needs a raw full https:// evidence URL; company pages are first_party; do not infer emails/profiles/dates; no negative claims from search absence; do not explain conflicts without evidence; source date is null unless visibly published.
-Return exactly one compact JSON object in one fenced code block with arrays contacts, people, signals, conflicts_and_unknowns. Contact fields: purpose,value_as_published,normalized_value,current_status,evidence_class,evidence_url,source_date. People: name,current_role,relevance,evidence_class,role_evidence_url,personal_profile_url,source_date. Signals: date,fact,evidence_class,evidence_url,outreach_use. Max 20 contacts, 12 people, 10 signals. No prose outside JSON.`;
+Find complete public company contacts, verified decision-relevant people, and separately retain named people who need verification. Search these sources separately: SSM/e-Info, CTOS/CreditScan, MyHIJAU, SEDA, CIDB, Maukerja, Hiredly, Ricebowl, JobStreet, Jora, LinkedIn company and people pages, official team/careers/testimonial pages, and reputable award, association, tender and news pages.
+Rules: contacts, people and signals require a raw full https:// direct evidence URL; company pages are first_party; do not infer emails/profiles/dates; no negative claims from search absence; do not explain conflicts without evidence; source date is null unless visibly published. Put a person in people only when their current role has direct URL evidence. Put a person in candidate_people when a named public source identifies them but that direct role evidence is missing; provide source_name, and source_url when known. Candidates are leads to verify, not confirmed roles.
+Return exactly one compact JSON object in one fenced code block with arrays contacts, people, candidate_people, signals, conflicts_and_unknowns. Contact fields: purpose,value_as_published,normalized_value,current_status,evidence_class,evidence_url,source_date. People: name,current_role,relevance,evidence_class,role_evidence_url,personal_profile_url,source_date. Candidate people: name,current_role,source_name,source_url,relevance,verification_note. Signals: date,fact,evidence_class,evidence_url,outreach_use. Max 20 contacts, 12 people, 24 candidate_people, 10 signals. No prose outside JSON.`;
 }
 
 function round02Prompt(kind: 'contacts' | 'people' | 'signals', company: Record<string, unknown>, r1: Record<string, unknown>): string {
   const schemas = {
     contacts: 'contacts: purpose,value_as_published,normalized_value,current_status,evidence_class,evidence_url,source_date',
-    people: 'people: name,current_role,relevance,evidence_class,role_evidence_url,personal_profile_url,source_date',
+    people: 'people: name,current_role,relevance,evidence_class,role_evidence_url,personal_profile_url,source_date; candidate_people: name,current_role,source_name,source_url,relevance,verification_note',
     signals: 'signals: date,fact,evidence_class,evidence_url,outreach_use',
   };
   return `You are ChatGPT Round 02 auditing Gemini Round 01 for ${str(company.name)}. Do fresh web research; Round 01 is untrusted.
 COMPANY BASELINE: ${companyBaseline(company)}
 ROUND 01 PARSED LEADS: ${JSON.stringify(r1).slice(0, 28_000)}
-Focus only on ${kind}. Confirm, correct, reject and add missed evidence. For contacts inspect subscription/campaign/careers/vendor pages. For people prioritize CEO, commercial, partnerships, procurement, operations and HR. For signals use direct issuer or specific company pages.
-Return exactly one compact JSON object inside one fenced code block with ${schemas[kind]}. Every URL must be a literal raw full https:// string inside JSON, never a Markdown link label. No inferred emails or personal URLs. Search snippets and crawl dates are not evidence. Use null when unknown. Max ${kind === 'contacts' ? 20 : kind === 'people' ? 12 : 10} rows and no prose outside JSON.`;
+Focus only on ${kind}. Confirm, correct, reject and add missed evidence. For contacts inspect subscription/campaign/careers/vendor pages. For people inspect SSM/e-Info, CTOS/CreditScan, MyHIJAU, SEDA, CIDB, job boards, LinkedIn people/company pages, official team pages, awards and associations. Prioritize CEO, commercial, partnerships, procurement, operations and HR, but retain directors, registry contacts, team members and employees as candidate_people when the named source is public but the current role lacks direct evidence. For signals use direct issuer or specific company pages.
+Return exactly one compact JSON object inside one fenced code block with ${schemas[kind]}. Every URL in contacts, people and signals must be a literal raw full https:// string inside JSON, never a Markdown link label. Candidate people require source_name and use source_url only when known. No inferred emails or personal URLs. Search snippets and crawl dates are not evidence. Use null when unknown. Max ${kind === 'contacts' ? 20 : kind === 'people' ? '12 people plus 24 candidate_people' : 10} rows and no prose outside JSON.`;
 }
 
 
@@ -579,14 +635,70 @@ async function round03Facebook(company: Record<string, unknown>): Promise<{
 
 function round04Prompt(ledger: Record<string, unknown>): string {
   return `You are Gemini Round 04. Write a concise final business-intelligence synthesis using only this validated ledger: ${JSON.stringify(ledger)}
-Return exactly one JSON object in a fenced code block with keys summary (max 120 words), outreach_angles (max 5 short strings), entity, contacts, people, signals, conflicts_and_unknowns. Copy entity/contacts/people/signals/conflicts arrays exactly, including every id and URL. Do not browse, add, remove, rename, infer, resolve conflicts or introduce any number/name/URL not present in the ledger. No prose outside JSON.`;
+Candidate people are leads to verify, not confirmed roles: do not present their role or affiliation as fact in summary or outreach_angles. Return exactly one JSON object in a fenced code block with keys summary (max 120 words), outreach_angles (max 5 short strings), entity, contacts, people, candidate_people, signals, conflicts_and_unknowns. Copy entity/contacts/people/candidate_people/signals/conflicts arrays exactly, including every id and URL. Do not browse, add, remove, rename, infer, resolve conflicts or introduce any number/name/URL not present in the ledger. No prose outside JSON.`;
 }
 
-function chineseTranslationPrompt(finalReport: Record<string, unknown>): string {
-  return `Translate this completed company deep-research report from English to Simplified Chinese (zh-CN).
-This is translation only, not research: do not add, omit, merge, reorder, infer, or correct any fact. Return exactly one JSON object in a fenced code block and preserve the identical object/array structure.
-Keep every id, *_id, URL, email address, phone number, normalized_value, value_as_published, rating, review count, date, code and proper company/person name exactly unchanged. Translate only explanatory prose and generic field values such as summary, purpose, role, relevance, fact, outreach_use, evidence_class, current_status, category, validation policy, and outreach_angles.
-CANONICAL ENGLISH REPORT: ${JSON.stringify(finalReport)}`;
+interface TranslationEntry { path: string[]; text: string; }
+
+function translationEntries(value: unknown, path: string[] = [], out: TranslationEntry[] = []): TranslationEntry[] {
+  if (typeof value === 'string') {
+    const key = path[path.length - 1] ?? '';
+    // Published data routes and identifiers must be copied byte-for-byte. The
+    // remaining strings are human-facing report copy and can be safely localised.
+    if (!translationInvariantKey(key) && !/^https?:\/\//i.test(value) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) out.push({ path, text: value });
+  } else if (Array.isArray(value)) {
+    value.forEach((child, index) => translationEntries(child, [...path, String(index)], out));
+  } else if (value && typeof value === 'object') {
+    Object.entries(value as Record<string, unknown>).forEach(([key, child]) => translationEntries(child, [...path, key], out));
+  }
+  return out;
+}
+
+function putTranslation(target: Record<string, unknown>, path: string[], text: string): void {
+  let cursor: Record<string, unknown> | unknown[] = target;
+  for (let index = 0; index < path.length - 1; index++) cursor = cursor[Array.isArray(cursor) ? Number(path[index]) : path[index]!] as Record<string, unknown> | unknown[];
+  const key = path[path.length - 1]!;
+  if (Array.isArray(cursor)) cursor[Number(key)] = text;
+  else cursor[key] = text;
+}
+
+async function translationResponse(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  texts: string[],
+): Promise<string[]> {
+  const prompt = `Translate each English string below to Simplified Chinese (zh-CN), in order. This is translation only: do not add, omit, merge, reorder, infer, or correct anything. Preserve all proper names, identifiers, URLs, email addresses, phone numbers, dates, codes, and numbers exactly if present. Return exactly one JSON object in a fenced code block: {"translations":["...same count and order..."]}.\nINPUT: ${JSON.stringify(texts)}`;
+  let lastError = 'translation request failed';
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await fetch(baseUrl + '/chat/completions', {
+        method: 'POST', headers: { authorization: 'Bearer ' + apiKey, 'content-type': 'application/json' },
+        body: JSON.stringify({ model, messages: [
+          { role: 'system', content: 'You are a precise English-to-Simplified-Chinese translator. Return only requested JSON.' },
+          { role: 'user', content: prompt },
+        ], temperature: 0 }), signal: AbortSignal.timeout(90_000),
+      });
+      if (!response.ok) {
+        lastError = 'translation service returned HTTP ' + response.status;
+        if (response.status === 429 || response.status >= 500) {
+          await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
+          continue;
+        }
+        throw new Error(lastError);
+      }
+      const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> };
+      const raw = payload.choices?.[0]?.message?.content;
+      const parsed = typeof raw === 'string' ? extractJson(raw) : { value: null, error: 'translation service returned no message content' };
+      const translated = parsed.value?.translations;
+      if (!Array.isArray(translated) || translated.length !== texts.length || !translated.every((item) => typeof item === 'string')) throw new Error('translation service returned an invalid translations array');
+      return translated as string[];
+    } catch (err) {
+      lastError = (err as Error).message ?? String(err);
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
+    }
+  }
+  throw new Error(lastError);
 }
 
 function personBaseline(company: Record<string, unknown>, person: Record<string, unknown>): string {
@@ -611,12 +723,12 @@ ${privateHint}
 Research public professional business information only: the current role, public company/board affiliations, attributable interviews or talks, and dated business signals relevant to a commercial or partnership conversation.
 Never collect or return home address, non-business phone, family, private social accounts, age, ethnicity, religion, health, political views, private wealth, breach data, data-broker records, or personal contact details. Do not infer any fact, email, profile, title, date or affiliation.
 Every retained item requires a raw full https:// direct source URL. Company-controlled pages are first_party; independent issuer/news pages are independent; public professional platforms are social_platform. Search snippets and bare homepages are not evidence.
-Return exactly one compact JSON object inside a fenced code block with arrays facts and signals. Fact fields: category,fact,evidence_class,evidence_url,source_date. Signal fields: date,fact,evidence_class,evidence_url,outreach_use. Max 12 facts and 8 signals. No prose outside JSON.`;
+Return exactly one compact JSON object inside a fenced code block with arrays contacts, facts and signals. Contact fields: purpose,value_as_published,normalized_value,current_status,evidence_class,evidence_url,source_date,identity_match_note. Retain only professional/business contact routes directly published by the person, company, or a reputable organization; distinguish a company-wide route from a person-specific route. Fact fields: category,fact,evidence_class,evidence_url,source_date. Signal fields: date,fact,evidence_class,evidence_url,outreach_use. Max 12 contacts, 12 facts and 8 signals. No prose outside JSON.`;
 }
 
 function personSynthesisPrompt(ledger: Record<string, unknown>): string {
   return `Write a concise VIP qualification brief using only this validated public-professional ledger: ${JSON.stringify(ledger)}
-Return exactly one JSON object in a fenced code block with keys summary (max 120 words), research_angles (max 4 short strings), person, facts, signals. Copy person, facts and signals exactly, including every id and URL. Do not browse, add, remove, rename, infer, or introduce any new URL, fact, affiliation, contact detail, or sensitive personal data. No prose outside JSON.`;
+Return exactly one JSON object in a fenced code block with keys summary (max 120 words), research_angles (max 4 short strings), person, contacts, facts, signals. Copy person, contacts, facts and signals exactly, including every id and URL. Do not browse, add, remove, rename, infer, or introduce any new URL, fact, affiliation, contact detail, or sensitive personal data. No prose outside JSON.`;
 }
 
 async function ask(model: string, prompt: string, timeoutMs: number): Promise<{
@@ -629,7 +741,7 @@ async function ask(model: string, prompt: string, timeoutMs: number): Promise<{
 }
 
 /** OpenAI-compatible translation endpoint, isolated from the research gateway. */
-async function translateChinese(finalReport: Record<string, unknown>): Promise<{
+export async function translateChinese(finalReport: Record<string, unknown>): Promise<{
   translated: Record<string, unknown>; model: string; ms: number;
 }> {
   const baseUrl = (process.env.TRANSLATION_BASE_URL?.trim() || 'https://e-router.up.railway.app/v1').replace(/\/+$/, '');
@@ -637,28 +749,20 @@ async function translateChinese(finalReport: Record<string, unknown>): Promise<{
   const model = process.env.TRANSLATION_MODEL?.trim() || 'step-3.7-flash';
   if (!apiKey) throw new Error('Chinese translation is not configured; set TRANSLATION_API_KEY');
   const started = Date.now();
-  const response = await fetch(baseUrl + '/chat/completions', {
-    method: 'POST',
-    headers: { authorization: 'Bearer ' + apiKey, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: 'You are a precise English-to-Simplified-Chinese JSON translator. Return only the requested JSON.' },
-        { role: 'user', content: chineseTranslationPrompt(finalReport) },
-      ],
-      temperature: 0,
-    }),
-    signal: AbortSignal.timeout(120_000),
-  });
-  if (!response.ok) throw new Error('translation service returned HTTP ' + response.status);
-  const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> };
-  const raw = payload.choices?.[0]?.message?.content;
-  if (typeof raw !== 'string') throw new Error('translation service returned no message content');
-  const parsed = extractJson(raw);
-  if (!parsed.value) throw new Error('translation service returned invalid JSON: ' + parsed.error);
-  const errors = validateChineseTranslation(parsed.value, finalReport);
+  const translated = structuredClone(finalReport);
+  const entries = translationEntries(finalReport);
+  // Small batches avoid provider 503s on lengthy evidence ledgers while
+  // retaining a deterministic one-to-one mapping to the canonical report.
+  for (let offset = 0; offset < entries.length; offset += 30) {
+    // Large enough to avoid provider request-rate throttling, still far below
+    // the one-shot report payload that triggered upstream 503s.
+    const batch = entries.slice(offset, offset + 30);
+    const texts = await translationResponse(baseUrl, apiKey, model, batch.map((entry) => entry.text));
+    batch.forEach((entry, index) => putTranslation(translated, entry.path, texts[index]!));
+  }
+  const errors = validateChineseTranslation(translated, finalReport);
   if (errors.length) throw new Error('translation validation failed: ' + errors.join('; '));
-  return { translated: parsed.value, model, ms: Date.now() - started };
+  return { translated, model, ms: Date.now() - started };
 }
 
 async function runBusinessSearch(publicId: string, reportId: string, request: Record<string, unknown>): Promise<void> {
@@ -707,7 +811,61 @@ async function runBusinessSearch(publicId: string, reportId: string, request: Re
   }
 }
 
-async function runCompanyResearch(publicId: string, reportId: string, company: Record<string, unknown>): Promise<void> {
+async function startAutoPersonResearch(
+  sourcePublicId: string,
+  company: Record<string, unknown>,
+  person: Record<string, unknown>,
+  companyRequest: Record<string, unknown>,
+): Promise<db.PublishedReport> {
+  const personId = first(person, ['id']);
+  const existing = await db.findPersonResearchReport(sourcePublicId, personId);
+  if (existing) {
+    if ((existing.status === 'queued' || existing.status === 'running') && !active.has(existing.public_id)) {
+      void runPersonResearch(existing.public_id, existing.id, company, person, null);
+    }
+    return existing;
+  }
+  const personSnapshot = {
+    id: personId,
+    name: first(person, ['name']),
+    role: first(person, ['role', 'current_role', 'position']),
+    role_url: first(person, ['role_url', 'role_evidence_url', 'evidence_url']),
+    relevance: first(person, ['relevance', 'why_relevant', 'outreach_relevance']),
+    evidence_class: first(person, ['evidence_class', 'source_type']),
+    personal_profile_url: directUrl(person.personal_profile_url) ?? null,
+  };
+  const request = {
+    sourceReportId: sourcePublicId,
+    personId,
+    requesterId: str(companyRequest.requesterId || companyRequest.userId) || null,
+    emailProvided: false,
+    autoTriggered: true,
+    selectionRule: 'company_report_p01',
+    personSnapshot,
+  };
+  let report: db.PublishedReport;
+  try {
+    report = await db.createReport({
+      type: 'person_research', title: first(person, ['name']) + ' VIP brief',
+      userId: str(request.requesterId) || null, request, companyId: String(company.id ?? '') || null,
+    });
+  } catch (err) {
+    const raced = await db.findPersonResearchReport(sourcePublicId, personId);
+    if (!raced) throw err;
+    report = raced;
+  }
+  if (report.status === 'queued' || report.status === 'running') {
+    void runPersonResearch(report.public_id, report.id, company, person, null);
+  }
+  return report;
+}
+
+async function runCompanyResearch(
+  publicId: string,
+  reportId: string,
+  company: Record<string, unknown>,
+  companyRequest: Record<string, unknown>,
+): Promise<void> {
   if (active.has(publicId)) return;
   active.add(publicId);
   const parsedForLedger: Record<string, unknown>[] = [];
@@ -715,31 +873,56 @@ async function runCompanyResearch(publicId: string, reportId: string, company: R
   // the load-bearing half: see publishOutcome.
   const failures: string[] = [];
   let produced = 0;
+  let autoPersonResearch: Record<string, unknown> | null = null;
+  const triggerAutoPersonResearch = async (): Promise<void> => {
+    if (autoPersonResearch) return;
+    const topPerson = highestRankedPerson(company, parsedForLedger);
+    if (!topPerson) return;
+    try {
+      const child = await startAutoPersonResearch(publicId, company, topPerson, companyRequest);
+      autoPersonResearch = {
+        report_id: child.public_id,
+        person_id: first(topPerson, ['id']),
+        person_name: first(topPerson, ['name']),
+        selection_rule: 'company_report_p01',
+        started_before_company_completion: true,
+      };
+    } catch (err) {
+      autoPersonResearch = {
+        person_id: first(topPerson, ['id']),
+        person_name: first(topPerson, ['name']),
+        selection_rule: 'company_report_p01',
+        start_error: (err as Error).message ?? String(err),
+      };
+    }
+  };
   try {
     await db.updateReport(publicId, { status: 'running', error: null });
     await db.initResearchRun(reportId);
 
     try {
-      const r1 = await ask('agy@mini', round01Prompt(company), 420_000);
+      // Do not pin to the mini: it is opportunistic capacity and can be offline.
+      // The gateway chooses a live mini when present and otherwise a ready container.
+      const r1 = await ask('agy', round01Prompt(company), 420_000);
       if (r1.parsed) {
-        for (const row of [...rows(r1.parsed.contacts), ...rows(r1.parsed.people), ...rows(r1.parsed.signals)]) row._round = 'round01';
+        for (const row of [...rows(r1.parsed.contacts), ...rows(r1.parsed.people), ...rows(r1.parsed.candidate_people), ...rows(r1.parsed.signals)]) row._round = 'round01';
         parsedForLedger.push(r1.parsed);
         produced += 1;
       } else failures.push(r1.parse_error ?? 'Round 01 returned no JSON object.');
       await db.saveRound(reportId, 'round01', r1, r1.parsed ? 'completed' : 'invalid_output', { model: r1.model, engine: r1.engine, ms: r1.ms });
     } catch (err) {
       failures.push((err as Error).message ?? String(err));
-      await db.saveRound(reportId, 'round01', { error: (err as Error).message }, 'failed', { model: 'agy@mini' });
+      await db.saveRound(reportId, 'round01', { error: (err as Error).message }, 'failed', { model: 'agy' });
     }
 
     const r1Context = parsedForLedger[0] ?? { contacts: [], people: [], signals: [] };
     const round02: Record<string, unknown> = { calls: {} };
     for (const kind of ['contacts', 'people', 'signals'] as const) {
       try {
-        const call = await ask('chatgpt@mini', round02Prompt(kind, company, r1Context), 300_000);
+        const call = await ask('chatgpt', round02Prompt(kind, company, r1Context), 300_000);
         object(round02.calls)[kind] = call;
         if (call.parsed) {
-          for (const row of rows(call.parsed[kind])) row._round = 'round02';
+          for (const row of [...rows(call.parsed[kind]), ...(kind === 'people' ? rows(call.parsed.candidate_people) : [])]) row._round = 'round02';
           parsedForLedger.push(call.parsed);
           produced += 1;
         } else failures.push(call.parse_error ?? 'Round 02 ' + kind + ' returned no JSON object.');
@@ -747,9 +930,10 @@ async function runCompanyResearch(publicId: string, reportId: string, company: R
         failures.push((err as Error).message ?? String(err));
         object(round02.calls)[kind] = { error: (err as Error).message };
       }
+      if (kind === 'people') await triggerAutoPersonResearch();
     }
     const r2Ok = Object.values(object(round02.calls)).some((v) => object(v).parsed);
-    await db.saveRound(reportId, 'round02', round02, r2Ok ? (failures.length ? 'partial' : 'completed') : 'failed', { model: 'chatgpt@mini', split_calls: 3 });
+    await db.saveRound(reportId, 'round02', round02, r2Ok ? (failures.length ? 'partial' : 'completed') : 'failed', { model: 'chatgpt', split_calls: 3 });
 
     try {
       const r3started = Date.now();
@@ -773,7 +957,7 @@ async function runCompanyResearch(publicId: string, reportId: string, company: R
     let finalReport: Record<string, unknown> = { ...ledger, summary: null, outreach_angles: [], synthesis_mode: 'validated_ledger_fallback' };
     let r4Artifact: Record<string, unknown>;
     try {
-      const r4 = await ask('agy@mini', round04Prompt(ledger), 420_000);
+      const r4 = await ask('agy', round04Prompt(ledger), 420_000);
       const fidelityErrors = r4.parsed ? validateFinal(r4.parsed, ledger) : [r4.parse_error ?? 'invalid final output'];
       if (r4.parsed && !fidelityErrors.length) {
         finalReport = { ...r4.parsed, synthesis_mode: 'gemini_validated' };
@@ -784,8 +968,9 @@ async function runCompanyResearch(publicId: string, reportId: string, company: R
     } catch (err) {
       failures.push((err as Error).message ?? String(err));
       r4Artifact = { error: (err as Error).message, fallback_used: true };
-      await db.saveRound(reportId, 'round04', r4Artifact, 'failed_fallback_used', { model: 'agy@mini' });
+      await db.saveRound(reportId, 'round04', r4Artifact, 'failed_fallback_used', { model: 'agy' });
     }
+    if (autoPersonResearch) finalReport = { ...finalReport, auto_person_research: autoPersonResearch };
     await db.saveFinal(reportId, ledger, finalReport);
     try {
       const cn = await translateChinese(finalReport);
@@ -831,41 +1016,41 @@ async function runPersonResearch(
   try {
     await db.updateReport(publicId, { status: 'running', error: null });
     await db.initPersonResearchRun(reportId);
-    let discoveryMetadata: Record<string, unknown> = { status: 'failed', model: 'agy@mini' };
+    let discoveryMetadata: Record<string, unknown> = { status: 'failed', model: 'agy' };
     try {
-      const discovery = await ask('agy@mini', personDiscoveryPrompt(company, person, emailHint), 420_000);
+      const discovery = await ask('agy', personDiscoveryPrompt(company, person, emailHint), 420_000);
       if (discovery.parsed) {
-        for (const row of [...rows(discovery.parsed.facts), ...rows(discovery.parsed.signals)]) row._round = 'person_discovery';
+        for (const row of [...rows(discovery.parsed.contacts), ...rows(discovery.parsed.facts), ...rows(discovery.parsed.signals)]) row._round = 'person_discovery';
         parsedForLedger.push(discovery.parsed);
         discoveryMetadata = { status: 'completed', model: discovery.model, engine: discovery.engine, ms: discovery.ms };
       } else hadFailure = true;
       if (!discovery.parsed) discoveryMetadata = { status: 'invalid_output', model: discovery.model, engine: discovery.engine, ms: discovery.ms };
     } catch (err) {
       hadFailure = true;
-      discoveryMetadata = { status: 'failed', model: 'agy@mini', error: (err as Error).message ?? String(err) };
+      discoveryMetadata = { status: 'failed', model: 'agy', error: (err as Error).message ?? String(err) };
     }
 
     const ledger = buildPersonLedger(company, person, parsedForLedger);
     await db.savePersonResearchRun(reportId, {
-      discovery: { facts: ledger.facts, signals: ledger.signals },
+      discovery: { contacts: ledger.contacts, facts: ledger.facts, signals: ledger.signals },
       ledger,
       status: { discovery: discoveryMetadata.status },
       metadata: { discovery: discoveryMetadata },
     });
     let finalReport: Record<string, unknown> = { ...ledger, summary: null, research_angles: [], synthesis_mode: 'validated_ledger_fallback' };
-    let synthesisMetadata: Record<string, unknown> = { status: 'failed', model: 'chatgpt@mini' };
+    let synthesisMetadata: Record<string, unknown> = { status: 'failed', model: 'chatgpt' };
     try {
-      const synthesis = await ask('chatgpt@mini', personSynthesisPrompt(ledger), 300_000);
+      const synthesis = await ask('chatgpt', personSynthesisPrompt(ledger), 300_000);
       const fidelityErrors = synthesis.parsed ? validatePersonFinal(synthesis.parsed, ledger) : [synthesis.parse_error ?? 'invalid final output'];
       if (synthesis.parsed && !fidelityErrors.length) finalReport = { ...synthesis.parsed, synthesis_mode: 'chatgpt_validated' };
       else hadFailure = true;
       synthesisMetadata = { status: fidelityErrors.length ? 'rejected_fallback_used' : 'completed', model: synthesis.model, engine: synthesis.engine, ms: synthesis.ms, fidelity_errors: fidelityErrors };
     } catch (err) {
       hadFailure = true;
-      synthesisMetadata = { status: 'failed', model: 'chatgpt@mini', error: (err as Error).message ?? String(err) };
+      synthesisMetadata = { status: 'failed', model: 'chatgpt', error: (err as Error).message ?? String(err) };
     }
     await db.savePersonResearchRun(reportId, {
-      synthesis: { synthesis_mode: finalReport.synthesis_mode, fact_count: rows(finalReport.facts).length, signal_count: rows(finalReport.signals).length },
+      synthesis: { synthesis_mode: finalReport.synthesis_mode, contact_count: rows(finalReport.contacts).length, fact_count: rows(finalReport.facts).length, signal_count: rows(finalReport.signals).length },
       ledger,
       finalReport,
       status: { discovery: discoveryMetadata.status, synthesis: synthesisMetadata.status },
@@ -907,7 +1092,8 @@ async function personResearchInput(report: db.PublishedReport): Promise<{ compan
   if (!sourceId || !personId || !report.company_id) return null;
   const [source, company] = await Promise.all([db.getReport(sourceId), db.getCompany(report.company_id)]);
   if (!source || source.report_type !== 'company_research' || !company) return null;
-  const person = rows(source.result?.people).find((row) => first(row, ['id']) === personId);
+  const person = rows(source.result?.people).find((row) => first(row, ['id']) === personId) ?? object(request.personSnapshot);
+  if (first(person, ['id']) !== personId || !first(person, ['name']) || !first(person, ['role', 'current_role', 'position'])) return null;
   return person ? { company, person } : null;
 }
 
@@ -925,7 +1111,7 @@ async function ensureRunning(report: db.PublishedReport): Promise<void> {
   }
   if (report.company_id) {
     const company = await db.getCompany(report.company_id);
-    if (company) void runCompanyResearch(report.public_id, report.id, company);
+    if (company) void runCompanyResearch(report.public_id, report.id, company, object(report.request));
   }
 }
 
@@ -1122,7 +1308,7 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       type: 'company_research', title: str(company.name, 'Company') + ' intelligence report',
       userId: str(request.requesterId) || null, request, companyId,
     });
-    void runCompanyResearch(report.public_id, report.id, company);
+    void runCompanyResearch(report.public_id, report.id, company, request);
     ctx.json(res, 202, { report: envelope(req, report) });
     return true;
   }

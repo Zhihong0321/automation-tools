@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLedger, buildPersonLedger, extractJson, facebookLedgerRows, publishOutcome, validateChineseTranslation, validateFinal, validatePersonFinal } from './intel.ts';
+import { buildLedger, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, publishOutcome, validateChineseTranslation, validateFinal, validatePersonFinal } from './intel.ts';
 import { companyPage, personPage, searchPage } from './reportui.ts';
 import type { PublishedReport } from './reportdb.ts';
 
@@ -69,6 +69,22 @@ test('ledger retains only direct evidence URLs and immutable Maps phone', () => 
   assert.equal((ledger.people as unknown[]).length, 1);
 });
 
+test('ledger keeps named source people as candidates without weakening validated people', () => {
+  const ledger = buildLedger({ id: '7', name: 'Example Solar' }, [{
+    people: [{ name: 'Verified Person', role: 'CEO', role_url: 'https://example.com/team/ceo' }],
+    candidate_people: [
+      { name: 'Registry Contact', current_role: 'Director', source_name: 'SSM / e-Info' },
+      { name: 'Employee Lead', current_role: 'Employee', source_name: 'LinkedIn company listing', source_url: 'https://www.linkedin.com/company/example/people/' },
+      { name: 'Unsourced', current_role: 'Manager' },
+    ],
+  }]);
+  assert.equal((ledger.people as unknown[]).length, 1);
+  const candidates = ledger.candidate_people as Record<string, unknown>[];
+  assert.equal(candidates.length, 2);
+  assert.equal(candidates[0]?.verification_status, 'needs_direct_role_evidence');
+  assert.equal(candidates.some((row) => row.name === 'Unsourced'), false);
+});
+
 test('final validation rejects changed people and newly invented URLs', () => {
   const ledger = {
     entity: { maps_url: 'https://www.google.com/maps/place/Example/data=!4m2' },
@@ -83,6 +99,7 @@ test('final validation rejects changed people and newly invented URLs', () => {
   }, ledger);
   assert.ok(errors.some((e) => /people id set/.test(e)));
   assert.ok(errors.some((e) => /new URL/.test(e)));
+  assert.ok(validateFinal({ ...ledger, candidate_people: [{ id: 'candidate_fake' }] }, ledger).some((e) => /candidate people id set/.test(e)));
 });
 
 test('Chinese translation keeps evidence identifiers and contact routes canonical', () => {
@@ -108,10 +125,12 @@ test('VIP ledger retains public evidence and rejects a synthesis that invents a 
   const company = { id: '7', name: 'Example Solar' };
   const person = { id: 'person_1', name: 'A Person', role: 'CEO', role_url: 'https://example.com/team' };
   const ledger = buildPersonLedger(company, person, [{
+    contacts: [{ purpose: 'Company enquiries', value_as_published: 'hello@example.com', evidence_url: 'https://example.com/contact' }],
     facts: [{ category: 'Interview', fact: 'Discussed clean-energy projects.', evidence_url: 'https://example.com/interview' }],
     signals: [{ date: '2026-08-20', fact: 'Opened a new office.', evidence_url: 'https://example.com/news/opening' }],
   }]);
   assert.equal((ledger.facts as unknown[]).length, 2);
+  assert.equal((ledger.contacts as unknown[]).length, 1);
   assert.equal((ledger.signals as unknown[]).length, 1);
   assert.deepEqual(validatePersonFinal({ ...ledger }, ledger), []);
   const errors = validatePersonFinal({
@@ -119,6 +138,17 @@ test('VIP ledger retains public evidence and rejects a synthesis that invents a 
     facts: [{ id: 'new_fact', evidence_url: 'https://example.com/invented' }],
   }, ledger);
   assert.ok(errors.some((error) => /fact id set|new URL/.test(error)));
+});
+
+test('automatic VIP selection uses the company report P01 person', () => {
+  const selected = highestRankedPerson({ id: '7', name: 'Example Solar' }, [{
+    people: [
+      { name: 'Founder One', role: 'Founder & CEO', role_url: 'https://example.com/team/founder' },
+      { name: 'Director Two', role: 'Sales Director', role_url: 'https://example.com/team/sales' },
+    ],
+  }]);
+  assert.equal(selected?.name, 'Founder One');
+  assert.equal(selected?.role, 'Founder & CEO');
 });
 
 function report(type: 'business_search' | 'company_research' | 'person_research'): PublishedReport {
@@ -139,6 +169,8 @@ test('both public report layouts include mobile viewport and report content', ()
   deepReport.result = {
     contacts: [{ purpose: 'Main', value: '+60123', evidence_url: 'https://example.com/contact' }],
     people: [{ name: 'A Person', role: 'CEO', role_url: 'https://example.com/team' }],
+    candidate_people: [{ name: 'A Lead', role: 'Employee', source_name: 'LinkedIn listing', verification_note: 'Confirm current role.' }],
+    auto_person_research: { report_id: 'abcdefghijklmnopqrst', person_name: 'A Person' },
   };
   const deep = companyPage(deepReport);
   for (const html of [search, deep]) {
@@ -147,9 +179,14 @@ test('both public report layouts include mobile viewport and report content', ()
   }
   assert.match(search, /Example Solar/);
   assert.match(deep, /Best contact routes/);
+  assert.match(deep, /A Person.*Person research/);
+  assert.match(deep, /People to verify/);
+  assert.match(deep, /\/r\/abcdefghijklmnopqrst/);
   const bilingual = companyPage(deepReport, { ...deepReport.result, summary: '中文摘要' });
   assert.match(bilingual, /中文报告/);
   assert.match(bilingual, /中文摘要/);
+  assert.match(bilingual, /data-report-language="en"/);
+  assert.match(bilingual, /data-report-language-panel="zh-CN" hidden/);
 });
 
 test('VIP brief layout labels public-professional scope and evidence', () => {
@@ -157,12 +194,14 @@ test('VIP brief layout labels public-professional scope and evidence', () => {
   brief.title = 'A Person VIP brief';
   brief.result = {
     person: { name: 'A Person', current_role: 'CEO', company_name: 'Example Solar' },
+    contacts: [{ purpose: 'Company enquiries', value_as_published: 'hello@example.com', evidence_url: 'https://example.com/contact', evidence_class: 'first_party' }],
     facts: [{ category: 'Current role', fact: 'A Person is CEO.', evidence_url: 'https://example.com/team', evidence_class: 'first_party' }],
   };
   const html = personPage(brief);
   assert.match(html, /VIP brief/);
   assert.match(html, /No private or sensitive-person data is included/);
   assert.match(html, /A Person is CEO/);
+  assert.match(html, /hello@example.com/);
 });
 
 test('a run where no round produced output is failed, not partial', () => {

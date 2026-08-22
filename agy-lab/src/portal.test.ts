@@ -12,6 +12,7 @@ test('end-user portal combines discovery, deep research, and report library', ()
   assert.match(html, /\/api\/company-research/);
   assert.match(html, /person_research/);
   assert.match(html, /VIP briefs/);
+  assert.match(html, /person_research/);
   assert.match(html, /\/api\/reports\?limit=/);
   assert.match(html, /Deep research →/);
   assert.match(html, /aria-label="Start deep research for /);

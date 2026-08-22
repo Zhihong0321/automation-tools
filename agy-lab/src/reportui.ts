@@ -103,8 +103,9 @@ a{color:inherit}.wrap{max-width:1180px;margin:0 auto;padding:0 30px 84px}.mast{h
 .contact-list{border-top:1px solid var(--ink)}.contact{display:grid;grid-template-columns:180px minmax(0,1fr) auto;align-items:center;gap:24px;min-height:96px;border-bottom:1px solid var(--line)}.label{font:700 10px/1.3 var(--sans);text-transform:uppercase;letter-spacing:.12em;color:var(--muted)}.contact-value{font:500 17px/1.3 var(--mono);word-break:break-word}.source{margin-top:7px;font-size:11px;color:var(--muted)}.source a{color:var(--accent);text-decoration:none;border-bottom:1px solid currentColor}
 .people{border-top:1px solid var(--ink)}.person{display:grid;grid-template-columns:64px minmax(190px,.8fr) minmax(240px,1.2fr) auto;gap:22px;align-items:start;padding:25px 0;border-bottom:1px solid var(--line)}.priority{font:500 11px/1.3 var(--mono);color:var(--accent)}.role{margin-top:6px;font:700 11px/1.3 var(--sans);text-transform:uppercase;letter-spacing:.07em;color:var(--accent)}.person p{margin:0;color:var(--muted);font-size:13px}.signal-list{border-top:1px solid var(--ink)}.signal{display:grid;grid-template-columns:180px minmax(0,1fr);gap:24px;padding:24px 0;border-bottom:1px solid var(--line)}.date{font:600 11px/1.3 var(--mono);color:var(--accent);text-transform:uppercase}.signal strong{font-size:15px}.angles{counter-reset:angle;display:grid;grid-template-columns:repeat(2,1fr);border-top:1px solid var(--ink)}.angle{counter-increment:angle;position:relative;min-height:150px;padding:26px 28px 26px 62px;border-bottom:1px solid var(--line);font:400 18px/1.4 var(--display)}.angle:nth-child(odd){border-right:1px solid var(--line)}.angle:before{content:counter(angle,decimal-leading-zero);position:absolute;left:0;top:30px;font:500 10px/1 var(--mono);color:var(--accent)}
 .foot{display:flex;justify-content:space-between;gap:20px;margin-top:72px;padding-top:18px;border-top:1px solid var(--ink);font:500 9px/1.4 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.language-switch{display:inline-flex;gap:4px;margin:30px 0 -16px;padding:4px;border:1px solid var(--line);background:var(--sheet);border-radius:999px}.language-button{min-height:34px;padding:0 14px;border:0;border-radius:999px;background:transparent;color:var(--muted);font:700 10px/1 var(--sans);letter-spacing:.09em;text-transform:uppercase;cursor:pointer}.language-button[aria-pressed="true"]{background:var(--ink);color:var(--sheet)}.language-button:hover{color:var(--ink)}.language-button[aria-pressed="true"]:hover{color:var(--sheet)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:4px}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
-@media(max-width:760px){.wrap{padding:0 18px 52px}.mast{height:60px}.folio{display:none}.hero{grid-template-columns:1fr;gap:30px;padding:42px 0 30px}.hero h1{font-size:clamp(43px,14vw,64px);line-height:.94}.hero-copy{font-size:14px;margin-top:18px}.hero-meta{align-self:auto}.meta-line{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:repeat(2,1fr)}.metric{padding:21px 15px 19px 0}.metric+.metric{padding-left:15px}.metric:nth-child(3){border-left:0;border-top:1px solid var(--line);padding-left:0}.metric:nth-child(4){border-top:1px solid var(--line)}.metric strong{font-size:35px}.section{padding-top:42px}.section-head{grid-template-columns:1fr;gap:8px}.section-note{text-align:left}.company{grid-template-columns:42px 1fr;gap:17px 12px;padding:24px 0}.record-address,.record-contact{grid-column:2}.actions{gap:12px}.button{min-height:46px;padding:0 18px}.brief{grid-template-columns:1fr;gap:14px;padding:28px 0}.brief p{font-size:23px}.contact{grid-template-columns:1fr auto;gap:7px 14px;padding:21px 0}.contact .label{grid-column:1/-1}.contact-value{font-size:15px}.people{border-top-color:var(--ink)}.person{grid-template-columns:38px 1fr;gap:14px 10px;padding:22px 0}.person p,.person .text-link{grid-column:2}.signal{grid-template-columns:1fr;gap:8px;padding:21px 0}.angles{grid-template-columns:1fr}.angle{min-height:auto;padding:22px 0 22px 42px}.angle:nth-child(odd){border-right:0}.foot{display:block;line-height:1.7}.foot span:last-child{display:block;margin-top:7px}}
+@media(max-width:760px){.wrap{padding:0 18px 52px}.mast{height:60px}.folio{display:none}.hero{grid-template-columns:1fr;gap:30px;padding:42px 0 30px}.hero h1{font-size:clamp(43px,14vw,64px);line-height:.94}.hero-copy{font-size:14px;margin-top:18px}.hero-meta{align-self:auto}.meta-line{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:repeat(2,1fr)}.metric{padding:21px 15px 19px 0}.metric+.metric{padding-left:15px}.metric:nth-child(3){border-left:0;border-top:1px solid var(--line);padding-left:0}.metric:nth-child(4){border-top:1px solid var(--line)}.metric strong{font-size:35px}.section{padding-top:42px}.section-head{grid-template-columns:1fr;gap:8px}.section-note{text-align:left}.company{grid-template-columns:42px 1fr;gap:17px 12px;padding:24px 0}.record-address,.record-contact{grid-column:2}.actions{gap:12px}.button{min-height:46px;padding:0 18px}.brief{grid-template-columns:1fr;gap:14px;padding:28px 0}.brief p{font-size:23px}.contact{grid-template-columns:1fr auto;gap:7px 14px;padding:21px 0}.contact .label{grid-column:1/-1}.contact-value{font-size:15px}.people{border-top-color:var(--ink)}.person{grid-template-columns:38px 1fr;gap:14px 10px;padding:22px 0}.person p,.person .text-link{grid-column:2}.signal{grid-template-columns:1fr;gap:8px;padding:21px 0}.angles{grid-template-columns:1fr}.angle{min-height:auto;padding:22px 0 22px 42px}.angle:nth-child(odd){border-right:0}.language-switch{margin-top:22px}.language-button{min-height:38px;padding:0 16px}.foot{display:block;line-height:1.7}.foot span:last-child{display:block;margin-top:7px}}
 </style></head><body class="${esc(report.report_type.replace('_', '-'))}"><main class="wrap">
 <nav class="mast" aria-label="Report masthead"><div class="wordmark"><span class="mark">EE</span><span>Business intelligence</span></div><div class="folio">${esc(reportLabel)}<br>${esc(report.public_id)}</div></nav>
 <header class="hero"><div><div class="kicker">${esc(reportLabel)} · ${esc(reportDate(report))}</div><h1>${esc(report.title ?? 'Research report')}</h1><p class="hero-copy">${active ? 'Research is in progress. This permanent report link refreshes as verified findings arrive.' : report.error ? esc(report.error) : isSearch ? 'A ranked field scan of relevant businesses, with direct routes to source listings and published contact points.' : 'A source-linked intelligence brief designed for qualification, outreach and informed decision-making.'}</p></div><aside class="hero-meta"><div class="status ${esc(report.status)}"><span class="status-dot"></span>${esc(statusLabel)}</div><div class="meta-line"><span>Issued ${esc(reportDate(report))}</span><span>${isSearch ? 'Source / Google Maps' : 'Evidence / Public sources'}</span></div>${!isSearch ? `<div class="rounds" aria-label="Four research rounds">${[0, 1, 2, 3].map((i) => `<span class="round ${i < roundsLit ? 'on' : ''}"></span>`).join('')}</div>` : ''}</aside></header>
@@ -148,6 +149,7 @@ export function searchPage(report: PublishedReport, detail: { report?: Record<st
 function chineseCompanyVersion(translated: Record<string, unknown>): string {
   const contacts = arr(translated.contacts);
   const people = arr(translated.people);
+  const candidatePeople = arr(translated.candidate_people);
   const signals = arr(translated.signals ?? translated.business_signals);
   const conflicts = arr(translated.conflicts_and_unknowns);
   const outreach = strings(translated.outreach_angles);
@@ -158,12 +160,14 @@ function chineseCompanyVersion(translated: Record<string, unknown>): string {
     return `<div class="contact"><div class="label">${esc(value(row, 'purpose', 'channel', 'type') || '联系方式')}</div><div><div class="contact-value">${esc(raw)}</div><div class="source">${esc(value(row, 'status', 'current_status', 'evidence_class'))}${evidence ? ` · <a href="${esc(evidence)}" target="_blank" rel="noopener">查看来源 ↗</a>` : ''}</div></div></div>`;
   }).join('');
   const peopleRows = people.map((row, i) => `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), '来源')}</article>`).join('');
+  const candidateRows = candidatePeople.map((row) => `<article class="person"><span class="priority">待核实</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role'))}</div></div><p>${esc(value(row, 'verification_note', 'relevance'))}</p>${link(value(row, 'source_url'), '来源')}</article>`).join('');
   const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || '当前')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${esc(value(row, 'evidence_class', 'type', 'source_class'))} ${link(value(row, 'evidence_url', 'evidence', 'source_url'), '来源')}</div></div></div>`).join('');
   const conflictRows = conflicts.map((row) => `<div class="signal"><div class="date">需核实</div><div><strong>${esc(value(row, 'issue', 'field'))}</strong><div class="source">${esc(value(row, 'details', 'status', 'note'))}</div></div></div>`).join('');
   let body = `<section class="section" lang="zh-CN"><div class="section-head"><h2>中文报告</h2><span class="section-note">与英文版对应的简体中文翻译；来源、ID 和联系方式保持原样。</span></div></section>`;
   if (summary) body += `<section class="brief" lang="zh-CN"><div class="brief-label">执行摘要</div><p>${esc(summary)}</p></section>`;
   body += `<section class="section" lang="zh-CN"><div class="section-head"><h2>最佳联系渠道</h2><span class="section-note">仅展示经证据台账保留的联系方式。</span></div><div class="contact-list">${contactRows || '<div class="empty">暂无已验证的联系方式。</div>'}</div></section>`;
   body += `<section class="section" lang="zh-CN"><div class="section-head"><h2>关键相关人员</h2><span class="section-note">当前职位均需有直接来源支持。</span></div><div class="people">${peopleRows || '<div class="empty">暂无已验证的相关人员。</div>'}</div></section>`;
+  if (candidatePeople.length) body += `<section class="section" lang="zh-CN"><div class="section-head"><h2>待核实人员线索</h2><span class="section-note">来自具名公开来源；在确认当前职位前请勿作为事实使用。</span></div><div class="people">${candidateRows}</div></section>`;
   if (outreach.length) body += `<section class="section" lang="zh-CN"><div class="section-head"><h2>沟通切入点</h2><span class="section-note">根据已验证研究得出的对话建议。</span></div><div class="angles">${outreach.map((item) => `<div class="angle">${esc(item)}</div>`).join('')}</div></section>`;
   body += `<section class="section" lang="zh-CN"><div class="section-head"><h2>业务动态</h2><span class="section-note">可能形成沟通理由的时效性证据。</span></div><div class="signal-list">${signalRows || '<div class="empty">暂无已验证的业务动态。</div>'}</div></section>`;
   if (conflictRows) body += `<section class="section" lang="zh-CN"><div class="section-head"><h2>冲突与未知项</h2></div><div class="message warning">${conflictRows}</div></section>`;
@@ -175,10 +179,13 @@ export function companyPage(report: PublishedReport, chinese: Record<string, unk
   const entity = obj(final.entity);
   const contacts = arr(final.contacts);
   const people = arr(final.people);
+  const candidatePeople = arr(final.candidate_people);
   const signals = arr(final.signals ?? final.business_signals);
   const conflicts = arr(final.conflicts_and_unknowns);
   const outreach = strings(final.outreach_angles);
   const summary = value(final, 'summary', 'executive_summary');
+  const autoPerson = obj(final.auto_person_research);
+  const autoPersonReportId = /^[A-Za-z0-9_-]{20}$/.test(value(autoPerson, 'report_id')) ? value(autoPerson, 'report_id') : '';
   const stats = `<div class="metrics">
     <div class="metric"><strong>${contacts.length || '—'}</strong><span>Contact routes</span></div>
     <div class="metric"><strong>${people.length || '—'}</strong><span>Relevant people</span></div>
@@ -192,27 +199,40 @@ export function companyPage(report: PublishedReport, chinese: Record<string, unk
     const action = /@/.test(raw) ? `<a class="button" href="mailto:${esc(raw)}">Email</a>` : /\d/.test(raw) ? `<a class="button" href="tel:${esc((normalized || raw).replace(/[^+\d]/g, ''))}">Call</a>` : link(raw, 'Open', 'button');
     return `<div class="contact"><div class="label">${esc(value(row, 'purpose', 'channel', 'type') || 'Contact')}</div><div><div class="contact-value">${esc(raw)}</div><div class="source">${esc(value(row, 'status', 'current_status', 'evidence_class'))}${evidence ? ` · <a href="${esc(evidence)}" target="_blank" rel="noopener">view evidence ↗</a>` : ''}</div></div>${action}</div>`;
   }).join('');
-  const peopleRows = people.map((row, i) => `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), 'Evidence')}</article>`).join('');
+  const autoPersonName = value(autoPerson, 'person_name').trim().toLocaleLowerCase();
+  const peopleRows = people.map((row, i) => {
+    const personName = value(row, 'name');
+    const isAutoPerson = Boolean(autoPersonReportId) && personName.trim().toLocaleLowerCase() === autoPersonName;
+    const vipLink = isAutoPerson ? ` <a class="button" href="/r/${esc(autoPersonReportId)}">Person research <span aria-hidden="true">↗</span></a>` : '';
+    return `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(personName)}${vipLink}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), 'Evidence')}</article>`;
+  }).join('');
+  const candidateRows = candidatePeople.map((row) => `<article class="person"><span class="priority">VERIFY</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role'))}</div></div><p>${esc(value(row, 'verification_note', 'relevance'))}</p>${link(value(row, 'source_url'), 'Source')}</article>`).join('');
   const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || 'Current')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${esc(value(row, 'evidence_class', 'type', 'source_class'))} ${link(value(row, 'evidence_url', 'evidence', 'source_url'), 'Source')}</div></div></div>`).join('');
   const conflictRows = conflicts.map((row) => `<div class="signal"><div class="date">Review</div><div><strong>${esc(value(row, 'issue', 'field'))}</strong><div class="source">${esc(value(row, 'details', 'status', 'note'))}</div></div></div>`).join('');
   let body = stats;
   if (summary) body += `<section class="brief"><div class="brief-label">Executive brief</div><p>${esc(summary)}</p></section>`;
   if (report.status === 'failed') body += `<section class="section"><div class="message error">${esc(report.error ?? 'Deep research failed.')}</div></section>`;
-  else if (!contacts.length && !people.length && report.status !== 'completed' && report.status !== 'partial') body += '<section class="section"><div class="empty">The research rounds are running. Verified findings will appear here automatically.</div></section>';
+  else if (!contacts.length && !people.length && !candidatePeople.length && report.status !== 'completed' && report.status !== 'partial') body += '<section class="section"><div class="empty">The research rounds are running. Verified findings will appear here automatically.</div></section>';
   else {
     body += `<section class="section"><div class="section-head"><h2>Best contact routes</h2><span class="section-note">Only channels retained by the evidence ledger are shown.</span></div><div class="contact-list">${contactRows || '<div class="empty">No validated contacts.</div>'}</div></section>`;
     body += `<section class="section"><div class="section-head"><h2>Decision-relevant people</h2><span class="section-note">Current roles require a direct supporting source.</span></div><div class="people">${peopleRows || '<div class="empty">No validated people.</div>'}</div></section>`;
+    if (candidatePeople.length) body += `<section class="section"><div class="section-head"><h2>People to verify</h2><span class="section-note">Named public-source leads. Confirm their current role before treating it as fact or starting VIP research.</span></div><div class="people">${candidateRows}</div></section>`;
     if (outreach.length) body += `<section class="section"><div class="section-head"><h2>Outreach angles</h2><span class="section-note">Conversation starters derived from the validated research set.</span></div><div class="angles">${outreach.map((item) => `<div class="angle">${esc(item)}</div>`).join('')}</div></section>`;
     body += `<section class="section"><div class="section-head"><h2>Business signals</h2><span class="section-note">Time-sensitive evidence that may create a reason to engage.</span></div><div class="signal-list">${signalRows || '<div class="empty">No validated signals.</div>'}</div></section>`;
     if (conflictRows) body += `<section class="section"><div class="section-head"><h2>Conflicts and unknowns</h2></div><div class="message warning">${conflictRows}</div></section>`;
   }
-  if (chinese) body += chineseCompanyVersion(chinese);
+  if (chinese) {
+    const englishBody = body;
+    const chineseBody = chineseCompanyVersion(chinese);
+    body = `<div class="language-switch" role="group" aria-label="Report language"><button class="language-button" type="button" data-report-language="en" aria-pressed="true">English</button><button class="language-button" type="button" data-report-language="zh-CN" aria-pressed="false">中文</button></div><div data-report-language-panel="en">${englishBody}</div><div data-report-language-panel="zh-CN" hidden>${chineseBody}</div><script>(function(){const buttons=document.querySelectorAll('[data-report-language]');const panels=document.querySelectorAll('[data-report-language-panel]');function select(language){buttons.forEach((button)=>button.setAttribute('aria-pressed',String(button.getAttribute('data-report-language')===language)));panels.forEach((panel)=>{panel.hidden=panel.getAttribute('data-report-language-panel')!==language;});}buttons.forEach((button)=>button.addEventListener('click',()=>select(button.getAttribute('data-report-language'))));}())</script>`;
+  }
   return shell(report, body);
 }
 
 export function personPage(report: PublishedReport): string {
   const final = obj(report.result);
   const person = obj(final.person);
+  const contacts = arr(final.contacts);
   const facts = arr(final.facts);
   const signals = arr(final.signals);
   const angles = strings(final.research_angles);
@@ -221,11 +241,18 @@ export function personPage(report: PublishedReport): string {
   const company = value(person, 'company_name');
   const summary = value(final, 'summary');
   const stats = `<div class="metrics">
+    <div class="metric"><strong>${contacts.length || '—'}</strong><span>Business contacts</span></div>
     <div class="metric"><strong>${facts.length || '—'}</strong><span>Verified facts</span></div>
     <div class="metric"><strong>${signals.length || '—'}</strong><span>Business signals</span></div>
     <div class="metric"><strong>${esc(company || '—')}</strong><span>Company context</span></div>
-    <div class="metric"><strong>Public</strong><span>Evidence scope</span></div>
   </div>`;
+  const contactRows = contacts.map((row) => {
+    const raw = value(row, 'value_as_published', 'value', 'normalized_value');
+    const normalized = value(row, 'normalized_value') || raw;
+    const evidence = value(row, 'evidence_url', 'source_url');
+    const action = /@/.test(raw) ? `<a class="button" href="mailto:${esc(raw)}">Email</a>` : /\d/.test(raw) ? `<a class="button" href="tel:${esc(normalized.replace(/[^+\d]/g, ''))}">Call</a>` : link(raw, 'Open', 'button');
+    return `<div class="contact"><div class="label">${esc(value(row, 'purpose') || 'Business contact')}</div><div><div class="contact-value">${esc(raw)}</div><div class="source">${esc(value(row, 'evidence_class', 'current_status'))}${evidence ? ` · <a href="${esc(evidence)}" target="_blank" rel="noopener">view evidence ↗</a>` : ''}</div></div>${action}</div>`;
+  }).join('');
   const factRows = facts.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'category') || 'Professional fact')}</div><div><strong>${esc(value(row, 'fact', 'value', 'description'))}</strong><div class="source">${esc(value(row, 'evidence_class', 'source_type'))} ${link(value(row, 'evidence_url', 'source_url'), 'Source')}</div></div></div>`).join('');
   const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || 'Current')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${esc(value(row, 'evidence_class', 'source_type'))} ${link(value(row, 'evidence_url', 'source_url'), 'Source')}</div></div></div>`).join('');
   let body = stats;
@@ -234,6 +261,7 @@ export function personPage(report: PublishedReport): string {
   if (report.status === 'failed') body += `<section class="section"><div class="message error">${esc(report.error ?? 'The VIP brief failed.')}</div></section>`;
   else if (!facts.length && !signals.length && report.status !== 'completed' && report.status !== 'partial') body += '<section class="section"><div class="empty">Public-professional research is running. This report will refresh automatically.</div></section>';
   else {
+    body += `<section class="section"><div class="section-head"><h2>Published business contacts</h2><span class="section-note">Company-wide and person-specific routes are labeled separately.</span></div><div class="contact-list">${contactRows || '<div class="empty">No validated public business contacts.</div>'}</div></section>`;
     body += `<section class="section"><div class="section-head"><h2>Verified professional facts</h2><span class="section-note">No private or sensitive-person data is included.</span></div><div class="signal-list">${factRows || '<div class="empty">No additional validated facts.</div>'}</div></section>`;
     if (angles.length) body += `<section class="section"><div class="section-head"><h2>Research angles</h2><span class="section-note">Use as prompts for informed qualification, not as asserted facts.</span></div><div class="angles">${angles.map((item) => `<div class="angle">${esc(item)}</div>`).join('')}</div></section>`;
     body += `<section class="section"><div class="section-head"><h2>Business signals</h2><span class="section-note">Dated, source-linked signals only.</span></div><div class="signal-list">${signalRows || '<div class="empty">No validated business signals.</div>'}</div></section>`;
