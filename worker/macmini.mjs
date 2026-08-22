@@ -80,7 +80,25 @@ const LANES = (() => {
   // pins a machine to one kind of work — the reason to reach for it now is to
   // run the wrappers on one box and the scan on another.
   const pinned = (process.env.WORKER_TYPES ?? '').split(',').map((t) => t.trim()).filter(Boolean);
-  if (pinned.length) return [{ suffix: '', types: pinned }];
+  // WORKER_SESSIONS widens a pinned worker without unpinning it. A pin is one
+  // lane by definition, and that is still right for `gmap.scan`; it stopped being
+  // right for `chatgpt.ask` the moment the machine had three signed-in accounts.
+  // The ask job is pinned in its plist precisely so it does not inherit the scan
+  // daemon's WORKER_TYPES from ~/.gmap-worker.env, so unpinning it is not an
+  // option -- it has to widen in place.
+  //
+  // First session keeps the full pinned type list, including the non-chatgpt
+  // types a pinned worker is also carrying (agy). The rest take only the ChatGPT
+  // types, because those are the only ones a second account can answer: agy is
+  // one CLI against one credential no matter how many lanes ask it.
+  const sessions = (process.env.WORKER_SESSIONS ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+  if (pinned.length) {
+    if (sessions.length < 2) return [{ suffix: '', types: pinned, session: sessions[0] }];
+    const chatgptOnly = pinned.filter((t) => t.startsWith('chatgpt.'));
+    return sessions.map((session, i) => (i === 0
+      ? { suffix: '', types: pinned, session }
+      : { suffix: '-' + (i + 1), types: chatgptOnly, session }));
+  }
   return [
     { suffix: '', types: ['ping', 'gmap.scan'] },
     // Three ChatGPT lanes, one per signed-in account, because that is what the
