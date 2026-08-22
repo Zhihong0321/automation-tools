@@ -117,9 +117,19 @@ function spaceScript({ space, profile, profileId }) {
   {
     const existing = (await listTaskSpaces()).find(
       (x) => x.id === ${wanted} || x.name === ${wanted} || x.taskId === ${wanted});
-    task = existing
-      ? await useOrCreateTaskSpace(existing.id)
-      : await ego.createTaskSpace(${wanted}, ${JSON.stringify(profileId)});
+    if (existing) {
+      task = await useOrCreateTaskSpace(existing.id);
+    } else {
+      // createTaskSpace CREATES; it does not SELECT. useOrCreateTaskSpace does both,
+      // which is why nothing downstream ever had to think about it -- and why the
+      // first version of this failed with "listTabs: Task space not selected" the
+      // moment a space had to be rebuilt. Select it, then take control: a freshly
+      // made space comes back agentDelegatedToUser, with control parked on the user
+      // side, and every page call fails until it is taken.
+      task = await ego.createTaskSpace(${wanted}, ${JSON.stringify(profileId)});
+      await ego.useTaskSpace(task.id);
+      await takeOverTaskSpace(task.id);
+    }
   }`
     : `
   const task = await useOrCreateTaskSpace(${wanted});`;
