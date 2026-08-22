@@ -309,3 +309,67 @@ than observed.
 > The user is not paying for rigour. He is paying for a report that comes out the
 > other end. When those two conflict — and a constraint that can reject good work
 > is exactly where they conflict — **the report wins.**
+
+---
+
+## 2026-08-22 (later) — Asking for a password that was never needed
+
+### What happened
+
+The Maps scan worker needed restarting to pick up a fix. I ran:
+
+```
+launchctl kickstart -k system/com.eternalgy.gmapworker
+→ Operation not permitted
+```
+
+I saw "system domain", concluded "root", and told the user to run it with `sudo`.
+Then I wrote it into the handoff document as a fact — *"Fix 2 — needs the owner's
+password, not a code change"* — so a future session would inherit it and ask him
+for a password too.
+
+He asked why. Two commands answered it:
+
+```
+ps  → the process runs as ganzhihong, not root
+plist → KeepAlive is unconditional
+```
+
+`kill <pid>` restarts it, with no privilege at all. `launchctl kickstart` needs
+root because it is a system-domain *control* operation; the job it controls runs
+as the user.
+
+### The part that makes it worse
+
+**I had already printed that plist earlier in the same session.** `UserName
+ganzhihong` and `KeepAlive true` were in output I generated myself, and scrolled
+past. I did not read it. I pattern-matched "LaunchDaemon" → "sudo" and stopped
+at the first error message.
+
+Then, asked to justify it, I compounded it: I implied a reboot would need someone
+physically at the machine. FileVault is off and auto-login is on, so the daemon
+starts at boot and the agents start when auto-login completes. The fleet recovers
+unattended. That was a second unmeasured claim, made while defending the first.
+
+### Why it matters more than one wasted instruction
+
+Asking for a password is not a neutral request. It says *"this system cannot run
+without you present"*, and the user is running a machine at home precisely so it
+does not need him present. The false claim attacked the property he actually
+cares about, and it went into a document as a durable fact.
+
+### The rule
+
+Same rule as the 2026-08-19 entry, which is the point: **that entry was written
+earlier the same day, and then this happened anyway.**
+
+> An error message names a symptom, not a cause. `Operation not permitted` says
+> this command was refused — not that the goal requires privilege. Before telling
+> a user that something needs their password, root, or their physical presence,
+> measure it: who owns the process, what restarts it, what happens at boot. Those
+> are three commands, and being wrong about them attacks the user's trust that
+> their system runs without them.
+
+And the narrower one, which would have caught it on its own:
+
+> If you have already printed the answer, read it before guessing.
