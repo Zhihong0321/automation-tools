@@ -68,8 +68,9 @@ export function extractJson(raw: string): { value: Record<string, unknown> | nul
 /**
  * A URL a model wrapped in Markdown is still that URL.
  *
- * Every prompt says to emit raw https:// strings and never a Markdown link, and
- * the models mostly comply -- but one VIP brief published 17 evidence links as
+ * The prompts ask for raw https:// strings -- though until this was written only
+ * Round 02 said so, and the two synthesis steps, which is where it went wrong,
+ * did not. One VIP brief published 17 evidence links as
  * `[https://host/path](https://host/path)`. Those are dead links in the report
  * UI. Unwrapping here is the permissive half; validateFinal / validatePersonFinal
  * are the strict half, and they now see through the same wrapper.
@@ -769,7 +770,7 @@ async function round03Facebook(company: Record<string, unknown>): Promise<{
 
 function round04Prompt(ledger: Record<string, unknown>): string {
   return `You are Gemini Round 04. Write a concise final business-intelligence synthesis using only this validated ledger: ${JSON.stringify(ledger)}
-Candidate people are leads to verify, not confirmed roles: do not present their role or affiliation as fact in summary or outreach_angles. Return exactly one JSON object in a fenced code block with keys summary (max 120 words), outreach_angles (max 5 short strings), entity, contacts, people, candidate_people, signals, conflicts_and_unknowns. Copy entity/contacts/people/candidate_people/signals/conflicts arrays exactly, including every id and URL. Do not browse, add, remove, rename, infer, resolve conflicts or introduce any number/name/URL not present in the ledger. No prose outside JSON.`;
+Candidate people are leads to verify, not confirmed roles: do not present their role or affiliation as fact in summary or outreach_angles. Return exactly one JSON object in a fenced code block with keys summary (max 120 words), outreach_angles (max 5 short strings), entity, contacts, people, candidate_people, signals, conflicts_and_unknowns. Copy entity/contacts/people/candidate_people/signals/conflicts arrays exactly, including every id and URL.Copy every URL as a literal raw https:// string exactly as it appears in the ledger, never as a Markdown link and never wrapped in brackets. Do not browse, add, remove, rename, infer, resolve conflicts or introduce any number/name/URL not present in the ledger. No prose outside JSON.`;
 }
 
 interface TranslationEntry { path: string[]; text: string; }
@@ -871,7 +872,7 @@ Return exactly one compact JSON object inside a fenced code block with arrays co
 
 function personSynthesisPrompt(ledger: Record<string, unknown>): string {
   return `Write a concise VIP qualification brief using only this validated public-professional ledger: ${JSON.stringify(ledger)}
-Return exactly one JSON object in a fenced code block with keys summary (max 120 words), research_angles (max 4 short strings), person, contacts, facts, signals. Copy person, contacts, facts and signals exactly, including every id and URL. Do not browse, add, remove, rename, infer, or introduce any new URL, fact, affiliation, contact detail, or sensitive personal data. No prose outside JSON.`;
+Return exactly one JSON object in a fenced code block with keys summary (max 120 words), research_angles (max 4 short strings), person, contacts, facts, signals. Copy person, contacts, facts and signals exactly, including every id and URL.Copy every URL as a literal raw https:// string exactly as it appears in the ledger, never as a Markdown link and never wrapped in brackets. Do not browse, add, remove, rename, infer, or introduce any new URL, fact, affiliation, contact detail, or sensitive personal data. No prose outside JSON.`;
 }
 
 async function ask(model: string, prompt: string, timeoutMs: number): Promise<{
