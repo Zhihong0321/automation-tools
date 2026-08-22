@@ -45,6 +45,81 @@ function link(url: unknown, label: string, className = 'text-link'): string {
  * comes back 200 with the existing report — the button then points at that,
  * which is why a second click is harmless.
  */
+/**
+ * The evidence grade, shown where the reader can act on it.
+ *
+ * `classifyEvidence` stopped deleting weakly-sourced rows and started tagging
+ * them instead -- but the page rendered every row identically, so the judgement
+ * the grade exists to support never actually reached the reader. A `domain_only`
+ * row cites a homepage rather than a page that states the fact. It is worth
+ * publishing, and it is worth publishing as weaker.
+ *
+ * Rows without the field (candidate people carry `verification_status`, and
+ * conflicts are not evidence rows) render exactly as before.
+ */
+const GRADES: Record<string, { en: string; zh: string; weight: string }> = {
+  direct_page: { en: 'Direct page', zh: '直接页面', weight: 'strong' },
+  domain_only: { en: 'Domain only', zh: '仅域名', weight: 'weak' },
+  insecure_page: { en: 'Direct page · http', zh: '直接页面 · http', weight: 'weak' },
+  insecure_domain: { en: 'Domain only · http', zh: '仅域名 · http', weight: 'weak' },
+  search_result: { en: 'Search result', zh: '搜索结果', weight: 'thin' },
+  unsourced: { en: 'Unsourced', zh: '无来源', weight: 'thin' },
+};
+
+/**
+ * The zh-CN translation pass rewrites some of these values into Chinese -- 7 of
+ * 39 on run `4RIySbBlPLYHJRlJ_KQ8`. That is a defect in the translator, which
+ * should leave an enum alone, but the reader should not lose a badge over it, so
+ * the translated forms map back to their canonical grade.
+ */
+const GRADE_ALIASES: Record<string, string> = Object.fromEntries(
+  Object.entries(GRADES).flatMap(([key, g]) => [[g.zh, key], [g.en, key]]),
+);
+
+function grade(row: Record<string, unknown>, zh = false): string {
+  const raw = value(row, 'evidence_strength');
+  if (!raw) return '';
+  const found = GRADES[raw] ?? GRADES[GRADE_ALIASES[raw] ?? ''];
+  // An unrecognised grade is still information the research produced. Show it
+  // plainly rather than dropping the row's only sourcing signal.
+  if (!found) return `<span class="grade">${esc(raw)}</span>`;
+  return `<span class="grade ${found.weight}">${esc(zh ? found.zh : found.en)}</span>`;
+}
+
+/**
+ * The evidence tally, stated on the report itself.
+ *
+ * The ledger computes this, but Round 04's synthesis returns its own empty
+ * `validation` object and that output becomes the published final -- so the
+ * count never reached the page. It is recomputed from the published rows here,
+ * which is both simpler and truer: it counts what the reader is actually
+ * looking at rather than what an earlier stage said it would be.
+ */
+function evidenceTally(collections: Record<string, unknown>[][], zh = false): string {
+  const tally = new Map<string, number>();
+  for (const rows of collections) {
+    for (const row of rows) {
+      const raw = value(row, 'evidence_strength');
+      if (!raw) continue;
+      const key = GRADES[raw] ? raw : GRADE_ALIASES[raw] ?? raw;
+      tally.set(key, (tally.get(key) ?? 0) + 1);
+    }
+  }
+  if (!tally.size) return '';
+  const order = Object.keys(GRADES);
+  const items = [...tally.entries()]
+    .sort((a, b) => (order.indexOf(a[0]) + 1 || 99) - (order.indexOf(b[0]) + 1 || 99))
+    .map(([key, n]) => {
+      const found = GRADES[key];
+      const label = found ? (zh ? found.zh : found.en) : key;
+      return `<span class="grade ${found?.weight ?? ''}">${n} · ${esc(label)}</span>`;
+    }).join('');
+  const note = zh
+    ? '每一行研究结果均予保留并标注来源强度；“直接页面”指链接直达陈述该事实的页面，“仅域名”指仅链接到主页。'
+    : 'Every row the research returned is kept and labelled. Direct page links to a page stating the fact; domain only links just to a homepage.';
+  return `<section class="breakdown"><div class="breakdown-label">${zh ? '证据强度' : 'Evidence quality'}</div><div><div class="breakdown-badges">${items}</div><p class="breakdown-note">${esc(note)}</p></div></section>`;
+}
+
 function researchScript(publicId: string): string {
   return `<script>
 (function(){
@@ -104,6 +179,8 @@ a{color:inherit}.wrap{max-width:1180px;margin:0 auto;padding:0 30px 84px}.mast{h
 .people{border-top:1px solid var(--ink)}.person{display:grid;grid-template-columns:64px minmax(190px,.8fr) minmax(240px,1.2fr) auto;gap:22px;align-items:start;padding:25px 0;border-bottom:1px solid var(--line)}.priority{font:500 11px/1.3 var(--mono);color:var(--accent)}.role{margin-top:6px;font:700 11px/1.3 var(--sans);text-transform:uppercase;letter-spacing:.07em;color:var(--accent)}.person p{margin:0;color:var(--muted);font-size:13px}.signal-list{border-top:1px solid var(--ink)}.signal{display:grid;grid-template-columns:180px minmax(0,1fr);gap:24px;padding:24px 0;border-bottom:1px solid var(--line)}.date{font:600 11px/1.3 var(--mono);color:var(--accent);text-transform:uppercase}.signal strong{font-size:15px}.angles{counter-reset:angle;display:grid;grid-template-columns:repeat(2,1fr);border-top:1px solid var(--ink)}.angle{counter-increment:angle;position:relative;min-height:150px;padding:26px 28px 26px 62px;border-bottom:1px solid var(--line);font:400 18px/1.4 var(--display)}.angle:nth-child(odd){border-right:1px solid var(--line)}.angle:before{content:counter(angle,decimal-leading-zero);position:absolute;left:0;top:30px;font:500 10px/1 var(--mono);color:var(--accent)}
 .foot{display:flex;justify-content:space-between;gap:20px;margin-top:72px;padding-top:18px;border-top:1px solid var(--ink);font:500 9px/1.4 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .language-switch{display:inline-flex;gap:4px;margin:30px 0 -16px;padding:4px;border:1px solid var(--line);background:var(--sheet);border-radius:999px}.language-button{min-height:34px;padding:0 14px;border:0;border-radius:999px;background:transparent;color:var(--muted);font:700 10px/1 var(--sans);letter-spacing:.09em;text-transform:uppercase;cursor:pointer}.language-button[aria-pressed="true"]{background:var(--ink);color:var(--sheet)}.language-button:hover{color:var(--ink)}.language-button[aria-pressed="true"]:hover{color:var(--sheet)}
+.grade{display:inline-block;margin-right:8px;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font:700 9px/1.6 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);white-space:nowrap}.grade.strong{border-color:#16815d;color:#0f6247}.grade.weak{border-color:#a06b00;color:#8a5c00}.grade.thin{border-color:var(--danger);color:var(--danger)}.person p .grade{margin:0 0 0 6px}
+.breakdown{display:grid;grid-template-columns:180px minmax(0,1fr);gap:40px;padding:26px 0;border-bottom:1px solid var(--ink)}.breakdown-label{font:700 10px/1.3 var(--sans);letter-spacing:.13em;text-transform:uppercase;color:var(--accent)}.breakdown-badges{display:flex;flex-wrap:wrap;gap:8px}.breakdown .grade{margin-right:0;font-size:10px;padding:4px 11px}.breakdown-note{max-width:640px;margin:12px 0 0;font-size:12px;line-height:1.5;color:var(--muted)}@media(max-width:760px){.breakdown{grid-template-columns:1fr;gap:12px;padding:22px 0}}
 :focus-visible{outline:2px solid var(--accent);outline-offset:4px}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
 @media(max-width:760px){.wrap{padding:0 18px 52px}.mast{height:60px}.folio{display:none}.hero{grid-template-columns:1fr;gap:30px;padding:42px 0 30px}.hero h1{font-size:clamp(43px,14vw,64px);line-height:.94}.hero-copy{font-size:14px;margin-top:18px}.hero-meta{align-self:auto}.meta-line{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:repeat(2,1fr)}.metric{padding:21px 15px 19px 0}.metric+.metric{padding-left:15px}.metric:nth-child(3){border-left:0;border-top:1px solid var(--line);padding-left:0}.metric:nth-child(4){border-top:1px solid var(--line)}.metric strong{font-size:35px}.section{padding-top:42px}.section-head{grid-template-columns:1fr;gap:8px}.section-note{text-align:left}.company{grid-template-columns:42px 1fr;gap:17px 12px;padding:24px 0}.record-address,.record-contact{grid-column:2}.actions{gap:12px}.button{min-height:46px;padding:0 18px}.brief{grid-template-columns:1fr;gap:14px;padding:28px 0}.brief p{font-size:23px}.contact{grid-template-columns:1fr auto;gap:7px 14px;padding:21px 0}.contact .label{grid-column:1/-1}.contact-value{font-size:15px}.people{border-top-color:var(--ink)}.person{grid-template-columns:38px 1fr;gap:14px 10px;padding:22px 0}.person p,.person .text-link{grid-column:2}.signal{grid-template-columns:1fr;gap:8px;padding:21px 0}.angles{grid-template-columns:1fr}.angle{min-height:auto;padding:22px 0 22px 42px}.angle:nth-child(odd){border-right:0}.language-switch{margin-top:22px}.language-button{min-height:38px;padding:0 16px}.foot{display:block;line-height:1.7}.foot span:last-child{display:block;margin-top:7px}}
 </style></head><body class="${esc(report.report_type.replace('_', '-'))}"><main class="wrap">
@@ -157,13 +234,14 @@ function chineseCompanyVersion(translated: Record<string, unknown>): string {
   const contactRows = contacts.map((row) => {
     const raw = value(row, 'value_as_published', 'raw_value', 'value', 'normalized_value');
     const evidence = value(row, 'evidence_url', 'evidence', 'source_url');
-    return `<div class="contact"><div class="label">${esc(value(row, 'purpose', 'channel', 'type') || '联系方式')}</div><div><div class="contact-value">${esc(raw)}</div><div class="source">${esc(value(row, 'status', 'current_status', 'evidence_class'))}${evidence ? ` · <a href="${esc(evidence)}" target="_blank" rel="noopener">查看来源 ↗</a>` : ''}</div></div></div>`;
+    return `<div class="contact"><div class="label">${esc(value(row, 'purpose', 'channel', 'type') || '联系方式')}</div><div><div class="contact-value">${esc(raw)}</div><div class="source">${grade(row, true)}${esc(value(row, 'status', 'current_status', 'evidence_class'))}${evidence ? ` · <a href="${esc(evidence)}" target="_blank" rel="noopener">查看来源 ↗</a>` : ''}</div></div></div>`;
   }).join('');
-  const peopleRows = people.map((row, i) => `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), '来源')}</article>`).join('');
+  const peopleRows = people.map((row, i) => `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}${grade(row, true)}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), '来源')}</article>`).join('');
   const candidateRows = candidatePeople.map((row) => `<article class="person"><span class="priority">待核实</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role'))}</div></div><p>${esc(value(row, 'verification_note', 'relevance'))}</p>${link(value(row, 'source_url'), '来源')}</article>`).join('');
-  const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || '当前')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${esc(value(row, 'evidence_class', 'type', 'source_class'))} ${link(value(row, 'evidence_url', 'evidence', 'source_url'), '来源')}</div></div></div>`).join('');
+  const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || '当前')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${grade(row, true)}${esc(value(row, 'evidence_class', 'type', 'source_class'))} ${link(value(row, 'evidence_url', 'evidence', 'source_url'), '来源')}</div></div></div>`).join('');
   const conflictRows = conflicts.map((row) => `<div class="signal"><div class="date">需核实</div><div><strong>${esc(value(row, 'issue', 'field'))}</strong><div class="source">${esc(value(row, 'details', 'status', 'note'))}</div></div></div>`).join('');
   let body = `<section class="section" lang="zh-CN"><div class="section-head"><h2>中文报告</h2><span class="section-note">与英文版对应的简体中文翻译；来源、ID 和联系方式保持原样。</span></div></section>`;
+  body += evidenceTally([contacts, people, signals], true);
   if (summary) body += `<section class="brief" lang="zh-CN"><div class="brief-label">执行摘要</div><p>${esc(summary)}</p></section>`;
   body += `<section class="section" lang="zh-CN"><div class="section-head"><h2>最佳联系渠道</h2><span class="section-note">仅展示经证据台账保留的联系方式。</span></div><div class="contact-list">${contactRows || '<div class="empty">暂无已验证的联系方式。</div>'}</div></section>`;
   body += `<section class="section" lang="zh-CN"><div class="section-head"><h2>关键相关人员</h2><span class="section-note">当前职位均需有直接来源支持。</span></div><div class="people">${peopleRows || '<div class="empty">暂无已验证的相关人员。</div>'}</div></section>`;
@@ -197,19 +275,19 @@ export function companyPage(report: PublishedReport, chinese: Record<string, unk
     const normalized = value(row, 'normalized_value');
     const evidence = value(row, 'evidence_url', 'evidence', 'source_url');
     const action = /@/.test(raw) ? `<a class="button" href="mailto:${esc(raw)}">Email</a>` : /\d/.test(raw) ? `<a class="button" href="tel:${esc((normalized || raw).replace(/[^+\d]/g, ''))}">Call</a>` : link(raw, 'Open', 'button');
-    return `<div class="contact"><div class="label">${esc(value(row, 'purpose', 'channel', 'type') || 'Contact')}</div><div><div class="contact-value">${esc(raw)}</div><div class="source">${esc(value(row, 'status', 'current_status', 'evidence_class'))}${evidence ? ` · <a href="${esc(evidence)}" target="_blank" rel="noopener">view evidence ↗</a>` : ''}</div></div>${action}</div>`;
+    return `<div class="contact"><div class="label">${esc(value(row, 'purpose', 'channel', 'type') || 'Contact')}</div><div><div class="contact-value">${esc(raw)}</div><div class="source">${grade(row)}${esc(value(row, 'status', 'current_status', 'evidence_class'))}${evidence ? ` · <a href="${esc(evidence)}" target="_blank" rel="noopener">view evidence ↗</a>` : ''}</div></div>${action}</div>`;
   }).join('');
   const autoPersonName = value(autoPerson, 'person_name').trim().toLocaleLowerCase();
   const peopleRows = people.map((row, i) => {
     const personName = value(row, 'name');
     const isAutoPerson = Boolean(autoPersonReportId) && personName.trim().toLocaleLowerCase() === autoPersonName;
     const vipLink = isAutoPerson ? ` <a class="button" href="/r/${esc(autoPersonReportId)}">Person research <span aria-hidden="true">↗</span></a>` : '';
-    return `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(personName)}${vipLink}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), 'Evidence')}</article>`;
+    return `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(personName)}${vipLink}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}${grade(row)}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), 'Evidence')}</article>`;
   }).join('');
   const candidateRows = candidatePeople.map((row) => `<article class="person"><span class="priority">VERIFY</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role'))}</div></div><p>${esc(value(row, 'verification_note', 'relevance'))}</p>${link(value(row, 'source_url'), 'Source')}</article>`).join('');
-  const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || 'Current')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${esc(value(row, 'evidence_class', 'type', 'source_class'))} ${link(value(row, 'evidence_url', 'evidence', 'source_url'), 'Source')}</div></div></div>`).join('');
+  const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || 'Current')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${grade(row)}${esc(value(row, 'evidence_class', 'type', 'source_class'))} ${link(value(row, 'evidence_url', 'evidence', 'source_url'), 'Source')}</div></div></div>`).join('');
   const conflictRows = conflicts.map((row) => `<div class="signal"><div class="date">Review</div><div><strong>${esc(value(row, 'issue', 'field'))}</strong><div class="source">${esc(value(row, 'details', 'status', 'note'))}</div></div></div>`).join('');
-  let body = stats;
+  let body = stats + evidenceTally([contacts, people, signals]);
   if (summary) body += `<section class="brief"><div class="brief-label">Executive brief</div><p>${esc(summary)}</p></section>`;
   if (report.status === 'failed') body += `<section class="section"><div class="message error">${esc(report.error ?? 'Deep research failed.')}</div></section>`;
   else if (!contacts.length && !people.length && !candidatePeople.length && report.status !== 'completed' && report.status !== 'partial') body += '<section class="section"><div class="empty">The research rounds are running. Verified findings will appear here automatically.</div></section>';
@@ -251,11 +329,11 @@ export function personPage(report: PublishedReport): string {
     const normalized = value(row, 'normalized_value') || raw;
     const evidence = value(row, 'evidence_url', 'source_url');
     const action = /@/.test(raw) ? `<a class="button" href="mailto:${esc(raw)}">Email</a>` : /\d/.test(raw) ? `<a class="button" href="tel:${esc(normalized.replace(/[^+\d]/g, ''))}">Call</a>` : link(raw, 'Open', 'button');
-    return `<div class="contact"><div class="label">${esc(value(row, 'purpose') || 'Business contact')}</div><div><div class="contact-value">${esc(raw)}</div><div class="source">${esc(value(row, 'evidence_class', 'current_status'))}${evidence ? ` · <a href="${esc(evidence)}" target="_blank" rel="noopener">view evidence ↗</a>` : ''}</div></div>${action}</div>`;
+    return `<div class="contact"><div class="label">${esc(value(row, 'purpose') || 'Business contact')}</div><div><div class="contact-value">${esc(raw)}</div><div class="source">${grade(row)}${esc(value(row, 'evidence_class', 'current_status'))}${evidence ? ` · <a href="${esc(evidence)}" target="_blank" rel="noopener">view evidence ↗</a>` : ''}</div></div>${action}</div>`;
   }).join('');
-  const factRows = facts.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'category') || 'Professional fact')}</div><div><strong>${esc(value(row, 'fact', 'value', 'description'))}</strong><div class="source">${esc(value(row, 'evidence_class', 'source_type'))} ${link(value(row, 'evidence_url', 'source_url'), 'Source')}</div></div></div>`).join('');
-  const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || 'Current')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${esc(value(row, 'evidence_class', 'source_type'))} ${link(value(row, 'evidence_url', 'source_url'), 'Source')}</div></div></div>`).join('');
-  let body = stats;
+  const factRows = facts.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'category') || 'Professional fact')}</div><div><strong>${esc(value(row, 'fact', 'value', 'description'))}</strong><div class="source">${grade(row)}${esc(value(row, 'evidence_class', 'source_type'))} ${link(value(row, 'evidence_url', 'source_url'), 'Source')}</div></div></div>`).join('');
+  const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || 'Current')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${grade(row)}${esc(value(row, 'evidence_class', 'source_type'))} ${link(value(row, 'evidence_url', 'source_url'), 'Source')}</div></div></div>`).join('');
+  let body = stats + evidenceTally([contacts, facts, signals]);
   body += `<section class="brief"><div class="brief-label">VIP profile</div><p>${esc([name, role, company].filter(Boolean).join(' · ') || 'Public-professional research only.')}</p></section>`;
   if (summary) body += `<section class="brief"><div class="brief-label">Qualification readout</div><p>${esc(summary)}</p></section>`;
   if (report.status === 'failed') body += `<section class="section"><div class="message error">${esc(report.error ?? 'The VIP brief failed.')}</div></section>`;
