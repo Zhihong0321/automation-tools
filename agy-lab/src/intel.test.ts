@@ -137,7 +137,7 @@ test('both public report layouts include mobile viewport and report content', ()
   }
   assert.match(search, /Example Solar/);
   assert.match(deep, /Best contact routes/);
-  assert.match(deep, /A Person.*VIP brief/);
+  assert.match(deep, /A Person.*Person research/);
   assert.match(deep, /People to verify/);
   assert.match(deep, /\/r\/abcdefghijklmnopqrst/);
   const bilingual = companyPage(deepReport, { ...deepReport.result, summary: '中文摘要' });
