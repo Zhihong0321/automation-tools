@@ -99,9 +99,10 @@ export const document = {
         operationId: 'createPersonResearch',
         tags: ['Person research'],
         summary: 'Start a public-professional VIP brief',
-        description: 'Starts from a validated person in a completed company-research report. email is an optional in-memory identity hint; it is not persisted in the report request or published output.',
+        description: 'Starts from a validated person in a completed company-research report. email is an optional in-memory identity hint; it is not persisted in the report request or published output. One brief per person per source report: if a brief already exists — including the automatic P01 one — the existing report is returned with 200 instead of a second run being started.',
         requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PersonResearchRequest' } } } },
         responses: {
+          '200': { description: 'A brief for this person already exists; the existing report is returned', content: { 'application/json': { schema: { $ref: '#/components/schemas/AcceptedReport' } } } },
           '202': { description: 'VIP brief accepted', content: { 'application/json': { schema: { $ref: '#/components/schemas/AcceptedReport' } } } },
           '400': { $ref: '#/components/responses/BadRequest' },
           '404': { $ref: '#/components/responses/NotFound' },

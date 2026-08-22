@@ -283,6 +283,29 @@ export async function findPersonResearchReport(sourceReportId: string, personId:
   return out.rows[0] ?? null;
 }
 
+/**
+ * Any live brief for this person on this report, however it was started.
+ *
+ * findPersonResearchReport above is scoped to autoTriggered rows because the
+ * unique index that protects the auto path is scoped that way too. This one is
+ * for the portal button, which must join whatever brief already exists -- the
+ * automatic P01 one included -- rather than start a second run of the same
+ * person. A failed brief is not returned: that one deserves a retry.
+ */
+export async function findPersonBrief(sourceReportId: string, personId: string): Promise<PublishedReport | null> {
+  await migrate();
+  const out = await sql<PublishedReport>(
+    `select * from published_report
+     where report_type = 'person_research'
+       and status <> 'failed'
+       and request->>'sourceReportId' = $1
+       and request->>'personId' = $2
+     order by created_at desc limit 1`,
+    [sourceReportId, personId],
+  );
+  return out.rows[0] ?? null;
+}
+
 export async function listReports(options: {
   type?: ReportType | null;
   status?: ReportStatus | null;

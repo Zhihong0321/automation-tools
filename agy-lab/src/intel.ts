@@ -1752,6 +1752,15 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       ctx.json(res, 404, { error: 'validated person or source company not found', personId });
       return true;
     }
+    // One brief per person per company report. The portal shows a VIP button on
+    // every validated person, and P01 already has an automatic brief -- so the
+    // first thing most people click is a person who is already being researched.
+    // Joining that run is right; starting a second four-round pass is not.
+    const running = await db.findPersonBrief(sourceReportId, personId);
+    if (running) {
+      ctx.json(res, 200, { report: envelope(req, running) });
+      return true;
+    }
     const request = { sourceReportId, personId, requesterId: str(body.requesterId || body.userId) || null, emailProvided: Boolean(email) };
     const report = await db.createReport({
       type: 'person_research', title: first(person, ['name']) + ' VIP brief',

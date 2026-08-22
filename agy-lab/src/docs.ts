@@ -331,10 +331,14 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
   line in the research library.</p>
 
   <h3>5. Create a VIP person brief</h3>
-  <div class="ep"><span class="m post">POST</span><code class="path">/api/person-research</code><span class="tag">Bearer &middot; returns 202</span></div>
+  <div class="ep"><span class="m post">POST</span><code class="path">/api/person-research</code><span class="tag">Bearer &middot; returns 202, or 200 when one exists</span></div>
   <p>Start only from a validated person in a completed company report with <code>POST /api/person-research</code>. Use
   <code>data.final.people[].id</code> as <code>personId</code>. An optional email is an
   in-memory identity hint only: it is not written to the report request or public output.</p>
+  <p>One brief per person per source report. If a brief for that person already exists &mdash; including the
+  automatic P01 one the company run starts for itself &mdash; that report comes back with <code>200</code>
+  rather than a second four-round pass being started. Treat <code>200</code> as success and follow the
+  returned <code>id</code>.</p>
 <pre><code>curl -s https://ee-auto.up.railway.app/api/person-research \
   -H "Authorization: Bearer $EE_AUTO_TOKEN" -H 'content-type: application/json' \
   -d '{"companyResearchId":"XyZaBcDeFgHiJkLmNoPq","personId":"person_abc123","email":"owner@example.com"}'</code></pre>

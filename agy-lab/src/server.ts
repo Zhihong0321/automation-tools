@@ -79,7 +79,8 @@ function authorized(req: http.IncomingMessage, url: URL): boolean {
   if (crypto.timingSafeEqual(digest(supplied), digest(TOKEN))) return true;
   const productRoute = url.pathname === '/api/reports'
     || url.pathname.startsWith('/api/business-search')
-    || url.pathname.startsWith('/api/company-research');
+    || url.pathname.startsWith('/api/company-research')
+    || url.pathname.startsWith('/api/person-research');
   return productRoute && PORTAL_TOKEN.length >= 16
     && crypto.timingSafeEqual(digest(supplied), digest(PORTAL_TOKEN));
 }

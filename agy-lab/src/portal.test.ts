@@ -36,3 +36,37 @@ test('portal uses a mobile bottom navigation and scoped access gate', () => {
   assert.match(html, /Workspace access key/);
   assert.match(html, /never added to a report link/);
 });
+
+test('a company can be researched by name, after the operator confirms the Maps match', () => {
+  const html = page();
+  // Two entry modes, not one. The market scan was the only way in, so a user who
+  // knew exactly which company they wanted had to search a category and hunt.
+  assert.match(html, /data-mode="market"/);
+  assert.match(html, /data-mode="company"/);
+  assert.match(html, /id="companyName"/);
+  assert.match(html, />Find company</);
+  // The name is a Maps lookup whose matches the user picks from -- never an
+  // auto-pick, because the wrong branch costs a full four-round research run.
+  assert.match(html, /Which one is yours\?/);
+  assert.match(html, /Nothing is researched until you pick one/);
+  assert.match(html, /state\.mode==='company'\)return startLookup\(\)/);
+  assert.match(html, /keyword:name,place:place\|\|undefined,max:10/);
+});
+
+test('every validated person in a dossier can be sent to VIP research', () => {
+  const html = page();
+  assert.match(html, /\/api\/person-research/);
+  assert.match(html, /companyResearchId:reportId,personId:personId/);
+  assert.match(html, /VIP brief \\u2192/);
+  assert.match(html, /Validated people/);
+  // P01 already has an automatic brief. Offering "start" there would either
+  // duplicate a four-round run or dead-end on the server's dedup.
+  assert.match(html, /pid===autoPerson&&autoReport/);
+  assert.match(html, /Open brief/);
+  // Candidate people have no id the person-research route accepts, and their
+  // role is unevidenced -- they are shown as leads, never as a launch button.
+  assert.match(html, /Leads to verify/);
+  assert.match(html, /confirm the role before a brief/);
+  // Only a finished dossier has people to offer.
+  assert.match(html, /var ready=deep&&\(report\.status==='completed'\|\|report\.status==='partial'\)/);
+});
