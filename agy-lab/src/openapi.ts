@@ -222,7 +222,9 @@ export const document = {
         type: 'object',
         properties: {
           entity: { type: 'object', additionalProperties: true }, summary: { type: ['string', 'null'] }, contacts: { type: 'array', items: { type: 'object', additionalProperties: true } },
-          people: { type: 'array', items: { type: 'object', additionalProperties: true } }, signals: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          people: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'People whose current role has direct evidence.' },
+          candidate_people: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Named public-source leads that require direct current-role verification; they are not eligible for automatic VIP research.' },
+          signals: { type: 'array', items: { type: 'object', additionalProperties: true } },
           outreach_angles: { type: 'array', items: { type: 'string' } }, conflicts_and_unknowns: { type: 'array', items: { type: 'object', additionalProperties: true } },
           auto_person_research: { type: ['object', 'null'], additionalProperties: true, description: 'Separate automatically triggered P01 VIP report reference.' },
           synthesis_mode: { type: 'string', enum: ['gemini_validated', 'validated_ledger_fallback'] },

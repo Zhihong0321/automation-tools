@@ -298,11 +298,11 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
   "data": {
     "final": {
       "entity": { "name":"SOLS Energy Sdn Bhd", "company_id":"69", "...":"..." },
-      "summary":"...", "contacts":[...], "people":[...], "signals":[...],
+      "summary":"...", "contacts":[...], "people":[...], "candidate_people":[...], "signals":[...],
       "outreach_angles":[...], "conflicts_and_unknowns":[],
       "synthesis_mode":"gemini_validated"
     },
-    "final_cn": { "summary":"...", "contacts":[...], "people":[...], "signals":[...] },
+    "final_cn": { "summary":"...", "contacts":[...], "people":[...], "candidate_people":[...], "signals":[...] },
     "translation": { "language":"zh-CN", "model":"step-3.7-flash", "status":"completed" }
   },
   "research_run": {
@@ -315,7 +315,7 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
   <code>data.final</code>; the matching Simplified Chinese rendering is at <code>data.final_cn</code>.
   Chinese translation preserves evidence IDs, source URLs, email addresses, phone numbers and published contact values exactly.
   Raw rounds are at <code>research_run.round01</code> through
-  <code>round04</code>. Only rows with direct HTTPS evidence enter the validated ledger.
+  <code>round04</code>. Contacts, people and signals need direct HTTPS evidence to enter the validated ledger; <code>candidate_people</code> retains named public-source leads separately and never qualifies for VIP research until verified.
   If final Gemini synthesis changes a validated contact/person set or introduces a new URL,
   it is rejected and <code>synthesis_mode</code> becomes <code>validated_ledger_fallback</code>.</p>
   <p>As soon as the Round 02 people audit identifies the report's P01 person, the service
