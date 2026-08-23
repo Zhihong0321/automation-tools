@@ -22,7 +22,10 @@ test('end-user portal combines discovery, deep research, and report library', ()
   assert.match(html, /Enter a business, a location, or both/);
   assert.match(html, /if\(!keyword&&!place\)/);
   assert.doesNotMatch(html, /id="keyword" required/);
-  assert.match(html, /sessionStorage/);
+  // The access key is typed once: a cookie outlives the tab, sessionStorage did not.
+  assert.match(html, /max-age=31536000/);
+  assert.match(html, /SameSite=Strict/);
+  assert.match(html, /document.cookie/);
   assert.doesNotMatch(html, /eternalgy2026/i);
   const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1];
   assert.ok(script);

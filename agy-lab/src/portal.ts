@@ -1,7 +1,7 @@
 // End-user business-intelligence workspace.
 //
 // The shell is public, but it contains no credential. Users enter a scoped
-// PORTAL_TOKEN which is kept in sessionStorage and sent only as a bearer header.
+// PORTAL_TOKEN, typed once and kept in a first-party cookie, sent only as a bearer header.
 // The same page also accepts LAB_TOKEN for owner testing.
 export function page(): string {
   return String.raw`<!doctype html>
@@ -48,6 +48,10 @@ export function page(): string {
 var state={token:'',jobs:{},reports:[],filter:'all',mode:'market',toastTimer:null};
 var terminal=['completed','partial','failed'];
 function el(id){return document.getElementById(id)}
+var TOKEN_KEY='ee_portal_token';
+function readToken(){var parts=document.cookie?document.cookie.split(';'):[];for(var i=0;i<parts.length;i++){var p=parts[i].trim();if(p.indexOf(TOKEN_KEY+'=')===0)return decodeURIComponent(p.slice(TOKEN_KEY.length+1))}return ''}
+function saveToken(value){var secure=location.protocol==='https:'?';Secure':'';document.cookie=TOKEN_KEY+'='+encodeURIComponent(value)+';path=/;max-age=31536000;SameSite=Strict'+secure}
+function dropToken(){var secure=location.protocol==='https:'?';Secure':'';document.cookie=TOKEN_KEY+'=;path=/;max-age=0;SameSite=Strict'+secure}
 function esc(value){return String(value==null?'':value).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 function attr(value){return esc(value)}
 function safeId(value){return /^[A-Za-z0-9_-]{20}$/.test(String(value==null?'':value))?String(value):''}
@@ -55,9 +59,9 @@ function safeUrl(value){try{var u=new URL(String(value));return u.protocol==='ht
 function date(value){try{return new Intl.DateTimeFormat('en',{day:'2-digit',month:'short',year:'numeric'}).format(new Date(value))}catch(e){return 'Undated'}}
 function showToast(message){var node=el('toast');node.textContent=message;node.classList.add('show');clearTimeout(state.toastTimer);state.toastTimer=setTimeout(function(){node.classList.remove('show')},3600)}
 async function api(path,options){options=options||{};var headers=Object.assign({'Authorization':'Bearer '+state.token},options.headers||{});if(options.body)headers['Content-Type']='application/json';var response=await fetch(path,Object.assign({},options,{headers:headers}));var text=await response.text();var body={};try{body=text?JSON.parse(text):{}}catch(e){body={error:text||'Invalid server response'}}if(!response.ok){var message=typeof body.error==='string'?body.error:(body.error&&body.error.message)||('Request failed: '+response.status);var error=new Error(message);error.status=response.status;throw error}return body}
-async function connect(event){if(event)event.preventDefault();var key=el('accessKey').value.trim();if(!key)return;state.token=key;el('connectButton').disabled=true;el('gateError').textContent='';try{await api('/api/reports?limit=1');sessionStorage.setItem('ee_portal_token',key);el('accessGate').classList.add('hidden');el('portalApp').removeAttribute('inert');el('portalApp').setAttribute('aria-hidden','false');await loadLibrary();showToast('Workspace connected')}catch(error){state.token='';el('gateError').textContent=error.status===401?'Access key not accepted.':error.message}finally{el('connectButton').disabled=false}}
-function disconnect(){sessionStorage.removeItem('ee_portal_token');state.token='';location.reload()}
-function authLost(error){if(error&&error.status===401){sessionStorage.removeItem('ee_portal_token');state.token='';el('accessGate').classList.remove('hidden');el('gateError').textContent='Your access expired. Enter the workspace key again.';return true}return false}
+async function connect(event){if(event)event.preventDefault();var key=el('accessKey').value.trim();if(!key)return;state.token=key;el('connectButton').disabled=true;el('gateError').textContent='';try{await api('/api/reports?limit=1');saveToken(key);el('accessGate').classList.add('hidden');el('portalApp').removeAttribute('inert');el('portalApp').setAttribute('aria-hidden','false');await loadLibrary();showToast('Workspace connected')}catch(error){state.token='';el('gateError').textContent=error.status===401?'Access key not accepted.':error.message}finally{el('connectButton').disabled=false}}
+function disconnect(){dropToken();state.token='';location.reload()}
+function authLost(error){if(error&&error.status===401){dropToken();state.token='';el('accessGate').classList.remove('hidden');el('gateError').textContent='Your access expired. Enter the workspace key again.';return true}return false}
 function switchView(name){document.querySelectorAll('.view').forEach(function(node){node.classList.toggle('active',node.id===name+'View')});document.querySelectorAll('[data-view]').forEach(function(node){node.classList.toggle('active',node.getAttribute('data-view')===name)});if(name==='library')loadLibrary();window.scrollTo({top:0,behavior:'smooth'})}
 function upsertJob(report,kind){state.jobs[report.id]=Object.assign({},state.jobs[report.id]||{},{report:report,kind:kind});renderJobs()}
 function renderJobs(){var values=Object.keys(state.jobs).map(function(key){return state.jobs[key]});el('activeSection').classList.toggle('hidden',values.length===0);el('jobs').innerHTML=values.map(function(job){var r=job.report;var done=terminal.indexOf(r.status)>=0;var pulse=r.status==='failed'?'bad':done?'done':'';var label=job.kind==='search'?'Market scan':job.kind==='lookup'?'Company lookup':job.kind==='vip'?'VIP brief':'Company research';var open=safeUrl(r.view_url);return '<article class="job"><div class="job-type">'+label+'</div><div><div class="job-title">'+esc(r.title)+'</div><div class="job-meta">'+esc(r.status)+' · '+esc(r.id)+'</div></div><div class="job-action"><span class="pulse '+pulse+'"></span>'+(open?'<a class="text-action" target="_blank" rel="noopener" href="'+attr(open)+'">View <span>↗</span></a>':'')+'</div></article>'}).join('')}
@@ -78,6 +82,6 @@ function peopleHtml(reportId,final){var people=final.people||[];var candidates=f
 if(candidates.length){out+='<p class="people-head">Leads to verify \u00b7 role not yet evidenced</p>'+candidates.map(function(row){var source=safeUrl(row.source_url);return '<div class="person-row"><div class="person-rank">\u2014</div><div><div class="person-name">'+esc(row.name||'Unnamed')+'</div><div class="person-role">'+esc(row.role||row.current_role||row.position||'Role not stated')+'</div>'+'<span class="person-note">Named by '+esc(row.source_name||'a public source')+' \u00b7 confirm the role before a brief</span></div>'+(source?'<a class="vip" target="_blank" rel="noopener" href="'+attr(source)+'">Source <span>\u2197</span></a>':'')+'</div>'}).join('')}
 return out||'<div class="empty">This dossier validated no people.</div>'}
 async function startVip(button){var reportId=button.getAttribute('data-report')||'';var personId=button.getAttribute('data-person')||'';if(!reportId||!personId)return;button.disabled=true;button.textContent='Starting\u2026';try{var body=await api('/api/person-research',{method:'POST',body:JSON.stringify({companyResearchId:reportId,personId:personId,requesterId:'portal'})});var view=safeUrl(body.report&&body.report.view_url);if(view){button.outerHTML='<a class="vip" target="_blank" rel="noopener" href="'+attr(view)+'">Open brief <span>\u2197</span></a>'}else{button.textContent='Brief underway'}upsertJob(body.report,'vip');poll(body.report,'vip');showToast('VIP brief started. Follow it in Active work.')}catch(error){button.disabled=false;button.textContent='VIP brief \u2192';if(!authLost(error))showToast(error.message)}}
-(function boot(){var saved=sessionStorage.getItem('ee_portal_token');if(saved){el('accessKey').value=saved;connect()}else{setTimeout(function(){el('accessKey').focus()},80)}})();
+(function boot(){var saved=readToken();if(!saved){try{saved=sessionStorage.getItem(TOKEN_KEY)||''}catch(err){saved=''}if(saved)saveToken(saved)}if(saved){el('accessKey').value=saved;connect()}else{setTimeout(function(){el('accessKey').focus()},80)}})();
 </script></body></html>`;
 }
