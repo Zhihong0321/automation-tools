@@ -331,21 +331,40 @@ export function companyPage(
   }
   // The button only posts; the server decides. /api/person-research already
   // joins a brief that is running rather than starting a second four-round pass,
-  // so a double-click costs nothing. The access key is the portal's own, read
-  // from sessionStorage on the same origin and sent only as a bearer header --
-  // never put in the URL, never written to the page.
+  // so a double-click costs nothing. The access key is the portal's own: typed
+  // once, then kept in a first-party cookie on this origin and sent only as a
+  // bearer header -- never put in the URL, never written to the page. A rejected
+  // key is cleared, because that is the only way back from a typo.
   if (peopleRows.includes('class="button research"')) {
     body += `<script>(function(){
 var buttons=document.querySelectorAll('button.research[data-person]');
 if(!buttons.length)return;
 var KEY='ee_portal_token';
 var REPORT=${JSON.stringify(report.public_id)};
+function cookieKey(){
+  var parts=document.cookie?document.cookie.split(';'):[];
+  for(var i=0;i<parts.length;i++){
+    var p=parts[i].trim();
+    if(p.indexOf(KEY+'=')===0)return decodeURIComponent(p.slice(KEY.length+1));
+  }
+  return '';
+}
+function storeKey(value){
+  var secure=location.protocol==='https:'?';Secure':'';
+  document.cookie=KEY+'='+encodeURIComponent(value)+';path=/;max-age=31536000;SameSite=Strict'+secure;
+}
+function clearKey(){
+  var secure=location.protocol==='https:'?';Secure':'';
+  document.cookie=KEY+'=;path=/;max-age=0;SameSite=Strict'+secure;
+}
 function accessKey(){
-  var stored='';
-  try{stored=sessionStorage.getItem(KEY)||''}catch(err){stored=''}
+  var stored=cookieKey();
   if(stored)return stored;
+  // Anyone who already typed it this session should not be asked a second time.
+  try{stored=sessionStorage.getItem(KEY)||''}catch(err){stored=''}
+  if(stored){storeKey(stored);return stored}
   var typed=(window.prompt('Access key to start VIP research')||'').trim();
-  if(typed){try{sessionStorage.setItem(KEY,typed)}catch(err){}}
+  if(typed)storeKey(typed);
   return typed;
 }
 function restore(button,markup,message){button.disabled=false;button.innerHTML=markup;if(message)window.alert(message)}
@@ -364,7 +383,7 @@ buttons.forEach(function(button){
         var payload={};
         try{payload=text?JSON.parse(text):{}}catch(err){payload={}}
         if(response.status===401||response.status===403){
-          try{sessionStorage.removeItem(KEY)}catch(err){}
+          clearKey();
           return restore(button,markup,'That access key was rejected. Try again.');
         }
         if(!response.ok)return restore(button,markup,(payload&&payload.error)||('Could not start research: '+response.status));
