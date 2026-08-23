@@ -439,6 +439,31 @@ export async function findPersonBrief(sourceReportId: string, personId: string):
   return out.rows[0] ?? null;
 }
 
+/**
+ * Every VIP brief already started from one company dossier, keyed by the person
+ * it is about. The report page needs the whole set at once: a person who has a
+ * brief gets a link to it, and only a person who does not gets a button that
+ * would start one.
+ */
+export async function listPersonBriefs(sourceReportId: string): Promise<Record<string, PublishedReport>> {
+  await migrate();
+  const out = await sql<PublishedReport>(
+    `select distinct on (request->>'personId') *
+     from published_report
+     where report_type = 'person_research'
+       and status <> 'failed'
+       and request->>'sourceReportId' = $1
+     order by request->>'personId', created_at desc`,
+    [sourceReportId],
+  );
+  const byPerson: Record<string, PublishedReport> = {};
+  for (const row of out.rows) {
+    const personId = String((row.request as Record<string, unknown>)?.personId ?? '');
+    if (personId) byPerson[personId] = row;
+  }
+  return byPerson;
+}
+
 export async function listReports(options: {
   type?: ReportType | null;
   status?: ReportStatus | null;

@@ -1635,7 +1635,10 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
   else {
     const run = await db.researchRun(report.id);
     const chinese = object(run?.translated_report);
-    html = ui.companyPage(report, Object.keys(chinese).length ? chinese : null);
+    // Which people already have a VIP brief, so the page shows a link to it
+    // rather than a button that would start one.
+    const briefs = await db.listPersonBriefs(report.public_id).catch(() => ({}));
+    html = ui.companyPage(report, Object.keys(chinese).length ? chinese : null, briefs);
   }
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
   res.end(html);

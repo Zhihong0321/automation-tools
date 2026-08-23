@@ -255,7 +255,12 @@ function chineseCompanyVersion(translated: Record<string, unknown>): string {
   return body;
 }
 
-export function companyPage(report: PublishedReport, chinese: Record<string, unknown> | null = null): string {
+export function companyPage(
+  report: PublishedReport,
+  chinese: Record<string, unknown> | null = null,
+  /** personId -> the VIP brief already started for them, from listPersonBriefs(). */
+  briefs: Record<string, { public_id: string; status: string }> = {},
+): string {
   const final = obj(report.result);
   const entity = obj(final.entity);
   const contacts = arr(final.contacts);
@@ -281,11 +286,22 @@ export function companyPage(report: PublishedReport, chinese: Record<string, unk
     return `<div class="contact"><div class="label">${esc(value(row, 'purpose', 'channel', 'type') || 'Contact')}</div><div><div class="contact-value">${esc(raw)}</div><div class="source">${grade(row)}${esc(value(row, 'status', 'current_status', 'evidence_class'))}${evidence ? ` · <a href="${esc(evidence)}" target="_blank" rel="noopener">view evidence ↗</a>` : ''}</div></div>${action}</div>`;
   }).join('');
   const autoPersonName = value(autoPerson, 'person_name').trim().toLocaleLowerCase();
+  // Every validated person is one click from their own brief. Which control they
+  // get depends only on whether a brief already exists: a link to it, or a button
+  // that starts one. Before this, only P01 -- the person the pipeline researches
+  // automatically -- had any control at all, and the other fifteen were dead text.
+  const researchable = report.status === 'completed' || report.status === 'partial';
   const peopleRows = people.map((row, i) => {
     const personName = value(row, 'name');
+    const personId = value(row, 'id');
     const isAutoPerson = Boolean(autoPersonReportId) && personName.trim().toLocaleLowerCase() === autoPersonName;
-    const vipLink = isAutoPerson ? ` <a class="button" href="/r/${esc(autoPersonReportId)}">Person research <span aria-hidden="true">↗</span></a>` : '';
-    return `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(personName)}${vipLink}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}${grade(row)}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), 'Evidence')}</article>`;
+    const existing = briefs[personId] ?? (isAutoPerson && autoPersonReportId ? { public_id: autoPersonReportId, status: 'running' } : null);
+    const control = existing
+      ? ` <a class="button" href="/r/${esc(existing.public_id)}">${existing.status === 'completed' || existing.status === 'partial' ? 'Open brief' : 'Brief underway'} <span aria-hidden="true">↗</span></a>`
+      : personId && researchable
+        ? ` <button class="button research" type="button" data-person="${esc(personId)}" data-name="${esc(personName)}">Person research <span aria-hidden="true">→</span></button>`
+        : '';
+    return `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(personName)}${control}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}${grade(row)}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), 'Evidence')}</article>`;
   }).join('');
   const candidateRows = candidatePeople.map((row) => `<article class="person"><span class="priority">VERIFY</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role'))}</div></div><p>${esc(value(row, 'verification_note', 'relevance'))}</p>${link(value(row, 'source_url'), 'Source')}</article>`).join('');
   const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || 'Current')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${grade(row)}${esc(value(row, 'evidence_class', 'type', 'source_class'))} ${link(value(row, 'evidence_url', 'evidence', 'source_url'), 'Source')}</div></div></div>`).join('');
@@ -301,6 +317,59 @@ export function companyPage(report: PublishedReport, chinese: Record<string, unk
     if (outreach.length) body += `<section class="section"><div class="section-head"><h2>Outreach angles</h2><span class="section-note">Conversation starters derived from the validated research set.</span></div><div class="angles">${outreach.map((item) => `<div class="angle">${esc(item)}</div>`).join('')}</div></section>`;
     body += `<section class="section"><div class="section-head"><h2>Business signals</h2><span class="section-note">Time-sensitive evidence that may create a reason to engage.</span></div><div class="signal-list">${signalRows || '<div class="empty">No validated signals.</div>'}</div></section>`;
     if (conflictRows) body += `<section class="section"><div class="section-head"><h2>Conflicts and unknowns</h2></div><div class="message warning">${conflictRows}</div></section>`;
+  }
+  // The button only posts; the server decides. /api/person-research already
+  // joins a brief that is running rather than starting a second four-round pass,
+  // so a double-click costs nothing. The access key is the portal's own, read
+  // from sessionStorage on the same origin and sent only as a bearer header --
+  // never put in the URL, never written to the page.
+  if (peopleRows.includes('class="button research"')) {
+    body += `<script>(function(){
+var buttons=document.querySelectorAll('button.research[data-person]');
+if(!buttons.length)return;
+var KEY='ee_portal_token';
+var REPORT=${JSON.stringify(report.public_id)};
+function accessKey(){
+  var stored='';
+  try{stored=sessionStorage.getItem(KEY)||''}catch(err){stored=''}
+  if(stored)return stored;
+  var typed=(window.prompt('Access key to start VIP research')||'').trim();
+  if(typed){try{sessionStorage.setItem(KEY,typed)}catch(err){}}
+  return typed;
+}
+function restore(button,markup,message){button.disabled=false;button.innerHTML=markup;if(message)window.alert(message)}
+buttons.forEach(function(button){
+  button.addEventListener('click',function(){
+    var markup=button.innerHTML;
+    var key=accessKey();
+    if(!key)return;
+    button.disabled=true;button.textContent='Starting…';
+    fetch('/api/person-research',{
+      method:'POST',
+      headers:{'Authorization':'Bearer '+key,'Content-Type':'application/json'},
+      body:JSON.stringify({companyResearchId:REPORT,personId:button.getAttribute('data-person'),requesterId:'report'})
+    }).then(function(response){
+      return response.text().then(function(text){
+        var payload={};
+        try{payload=text?JSON.parse(text):{}}catch(err){payload={}}
+        if(response.status===401||response.status===403){
+          try{sessionStorage.removeItem(KEY)}catch(err){}
+          return restore(button,markup,'That access key was rejected. Try again.');
+        }
+        if(!response.ok)return restore(button,markup,(payload&&payload.error)||('Could not start research: '+response.status));
+        var view=payload.report&&payload.report.view_url;
+        if(typeof view==='string'&&view.indexOf('http')===0){
+          var open=document.createElement('a');
+          open.className='button';
+          open.href=view;
+          open.textContent='Brief underway ↗';
+          button.replaceWith(open);
+        }else{button.disabled=true;button.textContent='Brief underway'}
+      });
+    }).catch(function(err){restore(button,markup,err.message||'Could not reach the server.')});
+  });
+});
+}())<\/script>`;
   }
   if (chinese) {
     const englishBody = body;

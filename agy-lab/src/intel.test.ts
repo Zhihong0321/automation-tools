@@ -350,7 +350,11 @@ test('both public report layouts include mobile viewport and report content', ()
   const deepReport = report('company_research');
   deepReport.result = {
     contacts: [{ purpose: 'Main', value: '+60123', evidence_url: 'https://example.com/contact' }],
-    people: [{ name: 'A Person', role: 'CEO', role_url: 'https://example.com/team' }],
+    people: [
+      { id: 'person_aaaa', name: 'A Person', role: 'CEO', role_url: 'https://example.com/team' },
+      { id: 'person_bbbb', name: 'Second Person', role: 'CFO', role_url: 'https://example.com/team' },
+      { name: 'Nameless Id', role: 'Unknown' },
+    ],
     candidate_people: [{ name: 'A Lead', role: 'Employee', source_name: 'LinkedIn listing', verification_note: 'Confirm current role.' }],
     auto_person_research: { report_id: 'abcdefghijklmnopqrst', person_name: 'A Person' },
   };
@@ -361,9 +365,22 @@ test('both public report layouts include mobile viewport and report content', ()
   }
   assert.match(search, /Example Solar/);
   assert.match(deep, /Best contact routes/);
-  assert.match(deep, /A Person.*Person research/);
   assert.match(deep, /People to verify/);
-  assert.match(deep, /\/r\/abcdefghijklmnopqrst/);
+  // P01 already has a brief, so their control LINKS to it and must not offer to
+  // start a second one.
+  assert.match(deep, /A Person.*\/r\/abcdefghijklmnopqrst/);
+  assert.doesNotMatch(deep, /data-person="person_aaaa"/);
+  // Everyone else gets a button that starts their own brief. Before this, the
+  // fifteen people who were not P01 had no control at all.
+  assert.match(deep, /Second Person.*data-person="person_bbbb"/);
+  assert.match(deep, /Person research/);
+  // A person the pipeline could not give an id to cannot be researched by id,
+  // so they get no button rather than one that would 400.
+  assert.doesNotMatch(deep, /Nameless Id<\/h3>\s*<button/);
+  // The trigger posts to the authenticated endpoint and never puts the key in a URL.
+  assert.match(deep, /\/api\/person-research/);
+  assert.match(deep, /Bearer/);
+  assert.doesNotMatch(deep, /token=/);
   const bilingual = companyPage(deepReport, { ...deepReport.result, summary: '中文摘要' });
   assert.match(bilingual, /中文报告/);
   assert.match(bilingual, /中文摘要/);
@@ -438,4 +455,26 @@ test('the identity SQL survives the template literal it is written in', async ()
   }
   assert.ok(REGISTERED_SQL.startsWith('~*'), 'the suffix test is a regex match operator');
   assert.ok(NAME_KEY_SQL.includes('lower(btrim(name))'), 'the name key normalises the name column');
+});
+
+// Person research needs a completed dossier: /api/person-research rejects a
+// source report that is still running, so the page must not offer the button yet.
+test('a company report still running offers no person-research button', () => {
+  const running = report('company_research');
+  running.status = 'running';
+  running.result = { people: [{ id: 'person_cccc', name: 'Someone', role: 'CEO' }] };
+  const html = companyPage(running);
+  assert.doesNotMatch(html, /data-person="person_cccc"/);
+});
+
+// A brief that has finished says so, instead of reading as an invitation to start one.
+test('an existing brief is linked, and its label reflects whether it is done', () => {
+  const done = report('company_research');
+  done.result = { people: [{ id: 'person_dddd', name: 'Finished Person', role: 'CEO' }] };
+  const html = companyPage(done, null, {
+    person_dddd: { public_id: 'zyxwvutsrqponmlkjihg', status: 'completed' },
+  });
+  assert.match(html, /\/r\/zyxwvutsrqponmlkjihg/);
+  assert.match(html, /Open brief/);
+  assert.doesNotMatch(html, /data-person="person_dddd"/);
 });
