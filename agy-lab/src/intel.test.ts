@@ -439,7 +439,8 @@ test('both public report layouts include mobile viewport and report content', ()
   const deep = companyPage(deepReport);
   for (const html of [search, deep]) {
     assert.match(html, /width=device-width/);
-    assert.match(html, /@media\(max-width:760px\)/);
+    // The sheet is mobile-first: the phone layout is the base, and 760px widens it.
+    assert.match(html, /@media\(min-width:760px\)/);
   }
   assert.match(search, /Example Solar/);
   assert.match(deep, /Best contact routes/);
