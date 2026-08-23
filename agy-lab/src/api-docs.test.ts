@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { page } from './docs.ts';
 import { document } from './openapi.ts';
+import { resolveModel } from './gateway.ts';
 
 test('served docs explain the complete search-to-research handoff', () => {
   const html = page();
@@ -12,6 +13,9 @@ test('served docs explain the complete search-to-research handoff', () => {
   assert.match(html, /POST \/api\/company-research/);
   assert.match(html, /\/api\/person-research/);
   assert.match(html, /person_research_run/);
+  assert.match(html, /fb\.person/);
+  assert.match(html, /x\.subject/);
+  assert.match(html, /identical Gemini\/AGY, social-scout, audit, and validation flow/);
   assert.match(html, /research_run\.round01/);
   assert.match(html, /GET \/public\/reports\/:reportId/);
   assert.match(html, /\/openapi\.json/);
@@ -52,6 +56,12 @@ test('OpenAPI contract exposes each research workflow and resolves local referen
     { required: ['keyword'] }, { required: ['place'] }, { required: ['location'] },
   ]);
   assert.equal(searchRequest.required, undefined);
+  const personRequest = document.components.schemas.PersonResearchRequest;
+  assert.ok(personRequest.properties.mobile);
+  assert.ok(personRequest.properties.mobileNumber);
+  assert.match(document.paths['/api/person-research'].post.description, /identifier-assisted discovery/);
+  assert.match(document.components.schemas.CompanyResearchRequest.description, /identical current VIP pipeline/);
+  assert.deepEqual(resolveModel('gemini@container'), { engine: 'agy', model: 'agy', location: 'container' });
 
   const root = document as unknown as Record<string, unknown>;
   const refs: string[] = [];

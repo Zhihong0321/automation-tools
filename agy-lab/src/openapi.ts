@@ -99,7 +99,7 @@ export const document = {
         operationId: 'createPersonResearch',
         tags: ['Person research'],
         summary: 'Start a public-professional VIP brief',
-        description: 'Starts from a validated person in a completed company-research report. email is an optional in-memory identity hint; it is not persisted in the report request or published output. One brief per person per source report: if a brief already exists — including the automatic P01 one — the existing report is returned with 200 instead of a second run being started.',
+        description: 'Starts from a validated person in a completed company-research report. Optional email and mobile resolvers are used only during the live identifier-assisted discovery pass via Gemini/AGY, then discarded. They are not persisted in the report request, audit record, or published output. One brief per person per source report: if a brief already exists — including the automatic P01 one — the existing report is returned with 200 instead of a second run being started.',
         requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PersonResearchRequest' } } } },
         responses: {
           '200': { description: 'A brief for this person already exists; the existing report is returned', content: { 'application/json': { schema: { $ref: '#/components/schemas/AcceptedReport' } } } },
@@ -188,18 +188,29 @@ export const document = {
       },
       CompanyResearchRequest: {
         type: 'object', required: ['companyId'], additionalProperties: false,
-        description: 'Once the people audit identifies P01, a separate person_research report starts automatically in parallel with the remaining company rounds and translation.',
+        description: 'Once the people audit identifies P01, a separate person_research report starts automatically in parallel with the remaining company rounds and translation. It uses the identical current VIP pipeline as POST /api/person-research: Gemini/AGY primary discovery, capability-gated Facebook/Instagram/Threads and xAI/X scouts, independent audit, and validated synthesis.',
         properties: {
           companyId: { type: 'string', pattern: '^\\d+$', description: 'Persisted company id from data.companies[].id. company_id is accepted as an alias.' },
           requesterId: { type: 'string', description: 'Optional caller-owned correlation id. userId is accepted as an alias.' },
         },
       },
       PersonResearchRequest: {
-        type: 'object', required: ['companyResearchId', 'personId'], additionalProperties: false,
+        type: 'object', additionalProperties: false,
+        anyOf: [
+          { required: ['companyResearchId', 'personId'] },
+          { required: ['companyResearchId', 'person_id'] },
+          { required: ['company_research_id', 'personId'] },
+          { required: ['company_research_id', 'person_id'] },
+        ],
         properties: {
           companyResearchId: { type: 'string', pattern: '^[A-Za-z0-9_-]{20}$', description: 'Completed company-research report id. company_research_id is accepted as an alias.' },
+          company_research_id: { type: 'string', pattern: '^[A-Za-z0-9_-]{20}$', description: 'Alias for companyResearchId.' },
           personId: { type: 'string', minLength: 1, description: 'Validated person id from final.people[].id. person_id is accepted as an alias.' },
-          email: { type: 'string', format: 'email', description: 'Optional identity hint used only while the request runs. It is not persisted in the report request or published output.' },
+          person_id: { type: 'string', minLength: 1, description: 'Alias for personId.' },
+          email: { type: 'string', format: 'email', description: 'Optional caller-supplied identity resolver. Used only for the live discovery pass; never persisted or published.' },
+          mobile: { type: 'string', pattern: '^[+()\\d.\\s-]{7,32}$', description: 'Optional caller-supplied mobile resolver. It must contain 7–15 digits and may include formatting. Used only for the live discovery pass; never persisted or published.' },
+          mobileNumber: { type: 'string', pattern: '^[+()\\d.\\s-]{7,32}$', description: 'Alias for mobile.' },
+          phone: { type: 'string', pattern: '^[+()\\d.\\s-]{7,32}$', description: 'Alias for mobile.' },
           requesterId: { type: 'string' }, userId: { type: 'string' },
         },
       },
@@ -227,7 +238,7 @@ export const document = {
           candidate_people: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Named public-source leads that require direct current-role verification; they are not eligible for automatic VIP research.' },
           signals: { type: 'array', items: { type: 'object', additionalProperties: true } },
           outreach_angles: { type: 'array', items: { type: 'string' } }, conflicts_and_unknowns: { type: 'array', items: { type: 'object', additionalProperties: true } },
-          auto_person_research: { type: ['object', 'null'], additionalProperties: true, description: 'Separate automatically triggered P01 VIP report reference.' },
+          auto_person_research: { type: ['object', 'null'], additionalProperties: true, description: 'Separate automatically triggered P01 VIP report reference. The child uses the same current VIP pipeline as POST /api/person-research.' },
           synthesis_mode: { type: 'string', enum: ['gemini_validated', 'validated_ledger_fallback'] },
         }, additionalProperties: true,
       },
@@ -254,7 +265,7 @@ export const document = {
         },
       },
       PersonResearchRun: {
-        type: ['object', 'null'], description: 'Authenticated VIP-brief audit record. It retains validated public-professional evidence and execution metadata, never the optional email identity hint.',
+        type: ['object', 'null'], description: 'Authenticated VIP-brief audit record. It retains validated public-professional evidence plus primary discovery, Facebook/Instagram/Threads scout, xAI/X scout, independent-audit, and synthesis metadata; it never retains caller-supplied email or mobile resolvers. Social lanes are capability-gated and may report unavailable when their worker is offline.',
         properties: {
           report_id: { type: 'string' }, discovery: { type: ['object', 'null'], additionalProperties: true }, synthesis: { type: ['object', 'null'], additionalProperties: true },
           validated_ledger: { oneOf: [{ $ref: '#/components/schemas/FinalPersonReport' }, { type: 'null' }] }, final_report: { oneOf: [{ $ref: '#/components/schemas/FinalPersonReport' }, { type: 'null' }] },

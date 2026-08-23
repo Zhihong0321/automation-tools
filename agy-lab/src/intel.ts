@@ -27,6 +27,77 @@ const object = (v: unknown): Record<string, unknown> =>
 const rows = (v: unknown): Record<string, unknown>[] =>
   Array.isArray(v) ? v.filter((x) => x && typeof x === 'object') as Record<string, unknown>[] : [];
 
+/**
+ * Identity resolvers are supplied only for the live discovery call. The raw
+ * values never enter a report request, run artifact, ledger, or final brief.
+ */
+export interface PersonIdentityHints {
+  email?: string;
+  mobile?: string;
+}
+
+export function normalizeMobileHint(value: string): string | null {
+  const raw = value.trim();
+  if (!raw || !/^[+()\d.\s-]+$/.test(raw)) return null;
+  const digits = raw.replace(/\D/g, '');
+  // E.164 tops out at 15 digits. We also allow national-format mobile input,
+  // but refuse short values that are more likely an extension or random text.
+  return digits.length >= 7 && digits.length <= 15 ? digits : null;
+}
+
+function identityHintValues(hints: PersonIdentityHints): string[] {
+  const values: string[] = [];
+  if (hints.email) values.push(hints.email.trim().toLowerCase());
+  const mobile = hints.mobile ? normalizeMobileHint(hints.mobile) : null;
+  if (mobile) values.push(mobile);
+  return values;
+}
+
+function containsIdentityHint(value: unknown, hints: PersonIdentityHints): boolean {
+  const values = identityHintValues(hints);
+  if (!values.length) return false;
+  if (typeof value === 'string') {
+    const lower = value.toLowerCase();
+    const digits = value.replace(/\D/g, '');
+    return values.some((hint) => hint.includes('@') ? lower.includes(hint) : digits.includes(hint));
+  }
+  if (Array.isArray(value)) return value.some((entry) => containsIdentityHint(entry, hints));
+  if (value && typeof value === 'object') return Object.values(value as Record<string, unknown>).some((entry) => containsIdentityHint(entry, hints));
+  return false;
+}
+
+/** Drop any model row that repeats a caller-supplied resolver before it reaches storage. */
+export function redactIdentityHintsFromDiscovery(
+  discovery: Record<string, unknown>,
+  hints: PersonIdentityHints,
+): Record<string, unknown> {
+  if (!identityHintValues(hints).length) return discovery;
+  const cleaned = structuredClone(discovery);
+  for (const key of ['contacts', 'facts', 'signals']) {
+    if (Array.isArray(cleaned[key])) cleaned[key] = rows(cleaned[key]).filter((row) => !containsIdentityHint(row, hints));
+  }
+  return cleaned;
+}
+
+/** A social scout may report only evidence it directly observed on its own network. */
+export function keepDiscoveryEvidenceFromHosts(
+  discovery: Record<string, unknown>,
+  allowedHosts: string[],
+): Record<string, unknown> {
+  const hosts = new Set(allowedHosts.map((host) => host.toLowerCase()));
+  const allowed = (row: Record<string, unknown>): boolean => {
+    const evidence = directUrl(first(row, ['evidence_url', 'source_url', 'url']));
+    if (!evidence) return false;
+    const hostname = new URL(evidence).hostname.toLowerCase();
+    return [...hosts].some((host) => hostname === host || hostname.endsWith('.' + host));
+  };
+  const cleaned = structuredClone(discovery);
+  for (const key of ['contacts', 'facts', 'signals']) {
+    if (Array.isArray(cleaned[key])) cleaned[key] = rows(cleaned[key]).filter(allowed);
+  }
+  return cleaned;
+}
+
 function origin(req: http.IncomingMessage): string {
   const forwarded = str(req.headers['x-forwarded-proto']);
   const proto = forwarded.split(',')[0]?.trim() || 'http';
@@ -580,11 +651,15 @@ function collectPersonFacts(sources: Record<string, unknown>[]): Record<string, 
         evidence_strength: cited.strength,
         evidence_as_cited: cited.url ? null : first(row, ['evidence_url', 'source_url', 'url']) || null,
         source_date: row.source_date ?? row.visible_source_date ?? null,
+        // This may say that an individual resolver matched, but never contains
+        // the resolver value itself. It makes a historical affiliation auditable
+        // without exposing an email address or mobile number.
+        identity_match_basis: first(row, ['identity_match_basis', 'identity_match_note']) || null,
         introduced_by: first(row, ['introduced_by', '_round']) || null,
       });
     }
   }
-  return [...found.values()].slice(0, 14);
+  return [...found.values()].slice(0, 16);
 }
 
 export function buildPersonLedger(
@@ -599,6 +674,7 @@ export function buildPersonLedger(
     facts: roleUrl && name && role ? [{
       category: 'Current role', fact: `${name} is listed as ${role} at ${str(company.name, 'the company')}.`,
       evidence_class: first(person, ['evidence_class']) || 'first_party', evidence_url: roleUrl, _round: 'company_research',
+      identity_match_basis: 'direct_current_role_evidence',
     }] : [],
     contacts: [], signals: [],
   };
@@ -614,7 +690,7 @@ export function buildPersonLedger(
     facts: collectPersonFacts(all),
     signals: collectSignals(all),
     validation: {
-      policy: 'Public professional evidence only; private or sensitive personal data is excluded. Every row the research returned is retained and carries an evidence_strength rather than being discarded for weak sourcing -- the reader decides what to trust.',
+      policy: 'Public professional evidence only. An exact individual email or normalized mobile match may validate a sourced historical affiliation, but the matching value is never retained or published. Private or sensitive personal data and uncited social claims are excluded. Retained entries carry evidence_strength so the reader can judge sourcing.',
       contact_count: collectContacts(all).length,
       fact_count: collectPersonFacts(all).length,
       signal_count: collectSignals(all).length,
@@ -1004,18 +1080,174 @@ function personBaseline(company: Record<string, unknown>, person: Record<string,
   });
 }
 
-function personDiscoveryPrompt(company: Record<string, unknown>, person: Record<string, unknown>, emailHint: string | null): string {
-  const privateHint = emailHint
-    ? 'A private email identity hint was supplied solely to distinguish this person from namesakes. Do not repeat, publish, search for, or return it.'
-    : 'No email identity hint was supplied.';
+export function personDiscoveryPrompt(company: Record<string, unknown>, person: Record<string, unknown>, hints: PersonIdentityHints = {}): string {
+  const resolvers = [
+    hints.email ? `email: ${hints.email}` : null,
+    hints.mobile ? `mobile: ${hints.mobile}` : null,
+  ].filter(Boolean);
+  const privateHint = resolvers.length
+    ? `PRIVATE IDENTITY RESOLVERS (caller-supplied; use only as exact search and disambiguation keys): ${resolvers.join('; ')}. Never repeat, return, publish, save, or treat these values as a contact or evidence. Use them only to locate public professional pages that independently connect the target name to the target company or current role. Do not query breach data, data brokers, people-search sites, or private/social accounts.`
+    : 'No private identity resolver was supplied; scope discovery with the target name and company.';
   return `You are researching a confirmed business leader for a VIP qualification brief as of ${new Date().toISOString().slice(0, 10)}.
 TARGET BASELINE: ${personBaseline(company, person)}
 ${privateHint}
 ${FETCH_POLICY}
-Research public professional business information only: the current role, public company/board affiliations, attributable interviews or talks, and dated business signals relevant to a commercial or partnership conversation.
+Research public professional business information only: the current role, public company/board affiliations, attributable interviews or talks, dated business signals, and professional publications or speaking appearances relevant to a commercial or partnership conversation. Resolve namesakes conservatively: retain a finding only when the direct source ties it to the target company/current role, when two independent public-professional sources make the match clear, or when a source contains an exact match to a caller-supplied individual email or normalized mobile. That exact resolver match is sufficient to retain a prior-company affiliation even when the source names a different employer; label it as historical, never current. For a resolver-validated row, set identity_match_basis to exact_email_match or exact_mobile_match, but never repeat any identifier value.
 Never collect or return home address, non-business phone, family, private social accounts, age, ethnicity, religion, health, political views, private wealth, breach data, data-broker records, or personal contact details. Do not infer any fact, email, profile, title, date or affiliation.
-Report every public professional item you find and let the pipeline grade its sourcing -- do not withhold a real finding because its source is only a homepage or is http rather than https. Give the most specific URL you actually used, as a raw URL string and never a Markdown link. Company-controlled pages are first_party; independent issuer/news pages are independent; public professional platforms are social_platform.
-Return exactly one compact JSON object inside a fenced code block with arrays contacts, facts and signals. Contact fields: purpose,value_as_published,normalized_value,current_status,evidence_class,evidence_url,source_date,identity_match_note. Retain only professional/business contact routes directly published by the person, company, or a reputable organization; distinguish a company-wide route from a person-specific route. Fact fields: category,fact,evidence_class,evidence_url,source_date. Signal fields: date,fact,evidence_class,evidence_url,outreach_use. Max 12 contacts, 12 facts and 8 signals. No prose outside JSON.`;
+Every retained item requires a raw full https:// direct source URL. Company-controlled pages are first_party; independent issuer/news pages are independent; public professional platforms are social_platform. Search snippets and bare homepages are not evidence.
+Return exactly one compact JSON object inside a fenced code block with arrays contacts, facts and signals. Contact fields: purpose,value_as_published,normalized_value,current_status,evidence_class,evidence_url,source_date,identity_match_note. Retain only professional/business contact routes directly published by the person, company, or a reputable organization; distinguish a company-wide route from a person-specific route. Fact fields: category,fact,evidence_class,evidence_url,source_date,identity_match_basis. Signal fields: date,fact,evidence_class,evidence_url,outreach_use. Max 16 contacts, 16 facts and 10 signals. No prose outside JSON.`;
+}
+
+function personAuditPrompt(
+  company: Record<string, unknown>,
+  person: Record<string, unknown>,
+  discovery: Record<string, unknown>,
+): string {
+  const leadUrls = [...rows(discovery.contacts), ...rows(discovery.facts), ...rows(discovery.signals)]
+    .map((row) => first(row, ['evidence_url', 'source_url', 'url']))
+    .filter(Boolean)
+    .slice(0, 24);
+  return `Independently audit and extend a VIP qualification brief for this exact business leader as of ${new Date().toISOString().slice(0, 10)}.
+TARGET BASELINE: ${personBaseline(company, person)}
+These untrusted public URLs are leads only; verify them and research beyond them: ${JSON.stringify(leadUrls)}
+Use only the target name, company, role, and public-source leads. Do not seek or infer personal identifiers, and do not collect private or sensitive data. Retain only public professional information that direct evidence connects to the target company/current role, or to a historical employer already resolver-validated by the primary pass: current role, board/company affiliations, attributable interviews/talks/publications, and dated business signals relevant to a commercial conversation. Never upgrade a historical affiliation into a current role.
+Every retained row needs a raw full https:// direct evidence URL; exclude search snippets, bare homepages, uncited claims, namesake matches, data brokers, breach data, and personal contact details. Return exactly one compact JSON object inside a fenced code block with contacts, facts and signals. Use the same fields as the discovery pass. Max 12 contacts, 16 facts and 10 signals. No prose outside JSON.`;
+}
+
+type SocialScout = 'facebook' | 'x';
+
+const scoutConfig: Record<SocialScout, { jobType: string; hosts: string[]; label: string; defaultTimeoutMs: number }> = {
+  facebook: {
+    // Matches the home worker's public-person contract, not the company-page
+    // crawler. It needs both names to resolve a namesake conservatively.
+    jobType: process.env.VIP_FB_SCOUT_JOB_TYPE?.trim() || 'fb.person',
+    hosts: ['facebook.com', 'instagram.com', 'threads.net'],
+    label: 'Facebook/Instagram Scout',
+    defaultTimeoutMs: 300_000,
+  },
+  x: {
+    // x-recon uses Grok to search X and exposes the cited X permalinks in its
+    // x.subject envelope. It intentionally has a longer budget than Facebook.
+    jobType: process.env.VIP_XAI_SCOUT_JOB_TYPE?.trim() || 'x.subject',
+    hosts: ['x.com', 'twitter.com'],
+    label: 'Grok / X Scout',
+    defaultTimeoutMs: 600_000,
+  },
+};
+
+function personScoutPayload(
+  scout: SocialScout,
+  company: Record<string, unknown>,
+  person: Record<string, unknown>,
+  timeoutMs: number,
+): Record<string, unknown> {
+  const personName = first(person, ['name']);
+  const companyName = str(company.name);
+  if (scout === 'facebook') {
+    return {
+      person: personName,
+      company: companyName,
+      address: str(company.address),
+      website: str(company.website),
+      budget: Math.min(Math.max(Number(process.env.VIP_FB_SCOUT_BUDGET ?? 8), 1), 25),
+      timeoutMs,
+    };
+  }
+  return {
+    // The company qualifier is part of the actual X/Grok search subject so a
+    // common name does not silently turn into a namesake investigation.
+    subject: `${personName} ${companyName}`.trim(),
+    max: Math.min(Math.max(Number(process.env.VIP_XAI_SCOUT_MAX ?? 12), 1), 40),
+    budget: Math.min(Math.max(Number(process.env.VIP_XAI_SCOUT_BUDGET ?? 4), 1), 10),
+    timeoutMs,
+  };
+}
+
+/** Convert supported worker envelopes to the evidence-only VIP ledger shape. */
+export function scoutParsed(scout: SocialScout, result: unknown): Record<string, unknown> | null {
+  const value = object(result);
+  const direct = object(value.parsed);
+  if (Object.keys(direct).length) return direct;
+  const raw = str(value.answer || value.text || value.output);
+  if (raw) return extractJson(raw).value;
+  if (Array.isArray(value.contacts) || Array.isArray(value.facts) || Array.isArray(value.signals)) return value;
+
+  const native = object(value.result);
+  if (!Object.keys(native).length) return null;
+  if (scout === 'facebook') {
+    const confidence = str(native.confidence).toLowerCase();
+    const url = directUrl(first(native, ['facebook_url', 'profile_url', 'page_url']));
+    // fb.person has already resolved name + company. A weak lead is not enough
+    // to identify a person in a VIP report, even though it is useful worker
+    // telemetry, so it contributes no ledger row.
+    if (!url || !['confirmed', 'likely'].includes(confidence)) return { contacts: [], facts: [], signals: [] };
+    return {
+      contacts: [],
+      facts: [{
+        category: 'Public social profile',
+        fact: 'A public Facebook profile/page was matched to the scoped person and company.',
+        evidence_class: 'social_platform', evidence_url: url, source_date: null,
+      }],
+      signals: [],
+    };
+  }
+
+  // x-recon labels whether Grok actually rendered each permalink. An X URL
+  // alone is not sufficient: only cited threads are direct worker evidence.
+  const threads = rows(native.threads)
+    .filter((thread) => thread.cited === true && Boolean(directUrl(first(thread, ['url', 'evidence_url']))))
+    .slice(0, 10);
+  const facts = threads.map((thread) => {
+    const author = first(thread, ['author']) || 'an X account';
+    const detail = first(thread, ['topic', 'excerpt']) || 'a public post relevant to the scoped person/company';
+    return {
+      category: 'Cited X post', fact: `${author} posted about ${detail}.`, evidence_class: 'social_platform',
+      evidence_url: directUrl(first(thread, ['url', 'evidence_url'])), source_date: thread.date ?? null,
+    };
+  });
+  const signals = threads.filter((thread) => Boolean(str(thread.date))).map((thread) => ({
+    date: thread.date, fact: first(thread, ['topic', 'excerpt']) || 'Cited X discussion relevant to the scoped person/company.',
+    evidence_class: 'social_platform', evidence_url: directUrl(first(thread, ['url', 'evidence_url'])),
+    outreach_use: 'Use only when the cited discussion is relevant to the conversation.',
+  }));
+  return { contacts: [], facts, signals };
+}
+
+async function runPersonScout(
+  scout: SocialScout,
+  company: Record<string, unknown>,
+  person: Record<string, unknown>,
+): Promise<{ parsed: Record<string, unknown> | null; metadata: Record<string, unknown>; failed: boolean }> {
+  const config = scoutConfig[scout];
+  if (!jobs.liveTypes().includes(config.jobType)) {
+    return { parsed: null, metadata: { status: 'unavailable', lane: config.label, worker_job_type: config.jobType }, failed: false };
+  }
+  const configuredTimeout = Number(process.env.VIP_SOCIAL_SCOUT_TIMEOUT_MS);
+  const timeoutMs = Math.min(Math.max(Number.isFinite(configuredTimeout) ? configuredTimeout : config.defaultTimeoutMs, 30_000), 600_000);
+  const started = Date.now();
+  try {
+    // Private resolvers intentionally do not cross into worker payloads. The
+    // payload below is the actual fb.person / x.subject worker contract.
+    const job = jobs.create(config.jobType, personScoutPayload(scout, company, person, timeoutMs), timeoutMs);
+    const settled = await jobs.wait(job.id, timeoutMs + 5_000);
+    if (!settled || settled.status === 'pending' || settled.status === 'running') {
+      return { parsed: null, metadata: { status: 'timeout', lane: config.label, worker_job_type: config.jobType, job_id: job.id, ms: Date.now() - started }, failed: true };
+    }
+    if (settled.status !== 'done') {
+      return { parsed: null, metadata: { status: 'failed', lane: config.label, worker_job_type: config.jobType, job_id: job.id, error: settled.error, ms: Date.now() - started }, failed: true };
+    }
+    const parsed = scoutParsed(scout, settled.result);
+    if (!parsed) {
+      return { parsed: null, metadata: { status: 'invalid_output', lane: config.label, worker_job_type: config.jobType, job_id: job.id, ms: Date.now() - started }, failed: true };
+    }
+    return {
+      parsed: keepDiscoveryEvidenceFromHosts(parsed, config.hosts),
+      metadata: { status: 'completed', lane: config.label, worker_job_type: config.jobType, job_id: job.id, ms: Date.now() - started },
+      failed: false,
+    };
+  } catch (err) {
+    return { parsed: null, metadata: { status: 'failed', lane: config.label, worker_job_type: config.jobType, error: (err as Error).message ?? String(err), ms: Date.now() - started }, failed: true };
+  }
 }
 
 function personSynthesisPrompt(ledger: Record<string, unknown>): string {
@@ -1129,19 +1361,34 @@ async function runBusinessSearch(publicId: string, reportId: string, request: Re
   }
 }
 
-async function startAutoPersonResearch(
-  sourcePublicId: string,
-  company: Record<string, unknown>,
-  person: Record<string, unknown>,
-  companyRequest: Record<string, unknown>,
-): Promise<db.PublishedReport> {
+type PersonResearchLaunch = {
+  sourceReportId: string;
+  company: Record<string, unknown>;
+  person: Record<string, unknown>;
+  requesterId: string | null;
+  identityHints?: PersonIdentityHints;
+  autoTriggered: boolean;
+  selectionRule?: string;
+};
+
+/**
+ * The sole launcher for both POST /api/person-research and the P01 child that
+ * company research creates. Keeping this shared is deliberate: the automatic
+ * brief must always enter the current VIP pipeline (Gemini/AGY + available
+ * social scouts + independent audit), rather than preserving an older fork.
+ */
+async function launchPersonResearch(input: PersonResearchLaunch): Promise<db.PublishedReport> {
+  const { sourceReportId, company, person, requesterId, autoTriggered } = input;
+  const identityHints = input.identityHints ?? {};
   const personId = first(person, ['id']);
-  const existing = await db.findPersonResearchReport(sourcePublicId, personId);
-  if (existing) {
-    if ((existing.status === 'queued' || existing.status === 'running') && !active.has(existing.public_id)) {
-      void runPersonResearch(existing.public_id, existing.id, company, person, null);
+  if (autoTriggered) {
+    const existing = await db.findPersonResearchReport(sourceReportId, personId);
+    if (existing) {
+      if ((existing.status === 'queued' || existing.status === 'running') && !active.has(existing.public_id)) {
+        void runPersonResearch(existing.public_id, existing.id, company, person);
+      }
+      return existing;
     }
-    return existing;
   }
   const personSnapshot = {
     id: personId,
@@ -1153,12 +1400,14 @@ async function startAutoPersonResearch(
     personal_profile_url: directUrl(person.personal_profile_url) ?? null,
   };
   const request = {
-    sourceReportId: sourcePublicId,
+    sourceReportId,
     personId,
-    requesterId: str(companyRequest.requesterId || companyRequest.userId) || null,
-    emailProvided: false,
-    autoTriggered: true,
-    selectionRule: 'company_report_p01',
+    requesterId,
+    emailProvided: Boolean(identityHints.email),
+    mobileProvided: Boolean(identityHints.mobile),
+    autoTriggered,
+    ...(input.selectionRule ? { selectionRule: input.selectionRule } : {}),
+    pipelineVersion: 'vip-gemini-fb-xai-v1',
     personSnapshot,
   };
   let report: db.PublishedReport;
@@ -1168,14 +1417,30 @@ async function startAutoPersonResearch(
       userId: str(request.requesterId) || null, request, companyId: String(company.id ?? '') || null,
     });
   } catch (err) {
-    const raced = await db.findPersonResearchReport(sourcePublicId, personId);
+    const raced = autoTriggered ? await db.findPersonResearchReport(sourceReportId, personId) : null;
     if (!raced) throw err;
     report = raced;
   }
   if (report.status === 'queued' || report.status === 'running') {
-    void runPersonResearch(report.public_id, report.id, company, person, null);
+    void runPersonResearch(report.public_id, report.id, company, person, identityHints);
   }
   return report;
+}
+
+async function startAutoPersonResearch(
+  sourcePublicId: string,
+  company: Record<string, unknown>,
+  person: Record<string, unknown>,
+  companyRequest: Record<string, unknown>,
+): Promise<db.PublishedReport> {
+  return launchPersonResearch({
+    sourceReportId: sourcePublicId,
+    company,
+    person,
+    requesterId: str(companyRequest.requesterId || companyRequest.userId) || null,
+    autoTriggered: true,
+    selectionRule: 'company_report_p01',
+  });
 }
 
 async function runCompanyResearch(
@@ -1403,7 +1668,7 @@ async function runPersonResearch(
   reportId: string,
   company: Record<string, unknown>,
   person: Record<string, unknown>,
-  emailHint: string | null,
+  identityHints: PersonIdentityHints = {},
 ): Promise<void> {
   if (active.has(publicId)) return;
   active.add(publicId);
@@ -1412,26 +1677,53 @@ async function runPersonResearch(
   try {
     await db.updateReport(publicId, { status: 'running', error: null });
     await db.initPersonResearchRun(reportId);
-    let discoveryMetadata: Record<string, unknown> = { status: 'failed', model: 'agy' };
+    let discoveryMetadata: Record<string, unknown> = { status: 'failed', model: process.env.VIP_GEMINI_MODEL?.trim() || 'agy' };
     try {
-      const discovery = await ask('agy', personDiscoveryPrompt(company, person, emailHint), 420_000);
+      const discovery = await ask(process.env.VIP_GEMINI_MODEL?.trim() || 'agy', personDiscoveryPrompt(company, person, identityHints), 420_000);
       if (discovery.parsed) {
-        for (const row of [...rows(discovery.parsed.contacts), ...rows(discovery.parsed.facts), ...rows(discovery.parsed.signals)]) row._round = 'person_discovery';
-        parsedForLedger.push(discovery.parsed);
+        const redacted = redactIdentityHintsFromDiscovery(discovery.parsed, identityHints);
+        for (const row of [...rows(redacted.contacts), ...rows(redacted.facts), ...rows(redacted.signals)]) row._round = 'person_discovery';
+        parsedForLedger.push(redacted);
         discoveryMetadata = { status: 'completed', model: discovery.model, engine: discovery.engine, ms: discovery.ms };
       } else hadFailure = true;
       if (!discovery.parsed) discoveryMetadata = { status: 'invalid_output', model: discovery.model, engine: discovery.engine, ms: discovery.ms };
     } catch (err) {
       hadFailure = true;
-      discoveryMetadata = { status: 'failed', model: 'agy', error: (err as Error).message ?? String(err) };
+      discoveryMetadata = { status: 'failed', model: process.env.VIP_GEMINI_MODEL?.trim() || 'agy', error: (err as Error).message ?? String(err) };
+    }
+
+    const [facebookScout, xScout] = await Promise.all([
+      runPersonScout('facebook', company, person),
+      runPersonScout('x', company, person),
+    ]);
+    for (const [round, scout] of [['facebook_scout', facebookScout], ['xai_x_scout', xScout]] as const) {
+      if (scout.failed) hadFailure = true;
+      if (!scout.parsed) continue;
+      for (const row of [...rows(scout.parsed.contacts), ...rows(scout.parsed.facts), ...rows(scout.parsed.signals)]) row._round = round;
+      parsedForLedger.push(scout.parsed);
+    }
+
+    let auditMetadata: Record<string, unknown> = { status: 'failed', model: 'chatgpt' };
+    try {
+      const audit = await ask('chatgpt', personAuditPrompt(company, person, parsedForLedger[0] ?? {}), 300_000);
+      if (audit.parsed) {
+        const redacted = redactIdentityHintsFromDiscovery(audit.parsed, identityHints);
+        for (const row of [...rows(redacted.contacts), ...rows(redacted.facts), ...rows(redacted.signals)]) row._round = 'person_independent_audit';
+        parsedForLedger.push(redacted);
+        auditMetadata = { status: 'completed', model: audit.model, engine: audit.engine, ms: audit.ms };
+      } else hadFailure = true;
+      if (!audit.parsed) auditMetadata = { status: 'invalid_output', model: audit.model, engine: audit.engine, ms: audit.ms };
+    } catch (err) {
+      hadFailure = true;
+      auditMetadata = { status: 'failed', model: 'chatgpt', error: (err as Error).message ?? String(err) };
     }
 
     const ledger = buildPersonLedger(company, person, parsedForLedger);
     await db.savePersonResearchRun(reportId, {
       discovery: { contacts: ledger.contacts, facts: ledger.facts, signals: ledger.signals },
       ledger,
-      status: { discovery: discoveryMetadata.status },
-      metadata: { discovery: discoveryMetadata },
+      status: { discovery: discoveryMetadata.status, facebook_scout: facebookScout.metadata.status, xai_x_scout: xScout.metadata.status, independent_audit: auditMetadata.status },
+      metadata: { discovery: discoveryMetadata, facebook_scout: facebookScout.metadata, xai_x_scout: xScout.metadata, independent_audit: auditMetadata },
     });
     let finalReport: Record<string, unknown> = { ...ledger, summary: null, research_angles: [], synthesis_mode: 'validated_ledger_fallback' };
     let synthesisMetadata: Record<string, unknown> = { status: 'failed', model: 'chatgpt' };
@@ -1468,8 +1760,8 @@ async function runPersonResearch(
       synthesis: { synthesis_mode: finalReport.synthesis_mode, contact_count: rows(finalReport.contacts).length, fact_count: rows(finalReport.facts).length, signal_count: rows(finalReport.signals).length },
       ledger,
       finalReport,
-      status: { discovery: discoveryMetadata.status, synthesis: synthesisMetadata.status },
-      metadata: { discovery: discoveryMetadata, synthesis: synthesisMetadata },
+      status: { discovery: discoveryMetadata.status, facebook_scout: facebookScout.metadata.status, xai_x_scout: xScout.metadata.status, independent_audit: auditMetadata.status, synthesis: synthesisMetadata.status },
+      metadata: { discovery: discoveryMetadata, facebook_scout: facebookScout.metadata, xai_x_scout: xScout.metadata, independent_audit: auditMetadata, synthesis: synthesisMetadata },
       completed: true,
     });
     await db.updateReport(publicId, {
@@ -1521,7 +1813,7 @@ async function ensureRunning(report: db.PublishedReport): Promise<void> {
   }
   if (report.report_type === 'person_research') {
     const input = await personResearchInput(report);
-    if (input) void runPersonResearch(report.public_id, report.id, input.company, input.person, null);
+    if (input) void runPersonResearch(report.public_id, report.id, input.company, input.person);
     return;
   }
   if (report.company_id) {
@@ -1733,12 +2025,17 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     const sourceReportId = str(body.companyResearchId || body.company_research_id).trim();
     const personId = str(body.personId || body.person_id).trim();
     const email = str(body.email).trim();
+    const mobile = str(body.mobile ?? body.mobileNumber ?? body.phone).trim();
     if (!/^[A-Za-z0-9_-]{20}$/.test(sourceReportId) || !personId) {
       ctx.json(res, 400, { error: 'companyResearchId and personId from a completed company report are required' });
       return true;
     }
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       ctx.json(res, 400, { error: 'email must be a valid optional identity hint' });
+      return true;
+    }
+    if (mobile && !normalizeMobileHint(mobile)) {
+      ctx.json(res, 400, { error: 'mobile must contain 7 to 15 digits and may use +, spaces, parentheses, periods, or hyphens' });
       return true;
     }
     const source = await db.getReport(sourceReportId);
@@ -1761,12 +2058,14 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       ctx.json(res, 200, { report: envelope(req, running) });
       return true;
     }
-    const request = { sourceReportId, personId, requesterId: str(body.requesterId || body.userId) || null, emailProvided: Boolean(email) };
-    const report = await db.createReport({
-      type: 'person_research', title: first(person, ['name']) + ' VIP brief',
-      userId: str(request.requesterId) || null, request, companyId: source.company_id,
+    const report = await launchPersonResearch({
+      sourceReportId,
+      company,
+      person,
+      requesterId: str(body.requesterId || body.userId) || null,
+      identityHints: { ...(email ? { email } : {}), ...(mobile ? { mobile } : {}) },
+      autoTriggered: false,
     });
-    void runPersonResearch(report.public_id, report.id, company, person, email || null);
     ctx.json(res, 202, { report: envelope(req, report) });
     return true;
   }

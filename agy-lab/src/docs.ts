@@ -333,19 +333,39 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
   <h3>5. Create a VIP person brief</h3>
   <div class="ep"><span class="m post">POST</span><code class="path">/api/person-research</code><span class="tag">Bearer &middot; returns 202, or 200 when one exists</span></div>
   <p>Start only from a validated person in a completed company report with <code>POST /api/person-research</code>. Use
-  <code>data.final.people[].id</code> as <code>personId</code>. An optional email is an
-  in-memory identity hint only: it is not written to the report request or public output.</p>
+  <code>data.final.people[].id</code> as <code>personId</code>. Optional <code>email</code> and
+  <code>mobile</code> values are transient identity resolvers: the first discovery pass uses them
+  to find public professional pages for the already-scoped name and company, then an independent
+  public-source audit extends and verifies the evidence. Neither value is written to the report
+  request, audit record, or public output. An exact match to an individual resolver can validate a
+  source-linked historical affiliation at another company; it is explicitly labelled historical and
+  records only <code>exact_email_match</code> or <code>exact_mobile_match</code>, never the value.</p>
   <p>One brief per person per source report. If a brief for that person already exists &mdash; including the
   automatic P01 one the company run starts for itself &mdash; that report comes back with <code>200</code>
   rather than a second four-round pass being started. Treat <code>200</code> as success and follow the
   returned <code>id</code>.</p>
 <pre><code>curl -s https://ee-auto.up.railway.app/api/person-research \
   -H "Authorization: Bearer $EE_AUTO_TOKEN" -H 'content-type: application/json' \
-  -d '{"companyResearchId":"XyZaBcDeFgHiJkLmNoPq","personId":"person_abc123","email":"owner@example.com"}'</code></pre>
+  -d '{"companyResearchId":"XyZaBcDeFgHiJkLmNoPq","personId":"person_abc123","email":"owner@example.com","mobile":"+60 12-345 6789"}'</code></pre>
+  <p>Company research automatically launches this same VIP pipeline for its first validated P01
+  person as soon as the people audit identifies one. The child reference appears at
+  <code>data.final.auto_person_research</code>; poll its <code>report_id</code> with
+  <code>GET /api/person-research/:reportId</code>. A caller-created VIP brief and an automatic P01
+  brief share the identical Gemini/AGY, social-scout, audit, and validation flow.</p>
   <p>Poll <code>GET /api/person-research/:reportId</code>. The authenticated response includes
   <code>research_run</code> from <code>person_research_run</code>, containing validated
-  public-professional evidence, the final brief, and execution metadata. It never retains the
-  optional email hint or raw model text.</p>
+  public-professional evidence, the final brief, and discovery/audit/synthesis metadata. It never
+  retains caller-supplied identity resolvers or raw model text.</p>
+  <p>VIP discovery combines the primary Gemini/AGY web pass (set <code>VIP_GEMINI_MODEL=gemini</code>
+  or leave its default <code>agy</code>), an optional Facebook/Instagram/Threads
+  scout, and an optional xAI/X scout. A social lane runs only when a live worker claims its job type:
+  <code>fb.person</code> and <code>x.subject</code> by default. Set
+  <code>VIP_FB_SCOUT_JOB_TYPE</code> or <code>VIP_XAI_SCOUT_JOB_TYPE</code> to match a worker that
+  uses different names. Scouts receive only the validated public person/company baseline—not email
+  or mobile resolvers—and may publish rows only when their direct evidence URL is on their own
+  network. Per-lane status and job metadata are in <code>research_run.engine_metadata</code>.</p>
+<pre><code>// x.subject worker evidence: only cited X permalinks enter the VIP ledger
+{"result":{"threads":[{"url":"https://x.com/example/status/1","cited":true,"date":"2026-08-22","topic":"..."}]}}</code></pre>
 
   <h3>6. Publish or consume the final report</h3>
   <div class="tbl"><table><thead><tr><th>Route</th><th>Auth</th><th>Use</th></tr></thead><tbody>

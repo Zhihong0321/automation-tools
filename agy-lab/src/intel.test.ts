@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLedger, classifyEvidence, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, normaliseUrls, publishOutcome, round01Prompt, seniorityScore, translateChinese, unwrapUrl, validateChineseTranslation, validateFinal, validatePersonFinal } from './intel.ts';
+import { buildLedger, classifyEvidence, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, keepDiscoveryEvidenceFromHosts, normaliseUrls, normalizeMobileHint, personDiscoveryPrompt, publishOutcome, redactIdentityHintsFromDiscovery, round01Prompt, scoutParsed, seniorityScore, translateChinese, unwrapUrl, validateChineseTranslation, validateFinal, validatePersonFinal } from './intel.ts';
 import { companyPage, personPage, searchPage } from './reportui.ts';
 import type { PublishedReport } from './reportdb.ts';
 
@@ -188,6 +188,84 @@ test('VIP ledger retains public evidence and rejects a synthesis that invents a 
     facts: [{ id: 'new_fact', evidence_url: 'https://example.com/invented' }],
   }, ledger);
   assert.ok(errors.some((error) => /fact id set|new URL/.test(error)));
+});
+
+test('VIP identity resolvers enable scoped discovery but cannot enter the retained evidence', () => {
+  const company = { id: '7', name: 'Example Solar' };
+  const person = { id: 'person_1', name: 'A Person', role: 'CEO', role_url: 'https://example.com/team' };
+  const hints = { email: 'owner@example.com', mobile: '+60 12-345 6789' };
+  const prompt = personDiscoveryPrompt(company, person, hints);
+  assert.match(prompt, /owner@example\.com/);
+  assert.match(prompt, /exact search and disambiguation keys/);
+  assert.match(prompt, /Never repeat, return, publish, save/);
+  assert.match(prompt, /prior-company affiliation/);
+  assert.equal(normalizeMobileHint('+60 12-345 6789'), '60123456789');
+  assert.equal(normalizeMobileHint('not-a-number'), null);
+
+  const cleaned = redactIdentityHintsFromDiscovery({
+    contacts: [
+      { purpose: 'Supplied value', value_as_published: 'owner@example.com', evidence_url: 'https://example.com/contact' },
+      { purpose: 'Office', value_as_published: 'hello@example.com', evidence_url: 'https://example.com/contact' },
+    ],
+    facts: [
+      { category: 'Bad echo', fact: 'Call +60 12-345 6789', evidence_url: 'https://example.com/team' },
+      { category: 'Interview', fact: 'Discussed solar deployment.', evidence_url: 'https://example.com/interview' },
+    ],
+    signals: [],
+  }, hints);
+  const ledger = buildPersonLedger(company, person, [cleaned]);
+  assert.equal((ledger.contacts as Record<string, unknown>[]).some((row) => row.value_as_published === 'owner@example.com'), false);
+  assert.equal((ledger.contacts as unknown[]).length, 1);
+  assert.equal((ledger.facts as Record<string, unknown>[]).some((row) => String(row.fact).includes('345 6789')), false);
+  assert.equal((ledger.facts as unknown[]).length, 2); // role baseline plus the public interview
+});
+
+test('VIP ledger can disclose a resolver-validated historical affiliation without the resolver', () => {
+  const ledger = buildPersonLedger(
+    { id: '7', name: 'Current Co' },
+    { id: 'person_1', name: 'A Person', role: 'Manager', role_url: 'https://current.example/team' },
+    [{ facts: [{
+      category: 'Historical affiliation', fact: 'A Person was listed as a commercial contact at Previous Co.',
+      identity_match_basis: 'exact_mobile_match', evidence_url: 'https://previous.example/directory',
+    }] }],
+  );
+  const historical = (ledger.facts as Record<string, unknown>[]).find((fact) => fact.category === 'Historical affiliation');
+  assert.equal(historical?.identity_match_basis, 'exact_mobile_match');
+  assert.doesNotMatch(JSON.stringify(historical), /0123456789/);
+});
+
+test('social-scout evidence is accepted only from its declared network', () => {
+  const filtered = keepDiscoveryEvidenceFromHosts({
+    facts: [
+      { category: 'Post', fact: 'Public launch announcement.', evidence_url: 'https://www.facebook.com/example/posts/1' },
+      { category: 'Leak', fact: 'Copied from elsewhere.', evidence_url: 'https://example.com/news/1' },
+    ],
+    signals: [{ date: '2026-08-22', fact: 'Posted an update.', evidence_url: 'https://x.com/example/status/1' }],
+    contacts: [],
+  }, ['facebook.com', 'instagram.com', 'threads.net']);
+  assert.equal((filtered.facts as unknown[]).length, 1);
+  assert.equal((filtered.signals as unknown[]).length, 0);
+});
+
+test('VIP social scouts match the actual fb.person and x.subject worker contracts', () => {
+  const facebook = scoutParsed('facebook', {
+    engine: 'fb-recon', mode: 'person', result: {
+      found: true, confidence: 'likely', facebook_url: 'https://www.facebook.com/example.person',
+    },
+  });
+  assert.equal((facebook?.facts as unknown[]).length, 1);
+  assert.equal((facebook?.facts as Record<string, unknown>[])[0]?.evidence_url, 'https://www.facebook.com/example.person');
+  assert.equal((scoutParsed('facebook', { result: { confidence: 'weak', facebook_url: 'https://www.facebook.com/namesake' } })?.facts as unknown[]).length, 0);
+
+  const x = scoutParsed('x', { engine: 'x-recon', mode: 'subject', result: {
+    threads: [
+      { url: 'https://x.com/example/status/1', cited: true, date: '2026-08-22', author: '@example', topic: 'new launch' },
+      { url: 'https://x.com/example/status/2', cited: false, date: '2026-08-22', topic: 'uncited claim' },
+    ],
+  } });
+  assert.equal((x?.facts as unknown[]).length, 1);
+  assert.equal((x?.signals as unknown[]).length, 1);
+  assert.equal((x?.facts as Record<string, unknown>[])[0]?.evidence_url, 'https://x.com/example/status/1');
 });
 
 test('automatic VIP selection uses the company report P01 person', () => {

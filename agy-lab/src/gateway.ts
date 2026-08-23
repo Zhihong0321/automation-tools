@@ -160,7 +160,11 @@ export function resolveModel(raw: string): Route {
   }
   const [head, ...rest] = wanted.split(/[:/]/);
   const name = (head ?? '').toLowerCase();
-  if (name === 'agy' || name === 'antigravity') {
+  // Gemini is served here through the AGY runtime.  Keeping `gemini` as a
+  // first-class alias lets feature-specific configuration say what it wants
+  // (for example VIP_GEMINI_MODEL=gemini) without inventing a second engine or
+  // accidentally routing that traffic to another provider.
+  if (name === 'agy' || name === 'antigravity' || name === 'gemini' || name === 'google') {
     const location = pinned ?? defaultLocation('agy');
     if (location === 'mini' && !miniLive('agy')) {
       throw fail(503, 'No mini worker is claiming agy.ask right now.', 'engine_unavailable');
