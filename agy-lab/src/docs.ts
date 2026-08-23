@@ -347,6 +347,28 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
   public-professional evidence, the final brief, and execution metadata. It never retains the
   optional email hint or raw model text.</p>
 
+  <h3>6. Capture the ads a company is running</h3>
+  <div class="ep"><span class="m post">POST</span><code class="path">/api/ads-research</code><span class="tag">Bearer &middot; returns 202</span></div>
+  <p>Captures every live ad for a company from the Facebook Ad Library and the Google Ads
+  Transparency Center. This is a crawl, not a model call: the <code>ads.company</code> worker at
+  home drives a real browser, so the run costs a crawl job and no tokens.</p>
+  <p><strong>Google publishes no ad text.</strong> Its rows carry format, dates and a permalink only
+  &mdash; the wording of a Google ad exists solely inside the creative image. That is not a capture
+  failure, and no field will ever be populated for it. Facebook rows carry the full copy.</p>
+<pre><code>curl -s https://ee-auto.up.railway.app/api/ads-research \
+  -H "Authorization: Bearer $EE_AUTO_TOKEN" -H 'content-type: application/json' \
+  -d '{"name":"Solarvest","region":"MY","gMax":30}'</code></pre>
+  <p>Poll <code>GET /api/ads-research/:reportId</code>. The authenticated response includes
+  <code>research_run</code> from <code>ads_research_run</code>, holding the raw per-network captures.
+  When no worker is claiming <code>ads.company</code> the report finishes <code>partial</code> and
+  says so, rather than hanging until the job times out.</p>
+  <p>Every completed company dossier carries a <strong>Research their ads</strong> button that posts
+  this endpoint with the dossier's <code>companyId</code>. That links the ads report to the company,
+  so the dossier shows it from then on. Passing <code>companyId</code> also makes the call safe to
+  repeat: a capture still in flight for that company comes back with <code>200</code> instead of a
+  second crawl. A completed one does not block a new run &mdash; ads change week to week, so
+  re-running is legitimate and the dossier links the newest.</p>
+
   <h3>6. Publish or consume the final report</h3>
   <div class="tbl"><table><thead><tr><th>Route</th><th>Auth</th><th>Use</th></tr></thead><tbody>
     <tr><td><code>GET /api/reports</code></td><td>Bearer</td><td>Combined paginated library. Filter with <code>type</code>, <code>status</code>, <code>limit</code>, and <code>offset</code>.</td></tr>
@@ -354,6 +376,7 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
     <tr><td><code>GET /public/reports/:reportId</code></td><td>none</td><td>Final public JSON. Search reports return <code>companies</code>; deep reports return English <code>final</code> plus <code>final_cn</code> when Chinese translation is complete. Raw rounds are excluded.</td></tr>
     <tr><td><code>GET /api/company-research/:reportId</code></td><td>Bearer</td><td>Private final output plus raw benchmark rounds.</td></tr>
     <tr><td><code>GET /api/person-research/:reportId</code></td><td>Bearer</td><td>Private VIP brief plus its validated-evidence audit record.</td></tr>
+    <tr><td><code>GET /api/ads-research/:reportId</code></td><td>Bearer</td><td>Private ads report plus the raw per-network captures.</td></tr>
   </tbody></table></div>
 
   <h3>Reference polling helper</h3>

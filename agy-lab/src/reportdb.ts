@@ -92,7 +92,7 @@ export function migrate(): Promise<void> {
       create table if not exists published_report (
         id bigserial primary key,
         public_id text not null unique,
-        report_type text not null check (report_type in ('business_search', 'company_research', 'person_research')),
+        report_type text not null check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research')),
         status text not null default 'queued'
           check (status in ('queued', 'running', 'completed', 'partial', 'failed')),
         title text,
@@ -141,6 +141,18 @@ export function migrate(): Promise<void> {
         started_at timestamptz,
         completed_at timestamptz,
         updated_at timestamptz not null default now()
+      );
+      create table if not exists ads_research_run (
+        report_id bigint primary key references published_report(id) on delete cascade,
+        facebook jsonb,
+        google jsonb,
+        ads jsonb,
+        final_report jsonb,
+        run_status jsonb not null default '{}'::jsonb,
+        engine_metadata jsonb not null default '{}'::jsonb,
+        started_at timestamptz,
+        completed_at timestamptz,
+        updated_at timestamptz not null default now()
       )
     `);
     await sql(`
@@ -156,7 +168,7 @@ export function migrate(): Promise<void> {
           execute format('alter table published_report drop constraint %I', report_type_constraint);
         end if;
         alter table published_report add constraint published_report_report_type_check
-          check (report_type in ('business_search', 'company_research', 'person_research'));
+          check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research'));
       end $$;
     `);
     // Existing deployments already have company_research_run, so these must be
@@ -274,7 +286,7 @@ export function migrate(): Promise<void> {
   return migrated;
 }
 
-export type ReportType = 'business_search' | 'company_research' | 'person_research';
+export type ReportType = 'business_search' | 'company_research' | 'person_research' | 'ads_research';
 export type ReportStatus = 'queued' | 'running' | 'completed' | 'partial' | 'failed';
 
 export interface PublishedReport {
@@ -445,6 +457,27 @@ export async function findPersonBrief(sourceReportId: string, personId: string):
  * brief gets a link to it, and only a person who does not gets a button that
  * would start one.
  */
+/**
+ * The ads report already started for this company, if any.
+ *
+ * The dossier shows one ads action for the company as a whole, so it needs to know
+ * whether a run exists before deciding between a link and a button. Latest first:
+ * ads change week to week, so re-running is legitimate and the newest one is the
+ * one worth linking to.
+ */
+export async function findAdsReport(companyId: string | number): Promise<PublishedReport | null> {
+  await migrate();
+  const out = await sql<PublishedReport>(
+    `select * from published_report
+     where report_type = 'ads_research'
+       and status <> 'failed'
+       and company_id = $1::bigint
+     order by created_at desc limit 1`,
+    [String(companyId)],
+  );
+  return out.rows[0] ?? null;
+}
+
 export async function listPersonBriefs(sourceReportId: string): Promise<Record<string, PublishedReport>> {
   await migrate();
   const out = await sql<PublishedReport>(
@@ -649,6 +682,53 @@ export async function savePersonResearchRun(reportId: string, patch: {
 export async function personResearchRun(reportId: string): Promise<Record<string, unknown> | null> {
   await migrate();
   return (await sql('select * from person_research_run where report_id=$1', [reportId])).rows[0] ?? null;
+}
+
+export async function initAdsResearchRun(reportId: string): Promise<void> {
+  await migrate();
+  await sql(
+    `insert into ads_research_run (report_id, started_at)
+     values ($1, now()) on conflict (report_id) do nothing`,
+    [reportId],
+  );
+}
+
+export async function saveAdsResearchRun(reportId: string, patch: {
+  facebook?: Record<string, unknown>;
+  google?: Record<string, unknown>;
+  ads?: Record<string, unknown>;
+  finalReport?: Record<string, unknown>;
+  status?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  completed?: boolean;
+}): Promise<void> {
+  await initAdsResearchRun(reportId);
+  await sql(
+    `update ads_research_run set
+       facebook = case when $2::boolean then $3::jsonb else facebook end,
+       google = case when $4::boolean then $5::jsonb else google end,
+       ads = case when $6::boolean then $7::jsonb else ads end,
+       final_report = case when $8::boolean then $9::jsonb else final_report end,
+       run_status = case when $10::boolean then $11::jsonb else run_status end,
+       engine_metadata = case when $12::boolean then $13::jsonb else engine_metadata end,
+       completed_at = case when $14::boolean then now() else completed_at end,
+       updated_at = now() where report_id = $1`,
+    [
+      reportId,
+      Object.prototype.hasOwnProperty.call(patch, 'facebook'), JSON.stringify(patch.facebook ?? null),
+      Object.prototype.hasOwnProperty.call(patch, 'google'), JSON.stringify(patch.google ?? null),
+      Object.prototype.hasOwnProperty.call(patch, 'ads'), JSON.stringify(patch.ads ?? null),
+      Object.prototype.hasOwnProperty.call(patch, 'finalReport'), JSON.stringify(patch.finalReport ?? null),
+      Object.prototype.hasOwnProperty.call(patch, 'status'), JSON.stringify(patch.status ?? {}),
+      Object.prototype.hasOwnProperty.call(patch, 'metadata'), JSON.stringify(patch.metadata ?? {}),
+      patch.completed === true,
+    ],
+  );
+}
+
+export async function adsResearchRun(reportId: string): Promise<Record<string, unknown> | null> {
+  await migrate();
+  return (await sql('select * from ads_research_run where report_id=$1', [reportId])).rows[0] ?? null;
 }
 
 export async function close(): Promise<void> {

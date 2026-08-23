@@ -79,6 +79,7 @@ answers this thing can produce.
 | `POST /api/ask` | the native shape: `{model, prompt}` in, `{answer, ms}` out |
 | `POST /api/business-search` | start a Google Maps business-list report |
 | `POST /api/company-research` | start a multi-round company deep-research report |
+| `POST /api/ads-research` | capture the ads a company is running on Facebook and Google |
 | `GET /r/:id` | mobile-first public report page; opaque share id, no bearer token |
 
 `/api/v1/chat/completions` is the same route, for a client that insists on
@@ -261,7 +262,9 @@ Three consequences worth planning for:
 | `GET /api/reports` | bearer | combined report library; filter by `type`, `status`, `limit`, `offset` |
 | `GET /api/business-search/:reportId` | bearer | status and `data.companies` |
 | `POST /api/company-research` | bearer | `202` and report envelope |
+| `POST /api/ads-research` | bearer | `202` and report envelope |
 | `GET /api/company-research/:reportId` | bearer | status, `data.final`, and raw benchmark rounds |
+| `GET /api/ads-research/:reportId` | bearer | status, `data.final`, and the raw per-network captures |
 | `GET /r/:reportId` | opaque id | mobile human report |
 | `GET /public/reports/:reportId` | opaque id | public final JSON, never raw rounds |
 
@@ -331,6 +334,8 @@ container.
 | `fb.probe` | none | `{status, detail, ms}` — whether ego lite still holds a Facebook session |
 | `x.subject` | `{subject, since?, lang?, max?, budget?, timeoutMs?}` | `{engine, mode, lead, result, meta}` — what X is saying about the subject |
 | `x.company` | `{name, city?, website?, phone?, category?, since?, budget?}` | the same envelope, shaped around a lead rather than a topic |
+| `ads.company` | `{name, region?, fbMax?, gMax?, timeoutMs?}` | `{facebook, google, ads[], creatives_ok}` — every live ad the company is running, with the creatives downloaded |
+| `ads.probe` | none | `{status, detail, ms}` — whether ego lite can still reach both ad libraries |
 | `x.probe` | none | `{status, detail, account, ms}` — `ready`, `gated` or `logged_out` on grok.com |
 
 The four wrapper types are the transport for the mini's half of `/v1`; a caller
@@ -370,6 +375,57 @@ null.
 `company_data`, `search_report` and the link between them, deduped on Google's place
 id. `saved` reports what landed; if it is null, `saveError` says why and the rows
 still come back in the response.
+
+### Competitor ads — `ads.*`
+
+What a company is actually advertising, captured from the **Facebook Ad Library** and the
+**Google Ads Transparency Center** by the `ads-recon` worker driving ego lite. It is a
+crawl, not a model call — no tokens are spent and no key can fail the run.
+
+| Type | Given | Returns |
+|---|---|---|
+| `ads.company` | a company or advertiser name, plus an optional region | its live ads on both networks, with the creative files downloaded |
+| `ads.probe` | nothing | whether both ad libraries are still reachable |
+
+**Google publishes no ad text.** Every Google row has a null `headline` and `body`, and
+that is not a capture failure — the wording of a Google ad is rendered inside the creative
+image and exists nowhere as text. Facebook rows carry the full copy: headline, body, CTA
+and the unwrapped landing URL. Budget accordingly: Facebook is one page load for the whole
+grid, while Google costs **one page load per ad**, which is why `gMax` defaults to 30.
+
+```bash
+curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \
+     -H 'content-type: application/json' \
+     -d '{"type":"ads.company","timeoutMs":900000,
+          "payload":{"name":"Solarvest","region":"MY","gMax":30}}'
+```
+
+Or as a research report, which stores it and gives it a permanent link:
+
+```bash
+curl -s -X POST $LAB/api/ads-research -H "authorization: Bearer $LAB_TOKEN" \
+     -H 'content-type: application/json' -d '{"name":"Solarvest","region":"MY"}'
+```
+
+`report_type` is `ads_research`; the raw per-network captures live in `ads_research_run`.
+When no worker is claiming `ads.company` the report finishes `partial` and says so, rather
+than leaving a job pending until it times out.
+
+**From a company dossier.** Every completed company report carries a *Research their ads*
+button, so ads research is one click from the dossier rather than a separate lookup. It
+posts the same endpoint with the dossier's `companyId`, which links the ads report to that
+company and makes it appear on the dossier from then on:
+
+```bash
+curl -s -X POST $LAB/api/ads-research -H "authorization: Bearer $LAB_TOKEN" \
+     -H 'content-type: application/json' \
+     -d '{"name":"Solarvest","companyId":"42","requesterId":"report"}'
+```
+
+Passing `companyId` also makes the call safe to repeat: a capture **still in flight** for
+that company is returned with `200` instead of a second crawl being started. A *completed*
+one is not a reason to refuse — ads change week to week, so re-running produces a fresh
+report, and the dossier links the newest.
 
 ### Facebook lead enrichment — `fb.*`
 

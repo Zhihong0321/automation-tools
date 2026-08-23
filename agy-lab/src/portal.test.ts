@@ -70,3 +70,31 @@ test('every validated person in a dossier can be sent to VIP research', () => {
   // Only a finished dossier has people to offer.
   assert.match(html, /var ready=deep&&\(report\.status==='completed'\|\|report\.status==='partial'\)/);
 });
+
+test('a company dossier offers ads research, and links an existing run instead', async () => {
+  const ui = await import('./reportui.ts');
+  const base = {
+    public_id: 'AAAAAAAAAAAAAAAAAAAA', report_type: 'company_research', title: 'Solarvest',
+    company_id: '42', error: null, created_at: '', updated_at: '',
+    result: { entity: { name: 'SOLARVEST ENERGY SDN BHD' }, summary: 'x', people: [], contacts: [] },
+  } as never;
+
+  const done = ui.companyPage({ ...(base as object), status: 'completed' } as never, null, {}, null);
+  assert.match(done, /data-ads="1"/);
+  assert.match(done, /\/api\/ads-research/);
+  // The crawl is keyed by the company's own name, not the report title.
+  assert.match(done, /data-name="SOLARVEST ENERGY SDN BHD"/);
+
+  // A dossier still running has nothing to advertise-research against yet.
+  const running = ui.companyPage({ ...(base as object), status: 'running' } as never, null, {}, null);
+  assert.doesNotMatch(running, /data-ads="1"/);
+
+  // An existing capture is linked, never offered again -- the same rule the VIP
+  // button follows, so a second crawl of one advertiser cannot be started by clicking.
+  const linked = ui.companyPage(
+    { ...(base as object), status: 'completed' } as never, null, {},
+    { public_id: 'BBBBBBBBBBBBBBBBBBBB', status: 'completed' },
+  );
+  assert.match(linked, /\/r\/BBBBBBBBBBBBBBBBBBBB/);
+  assert.doesNotMatch(linked, /data-ads="1"/);
+});

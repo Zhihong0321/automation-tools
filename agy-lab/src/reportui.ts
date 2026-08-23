@@ -260,6 +260,8 @@ export function companyPage(
   chinese: Record<string, unknown> | null = null,
   /** personId -> the VIP brief already started for them, from listPersonBriefs(). */
   briefs: Record<string, { public_id: string; status: string }> = {},
+  /** The ads report already started for this company, from findAdsReport(). */
+  adsReport: { public_id: string; status: string } | null = null,
 ): string {
   const final = obj(report.result);
   const entity = obj(final.entity);
@@ -308,6 +310,15 @@ export function companyPage(
   const conflictRows = conflicts.map((row) => `<div class="signal"><div class="date">Review</div><div><strong>${esc(value(row, 'issue', 'field'))}</strong><div class="source">${esc(value(row, 'details', 'status', 'note'))}</div></div></div>`).join('');
   let body = stats + evidenceTally([contacts, people, signals]);
   if (summary) body += `<section class="brief"><div class="brief-label">Executive brief</div><p>${esc(summary)}</p></section>`;
+  // One ads action for the company as a whole -- the dossier says who they are; this
+  // says what they are currently telling the market. A run already started is linked
+  // rather than offered again.
+  const adsControl = adsReport
+    ? `<a class="button" href="/r/${esc(adsReport.public_id)}">${adsReport.status === 'completed' || adsReport.status === 'partial' ? 'Open ads report' : 'Ads capture underway'} <span aria-hidden="true">↗</span></a>`
+    : researchable
+      ? `<button class="button research" type="button" data-ads="1" data-name="${esc(value(entity, 'name', 'legal_name', 'registered_name') || report.title || '')}">Research their ads <span aria-hidden="true">→</span></button>`
+      : '';
+  if (adsControl) body += `<section class="brief"><div class="brief-label">Advertising</div><p>Capture every ad this company is currently running on Facebook and Google. ${adsControl}</p></section>`;
   if (report.status === 'failed') body += `<section class="section"><div class="message error">${esc(report.error ?? 'Deep research failed.')}</div></section>`;
   else if (!contacts.length && !people.length && !candidatePeople.length && report.status !== 'completed' && report.status !== 'partial') body += '<section class="section"><div class="empty">The research rounds are running. Verified findings will appear here automatically.</div></section>';
   else {
@@ -317,6 +328,55 @@ export function companyPage(
     if (outreach.length) body += `<section class="section"><div class="section-head"><h2>Outreach angles</h2><span class="section-note">Conversation starters derived from the validated research set.</span></div><div class="angles">${outreach.map((item) => `<div class="angle">${esc(item)}</div>`).join('')}</div></section>`;
     body += `<section class="section"><div class="section-head"><h2>Business signals</h2><span class="section-note">Time-sensitive evidence that may create a reason to engage.</span></div><div class="signal-list">${signalRows || '<div class="empty">No validated signals.</div>'}</div></section>`;
     if (conflictRows) body += `<section class="section"><div class="section-head"><h2>Conflicts and unknowns</h2></div><div class="message warning">${conflictRows}</div></section>`;
+  }
+  // Same contract as the person button below: the button only posts, the server
+  // decides. /api/ads-research joins a capture that is already running rather than
+  // starting a second, so a double-click costs nothing.
+  if (body.includes('data-ads="1"')) {
+    body += `<script>(function(){
+var button=document.querySelector('button.research[data-ads]');
+if(!button)return;
+var KEY='ee_portal_token';
+var COMPANY=${JSON.stringify(String(report.company_id ?? ''))};
+function accessKey(){
+  var stored='';
+  try{stored=sessionStorage.getItem(KEY)||''}catch(err){stored=''}
+  if(stored)return stored;
+  var typed=(window.prompt('Access key to capture their ads')||'').trim();
+  if(typed){try{sessionStorage.setItem(KEY,typed)}catch(err){}}
+  return typed;
+}
+function restore(markup,message){button.disabled=false;button.innerHTML=markup;if(message)window.alert(message)}
+button.addEventListener('click',function(){
+  var markup=button.innerHTML;
+  var key=accessKey();
+  if(!key)return;
+  button.disabled=true;button.textContent='Starting…';
+  fetch('/api/ads-research',{
+    method:'POST',
+    headers:{'Authorization':'Bearer '+key,'Content-Type':'application/json'},
+    body:JSON.stringify({name:button.getAttribute('data-name'),companyId:COMPANY,requesterId:'report'})
+  }).then(function(response){
+    return response.text().then(function(text){
+      var payload={};
+      try{payload=text?JSON.parse(text):{}}catch(err){payload={}}
+      if(response.status===401||response.status===403){
+        try{sessionStorage.removeItem(KEY)}catch(err){}
+        return restore(markup,'That access key was rejected. Try again.');
+      }
+      if(!response.ok)return restore(markup,(payload&&payload.error)||('Could not start ads capture: '+response.status));
+      var view=payload.report&&payload.report.view_url;
+      if(typeof view==='string'&&view.indexOf('http')===0){
+        var open=document.createElement('a');
+        open.className='button';
+        open.href=view;
+        open.textContent='Ads capture underway ↗';
+        button.replaceWith(open);
+      }else{button.disabled=true;button.textContent='Ads capture underway'}
+    });
+  }).catch(function(err){restore(markup,err.message||'Could not reach the server.')});
+});
+}())<\/script>`;
   }
   // The button only posts; the server decides. /api/person-research already
   // joins a brief that is running rather than starting a second four-round pass,
@@ -377,6 +437,46 @@ buttons.forEach(function(button){
     body = `<div class="language-switch" role="group" aria-label="Report language"><button class="language-button" type="button" data-report-language="en" aria-pressed="true">English</button><button class="language-button" type="button" data-report-language="zh-CN" aria-pressed="false">中文</button></div><div data-report-language-panel="en">${englishBody}</div><div data-report-language-panel="zh-CN" hidden>${chineseBody}</div><script>(function(){const buttons=document.querySelectorAll('[data-report-language]');const panels=document.querySelectorAll('[data-report-language-panel]');function select(language){buttons.forEach((button)=>button.setAttribute('aria-pressed',String(button.getAttribute('data-report-language')===language)));panels.forEach((panel)=>{panel.hidden=panel.getAttribute('data-report-language-panel')!==language;});}buttons.forEach((button)=>button.addEventListener('click',()=>select(button.getAttribute('data-report-language'))));}())</script>`;
   }
   return shell(report, body);
+}
+
+export function adsPage(report: PublishedReport): string {
+  const final = obj(report.result);
+  const ads = arr(final.ads);
+  const networks = obj(final.networks);
+  const fb = ads.filter((row) => value(row, 'network') === 'facebook');
+  const gg = ads.filter((row) => value(row, 'network') === 'google');
+  const stats = `<div class="metrics">
+    <div class="metric"><strong>${ads.length || '—'}</strong><span>Live ads</span></div>
+    <div class="metric"><strong>${fb.length || '—'}</strong><span>Facebook</span></div>
+    <div class="metric"><strong>${gg.length || '—'}</strong><span>Google</span></div>
+    <div class="metric"><strong>${esc(value(final, 'region') || '—')}</strong><span>Region</span></div>
+  </div>`;
+
+  // Google publishes no ad text, so its rows carry no headline or body. Say that on
+  // the row rather than rendering a blank that reads as a capture failure.
+  const row = (ad: Record<string, unknown>) => {
+    const net = value(ad, 'network');
+    const headline = value(ad, 'headline');
+    const body = value(ad, 'body');
+    const cta = value(ad, 'cta');
+    const when = value(ad, 'started_running') || value(ad, 'last_shown');
+    const url = value(ad, 'library_url');
+    const copy = headline || body
+      ? `<strong>${esc(headline || '')}</strong>${body ? `<div class="source">${esc(body.slice(0, 300))}</div>` : ''}`
+      : `<strong>${esc(value(ad, 'format') || 'Ad')}</strong><div class="source">${net === 'google' ? 'Google publishes no ad text — the wording is inside the creative.' : 'No text on this ad.'}</div>`;
+    return `<div class="signal"><div class="date">${esc(when || net)}</div><div>${copy}<div class="source">${esc(net)}${cta ? ' · ' + esc(cta) : ''} ${link(url, 'View in ad library')}</div></div></div>`;
+  };
+
+  let out = stats;
+  out += `<section class="brief"><div class="brief-label">What they are advertising</div><p>${esc(value(final, 'company') || report.title || '')} — ${ads.length} live ad${ads.length === 1 ? '' : 's'} across Facebook and Google.</p></section>`;
+  if (value(final, 'note')) out += `<section class="section"><div class="message error">${esc(value(final, 'note'))}</div></section>`;
+  if (report.status === 'failed') out += `<section class="section"><div class="message error">${esc(report.error ?? 'The ads capture failed.')}</div></section>`;
+  else if (!ads.length && report.status !== 'completed' && report.status !== 'partial') out += '<section class="section"><div class="empty">Ads capture is running. This report will refresh automatically.</div></section>';
+  else {
+    out += `<section class="section"><div class="section-head"><h2>Facebook Ad Library</h2><span class="section-note">${networks.facebook ?? fb.length} ad(s), copy as published.</span></div><div class="signal-list">${fb.map(row).join('') || '<div class="empty">No Facebook ads found.</div>'}</div></section>`;
+    out += `<section class="section"><div class="section-head"><h2>Google Ads Transparency</h2><span class="section-note">${networks.google ?? gg.length} ad(s) — Google publishes no ad copy as text.</span></div><div class="signal-list">${gg.map(row).join('') || '<div class="empty">No Google ads found.</div>'}</div></section>`;
+  }
+  return shell(report, out);
 }
 
 export function personPage(report: PublishedReport): string {
