@@ -306,6 +306,34 @@ export async function findPersonBrief(sourceReportId: string, personId: string):
   return out.rows[0] ?? null;
 }
 
+/**
+ * Every live brief on this company report, keyed by the person it covers.
+ *
+ * The dossier page renders one button per person and must know, in a single
+ * round trip, which of them already have a brief -- a per-person query would
+ * be one round trip per row on a page that routinely lists a dozen people.
+ * Same status rule as findPersonBrief: a failed brief is omitted so its row
+ * offers a retry rather than a link to the failure.
+ */
+export async function listPersonBriefs(sourceReportId: string): Promise<Map<string, PublishedReport>> {
+  await migrate();
+  const out = await sql<PublishedReport>(
+    `select distinct on (request->>'personId') *
+     from published_report
+     where report_type = 'person_research'
+       and status <> 'failed'
+       and request->>'sourceReportId' = $1
+     order by request->>'personId', created_at desc`,
+    [sourceReportId],
+  );
+  const byPerson = new Map<string, PublishedReport>();
+  for (const row of out.rows) {
+    const personId = String((row.request as Record<string, unknown> | null)?.personId ?? '');
+    if (personId) byPerson.set(personId, row);
+  }
+  return byPerson;
+}
+
 export async function listReports(options: {
   type?: ReportType | null;
   status?: ReportStatus | null;

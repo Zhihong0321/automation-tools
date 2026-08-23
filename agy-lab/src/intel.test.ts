@@ -428,7 +428,7 @@ test('both public report layouts include mobile viewport and report content', ()
   const deepReport = report('company_research');
   deepReport.result = {
     contacts: [{ purpose: 'Main', value: '+60123', evidence_url: 'https://example.com/contact' }],
-    people: [{ name: 'A Person', role: 'CEO', role_url: 'https://example.com/team' }],
+    people: [{ name: 'A Person', role: 'CEO', role_url: 'https://example.com/team' }, { name: 'B Person', id: 'p02', role: 'CFO', role_url: 'https://example.com/team' }],
     candidate_people: [{ name: 'A Lead', role: 'Employee', source_name: 'LinkedIn listing', verification_note: 'Confirm current role.' }],
     auto_person_research: { report_id: 'abcdefghijklmnopqrst', person_name: 'A Person' },
   };
@@ -439,7 +439,11 @@ test('both public report layouts include mobile viewport and report content', ()
   }
   assert.match(search, /Example Solar/);
   assert.match(deep, /Best contact routes/);
-  assert.match(deep, /A Person.*Person research/);
+  assert.ok(deep.includes('A Person <a class="button" href="/r/abcdefghijklmnopqrst">Person report'), 'a person with a brief links to it');
+  assert.ok(deep.includes('B Person <button class="button person-research" type="button" data-person="p02"'), 'a person without a brief can be sent to research');
+  assert.ok(deep.includes('/person-research'), 'the dossier ships the public start route');
+  const withBrief = companyPage(deepReport, null, new Map([['p02', { public_id: 'zyxwvutsrqponmlkjihg' }]]));
+  assert.ok(withBrief.includes('B Person <a class="button" href="/r/zyxwvutsrqponmlkjihg">Person report'), 'a completed brief replaces the button with its link');
   assert.match(deep, /People to verify/);
   assert.match(deep, /\/r\/abcdefghijklmnopqrst/);
   const bilingual = companyPage(deepReport, { ...deepReport.result, summary: '中文摘要' });

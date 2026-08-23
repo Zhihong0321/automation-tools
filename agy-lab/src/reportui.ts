@@ -146,6 +146,40 @@ function researchScript(publicId: string): string {
 </script>`;
 }
 
+/**
+ * Start a VIP brief from the shared dossier page.
+ *
+ * Mirrors researchScript: the page is outside the bearer gate, so it calls the
+ * report-scoped public route rather than /api/person-research. The server
+ * refuses any personId this dossier does not list, and joins an existing brief
+ * instead of starting a second one, so a double click costs nothing.
+ */
+function personResearchScript(publicId: string): string {
+  return `<script>
+(function(){
+  var id=${JSON.stringify(publicId)};
+  document.addEventListener("click",function(ev){
+    var b=ev.target.closest&&ev.target.closest("button.person-research");
+    if(!b||b.disabled)return;
+    var person=b.getAttribute("data-person");
+    if(!person)return;
+    b.disabled=true;var was=b.textContent;b.textContent="Starting\u2026";
+    fetch("/public/reports/"+id+"/person-research",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({personId:person})})
+      .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||("HTTP "+r.status));return j})})
+      .then(function(j){
+        var link=j.report&&j.report.view_url;
+        if(!link){throw new Error("no report link returned")}
+        var a=document.createElement("a");
+        a.className="button";a.href=link;a.textContent="Person report \u2197";
+        a.setAttribute("target","_blank");a.setAttribute("rel","noopener");
+        b.replaceWith(a);
+      })
+      .catch(function(e){b.disabled=false;b.textContent=was;alert("Could not start person research: "+e.message)});
+  });
+})();
+</script>`;
+}
+
 function shell(report: PublishedReport, body: string): string {
   const active = report.status === 'queued' || report.status === 'running';
   const isSearch = report.report_type === 'business_search';
@@ -173,7 +207,7 @@ a{color:inherit}.wrap{max-width:1180px;margin:0 auto;padding:0 30px 84px}.mast{h
 .hero{display:grid;grid-template-columns:minmax(0,1fr) 220px;gap:40px;padding:68px 0 54px;border-bottom:1px solid var(--ink)}.kicker{display:flex;align-items:center;gap:10px;margin-bottom:18px;font:700 11px/1 var(--sans);text-transform:uppercase;letter-spacing:.16em;color:var(--accent)}.kicker:before{content:"";width:28px;height:2px;background:var(--accent)}.hero h1{max-width:880px;margin:0;font:400 clamp(44px,7vw,88px)/.91 var(--display);letter-spacing:-.055em;text-wrap:balance}.hero-copy{max-width:700px;margin:24px 0 0;font-size:16px;line-height:1.6;color:var(--muted)}.hero-meta{align-self:end;border-top:1px solid var(--ink);padding-top:13px}.status{display:flex;align-items:center;gap:9px;font:700 11px/1.2 var(--sans);letter-spacing:.08em;text-transform:uppercase}.status-dot{width:8px;height:8px;border-radius:50%;background:#d1981d;box-shadow:0 0 0 4px rgba(209,152,29,.12)}.completed .status-dot,.partial .status-dot{background:#16815d;box-shadow:0 0 0 4px rgba(22,129,93,.12)}.failed .status-dot{background:var(--danger);box-shadow:0 0 0 4px rgba(164,59,49,.12)}.meta-line{margin-top:18px;display:grid;gap:7px;font:500 10px/1.2 var(--mono);color:var(--muted);text-transform:uppercase}.rounds{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:18px}.round{height:3px;background:var(--soft)}.round.on{background:var(--accent)}
 .metrics{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--ink)}.metric{min-width:0;padding:28px 24px 24px 0}.metric+.metric{padding-left:24px;border-left:1px solid var(--line)}.metric strong{display:block;overflow:hidden;text-overflow:ellipsis;font:400 clamp(31px,4vw,50px)/.9 var(--display);letter-spacing:-.04em}.metric span{display:block;margin-top:10px;font:700 9px/1.2 var(--sans);letter-spacing:.13em;text-transform:uppercase;color:var(--muted)}
 .section{padding-top:58px}.section-head{display:grid;grid-template-columns:1fr minmax(180px,320px);align-items:end;gap:30px;margin-bottom:21px}.section h2{margin:0;font:400 clamp(28px,3vw,40px)/1 var(--display);letter-spacing:-.035em}.section-note{font-size:12px;line-height:1.45;color:var(--muted);text-align:right}.sheet{background:var(--sheet);border:1px solid var(--ink)}.empty,.message{padding:52px 24px;text-align:center;color:var(--muted)}.message.error{border:1px solid var(--danger);background:#fff2ef;color:#742920}.message.warning{border:1px solid #c38a24;background:#fff9e8;color:#684600}
-.records{border-top:1px solid var(--ink)}.company{display:grid;grid-template-columns:64px minmax(210px,1.1fr) minmax(220px,1fr) minmax(240px,.9fr);gap:22px;align-items:start;padding:28px 0;border-bottom:1px solid var(--line)}.record-no{font:500 12px/1 var(--mono);color:var(--accent)}.company h3,.person h3{margin:0;font:600 19px/1.18 var(--sans);letter-spacing:-.025em}.record-meta{margin-top:7px;font-size:12px;color:var(--muted)}.record-address{font-size:13px;color:var(--muted);max-width:380px}.record-contact{display:grid;gap:15px}.phone{font:500 16px/1.2 var(--mono);letter-spacing:-.035em}.actions{display:flex;gap:13px;align-items:center;flex-wrap:wrap}.button{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:0 16px;background:var(--ink);border:1px solid var(--ink);color:var(--sheet);font:700 10px/1 var(--sans);text-decoration:none;text-transform:uppercase;letter-spacing:.1em;transition:background .18s,color .18s}.button:hover{background:var(--accent);border-color:var(--accent)}.text-link{display:inline-flex;align-items:center;gap:5px;padding:7px 0;border-bottom:1px solid currentColor;font:700 10px/1 var(--sans);text-decoration:none;text-transform:uppercase;letter-spacing:.09em}.text-link span{color:var(--accent)}.id-tag{font:500 9px/1 var(--mono);color:var(--faint);text-transform:uppercase}.button.research{background:var(--sheet);color:var(--ink);cursor:pointer}.button.research:hover{background:var(--accent);border-color:var(--accent);color:var(--sheet)}.button.research[disabled]{opacity:.55;cursor:default;background:var(--sheet);color:var(--ink);border-color:var(--line)}
+.records{border-top:1px solid var(--ink)}.company{display:grid;grid-template-columns:64px minmax(210px,1.1fr) minmax(220px,1fr) minmax(240px,.9fr);gap:22px;align-items:start;padding:28px 0;border-bottom:1px solid var(--line)}.record-no{font:500 12px/1 var(--mono);color:var(--accent)}.company h3,.person h3{margin:0;font:600 19px/1.18 var(--sans);letter-spacing:-.025em}.record-meta{margin-top:7px;font-size:12px;color:var(--muted)}.record-address{font-size:13px;color:var(--muted);max-width:380px}.record-contact{display:grid;gap:15px}.phone{font:500 16px/1.2 var(--mono);letter-spacing:-.035em}.actions{display:flex;gap:13px;align-items:center;flex-wrap:wrap}.button{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:0 16px;background:var(--ink);border:1px solid var(--ink);color:var(--sheet);font:700 10px/1 var(--sans);text-decoration:none;text-transform:uppercase;letter-spacing:.1em;transition:background .18s,color .18s}.button:hover{background:var(--accent);border-color:var(--accent)}.text-link{display:inline-flex;align-items:center;gap:5px;padding:7px 0;border-bottom:1px solid currentColor;font:700 10px/1 var(--sans);text-decoration:none;text-transform:uppercase;letter-spacing:.09em}.text-link span{color:var(--accent)}.id-tag{font:500 9px/1 var(--mono);color:var(--faint);text-transform:uppercase}.button.research,.button.person-research{background:var(--sheet);color:var(--ink);cursor:pointer}.button.research:hover,.button.person-research:hover{background:var(--accent);border-color:var(--accent);color:var(--sheet)}.button.research[disabled],.button.person-research[disabled]{opacity:.55;cursor:default;background:var(--sheet);color:var(--ink);border-color:var(--line)}
 .brief{display:grid;grid-template-columns:180px minmax(0,1fr);gap:40px;padding:36px 0;border-bottom:1px solid var(--ink)}.brief-label{font:700 10px/1.3 var(--sans);letter-spacing:.13em;text-transform:uppercase;color:var(--accent)}.brief p{max-width:800px;margin:0;font:400 clamp(20px,2.5vw,29px)/1.35 var(--display);letter-spacing:-.02em}
 .contact-list{border-top:1px solid var(--ink)}.contact{display:grid;grid-template-columns:180px minmax(0,1fr) auto;align-items:center;gap:24px;min-height:96px;border-bottom:1px solid var(--line)}.label{font:700 10px/1.3 var(--sans);text-transform:uppercase;letter-spacing:.12em;color:var(--muted)}.contact-value{font:500 17px/1.3 var(--mono);word-break:break-word}.source{margin-top:7px;font-size:11px;color:var(--muted)}.source a{color:var(--accent);text-decoration:none;border-bottom:1px solid currentColor}
 .people{border-top:1px solid var(--ink)}.person{display:grid;grid-template-columns:64px minmax(190px,.8fr) minmax(240px,1.2fr) auto;gap:22px;align-items:start;padding:25px 0;border-bottom:1px solid var(--line)}.priority{font:500 11px/1.3 var(--mono);color:var(--accent)}.role{margin-top:6px;font:700 11px/1.3 var(--sans);text-transform:uppercase;letter-spacing:.07em;color:var(--accent)}.person p{margin:0;color:var(--muted);font-size:13px}.signal-list{border-top:1px solid var(--ink)}.signal{display:grid;grid-template-columns:180px minmax(0,1fr);gap:24px;padding:24px 0;border-bottom:1px solid var(--line)}.date{font:600 11px/1.3 var(--mono);color:var(--accent);text-transform:uppercase}.signal strong{font-size:15px}.angles{counter-reset:angle;display:grid;grid-template-columns:repeat(2,1fr);border-top:1px solid var(--ink)}.angle{counter-increment:angle;position:relative;min-height:150px;padding:26px 28px 26px 62px;border-bottom:1px solid var(--line);font:400 18px/1.4 var(--display)}.angle:nth-child(odd){border-right:1px solid var(--line)}.angle:before{content:counter(angle,decimal-leading-zero);position:absolute;left:0;top:30px;font:500 10px/1 var(--mono);color:var(--accent)}
@@ -187,7 +221,7 @@ a{color:inherit}.wrap{max-width:1180px;margin:0 auto;padding:0 30px 84px}.mast{h
 <nav class="mast" aria-label="Report masthead"><div class="wordmark"><span class="mark">EE</span><span>Business intelligence</span></div><div class="folio">${esc(reportLabel)}<br>${esc(report.public_id)}</div></nav>
 <header class="hero"><div><div class="kicker">${esc(reportLabel)} · ${esc(reportDate(report))}</div><h1>${esc(report.title ?? 'Research report')}</h1><p class="hero-copy">${active ? 'Research is in progress. This permanent report link refreshes as verified findings arrive.' : report.error ? esc(report.error) : isSearch ? 'A ranked field scan of relevant businesses, with direct routes to source listings and published contact points.' : 'A source-linked intelligence brief designed for qualification, outreach and informed decision-making.'}</p></div><aside class="hero-meta"><div class="status ${esc(report.status)}"><span class="status-dot"></span>${esc(statusLabel)}</div><div class="meta-line"><span>Issued ${esc(reportDate(report))}</span><span>${isSearch ? 'Source / Google Maps' : 'Evidence / Public sources'}</span></div>${!isSearch ? `<div class="rounds" aria-label="Four research rounds">${[0, 1, 2, 3].map((i) => `<span class="round ${i < roundsLit ? 'on' : ''}"></span>`).join('')}</div>` : ''}</aside></header>
 ${body}<footer class="foot"><span>EE Business Intelligence · Confidential link</span><span>Evidence opens at its original public source</span></footer>
-</main>${active ? '<script>setTimeout(()=>location.reload(),8000)</script>' : ''}${isSearch ? researchScript(report.public_id) : ''}</body></html>`;
+</main>${active ? '<script>setTimeout(()=>location.reload(),8000)</script>' : ''}${isSearch ? researchScript(report.public_id) : isPerson ? '' : personResearchScript(report.public_id)}</body></html>`;
 }
 
 export function notFoundPage(): string {
@@ -223,7 +257,33 @@ export function searchPage(report: PublishedReport, detail: { report?: Record<st
   return shell(report, body);
 }
 
-function chineseCompanyVersion(translated: Record<string, unknown>): string {
+/**
+ * The one action a person row offers: open the brief that exists, or start one.
+ *
+ * Shared by the English and Chinese panels so switching language does not drop
+ * the button. The translation copies person ids verbatim, so the same lookup
+ * works on both sides; only the labels differ.
+ */
+function personAction(
+  row: Record<string, unknown>,
+  briefs: Map<string, { public_id: string }>,
+  autoReportId: string,
+  autoName: string,
+  labels: { open: string; start: string },
+): string {
+  const personName = value(row, 'name');
+  const personId = value(row, 'id');
+  // Dossiers written before the per-person brief index recorded only the
+  // automatic P01 run, and only by name. Fall back to it so those rows link
+  // rather than offering to re-run research that already exists.
+  const isAuto = Boolean(autoReportId) && personName.trim().toLocaleLowerCase() === autoName;
+  const briefId = (personId && briefs.get(personId)?.public_id) || (isAuto ? autoReportId : '');
+  if (briefId) return ` <a class="button" href="/r/${esc(briefId)}">${esc(labels.open)} <span aria-hidden="true">&#8599;</span></a>`;
+  if (!personId) return '';
+  return ` <button class="button person-research" type="button" data-person="${esc(personId)}" aria-label="${esc(labels.start)}: ${esc(personName)}">${esc(labels.start)} <span aria-hidden="true">&rarr;</span></button>`;
+}
+
+function chineseCompanyVersion(translated: Record<string, unknown>, briefs: Map<string, { public_id: string }>, autoReportId: string, autoName: string): string {
   const contacts = arr(translated.contacts);
   const people = arr(translated.people);
   const candidatePeople = arr(translated.candidate_people);
@@ -236,7 +296,7 @@ function chineseCompanyVersion(translated: Record<string, unknown>): string {
     const evidence = value(row, 'evidence_url', 'evidence', 'source_url');
     return `<div class="contact"><div class="label">${esc(value(row, 'purpose', 'channel', 'type') || '联系方式')}</div><div><div class="contact-value">${esc(raw)}</div><div class="source">${grade(row, true)}${esc(value(row, 'status', 'current_status', 'evidence_class'))}${evidence ? ` · <a href="${esc(evidence)}" target="_blank" rel="noopener">查看来源 ↗</a>` : ''}</div></div></div>`;
   }).join('');
-  const peopleRows = people.map((row, i) => `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}${grade(row, true)}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), '来源')}</article>`).join('');
+  const peopleRows = people.map((row, i) => `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(value(row, 'name'))}${personAction(row, briefs, autoReportId, autoName, { open: '人物报告', start: '人物调研' })}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}${grade(row, true)}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), '来源')}</article>`).join('');
   const candidateRows = candidatePeople.map((row) => `<article class="person"><span class="priority">待核实</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role'))}</div></div><p>${esc(value(row, 'verification_note', 'relevance'))}</p>${link(value(row, 'source_url'), '来源')}</article>`).join('');
   const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || '当前')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${grade(row, true)}${esc(value(row, 'evidence_class', 'type', 'source_class'))} ${link(value(row, 'evidence_url', 'evidence', 'source_url'), '来源')}</div></div></div>`).join('');
   const conflictRows = conflicts.map((row) => `<div class="signal"><div class="date">需核实</div><div><strong>${esc(value(row, 'issue', 'field'))}</strong><div class="source">${esc(value(row, 'details', 'status', 'note'))}</div></div></div>`).join('');
@@ -252,7 +312,7 @@ function chineseCompanyVersion(translated: Record<string, unknown>): string {
   return body;
 }
 
-export function companyPage(report: PublishedReport, chinese: Record<string, unknown> | null = null): string {
+export function companyPage(report: PublishedReport, chinese: Record<string, unknown> | null = null, briefs: Map<string, { public_id: string }> = new Map()): string {
   const final = obj(report.result);
   const entity = obj(final.entity);
   const contacts = arr(final.contacts);
@@ -280,9 +340,8 @@ export function companyPage(report: PublishedReport, chinese: Record<string, unk
   const autoPersonName = value(autoPerson, 'person_name').trim().toLocaleLowerCase();
   const peopleRows = people.map((row, i) => {
     const personName = value(row, 'name');
-    const isAutoPerson = Boolean(autoPersonReportId) && personName.trim().toLocaleLowerCase() === autoPersonName;
-    const vipLink = isAutoPerson ? ` <a class="button" href="/r/${esc(autoPersonReportId)}">Person research <span aria-hidden="true">↗</span></a>` : '';
-    return `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(personName)}${vipLink}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}${grade(row)}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), 'Evidence')}</article>`;
+    const action = personAction(row, briefs, autoPersonReportId, autoPersonName, { open: 'Person report', start: 'Person research' });
+    return `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(personName)}${action}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}${grade(row)}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), 'Evidence')}</article>`;
   }).join('');
   const candidateRows = candidatePeople.map((row) => `<article class="person"><span class="priority">VERIFY</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role'))}</div></div><p>${esc(value(row, 'verification_note', 'relevance'))}</p>${link(value(row, 'source_url'), 'Source')}</article>`).join('');
   const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || 'Current')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${grade(row)}${esc(value(row, 'evidence_class', 'type', 'source_class'))} ${link(value(row, 'evidence_url', 'evidence', 'source_url'), 'Source')}</div></div></div>`).join('');
@@ -301,7 +360,7 @@ export function companyPage(report: PublishedReport, chinese: Record<string, unk
   }
   if (chinese) {
     const englishBody = body;
-    const chineseBody = chineseCompanyVersion(chinese);
+    const chineseBody = chineseCompanyVersion(chinese, briefs, autoPersonReportId, autoPersonName);
     body = `<div class="language-switch" role="group" aria-label="Report language"><button class="language-button" type="button" data-report-language="en" aria-pressed="true">English</button><button class="language-button" type="button" data-report-language="zh-CN" aria-pressed="false">中文</button></div><div data-report-language-panel="en">${englishBody}</div><div data-report-language-panel="zh-CN" hidden>${chineseBody}</div><script>(function(){const buttons=document.querySelectorAll('[data-report-language]');const panels=document.querySelectorAll('[data-report-language-panel]');function select(language){buttons.forEach((button)=>button.setAttribute('aria-pressed',String(button.getAttribute('data-report-language')===language)));panels.forEach((panel)=>{panel.hidden=panel.getAttribute('data-report-language-panel')!==language;});}buttons.forEach((button)=>button.addEventListener('click',()=>select(button.getAttribute('data-report-language'))));}())</script>`;
   }
   return shell(report, body);
