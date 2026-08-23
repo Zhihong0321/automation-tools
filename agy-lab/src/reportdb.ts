@@ -64,6 +64,26 @@ export async function sql<T = Record<string, unknown>>(text: string, params: unk
   return { rows: out.rows ?? [], rowCount: out.rowCount ?? out.rows?.length ?? 0 };
 }
 
+/**
+ * The company-identity rule, in SQL, kept as constants for two reasons.
+ *
+ * One: worker/db.mjs implements the same rule in JavaScript and the two must not
+ * drift — placeKey() there, these two here.
+ *
+ * Two: NO BACKSLASHES. An earlier version of this migration spelled the regexes
+ * `\s+` and `(^|\s)` inside a JS template literal, where `\s` is not an escape
+ * sequence and collapses to a bare `s`. Postgres received `'s+'` and `'(^|s)'`,
+ * matched nothing, and every merge statement silently updated zero rows. POSIX
+ * classes say the same thing with no character a template literal can eat.
+ */
+const nameKeySql = (col = 'name') =>
+  "regexp_replace(regexp_replace(lower(btrim(" + col + ")), '[.,''\"`]', '', 'g'), '[[:space:]]+', ' ', 'g')";
+export const NAME_KEY_SQL = nameKeySql();
+
+/** Suffixes a company registry issues. A storefront name carries none of them. */
+export const REGISTERED_SQL =
+  "~* '(^|[[:space:]])(sdn[[:space:]]*bhd|sendirian[[:space:]]+berhad|berhad|bhd|plt|llp|pte[[:space:]]*ltd|ltd|limited|inc|incorporated|corp|corporation|gmbh|pty)$'";
+
 /** Apply only the report-owned schema. The historical core schema remains in schema.sql. */
 export function migrate(): Promise<void> {
   if (migrated) return migrated;
@@ -151,7 +171,7 @@ export function migrate(): Promise<void> {
     //
     // Storefront names are NOT unique and are left alone: this table holds five
     // separate "The Store" branches on five phone numbers. worker/db.mjs decides
-    // which is which; the suffix test below is the same rule in SQL.
+    // which is which; NAME_KEY_SQL / REGISTERED_SQL below are the same rule in SQL.
     //
     // NOTHING IS DELETED. The superseded rows keep their own address and phone
     // and gain `merged_into`, pointing at the row that now carries the identity.
@@ -165,13 +185,9 @@ export function migrate(): Promise<void> {
     // The oldest row of each registered name wins, because its id is the one
     // already cited by existing reports.
     await sql(`
-      with norm as (
-        select id, regexp_replace(regexp_replace(lower(btrim(name)), '[.,''"\`]', '', 'g'), '\s+', ' ', 'g') as k
-        from company_data where merged_into is null
-      ),
-      registered as (
-        select id, k from norm
-        where k ~* '(^|\s)(sdn\s*bhd|sendirian\s+berhad|berhad|bhd|plt|llp|pte\s*ltd|ltd|limited|inc|incorporated|corp|corporation|gmbh|pty)$'
+      with registered as (
+        select id, ${NAME_KEY_SQL} as k from company_data
+        where merged_into is null and ${NAME_KEY_SQL} ${REGISTERED_SQL}
       ),
       groups as (
         select k, min(id) as keep from registered group by k having count(*) > 1
@@ -195,18 +211,16 @@ export function migrate(): Promise<void> {
       from company_data c where a.company_id = c.id and c.merged_into is not null;
     `);
     // Adopt the registry name as the dedupe key, so the NEXT scan of any branch
-    // updates this row instead of opening a third one. Only rows that survived
-    // the merge, and only ones not already keyed this way.
+    // updates this row instead of opening a third one. Survivors only, and only
+    // where no other row already holds that key.
     await sql(`
-      update company_data c set place_id = 'name:' || regexp_replace(regexp_replace(lower(btrim(name)), '[.,''"\`]', '', 'g'), '\s+', ' ', 'g')
+      update company_data c set place_id = 'name:' || ${NAME_KEY_SQL}
       where c.merged_into is null
         and c.place_id not like 'name:%'
-        and regexp_replace(regexp_replace(lower(btrim(c.name)), '[.,''"\`]', '', 'g'), '\s+', ' ', 'g')
-            ~* '(^|\s)(sdn\s*bhd|sendirian\s+berhad|berhad|bhd|plt|llp|pte\s*ltd|ltd|limited|inc|incorporated|corp|corporation|gmbh|pty)$'
+        and ${NAME_KEY_SQL} ${REGISTERED_SQL}
         and not exists (
           select 1 from company_data d
-          where d.id <> c.id
-            and d.place_id = 'name:' || regexp_replace(regexp_replace(lower(btrim(c.name)), '[.,''"\`]', '', 'g'), '\s+', ' ', 'g')
+          where d.id <> c.id and d.place_id = 'name:' || ${nameKeySql('c.name')}
         );
     `);
 
@@ -215,20 +229,27 @@ export function migrate(): Promise<void> {
     // previous snapshot is the only thing a later one can be read against. Four
     // Eternalgy Sdn Bhd dossiers existed under one identical title before this,
     // three of them on the same company id, with nothing to tell them apart.
-    //
-    // Nullable first, then backfilled, then made NOT NULL -- so the backfill can
-    // find the rows that predate the column and re-running it is a no-op.
     await sql(`alter table published_report add column if not exists version integer;`);
+    // Self-healing rather than run-once: it renumbers any company whose reports
+    // do not already carry distinct versions. That covers the first backfill
+    // (every version still null) AND the case above, where merging two company
+    // rows brings two V1 dossiers together under one id. Once a company is
+    // numbered correctly the group is skipped, so re-running costs nothing.
     await sql(`
-      with ranked as (
-        select id, row_number() over (
-                     partition by report_type, company_id order by created_at, id
-                   ) as rn
-        from published_report
+      with dupes as (
+        select report_type, company_id from published_report
         where company_id is not null
+        group by report_type, company_id
+        having count(*) <> count(distinct version)
+      ),
+      ranked as (
+        select p.id, row_number() over (
+                 partition by p.report_type, p.company_id order by p.created_at, p.id
+               ) as rn
+        from published_report p
+        join dupes d on d.report_type = p.report_type and d.company_id = p.company_id
       )
-      update published_report p set version = r.rn
-      from ranked r where p.id = r.id and p.version is null;
+      update published_report p set version = r.rn from ranked r where p.id = r.id;
     `);
     await sql(`update published_report set version = 1 where version is null;`);
     await sql(`

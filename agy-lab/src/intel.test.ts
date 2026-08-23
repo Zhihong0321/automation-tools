@@ -423,3 +423,19 @@ test('a failed report shows the reason and lights no round pips', () => {
   partial.status = 'partial';
   assert.equal(companyPage(partial).match(/class="round on"/g)?.length, 3);
 });
+
+// The company-identity SQL is built in JS template literals, where `\s` is NOT
+// an escape sequence and silently collapses to a bare `s`. That exact slip
+// shipped once: Postgres received '(^|s)(sdns*bhd|...)$' and 's+', matched
+// nothing, and every merge statement updated zero rows without erroring.
+test('the identity SQL survives the template literal it is written in', async () => {
+  const { NAME_KEY_SQL, REGISTERED_SQL } = await import('./reportdb.ts');
+  for (const [label, sql] of [['name key', NAME_KEY_SQL], ['suffix test', REGISTERED_SQL]] as const) {
+    assert.ok(sql.includes('[[:space:]]'), label + ' must use POSIX classes, not backslash escapes');
+    assert.ok(!/\\/.test(sql), label + ' must contain no backslash a template literal can eat');
+    assert.ok(!/\(\^\|s\)/.test(sql), label + ' shows the collapsed-escape signature (^|s)');
+    assert.ok(!/sdns\*bhd/.test(sql), label + ' shows the collapsed-escape signature sdns*bhd');
+  }
+  assert.ok(REGISTERED_SQL.startsWith('~*'), 'the suffix test is a regex match operator');
+  assert.ok(NAME_KEY_SQL.includes('lower(btrim(name))'), 'the name key normalises the name column');
+});
