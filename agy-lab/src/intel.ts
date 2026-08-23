@@ -43,6 +43,10 @@ function envelope(req: http.IncomingMessage, report: db.PublishedReport): Record
     type: report.report_type,
     status: report.status,
     title: report.title,
+    // Which pass this is on the same company. 1 unless the company has been
+    // researched before; a caller comparing two dossiers needs to know which
+    // one is newer without parsing the title.
+    version: report.version,
     created_at: report.created_at,
     updated_at: report.updated_at,
     completed_at: report.completed_at,

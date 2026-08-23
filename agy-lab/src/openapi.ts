@@ -165,7 +165,9 @@ export const document = {
           id: { type: 'string', pattern: '^[A-Za-z0-9_-]{20}$' },
           type: { type: 'string', enum: ['business_search', 'company_research', 'person_research'] },
           status: { $ref: '#/components/schemas/ReportStatus' },
-          title: { type: 'string' }, created_at: { type: 'string', format: 'date-time' }, updated_at: { type: 'string', format: 'date-time' },
+          title: { type: 'string' },
+          version: { type: 'integer', minimum: 1, description: 'Which research pass this is on the same company. 1 is the first; re-researching the same company produces V2, V3, ... and never overwrites an earlier dossier. Always 1 for a business search.' },
+          created_at: { type: 'string', format: 'date-time' }, updated_at: { type: 'string', format: 'date-time' },
           completed_at: { type: ['string', 'null'], format: 'date-time' }, view_url: { type: 'string', format: 'uri' }, api_url: { type: 'string', format: 'uri' },
           error: { type: ['string', 'null'], description: 'Failure detail or partial-run warning.' },
         },
@@ -188,7 +190,7 @@ export const document = {
       },
       CompanyResearchRequest: {
         type: 'object', required: ['companyId'], additionalProperties: false,
-        description: 'Once the people audit identifies P01, a separate person_research report starts automatically in parallel with the remaining company rounds and translation.',
+        description: 'Researching a company that already has a dossier is allowed and produces the next version (V2, V3, ...) rather than returning the old one. A run still in flight is joined, not duplicated. Once the people audit identifies P01, a separate person_research report starts automatically in parallel with the remaining company rounds and translation.',
         properties: {
           companyId: { type: 'string', pattern: '^\\d+$', description: 'Persisted company id from data.companies[].id. company_id is accepted as an alias.' },
           requesterId: { type: 'string', description: 'Optional caller-owned correlation id. userId is accepted as an alias.' },

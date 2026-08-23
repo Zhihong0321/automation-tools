@@ -40,13 +40,47 @@ export async function sql(text, params = []) {
   return JSON.parse(body);
 }
 
-/** Google's own id for a place. Without it the same shop lands twice on the next scan. */
-function placeKey(b) {
+/**
+ * A REGISTERED COMPANY NAME IS THE IDENTITY. No registry will hold two live
+ * "Eternalgy Sdn Bhd" at once, so two rows carrying that name are one company
+ * seen twice -- which is exactly what happened: a feed scan stored it on 21 Aug
+ * as ChIJj9bg8rlt2jERcLzNDSYhD-M, a place-card scan stored the same business
+ * again on 23 Aug, and the second dossier could not see the first three.
+ *
+ * A SHOP NAME IS NOT. This table holds five separate "The Store" branches with
+ * five different phone numbers, and two "MR.DIY". Keying those by name would
+ * merge real, distinct places into one row and lose four of them.
+ *
+ * So the rule follows the fact rather than overriding it: a name carrying a
+ * registered-entity suffix is country-unique and keys on the name; everything
+ * else keeps Google's place id, which is per-branch and correct for branches.
+ */
+const REGISTERED_SUFFIX =
+  /\b(?:sdn\.?\s*bhd|sendirian\s+berhad|berhad|bhd|plt|llp|pte\.?\s*ltd|ltd|limited|inc|incorporated|corp|corporation|gmbh|pty|gida)\.?$/i;
+
+/** Lowercase, punctuation-free, single-spaced — so "MR.DIY" and "Mr. DIY" agree. */
+function normaliseName(name) {
+  return (name ?? '')
+    .toLowerCase()
+    .replace(/[.,'"`’]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** True when the name names a registered legal entity rather than a storefront. */
+export function isRegisteredName(name) {
+  return REGISTERED_SUFFIX.test(normaliseName(name));
+}
+
+/** The dedupe key for one business row. See the note above for why it branches. */
+export function placeKey(b) {
+  const norm = normaliseName(b.name);
+  if (norm && isRegisteredName(b.name)) return 'name:' + norm;
   const m = /!19s([A-Za-z0-9_-]+)/.exec(b.mapsUrl ?? '');
   if (m) return m[1];
   // A result with no id is rare but must still dedupe, or a weekly scan of the
   // same town grows a duplicate row every run.
-  return 'name:' + (b.name ?? '').toLowerCase().trim() + '|' + (b.address ?? '').toLowerCase().trim();
+  return 'name:' + norm + '|' + (b.address ?? '').toLowerCase().trim();
 }
 
 /**
@@ -79,7 +113,12 @@ export async function saveScan(result, { jobId = null, worker = null, userId = n
          rating   = coalesce(excluded.rating,   company_data.rating),
          reviews  = coalesce(excluded.reviews,  company_data.reviews),
          category = coalesce(excluded.category, company_data.category),
-         address  = coalesce(excluded.address,  company_data.address),
+         -- The place card carries the full postal address; a feed card carries a
+         -- truncated one. Merging the same company from both must not shorten it.
+         address  = case
+                      when length(coalesce(excluded.address, '')) > length(coalesce(company_data.address, ''))
+                      then excluded.address else company_data.address
+                    end,
          phone    = coalesce(excluded.phone,    company_data.phone),
          website  = coalesce(excluded.website,  company_data.website),
          maps_url = excluded.maps_url,
