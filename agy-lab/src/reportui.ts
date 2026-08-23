@@ -146,40 +146,6 @@ function researchScript(publicId: string): string {
 </script>`;
 }
 
-/**
- * Start a VIP brief from the shared dossier page.
- *
- * Mirrors researchScript: the page is outside the bearer gate, so it calls the
- * report-scoped public route rather than /api/person-research. The server
- * refuses any personId this dossier does not list, and joins an existing brief
- * instead of starting a second one, so a double click costs nothing.
- */
-function personResearchScript(publicId: string): string {
-  return `<script>
-(function(){
-  var id=${JSON.stringify(publicId)};
-  document.addEventListener("click",function(ev){
-    var b=ev.target.closest&&ev.target.closest("button.person-research");
-    if(!b||b.disabled)return;
-    var person=b.getAttribute("data-person");
-    if(!person)return;
-    b.disabled=true;var was=b.textContent;b.textContent="Starting\u2026";
-    fetch("/public/reports/"+id+"/person-research",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({personId:person})})
-      .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||("HTTP "+r.status));return j})})
-      .then(function(j){
-        var link=j.report&&j.report.view_url;
-        if(!link){throw new Error("no report link returned")}
-        var a=document.createElement("a");
-        a.className="button";a.href=link;a.textContent="Person report \u2197";
-        a.setAttribute("target","_blank");a.setAttribute("rel","noopener");
-        b.replaceWith(a);
-      })
-      .catch(function(e){b.disabled=false;b.textContent=was;alert("Could not start person research: "+e.message)});
-  });
-})();
-</script>`;
-}
-
 function shell(report: PublishedReport, body: string): string {
   const active = report.status === 'queued' || report.status === 'running';
   const isSearch = report.report_type === 'business_search';
@@ -196,6 +162,9 @@ function shell(report: PublishedReport, body: string): string {
     : report.status === 'partial' ? 3
     : report.status === 'queued' ? 1 : 2;
   const reportLabel = isSearch ? 'Market scan' : isPerson ? 'VIP brief' : 'Company dossier';
+  // A re-researched company keeps every earlier dossier. Say which pass this is,
+  // in the kicker and the masthead folio, so two open tabs are never ambiguous.
+  const version = Number(report.version) > 1 ? 'V' + Number(report.version) : '';
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -207,7 +176,7 @@ a{color:inherit}.wrap{max-width:1180px;margin:0 auto;padding:0 30px 84px}.mast{h
 .hero{display:grid;grid-template-columns:minmax(0,1fr) 220px;gap:40px;padding:68px 0 54px;border-bottom:1px solid var(--ink)}.kicker{display:flex;align-items:center;gap:10px;margin-bottom:18px;font:700 11px/1 var(--sans);text-transform:uppercase;letter-spacing:.16em;color:var(--accent)}.kicker:before{content:"";width:28px;height:2px;background:var(--accent)}.hero h1{max-width:880px;margin:0;font:400 clamp(44px,7vw,88px)/.91 var(--display);letter-spacing:-.055em;text-wrap:balance}.hero-copy{max-width:700px;margin:24px 0 0;font-size:16px;line-height:1.6;color:var(--muted)}.hero-meta{align-self:end;border-top:1px solid var(--ink);padding-top:13px}.status{display:flex;align-items:center;gap:9px;font:700 11px/1.2 var(--sans);letter-spacing:.08em;text-transform:uppercase}.status-dot{width:8px;height:8px;border-radius:50%;background:#d1981d;box-shadow:0 0 0 4px rgba(209,152,29,.12)}.completed .status-dot,.partial .status-dot{background:#16815d;box-shadow:0 0 0 4px rgba(22,129,93,.12)}.failed .status-dot{background:var(--danger);box-shadow:0 0 0 4px rgba(164,59,49,.12)}.meta-line{margin-top:18px;display:grid;gap:7px;font:500 10px/1.2 var(--mono);color:var(--muted);text-transform:uppercase}.rounds{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:18px}.round{height:3px;background:var(--soft)}.round.on{background:var(--accent)}
 .metrics{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--ink)}.metric{min-width:0;padding:28px 24px 24px 0}.metric+.metric{padding-left:24px;border-left:1px solid var(--line)}.metric strong{display:block;overflow:hidden;text-overflow:ellipsis;font:400 clamp(31px,4vw,50px)/.9 var(--display);letter-spacing:-.04em}.metric span{display:block;margin-top:10px;font:700 9px/1.2 var(--sans);letter-spacing:.13em;text-transform:uppercase;color:var(--muted)}
 .section{padding-top:58px}.section-head{display:grid;grid-template-columns:1fr minmax(180px,320px);align-items:end;gap:30px;margin-bottom:21px}.section h2{margin:0;font:400 clamp(28px,3vw,40px)/1 var(--display);letter-spacing:-.035em}.section-note{font-size:12px;line-height:1.45;color:var(--muted);text-align:right}.sheet{background:var(--sheet);border:1px solid var(--ink)}.empty,.message{padding:52px 24px;text-align:center;color:var(--muted)}.message.error{border:1px solid var(--danger);background:#fff2ef;color:#742920}.message.warning{border:1px solid #c38a24;background:#fff9e8;color:#684600}
-.records{border-top:1px solid var(--ink)}.company{display:grid;grid-template-columns:64px minmax(210px,1.1fr) minmax(220px,1fr) minmax(240px,.9fr);gap:22px;align-items:start;padding:28px 0;border-bottom:1px solid var(--line)}.record-no{font:500 12px/1 var(--mono);color:var(--accent)}.company h3,.person h3{margin:0;font:600 19px/1.18 var(--sans);letter-spacing:-.025em}.record-meta{margin-top:7px;font-size:12px;color:var(--muted)}.record-address{font-size:13px;color:var(--muted);max-width:380px}.record-contact{display:grid;gap:15px}.phone{font:500 16px/1.2 var(--mono);letter-spacing:-.035em}.actions{display:flex;gap:13px;align-items:center;flex-wrap:wrap}.button{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:0 16px;background:var(--ink);border:1px solid var(--ink);color:var(--sheet);font:700 10px/1 var(--sans);text-decoration:none;text-transform:uppercase;letter-spacing:.1em;transition:background .18s,color .18s}.button:hover{background:var(--accent);border-color:var(--accent)}.text-link{display:inline-flex;align-items:center;gap:5px;padding:7px 0;border-bottom:1px solid currentColor;font:700 10px/1 var(--sans);text-decoration:none;text-transform:uppercase;letter-spacing:.09em}.text-link span{color:var(--accent)}.id-tag{font:500 9px/1 var(--mono);color:var(--faint);text-transform:uppercase}.button.research,.button.person-research{background:var(--sheet);color:var(--ink);cursor:pointer}.button.research:hover,.button.person-research:hover{background:var(--accent);border-color:var(--accent);color:var(--sheet)}.button.research[disabled],.button.person-research[disabled]{opacity:.55;cursor:default;background:var(--sheet);color:var(--ink);border-color:var(--line)}
+.records{border-top:1px solid var(--ink)}.company{display:grid;grid-template-columns:64px minmax(210px,1.1fr) minmax(220px,1fr) minmax(240px,.9fr);gap:22px;align-items:start;padding:28px 0;border-bottom:1px solid var(--line)}.record-no{font:500 12px/1 var(--mono);color:var(--accent)}.company h3,.person h3{margin:0;font:600 19px/1.18 var(--sans);letter-spacing:-.025em}.record-meta{margin-top:7px;font-size:12px;color:var(--muted)}.record-address{font-size:13px;color:var(--muted);max-width:380px}.record-contact{display:grid;gap:15px}.phone{font:500 16px/1.2 var(--mono);letter-spacing:-.035em}.actions{display:flex;gap:13px;align-items:center;flex-wrap:wrap}.button{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:0 16px;background:var(--ink);border:1px solid var(--ink);color:var(--sheet);font:700 10px/1 var(--sans);text-decoration:none;text-transform:uppercase;letter-spacing:.1em;transition:background .18s,color .18s}.button:hover{background:var(--accent);border-color:var(--accent)}.text-link{display:inline-flex;align-items:center;gap:5px;padding:7px 0;border-bottom:1px solid currentColor;font:700 10px/1 var(--sans);text-decoration:none;text-transform:uppercase;letter-spacing:.09em}.text-link span{color:var(--accent)}.id-tag{font:500 9px/1 var(--mono);color:var(--faint);text-transform:uppercase}.button.research{background:var(--sheet);color:var(--ink);cursor:pointer}.button.research:hover{background:var(--accent);border-color:var(--accent);color:var(--sheet)}.button.research[disabled]{opacity:.55;cursor:default;background:var(--sheet);color:var(--ink);border-color:var(--line)}
 .brief{display:grid;grid-template-columns:180px minmax(0,1fr);gap:40px;padding:36px 0;border-bottom:1px solid var(--ink)}.brief-label{font:700 10px/1.3 var(--sans);letter-spacing:.13em;text-transform:uppercase;color:var(--accent)}.brief p{max-width:800px;margin:0;font:400 clamp(20px,2.5vw,29px)/1.35 var(--display);letter-spacing:-.02em}
 .contact-list{border-top:1px solid var(--ink)}.contact{display:grid;grid-template-columns:180px minmax(0,1fr) auto;align-items:center;gap:24px;min-height:96px;border-bottom:1px solid var(--line)}.label{font:700 10px/1.3 var(--sans);text-transform:uppercase;letter-spacing:.12em;color:var(--muted)}.contact-value{font:500 17px/1.3 var(--mono);word-break:break-word}.source{margin-top:7px;font-size:11px;color:var(--muted)}.source a{color:var(--accent);text-decoration:none;border-bottom:1px solid currentColor}
 .people{border-top:1px solid var(--ink)}.person{display:grid;grid-template-columns:64px minmax(190px,.8fr) minmax(240px,1.2fr) auto;gap:22px;align-items:start;padding:25px 0;border-bottom:1px solid var(--line)}.priority{font:500 11px/1.3 var(--mono);color:var(--accent)}.role{margin-top:6px;font:700 11px/1.3 var(--sans);text-transform:uppercase;letter-spacing:.07em;color:var(--accent)}.person p{margin:0;color:var(--muted);font-size:13px}.signal-list{border-top:1px solid var(--ink)}.signal{display:grid;grid-template-columns:180px minmax(0,1fr);gap:24px;padding:24px 0;border-bottom:1px solid var(--line)}.date{font:600 11px/1.3 var(--mono);color:var(--accent);text-transform:uppercase}.signal strong{font-size:15px}.angles{counter-reset:angle;display:grid;grid-template-columns:repeat(2,1fr);border-top:1px solid var(--ink)}.angle{counter-increment:angle;position:relative;min-height:150px;padding:26px 28px 26px 62px;border-bottom:1px solid var(--line);font:400 18px/1.4 var(--display)}.angle:nth-child(odd){border-right:1px solid var(--line)}.angle:before{content:counter(angle,decimal-leading-zero);position:absolute;left:0;top:30px;font:500 10px/1 var(--mono);color:var(--accent)}
@@ -218,10 +187,10 @@ a{color:inherit}.wrap{max-width:1180px;margin:0 auto;padding:0 30px 84px}.mast{h
 :focus-visible{outline:2px solid var(--accent);outline-offset:4px}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
 @media(max-width:760px){.wrap{padding:0 18px 52px}.mast{height:60px}.folio{display:none}.hero{grid-template-columns:1fr;gap:30px;padding:42px 0 30px}.hero h1{font-size:clamp(43px,14vw,64px);line-height:.94}.hero-copy{font-size:14px;margin-top:18px}.hero-meta{align-self:auto}.meta-line{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:repeat(2,1fr)}.metric{padding:21px 15px 19px 0}.metric+.metric{padding-left:15px}.metric:nth-child(3){border-left:0;border-top:1px solid var(--line);padding-left:0}.metric:nth-child(4){border-top:1px solid var(--line)}.metric strong{font-size:35px}.section{padding-top:42px}.section-head{grid-template-columns:1fr;gap:8px}.section-note{text-align:left}.company{grid-template-columns:42px 1fr;gap:17px 12px;padding:24px 0}.record-address,.record-contact{grid-column:2}.actions{gap:12px}.button{min-height:46px;padding:0 18px}.brief{grid-template-columns:1fr;gap:14px;padding:28px 0}.brief p{font-size:23px}.contact{grid-template-columns:1fr auto;gap:7px 14px;padding:21px 0}.contact .label{grid-column:1/-1}.contact-value{font-size:15px}.people{border-top-color:var(--ink)}.person{grid-template-columns:38px 1fr;gap:14px 10px;padding:22px 0}.person p,.person .text-link{grid-column:2}.signal{grid-template-columns:1fr;gap:8px;padding:21px 0}.angles{grid-template-columns:1fr}.angle{min-height:auto;padding:22px 0 22px 42px}.angle:nth-child(odd){border-right:0}.language-switch{margin-top:22px}.language-button{min-height:38px;padding:0 16px}.foot{display:block;line-height:1.7}.foot span:last-child{display:block;margin-top:7px}}
 </style></head><body class="${esc(report.report_type.replace('_', '-'))}"><main class="wrap">
-<nav class="mast" aria-label="Report masthead"><div class="wordmark"><span class="mark">EE</span><span>Business intelligence</span></div><div class="folio">${esc(reportLabel)}<br>${esc(report.public_id)}</div></nav>
-<header class="hero"><div><div class="kicker">${esc(reportLabel)} · ${esc(reportDate(report))}</div><h1>${esc(report.title ?? 'Research report')}</h1><p class="hero-copy">${active ? 'Research is in progress. This permanent report link refreshes as verified findings arrive.' : report.error ? esc(report.error) : isSearch ? 'A ranked field scan of relevant businesses, with direct routes to source listings and published contact points.' : 'A source-linked intelligence brief designed for qualification, outreach and informed decision-making.'}</p></div><aside class="hero-meta"><div class="status ${esc(report.status)}"><span class="status-dot"></span>${esc(statusLabel)}</div><div class="meta-line"><span>Issued ${esc(reportDate(report))}</span><span>${isSearch ? 'Source / Google Maps' : 'Evidence / Public sources'}</span></div>${!isSearch ? `<div class="rounds" aria-label="Four research rounds">${[0, 1, 2, 3].map((i) => `<span class="round ${i < roundsLit ? 'on' : ''}"></span>`).join('')}</div>` : ''}</aside></header>
+<nav class="mast" aria-label="Report masthead"><div class="wordmark"><span class="mark">EE</span><span>Business intelligence</span></div><div class="folio">${esc(reportLabel)}${version ? ' · ' + version : ''}<br>${esc(report.public_id)}</div></nav>
+<header class="hero"><div><div class="kicker">${esc(reportLabel)} · ${esc(reportDate(report))}${version ? ' · ' + version : ''}</div><h1>${esc(report.title ?? 'Research report')}</h1><p class="hero-copy">${active ? 'Research is in progress. This permanent report link refreshes as verified findings arrive.' : report.error ? esc(report.error) : isSearch ? 'A ranked field scan of relevant businesses, with direct routes to source listings and published contact points.' : 'A source-linked intelligence brief designed for qualification, outreach and informed decision-making.'}</p></div><aside class="hero-meta"><div class="status ${esc(report.status)}"><span class="status-dot"></span>${esc(statusLabel)}</div><div class="meta-line"><span>Issued ${esc(reportDate(report))}</span>${version ? `<span>Research pass ${esc(version)}</span>` : ''}<span>${isSearch ? 'Source / Google Maps' : 'Evidence / Public sources'}</span></div>${!isSearch ? `<div class="rounds" aria-label="Four research rounds">${[0, 1, 2, 3].map((i) => `<span class="round ${i < roundsLit ? 'on' : ''}"></span>`).join('')}</div>` : ''}</aside></header>
 ${body}<footer class="foot"><span>EE Business Intelligence · Confidential link</span><span>Evidence opens at its original public source</span></footer>
-</main>${active ? '<script>setTimeout(()=>location.reload(),8000)</script>' : ''}${isSearch ? researchScript(report.public_id) : isPerson ? '' : personResearchScript(report.public_id)}</body></html>`;
+</main>${active ? '<script>setTimeout(()=>location.reload(),8000)</script>' : ''}${isSearch ? researchScript(report.public_id) : ''}</body></html>`;
 }
 
 export function notFoundPage(): string {
@@ -257,33 +226,7 @@ export function searchPage(report: PublishedReport, detail: { report?: Record<st
   return shell(report, body);
 }
 
-/**
- * The one action a person row offers: open the brief that exists, or start one.
- *
- * Shared by the English and Chinese panels so switching language does not drop
- * the button. The translation copies person ids verbatim, so the same lookup
- * works on both sides; only the labels differ.
- */
-function personAction(
-  row: Record<string, unknown>,
-  briefs: Map<string, { public_id: string }>,
-  autoReportId: string,
-  autoName: string,
-  labels: { open: string; start: string },
-): string {
-  const personName = value(row, 'name');
-  const personId = value(row, 'id');
-  // Dossiers written before the per-person brief index recorded only the
-  // automatic P01 run, and only by name. Fall back to it so those rows link
-  // rather than offering to re-run research that already exists.
-  const isAuto = Boolean(autoReportId) && personName.trim().toLocaleLowerCase() === autoName;
-  const briefId = (personId && briefs.get(personId)?.public_id) || (isAuto ? autoReportId : '');
-  if (briefId) return ` <a class="button" href="/r/${esc(briefId)}">${esc(labels.open)} <span aria-hidden="true">&#8599;</span></a>`;
-  if (!personId) return '';
-  return ` <button class="button person-research" type="button" data-person="${esc(personId)}" aria-label="${esc(labels.start)}: ${esc(personName)}">${esc(labels.start)} <span aria-hidden="true">&rarr;</span></button>`;
-}
-
-function chineseCompanyVersion(translated: Record<string, unknown>, briefs: Map<string, { public_id: string }>, autoReportId: string, autoName: string): string {
+function chineseCompanyVersion(translated: Record<string, unknown>, briefs: Record<string, { public_id: string; status: string }>, autoReportId: string, autoName: string, researchable: boolean): string {
   const contacts = arr(translated.contacts);
   const people = arr(translated.people);
   const candidatePeople = arr(translated.candidate_people);
@@ -296,7 +239,18 @@ function chineseCompanyVersion(translated: Record<string, unknown>, briefs: Map<
     const evidence = value(row, 'evidence_url', 'evidence', 'source_url');
     return `<div class="contact"><div class="label">${esc(value(row, 'purpose', 'channel', 'type') || '联系方式')}</div><div><div class="contact-value">${esc(raw)}</div><div class="source">${grade(row, true)}${esc(value(row, 'status', 'current_status', 'evidence_class'))}${evidence ? ` · <a href="${esc(evidence)}" target="_blank" rel="noopener">查看来源 ↗</a>` : ''}</div></div></div>`;
   }).join('');
-  const peopleRows = people.map((row, i) => `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(value(row, 'name'))}${personAction(row, briefs, autoReportId, autoName, { open: '人物报告', start: '人物调研' })}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}${grade(row, true)}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), '来源')}</article>`).join('');
+  const peopleRows = people.map((row, i) => {
+    const personName = value(row, 'name');
+    const personId = value(row, 'id');
+    const isAuto = Boolean(autoReportId) && personName.trim().toLocaleLowerCase() === autoName;
+    const existing = briefs[personId] ?? (isAuto && autoReportId ? { public_id: autoReportId, status: 'running' } : null);
+    const control = existing
+      ? ` <a class="button" href="/r/${esc(existing.public_id)}">${existing.status === 'completed' || existing.status === 'partial' ? '查看简报' : '简报进行中'} <span aria-hidden="true">&#8599;</span></a>`
+      : personId && researchable
+        ? ` <button class="button research" type="button" data-person="${esc(personId)}" data-name="${esc(personName)}">人物调研 <span aria-hidden="true">&rarr;</span></button>`
+        : '';
+    return `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(value(row, 'name'))}${control}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}${grade(row, true)}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), '来源')}</article>`;
+  }).join('');
   const candidateRows = candidatePeople.map((row) => `<article class="person"><span class="priority">待核实</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role'))}</div></div><p>${esc(value(row, 'verification_note', 'relevance'))}</p>${link(value(row, 'source_url'), '来源')}</article>`).join('');
   const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || '当前')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${grade(row, true)}${esc(value(row, 'evidence_class', 'type', 'source_class'))} ${link(value(row, 'evidence_url', 'evidence', 'source_url'), '来源')}</div></div></div>`).join('');
   const conflictRows = conflicts.map((row) => `<div class="signal"><div class="date">需核实</div><div><strong>${esc(value(row, 'issue', 'field'))}</strong><div class="source">${esc(value(row, 'details', 'status', 'note'))}</div></div></div>`).join('');
@@ -312,7 +266,12 @@ function chineseCompanyVersion(translated: Record<string, unknown>, briefs: Map<
   return body;
 }
 
-export function companyPage(report: PublishedReport, chinese: Record<string, unknown> | null = null, briefs: Map<string, { public_id: string }> = new Map()): string {
+export function companyPage(
+  report: PublishedReport,
+  chinese: Record<string, unknown> | null = null,
+  /** personId -> the VIP brief already started for them, from listPersonBriefs(). */
+  briefs: Record<string, { public_id: string; status: string }> = {},
+): string {
   const final = obj(report.result);
   const entity = obj(final.entity);
   const contacts = arr(final.contacts);
@@ -338,10 +297,22 @@ export function companyPage(report: PublishedReport, chinese: Record<string, unk
     return `<div class="contact"><div class="label">${esc(value(row, 'purpose', 'channel', 'type') || 'Contact')}</div><div><div class="contact-value">${esc(raw)}</div><div class="source">${grade(row)}${esc(value(row, 'status', 'current_status', 'evidence_class'))}${evidence ? ` · <a href="${esc(evidence)}" target="_blank" rel="noopener">view evidence ↗</a>` : ''}</div></div>${action}</div>`;
   }).join('');
   const autoPersonName = value(autoPerson, 'person_name').trim().toLocaleLowerCase();
+  // Every validated person is one click from their own brief. Which control they
+  // get depends only on whether a brief already exists: a link to it, or a button
+  // that starts one. Before this, only P01 -- the person the pipeline researches
+  // automatically -- had any control at all, and the other fifteen were dead text.
+  const researchable = report.status === 'completed' || report.status === 'partial';
   const peopleRows = people.map((row, i) => {
     const personName = value(row, 'name');
-    const action = personAction(row, briefs, autoPersonReportId, autoPersonName, { open: 'Person report', start: 'Person research' });
-    return `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(personName)}${action}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}${grade(row)}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), 'Evidence')}</article>`;
+    const personId = value(row, 'id');
+    const isAutoPerson = Boolean(autoPersonReportId) && personName.trim().toLocaleLowerCase() === autoPersonName;
+    const existing = briefs[personId] ?? (isAutoPerson && autoPersonReportId ? { public_id: autoPersonReportId, status: 'running' } : null);
+    const control = existing
+      ? ` <a class="button" href="/r/${esc(existing.public_id)}">${existing.status === 'completed' || existing.status === 'partial' ? 'Open brief' : 'Brief underway'} <span aria-hidden="true">↗</span></a>`
+      : personId && researchable
+        ? ` <button class="button research" type="button" data-person="${esc(personId)}" data-name="${esc(personName)}">Person research <span aria-hidden="true">→</span></button>`
+        : '';
+    return `<article class="person"><span class="priority">P${esc(rank(row.priority ?? i + 1))}</span><div><h3>${esc(personName)}${control}</h3><div class="role">${esc(value(row, 'role', 'current_role', 'position'))}</div></div><p>${esc(value(row, 'relevance', 'domain', 'why_relevant'))}${grade(row)}</p>${link(value(row, 'role_url', 'source', 'evidence_url'), 'Evidence')}</article>`;
   }).join('');
   const candidateRows = candidatePeople.map((row) => `<article class="person"><span class="priority">VERIFY</span><div><h3>${esc(value(row, 'name'))}</h3><div class="role">${esc(value(row, 'role', 'current_role'))}</div></div><p>${esc(value(row, 'verification_note', 'relevance'))}</p>${link(value(row, 'source_url'), 'Source')}</article>`).join('');
   const signalRows = signals.map((row) => `<div class="signal"><div class="date">${esc(value(row, 'date') || 'Current')}</div><div><strong>${esc(value(row, 'fact', 'description', 'signal'))}</strong><div class="source">${grade(row)}${esc(value(row, 'evidence_class', 'type', 'source_class'))} ${link(value(row, 'evidence_url', 'evidence', 'source_url'), 'Source')}</div></div></div>`).join('');
@@ -358,9 +329,62 @@ export function companyPage(report: PublishedReport, chinese: Record<string, unk
     body += `<section class="section"><div class="section-head"><h2>Business signals</h2><span class="section-note">Time-sensitive evidence that may create a reason to engage.</span></div><div class="signal-list">${signalRows || '<div class="empty">No validated signals.</div>'}</div></section>`;
     if (conflictRows) body += `<section class="section"><div class="section-head"><h2>Conflicts and unknowns</h2></div><div class="message warning">${conflictRows}</div></section>`;
   }
+  // The button only posts; the server decides. /api/person-research already
+  // joins a brief that is running rather than starting a second four-round pass,
+  // so a double-click costs nothing. The access key is the portal's own, read
+  // from sessionStorage on the same origin and sent only as a bearer header --
+  // never put in the URL, never written to the page.
+  if (peopleRows.includes('class="button research"')) {
+    body += `<script>(function(){
+var buttons=document.querySelectorAll('button.research[data-person]');
+if(!buttons.length)return;
+var KEY='ee_portal_token';
+var REPORT=${JSON.stringify(report.public_id)};
+function accessKey(){
+  var stored='';
+  try{stored=sessionStorage.getItem(KEY)||''}catch(err){stored=''}
+  if(stored)return stored;
+  var typed=(window.prompt('Access key to start VIP research')||'').trim();
+  if(typed){try{sessionStorage.setItem(KEY,typed)}catch(err){}}
+  return typed;
+}
+function restore(button,markup,message){button.disabled=false;button.innerHTML=markup;if(message)window.alert(message)}
+buttons.forEach(function(button){
+  button.addEventListener('click',function(){
+    var markup=button.innerHTML;
+    var key=accessKey();
+    if(!key)return;
+    button.disabled=true;button.textContent='Starting…';
+    fetch('/api/person-research',{
+      method:'POST',
+      headers:{'Authorization':'Bearer '+key,'Content-Type':'application/json'},
+      body:JSON.stringify({companyResearchId:REPORT,personId:button.getAttribute('data-person'),requesterId:'report'})
+    }).then(function(response){
+      return response.text().then(function(text){
+        var payload={};
+        try{payload=text?JSON.parse(text):{}}catch(err){payload={}}
+        if(response.status===401||response.status===403){
+          try{sessionStorage.removeItem(KEY)}catch(err){}
+          return restore(button,markup,'That access key was rejected. Try again.');
+        }
+        if(!response.ok)return restore(button,markup,(payload&&payload.error)||('Could not start research: '+response.status));
+        var view=payload.report&&payload.report.view_url;
+        if(typeof view==='string'&&view.indexOf('http')===0){
+          var open=document.createElement('a');
+          open.className='button';
+          open.href=view;
+          open.textContent='Brief underway ↗';
+          button.replaceWith(open);
+        }else{button.disabled=true;button.textContent='Brief underway'}
+      });
+    }).catch(function(err){restore(button,markup,err.message||'Could not reach the server.')});
+  });
+});
+}())<\/script>`;
+  }
   if (chinese) {
     const englishBody = body;
-    const chineseBody = chineseCompanyVersion(chinese, briefs, autoPersonReportId, autoPersonName);
+    const chineseBody = chineseCompanyVersion(chinese, briefs, autoPersonReportId, autoPersonName, researchable);
     body = `<div class="language-switch" role="group" aria-label="Report language"><button class="language-button" type="button" data-report-language="en" aria-pressed="true">English</button><button class="language-button" type="button" data-report-language="zh-CN" aria-pressed="false">中文</button></div><div data-report-language-panel="en">${englishBody}</div><div data-report-language-panel="zh-CN" hidden>${chineseBody}</div><script>(function(){const buttons=document.querySelectorAll('[data-report-language]');const panels=document.querySelectorAll('[data-report-language-panel]');function select(language){buttons.forEach((button)=>button.setAttribute('aria-pressed',String(button.getAttribute('data-report-language')===language)));panels.forEach((panel)=>{panel.hidden=panel.getAttribute('data-report-language-panel')!==language;});}buttons.forEach((button)=>button.addEventListener('click',()=>select(button.getAttribute('data-report-language'))));}())</script>`;
   }
   return shell(report, body);

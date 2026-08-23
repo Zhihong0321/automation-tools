@@ -64,6 +64,26 @@ export async function sql<T = Record<string, unknown>>(text: string, params: unk
   return { rows: out.rows ?? [], rowCount: out.rowCount ?? out.rows?.length ?? 0 };
 }
 
+/**
+ * The company-identity rule, in SQL, kept as constants for two reasons.
+ *
+ * One: worker/db.mjs implements the same rule in JavaScript and the two must not
+ * drift — placeKey() there, these two here.
+ *
+ * Two: NO BACKSLASHES. An earlier version of this migration spelled the regexes
+ * `\s+` and `(^|\s)` inside a JS template literal, where `\s` is not an escape
+ * sequence and collapses to a bare `s`. Postgres received `'s+'` and `'(^|s)'`,
+ * matched nothing, and every merge statement silently updated zero rows. POSIX
+ * classes say the same thing with no character a template literal can eat.
+ */
+const nameKeySql = (col = 'name') =>
+  "regexp_replace(regexp_replace(lower(btrim(" + col + ")), '[.,''\"`]', '', 'g'), '[[:space:]]+', ' ', 'g')";
+export const NAME_KEY_SQL = nameKeySql();
+
+/** Suffixes a company registry issues. A storefront name carries none of them. */
+export const REGISTERED_SQL =
+  "~* '(^|[[:space:]])(sdn[[:space:]]*bhd|sendirian[[:space:]]+berhad|berhad|bhd|plt|llp|pte[[:space:]]*ltd|ltd|limited|inc|incorporated|corp|corporation|gmbh|pty)$'";
+
 /** Apply only the report-owned schema. The historical core schema remains in schema.sql. */
 export function migrate(): Promise<void> {
   if (migrated) return migrated;
@@ -141,6 +161,107 @@ export function migrate(): Promise<void> {
     `);
     // Existing deployments already have company_research_run, so these must be
     // additive migrations rather than part of the CREATE TABLE definition only.
+    // ------------------------------------------------------------------ company identity
+    // A REGISTERED COMPANY NAME IS THE IDENTITY. Google issues a place id per
+    // BRANCH, so one legal entity arrives as several rows: "ERS Energy Sdn Bhd"
+    // is the KL head office (03-3099 1468) and "ERS Energy Sdn. Bhd." is the
+    // Johor branch (07-361 1468), and researching one could not see the other.
+    // Eternalgy Sdn Bhd was the same, split across a 21 Aug feed scan and a
+    // 23 Aug place-card scan, with three dossiers on one row and one on the other.
+    //
+    // Storefront names are NOT unique and are left alone: this table holds five
+    // separate "The Store" branches on five phone numbers. worker/db.mjs decides
+    // which is which; NAME_KEY_SQL / REGISTERED_SQL below are the same rule in SQL.
+    //
+    // NOTHING IS DELETED. The superseded rows keep their own address and phone
+    // and gain `merged_into`, pointing at the row that now carries the identity.
+    await sql(`
+      alter table company_data add column if not exists merged_into bigint
+        references company_data(id) on delete set null;
+      comment on column company_data.merged_into is
+        'Set when this row is a branch of a registered company that another row now represents. Kept, never deleted; scans and research follow the target.';
+      create index if not exists company_data_merged_idx on company_data (merged_into);
+    `);
+    // The oldest row of each registered name wins, because its id is the one
+    // already cited by existing reports.
+    await sql(`
+      with registered as (
+        select id, ${NAME_KEY_SQL} as k from company_data
+        where merged_into is null and ${NAME_KEY_SQL} ${REGISTERED_SQL}
+      ),
+      groups as (
+        select k, min(id) as keep from registered group by k having count(*) > 1
+      )
+      update company_data c set merged_into = g.keep
+      from registered r join groups g on g.k = r.k
+      where c.id = r.id and r.id <> g.keep;
+    `);
+    // Follow the merge everywhere a company is referenced, so no report and no
+    // scan link is left pointing at a row that no longer carries the identity.
+    await sql(`
+      update published_report p set company_id = c.merged_into
+      from company_data c where p.company_id = c.id and c.merged_into is not null;
+    `);
+    await sql(`
+      delete from search_report_company a using company_data c
+      where a.company_id = c.id and c.merged_into is not null
+        and exists (select 1 from search_report_company b
+                    where b.report_id = a.report_id and b.company_id = c.merged_into);
+      update search_report_company a set company_id = c.merged_into
+      from company_data c where a.company_id = c.id and c.merged_into is not null;
+    `);
+    // Adopt the registry name as the dedupe key, so the NEXT scan of any branch
+    // updates this row instead of opening a third one. Survivors only, and only
+    // where no other row already holds that key.
+    await sql(`
+      update company_data c set place_id = 'name:' || ${NAME_KEY_SQL}
+      where c.merged_into is null
+        and c.place_id not like 'name:%'
+        and ${NAME_KEY_SQL} ${REGISTERED_SQL}
+        and not exists (
+          select 1 from company_data d
+          where d.id <> c.id and d.place_id = 'name:' || ${nameKeySql('c.name')}
+        );
+    `);
+
+    // Researching a company again produces a NEW report, not a replacement: the
+    // findings are a snapshot of what the public web said on a given day, and the
+    // previous snapshot is the only thing a later one can be read against. Four
+    // Eternalgy Sdn Bhd dossiers existed under one identical title before this,
+    // three of them on the same company id, with nothing to tell them apart.
+    await sql(`alter table published_report add column if not exists version integer;`);
+    // Self-healing rather than run-once: it renumbers any company whose reports
+    // do not already carry distinct versions. That covers the first backfill
+    // (every version still null) AND the case above, where merging two company
+    // rows brings two V1 dossiers together under one id. Once a company is
+    // numbered correctly the group is skipped, so re-running costs nothing.
+    await sql(`
+      with dupes as (
+        select report_type, company_id from published_report
+        where company_id is not null
+        group by report_type, company_id
+        having count(*) <> count(distinct version)
+      ),
+      ranked as (
+        select p.id, row_number() over (
+                 partition by p.report_type, p.company_id order by p.created_at, p.id
+               ) as rn
+        from published_report p
+        join dupes d on d.report_type = p.report_type and d.company_id = p.company_id
+      )
+      update published_report p set version = r.rn from ranked r where p.id = r.id;
+    `);
+    await sql(`update published_report set version = 1 where version is null;`);
+    await sql(`
+      alter table published_report alter column version set default 1;
+      alter table published_report alter column version set not null;
+      comment on column published_report.version is
+        'Nth research pass on this company_id. V1 is the first; a re-run is V2, V3, ... Never overwritten.';
+    `);
+    await sql(`
+      create index if not exists published_report_company_version_idx
+        on published_report (company_id, report_type, version desc);
+    `);
     await sql(`
       alter table company_research_run add column if not exists translated_report jsonb;
       alter table company_research_run add column if not exists translation_metadata jsonb not null default '{}'::jsonb;
@@ -169,6 +290,7 @@ export interface PublishedReport {
   job_id: string | null;
   result: Record<string, unknown> | null;
   error: string | null;
+  version: number;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -183,9 +305,20 @@ export async function createReport(input: {
 }): Promise<PublishedReport> {
   await migrate();
   const publicId = crypto.randomBytes(15).toString('base64url');
+  // The version is read and written inside one statement so two clicks arriving
+  // together cannot both compute "V2". A report with no company (a business
+  // search) is always V1 -- there is no earlier pass for it to follow.
   const out = await sql<PublishedReport>(
-    `insert into published_report (public_id, report_type, title, user_id, request, company_id)
-     values ($1,$2,$3,$4,$5::jsonb,$6)
+    `with v as (
+       select case when $6::bigint is null then 1
+              else (select coalesce(max(version), 0) + 1 from published_report
+                    where report_type = $2 and company_id = $6::bigint)
+              end as n
+     )
+     insert into published_report (public_id, report_type, title, user_id, request, company_id, version)
+     select $1, $2, $3 || case when v.n > 1 then ' · V' || v.n else '' end,
+            $4, $5::jsonb, $6, v.n
+     from v
      returning *`,
     [publicId, input.type, input.title, input.userId ?? null, JSON.stringify(input.request), input.companyId ?? null],
   );
@@ -307,15 +440,12 @@ export async function findPersonBrief(sourceReportId: string, personId: string):
 }
 
 /**
- * Every live brief on this company report, keyed by the person it covers.
- *
- * The dossier page renders one button per person and must know, in a single
- * round trip, which of them already have a brief -- a per-person query would
- * be one round trip per row on a page that routinely lists a dozen people.
- * Same status rule as findPersonBrief: a failed brief is omitted so its row
- * offers a retry rather than a link to the failure.
+ * Every VIP brief already started from one company dossier, keyed by the person
+ * it is about. The report page needs the whole set at once: a person who has a
+ * brief gets a link to it, and only a person who does not gets a button that
+ * would start one.
  */
-export async function listPersonBriefs(sourceReportId: string): Promise<Map<string, PublishedReport>> {
+export async function listPersonBriefs(sourceReportId: string): Promise<Record<string, PublishedReport>> {
   await migrate();
   const out = await sql<PublishedReport>(
     `select distinct on (request->>'personId') *
@@ -326,10 +456,10 @@ export async function listPersonBriefs(sourceReportId: string): Promise<Map<stri
      order by request->>'personId', created_at desc`,
     [sourceReportId],
   );
-  const byPerson = new Map<string, PublishedReport>();
+  const byPerson: Record<string, PublishedReport> = {};
   for (const row of out.rows) {
-    const personId = String((row.request as Record<string, unknown> | null)?.personId ?? '');
-    if (personId) byPerson.set(personId, row);
+    const personId = String((row.request as Record<string, unknown>)?.personId ?? '');
+    if (personId) byPerson[personId] = row;
   }
   return byPerson;
 }
@@ -374,9 +504,16 @@ export async function getCompany(companyId: string): Promise<Record<string, unkn
  */
 export async function findCompanyReport(companyId: string): Promise<PublishedReport | null> {
   await migrate();
+  // Only a run that is STILL GOING. This guard exists so a double-click, or a
+  // shared link opened by three people at once, lands on the run already in
+  // flight instead of starting four twenty-minute dossiers -- and that is all it
+  // is for. A company whose research has finished is allowed to be researched
+  // again; that second pass is V2, not a duplicate. Returning the old terminal
+  // report here is what made "research this company" silently do nothing.
   const out = await sql<PublishedReport>(
     `select * from published_report
-     where company_id = $1 and report_type = 'company_research' and status <> 'failed'
+     where company_id = $1 and report_type = 'company_research'
+       and status in ('queued', 'running')
      order by id desc limit 1`,
     [companyId],
   );

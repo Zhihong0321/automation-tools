@@ -114,6 +114,10 @@ function envelope(req: http.IncomingMessage, report: db.PublishedReport): Record
     type: report.report_type,
     status: report.status,
     title: report.title,
+    // Which pass this is on the same company. 1 unless the company has been
+    // researched before; a caller comparing two dossiers needs to know which
+    // one is newer without parsing the title.
+    version: report.version,
     created_at: report.created_at,
     updated_at: report.updated_at,
     completed_at: report.completed_at,
@@ -1851,7 +1855,6 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
   const pageMatch = /^\/r\/([A-Za-z0-9_-]{20})$/.exec(p);
   const jsonMatch = /^\/public\/reports\/([A-Za-z0-9_-]{20})$/.exec(p);
   const researchMatch = /^\/public\/reports\/([A-Za-z0-9_-]{20})\/research$/.exec(p);
-  const personResearchMatch = /^\/public\/reports\/([A-Za-z0-9_-]{20})\/person-research$/.exec(p);
 
   // Start a company dossier from the shared report page.
   //
@@ -1892,43 +1895,6 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
     return sendJson(res, 202, { report: envelope(req, report) }), true;
   }
 
-  // Start a VIP brief for any person listed in a shared company dossier.
-  //
-  // Same capability rule as /research above: the personId must already be one
-  // this dossier lists, so holding the link lets you brief the people named in
-  // it and nobody else. The authed /api/person-research keeps its own route
-  // because it accepts identity resolvers (email/mobile), and that is exactly
-  // the input an unauthenticated page must never be able to supply.
-  if ((req.method ?? 'GET') === 'POST' && personResearchMatch) {
-    if (!db.configured()) return sendJson(res, 503, { error: 'reports are not configured' }), true;
-    const parent = await db.getReport(personResearchMatch[1]!);
-    if (!parent || parent.report_type !== 'company_research' || !parent.company_id
-      || (parent.status !== 'completed' && parent.status !== 'partial')) {
-      return sendJson(res, 404, { error: 'completed company research report not found' }), true;
-    }
-    const body = await readBody(req);
-    const personId = str(body.personId || body.person_id).trim();
-    const person = rows(parent.result?.people).find((row) => first(row, ['id']) === personId);
-    const company = await db.getCompany(parent.company_id);
-    if (!person || !company) {
-      return sendJson(res, 404, { error: 'that person is not listed in this report', personId }), true;
-    }
-    // One brief per person per dossier, for the same reason the authed route
-    // joins instead of starting a second run: P01 already has an automatic
-    // brief, and a shared link opened by three people must not start three.
-    const existing = await db.findPersonBrief(parent.public_id, personId);
-    if (existing) return sendJson(res, 200, { report: envelope(req, existing) }), true;
-    const report = await launchPersonResearch({
-      sourceReportId: parent.public_id,
-      company,
-      person,
-      requesterId: 'report:' + parent.public_id,
-      identityHints: {},
-      autoTriggered: false,
-    });
-    return sendJson(res, 202, { report: envelope(req, report) }), true;
-  }
-
   if ((req.method ?? 'GET') !== 'GET' || (!pageMatch && !jsonMatch)) return false;
   if (!db.configured()) {
     res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
@@ -1961,7 +1927,10 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
   else {
     const run = await db.researchRun(report.id);
     const chinese = object(run?.translated_report);
-    html = ui.companyPage(report, Object.keys(chinese).length ? chinese : null, await db.listPersonBriefs(report.public_id));
+    // Which people already have a VIP brief, so the page shows a link to it
+    // rather than a button that would start one.
+    const briefs = await db.listPersonBriefs(report.public_id).catch(() => ({}));
+    html = ui.companyPage(report, Object.keys(chinese).length ? chinese : null, briefs);
   }
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
   res.end(html);

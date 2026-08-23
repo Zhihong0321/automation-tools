@@ -428,7 +428,11 @@ test('both public report layouts include mobile viewport and report content', ()
   const deepReport = report('company_research');
   deepReport.result = {
     contacts: [{ purpose: 'Main', value: '+60123', evidence_url: 'https://example.com/contact' }],
-    people: [{ name: 'A Person', role: 'CEO', role_url: 'https://example.com/team' }, { name: 'B Person', id: 'p02', role: 'CFO', role_url: 'https://example.com/team' }],
+    people: [
+      { id: 'person_aaaa', name: 'A Person', role: 'CEO', role_url: 'https://example.com/team' },
+      { id: 'person_bbbb', name: 'Second Person', role: 'CFO', role_url: 'https://example.com/team' },
+      { name: 'Nameless Id', role: 'Unknown' },
+    ],
     candidate_people: [{ name: 'A Lead', role: 'Employee', source_name: 'LinkedIn listing', verification_note: 'Confirm current role.' }],
     auto_person_research: { report_id: 'abcdefghijklmnopqrst', person_name: 'A Person' },
   };
@@ -439,13 +443,22 @@ test('both public report layouts include mobile viewport and report content', ()
   }
   assert.match(search, /Example Solar/);
   assert.match(deep, /Best contact routes/);
-  assert.ok(deep.includes('A Person <a class="button" href="/r/abcdefghijklmnopqrst">Person report'), 'a person with a brief links to it');
-  assert.ok(deep.includes('B Person <button class="button person-research" type="button" data-person="p02"'), 'a person without a brief can be sent to research');
-  assert.ok(deep.includes('/person-research'), 'the dossier ships the public start route');
-  const withBrief = companyPage(deepReport, null, new Map([['p02', { public_id: 'zyxwvutsrqponmlkjihg' }]]));
-  assert.ok(withBrief.includes('B Person <a class="button" href="/r/zyxwvutsrqponmlkjihg">Person report'), 'a completed brief replaces the button with its link');
   assert.match(deep, /People to verify/);
-  assert.match(deep, /\/r\/abcdefghijklmnopqrst/);
+  // P01 already has a brief, so their control LINKS to it and must not offer to
+  // start a second one.
+  assert.match(deep, /A Person.*\/r\/abcdefghijklmnopqrst/);
+  assert.doesNotMatch(deep, /data-person="person_aaaa"/);
+  // Everyone else gets a button that starts their own brief. Before this, the
+  // fifteen people who were not P01 had no control at all.
+  assert.match(deep, /Second Person.*data-person="person_bbbb"/);
+  assert.match(deep, /Person research/);
+  // A person the pipeline could not give an id to cannot be researched by id,
+  // so they get no button rather than one that would 400.
+  assert.doesNotMatch(deep, /Nameless Id<\/h3>\s*<button/);
+  // The trigger posts to the authenticated endpoint and never puts the key in a URL.
+  assert.match(deep, /\/api\/person-research/);
+  assert.match(deep, /Bearer/);
+  assert.doesNotMatch(deep, /token=/);
   const bilingual = companyPage(deepReport, { ...deepReport.result, summary: '中文摘要' });
   assert.match(bilingual, /中文报告/);
   assert.match(bilingual, /中文摘要/);
@@ -504,4 +517,42 @@ test('a failed report shows the reason and lights no round pips', () => {
   const partial = report('company_research');
   partial.status = 'partial';
   assert.equal(companyPage(partial).match(/class="round on"/g)?.length, 3);
+});
+
+// The company-identity SQL is built in JS template literals, where `\s` is NOT
+// an escape sequence and silently collapses to a bare `s`. That exact slip
+// shipped once: Postgres received '(^|s)(sdns*bhd|...)$' and 's+', matched
+// nothing, and every merge statement updated zero rows without erroring.
+test('the identity SQL survives the template literal it is written in', async () => {
+  const { NAME_KEY_SQL, REGISTERED_SQL } = await import('./reportdb.ts');
+  for (const [label, sql] of [['name key', NAME_KEY_SQL], ['suffix test', REGISTERED_SQL]] as const) {
+    assert.ok(sql.includes('[[:space:]]'), label + ' must use POSIX classes, not backslash escapes');
+    assert.ok(!/\\/.test(sql), label + ' must contain no backslash a template literal can eat');
+    assert.ok(!/\(\^\|s\)/.test(sql), label + ' shows the collapsed-escape signature (^|s)');
+    assert.ok(!/sdns\*bhd/.test(sql), label + ' shows the collapsed-escape signature sdns*bhd');
+  }
+  assert.ok(REGISTERED_SQL.startsWith('~*'), 'the suffix test is a regex match operator');
+  assert.ok(NAME_KEY_SQL.includes('lower(btrim(name))'), 'the name key normalises the name column');
+});
+
+// Person research needs a completed dossier: /api/person-research rejects a
+// source report that is still running, so the page must not offer the button yet.
+test('a company report still running offers no person-research button', () => {
+  const running = report('company_research');
+  running.status = 'running';
+  running.result = { people: [{ id: 'person_cccc', name: 'Someone', role: 'CEO' }] };
+  const html = companyPage(running);
+  assert.doesNotMatch(html, /data-person="person_cccc"/);
+});
+
+// A brief that has finished says so, instead of reading as an invitation to start one.
+test('an existing brief is linked, and its label reflects whether it is done', () => {
+  const done = report('company_research');
+  done.result = { people: [{ id: 'person_dddd', name: 'Finished Person', role: 'CEO' }] };
+  const html = companyPage(done, null, {
+    person_dddd: { public_id: 'zyxwvutsrqponmlkjihg', status: 'completed' },
+  });
+  assert.match(html, /\/r\/zyxwvutsrqponmlkjihg/);
+  assert.match(html, /Open brief/);
+  assert.doesNotMatch(html, /data-person="person_dddd"/);
 });
