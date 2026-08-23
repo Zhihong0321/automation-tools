@@ -46,3 +46,27 @@ test('limitedView is carried through, and is not itself a block', () => {
   assert.equal(r.blocked, false);
   assert.equal(r.found, 30);
 });
+
+// The failure this file did not cover: a keyword specific enough to name one
+// business gets no feed at all, because Maps redirects to that place's own card.
+// It was scored as a block and published as an empty report.
+test('a place card with no feed is a reading, not a block', () => {
+  const r = classify(page({ feedPresent: false, placeCard: true }), list(1), 10);
+  assert.equal(r.blocked, false);
+  assert.equal(r.found, 1);
+  assert.equal(r.blockedReason, null);
+  assert.equal(r.capped, false);
+});
+
+test('a place card that read nothing is still a block', () => {
+  const r = classify(page({ feedPresent: false, placeCard: false }), [], 10);
+  assert.equal(r.blocked, true);
+  assert.equal(r.found, null);
+  assert.equal(r.blockedReason, 'no results feed');
+});
+
+test('a captcha over a place card still blocks', () => {
+  const r = classify(page({ feedPresent: false, placeCard: true, signals: { captcha: true } }), list(1), 10);
+  assert.equal(r.blocked, true);
+  assert.equal(r.blockedReason, 'captcha');
+});

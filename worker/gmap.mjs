@@ -191,6 +191,73 @@ const EXTRACT = `(() => {
 })()`;
 
 /**
+ * Runs in the page. Reads the ONE place Maps redirected us to.
+ *
+ * A query specific enough to match a single business -- which is every "research
+ * this company" lookup -- never renders a results feed at all. Maps sends the
+ * browser to /maps/place/<name> and draws that place's own detail card instead.
+ * The old code saw no feed, called it `blocked: no results feed`, and returned
+ * zero rows, while the name, rating, category, address, phone and website sat on
+ * the screen the whole time. Four rounds of research then ran on an empty list
+ * and published an empty report -- `eternalgy sdn bhd johor`, 23 Aug.
+ *
+ * Read through `data-item-id`, which is Maps' own hook for these rows
+ * (`address`, `authority` = website, `phone:tel:...`), for the same reason the
+ * feed extractor leans on ARIA: the class names are generated and change.
+ */
+const EXTRACT_PLACE = `(() => {
+  const body = document.body.innerText || '';
+  const main = document.querySelector('div[role="main"][aria-label]');
+  const name = (document.querySelector('h1')?.innerText || main?.getAttribute('aria-label') || '').trim();
+
+  const addrEl = document.querySelector('[data-item-id="address"]');
+  const siteEl = document.querySelector('[data-item-id="authority"]');
+  const telEl  = document.querySelector('[data-item-id^="phone:tel:"]');
+  // "Address: 23-01, Jalan Mutiara Emas 10/19, ..." -- the label carries the
+  // full value, the visible text is sometimes truncated.
+  const clean = (s) => (s || '').replace(/^(Address|Phone|Website):\\s*/i, '').trim() || null;
+
+  const starsLabel = document.querySelector('[role="img"][aria-label*="star"]')?.getAttribute('aria-label') || '';
+  const rating = /([\\d.]+)/.exec(starsLabel);
+  // Same as the feed: signed out, Maps serves "4.7 stars" with no count at all.
+  const reviews = /\\((\\d[\\d,]*)\\)/.exec(starsLabel) || /(\\d[\\d,]*)\\s*review/i.exec(starsLabel);
+
+  const lines = (main?.innerText || '').split('\\n').map((s) => s.trim()).filter(Boolean);
+  let category = document.querySelector('button[jsaction*="category"]')?.innerText.trim() || null;
+  if (!category && rating) {
+    const i = lines.indexOf(rating[1]);
+    if (i >= 0 && lines[i + 1]) category = lines[i + 1];
+  }
+
+  const business = !name ? null : {
+    name,
+    rating: rating ? Number(rating[1]) : null,
+    reviews: reviews ? Number(reviews[1].replace(/,/g, '')) : null,
+    category: category || null,
+    address: clean(addrEl?.getAttribute('aria-label') || addrEl?.innerText),
+    phone: clean(telEl?.getAttribute('aria-label') || telEl?.innerText),
+    // Already ruled out as a Google host by being the card's own website row.
+    website: siteEl?.href || null,
+    mapsUrl: location.href,
+  };
+
+  return {
+    businesses: business ? [business] : [],
+    // Stays false: there really was no feed, and which path produced the rows is
+    // worth being able to see. placeCard is what says the page WAS read.
+    feedPresent: false,
+    placeCard: !!business,
+    signals: {
+      captcha: /unusual traffic|not a robot|recaptcha/i.test(body),
+      consent: /before you continue|consent\\.google/i.test(body + location.href),
+      limitedView: /limited view of Google Maps/i.test(body),
+      signedIn: !/\\bSign in\\b/.test(body),
+    },
+    title: document.title,
+  };
+})()`;
+
+/**
  * Wait for the feed to actually exist rather than sleeping a guessed amount.
  * `connect()` already polls for this reason: a slow machine must not fail and a
  * fast one must not be punished. A sweep runs several of these back to back, so
@@ -243,7 +310,10 @@ async function harvest(conn, url, max) {
  */
 export function classify(page, businesses, max) {
   const sig = page.signals;
-  const blocked = sig.captcha || sig.consent || !page.feedPresent || businesses.length === 0;
+  // A place card is a real reading of a real business, not a missing feed --
+  // see EXTRACT_PLACE. Judging it a block is what published the empty report.
+  const readable = page.feedPresent || page.placeCard === true;
+  const blocked = sig.captcha || sig.consent || !readable || businesses.length === 0;
   return {
     found: blocked ? null : businesses.length,
     capped: !blocked && businesses.length >= max,
@@ -254,7 +324,7 @@ export function classify(page, businesses, max) {
         ? 'captcha'
         : sig.consent
           ? 'consent wall'
-          : !page.feedPresent
+          : !readable
             ? 'no results feed'
             : 'feed returned nothing — indistinguishable from a soft block, not recorded as 0',
     // Not a block on its own — Maps serves this to any signed-out session — but it
@@ -292,6 +362,17 @@ export async function scan(payload, job = null) {
     let { page, scrolls } = await harvest(conn, MAPS + encodeURIComponent(query) + '?hl=en', max);
     let businesses = page.businesses.filter((b) => b.name);
     let categories = null;
+
+    // A keyword specific enough to name one business is not a search either:
+    // Maps redirects to that place's card and there is no feed to read. This is
+    // the shape of EVERY company-research lookup, and it was returning zero.
+    if (keyword && !page.feedPresent && businesses.length === 0) {
+      const href = await conn.evaluate('location.href');
+      if (href && href.includes('/maps/place/')) {
+        page = await conn.evaluate(EXTRACT_PLACE);
+        businesses = page.businesses.filter((b) => b.name);
+      }
+    }
 
     // A bare town name is not a search. Maps resolves it to the town's own map
     // card, so there is no results feed to read and the old code called that a
