@@ -22,7 +22,11 @@ test('end-user portal combines discovery, deep research, and report library', ()
   assert.match(html, /Enter a business, a location, or both/);
   assert.match(html, /if\(!keyword&&!place\)/);
   assert.doesNotMatch(html, /id="keyword" required/);
-  assert.match(html, /sessionStorage/);
+  // The key is entered once. A per-tab store meant every report link opened in a
+  // new tab asked again, so the durable copy is a cookie mirrored to localStorage.
+  assert.match(html, /document\.cookie/);
+  assert.match(html, /eeKey\.read\(\)/);
+  assert.doesNotMatch(html, /sessionStorage\.getItem\('ee_portal_token'\)/);
   assert.doesNotMatch(html, /eternalgy2026/i);
   const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1];
   assert.ok(script);
@@ -35,6 +39,7 @@ test('portal uses a mobile bottom navigation and scoped access gate', () => {
   assert.match(html, /@media\(max-width:820px\)/);
   assert.match(html, /Workspace access key/);
   assert.match(html, /never added to a report link/);
+  assert.match(html, /You enter it once/);
 });
 
 test('a company can be researched by name, after the operator confirms the Maps match', () => {

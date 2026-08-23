@@ -1,4 +1,5 @@
 import type { PublishedReport } from './reportdb.ts';
+import { TOKEN_STORE_JS } from './tokenstore.ts';
 
 const esc = (value: unknown): string => String(value ?? '').replace(/[&<>"']/g, (c) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -336,15 +337,13 @@ export function companyPage(
     body += `<script>(function(){
 var button=document.querySelector('button.research[data-ads]');
 if(!button)return;
-var KEY='ee_portal_token';
+${TOKEN_STORE_JS}
 var COMPANY=${JSON.stringify(String(report.company_id ?? ''))};
 function accessKey(){
-  var stored='';
-  try{stored=sessionStorage.getItem(KEY)||''}catch(err){stored=''}
+  var stored=eeKey.read();
   if(stored)return stored;
   var typed=(window.prompt('Access key to capture their ads')||'').trim();
-  if(typed){try{sessionStorage.setItem(KEY,typed)}catch(err){}}
-  return typed;
+  return typed?eeKey.save(typed):'';
 }
 function restore(markup,message){button.disabled=false;button.innerHTML=markup;if(message)window.alert(message)}
 button.addEventListener('click',function(){
@@ -361,7 +360,7 @@ button.addEventListener('click',function(){
       var payload={};
       try{payload=text?JSON.parse(text):{}}catch(err){payload={}}
       if(response.status===401||response.status===403){
-        try{sessionStorage.removeItem(KEY)}catch(err){}
+        eeKey.clear();
         return restore(markup,'That access key was rejected. Try again.');
       }
       if(!response.ok)return restore(markup,(payload&&payload.error)||('Could not start ads capture: '+response.status));
@@ -381,21 +380,20 @@ button.addEventListener('click',function(){
   // The button only posts; the server decides. /api/person-research already
   // joins a brief that is running rather than starting a second four-round pass,
   // so a double-click costs nothing. The access key is the portal's own, read
-  // from sessionStorage on the same origin and sent only as a bearer header --
-  // never put in the URL, never written to the page.
+  // through eeKey on the same origin and sent only as a bearer header -- never
+  // put in the URL, never written to the page. It is asked for once, on the first
+  // report where no key is stored yet, and only again if the server rejects it.
   if (peopleRows.includes('class="button research"')) {
     body += `<script>(function(){
 var buttons=document.querySelectorAll('button.research[data-person]');
 if(!buttons.length)return;
-var KEY='ee_portal_token';
+${TOKEN_STORE_JS}
 var REPORT=${JSON.stringify(report.public_id)};
 function accessKey(){
-  var stored='';
-  try{stored=sessionStorage.getItem(KEY)||''}catch(err){stored=''}
+  var stored=eeKey.read();
   if(stored)return stored;
   var typed=(window.prompt('Access key to start VIP research')||'').trim();
-  if(typed){try{sessionStorage.setItem(KEY,typed)}catch(err){}}
-  return typed;
+  return typed?eeKey.save(typed):'';
 }
 function restore(button,markup,message){button.disabled=false;button.innerHTML=markup;if(message)window.alert(message)}
 buttons.forEach(function(button){
@@ -413,7 +411,7 @@ buttons.forEach(function(button){
         var payload={};
         try{payload=text?JSON.parse(text):{}}catch(err){payload={}}
         if(response.status===401||response.status===403){
-          try{sessionStorage.removeItem(KEY)}catch(err){}
+          eeKey.clear();
           return restore(button,markup,'That access key was rejected. Try again.');
         }
         if(!response.ok)return restore(button,markup,(payload&&payload.error)||('Could not start research: '+response.status));

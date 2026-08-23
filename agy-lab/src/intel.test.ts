@@ -388,6 +388,31 @@ test('both public report layouts include mobile viewport and report content', ()
   assert.match(bilingual, /data-report-language-panel="zh-CN" hidden/);
 });
 
+test('a report page asks for the access key once, not once per tab', () => {
+  // The key used to live in sessionStorage, which is per-tab: every report link
+  // opened in a new tab prompted again. It now goes to a first-party cookie
+  // (mirrored to localStorage, because Safari expires script-written cookies) so
+  // one entry covers every tab, every report and every restart.
+  const deepReport = report('company_research');
+  deepReport.result = {
+    people: [{ id: 'person_bbbb', name: 'Second Person', role: 'CFO', role_url: 'https://example.com/team' }],
+  };
+  const html = companyPage(deepReport);
+  assert.match(html, /var stored=eeKey\.read\(\)/);
+  assert.match(html, /Max-Age='\+YEAR/);
+  assert.match(html, /localStorage\.setItem\(NAME,value\)/);
+  assert.doesNotMatch(html, /sessionStorage\.setItem\(KEY/);
+  // Only a key the server itself rejected is thrown away, and the prompt is
+  // reached solely when nothing is stored.
+  assert.match(html, /response\.status===401\|\|response\.status===403\)\{\s*eeKey\.clear\(\)/);
+  assert.match(html, /if\(stored\)return stored;\s*var typed=\(window\.prompt/);
+  // The stored key stays out of the wire format the server reads: bearer only.
+  assert.doesNotMatch(html, /token=/);
+  for (const script of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) {
+    assert.doesNotThrow(() => new Function(script[1]));
+  }
+});
+
 test('VIP brief layout labels public-professional scope and evidence', () => {
   const brief = report('person_research');
   brief.title = 'A Person VIP brief';

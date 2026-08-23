@@ -1,8 +1,12 @@
 // End-user business-intelligence workspace.
 //
 // The shell is public, but it contains no credential. Users enter a scoped
-// PORTAL_TOKEN which is kept in sessionStorage and sent only as a bearer header.
+// PORTAL_TOKEN which is kept by eeKey (see tokenstore.ts) and sent only as a
+// bearer header. Entered once, it survives new tabs and browser restarts -- the
+// portal and every report page read the same store, so nobody is asked twice.
 // The same page also accepts LAB_TOKEN for owner testing.
+import { TOKEN_STORE_JS } from './tokenstore.ts';
+
 export function page(): string {
   return String.raw`<!doctype html>
 <html lang="en"><head>
@@ -26,7 +30,7 @@ export function page(): string {
 .vip{display:inline-flex;align-items:center;gap:6px;min-height:38px;border:1px solid var(--ink);background:transparent;color:var(--ink);padding:0 13px;font:750 9px/1 var(--sans);letter-spacing:.09em;text-transform:uppercase;white-space:nowrap;text-decoration:none;cursor:pointer}.vip:hover{background:var(--ink);color:#fff}.vip:disabled{opacity:.45;cursor:wait}
 @media(max-width:820px){.company-grid{grid-template-columns:1fr}.mode-tabs{display:grid;grid-template-columns:1fr 1fr;margin-bottom:20px}.mode-tab{margin-right:0;text-align:left;font-size:9px;letter-spacing:.08em}.report-actions{grid-column:2;grid-row:2;align-self:end;gap:9px}.person-row{grid-template-columns:30px minmax(0,1fr);gap:8px 12px}.person-row .vip{grid-column:2;justify-self:start;min-height:44px}}
 </style></head><body>
-<div id="accessGate" class="gate"><div class="gate-panel"><div class="gate-mark">EE</div><h1>Private intelligence workspace.</h1><p>Enter the access key supplied by the workspace owner. It stays in this browser tab and is never added to a report link.</p><form class="gate-form" onsubmit="connect(event)"><input id="accessKey" type="password" autocomplete="current-password" placeholder="Workspace access key" aria-label="Workspace access key"><button id="connectButton" class="primary" type="submit">Enter</button></form><p id="gateError" class="gate-error" role="alert"></p></div></div>
+<div id="accessGate" class="gate"><div class="gate-panel"><div class="gate-mark">EE</div><h1>Private intelligence workspace.</h1><p>Enter the access key supplied by the workspace owner. You enter it once: it stays in this browser and is never added to a report link.</p><form class="gate-form" onsubmit="connect(event)"><input id="accessKey" type="password" autocomplete="current-password" placeholder="Workspace access key" aria-label="Workspace access key"><button id="connectButton" class="primary" type="submit">Enter</button></form><p id="gateError" class="gate-error" role="alert"></p></div></div>
 <div id="portalApp" class="app" aria-hidden="true" inert>
   <header class="mast"><div class="mast-inner"><div class="brand"><span class="mark">EE</span><span>Business intelligence</span></div><nav class="desktop-nav" aria-label="Workspace"><button class="nav-button active" data-view="discover" onclick="switchView('discover')">Discover</button><button class="nav-button" data-view="library" onclick="switchView('library')">Reports</button><span class="access"><span class="access-dot"></span>Connected</span><button class="signout" onclick="disconnect()">Sign out</button></nav><button class="signout" onclick="disconnect()">Exit</button></div></header>
   <main class="content">
@@ -45,6 +49,7 @@ export function page(): string {
 </div><div id="toast" class="toast" role="status"></div>
 <script>
 'use strict';
+${TOKEN_STORE_JS}
 var state={token:'',jobs:{},reports:[],filter:'all',mode:'market',toastTimer:null};
 var terminal=['completed','partial','failed'];
 function el(id){return document.getElementById(id)}
@@ -55,9 +60,9 @@ function safeUrl(value){try{var u=new URL(String(value));return u.protocol==='ht
 function date(value){try{return new Intl.DateTimeFormat('en',{day:'2-digit',month:'short',year:'numeric'}).format(new Date(value))}catch(e){return 'Undated'}}
 function showToast(message){var node=el('toast');node.textContent=message;node.classList.add('show');clearTimeout(state.toastTimer);state.toastTimer=setTimeout(function(){node.classList.remove('show')},3600)}
 async function api(path,options){options=options||{};var headers=Object.assign({'Authorization':'Bearer '+state.token},options.headers||{});if(options.body)headers['Content-Type']='application/json';var response=await fetch(path,Object.assign({},options,{headers:headers}));var text=await response.text();var body={};try{body=text?JSON.parse(text):{}}catch(e){body={error:text||'Invalid server response'}}if(!response.ok){var message=typeof body.error==='string'?body.error:(body.error&&body.error.message)||('Request failed: '+response.status);var error=new Error(message);error.status=response.status;throw error}return body}
-async function connect(event){if(event)event.preventDefault();var key=el('accessKey').value.trim();if(!key)return;state.token=key;el('connectButton').disabled=true;el('gateError').textContent='';try{await api('/api/reports?limit=1');sessionStorage.setItem('ee_portal_token',key);el('accessGate').classList.add('hidden');el('portalApp').removeAttribute('inert');el('portalApp').setAttribute('aria-hidden','false');await loadLibrary();showToast('Workspace connected')}catch(error){state.token='';el('gateError').textContent=error.status===401?'Access key not accepted.':error.message}finally{el('connectButton').disabled=false}}
-function disconnect(){sessionStorage.removeItem('ee_portal_token');state.token='';location.reload()}
-function authLost(error){if(error&&error.status===401){sessionStorage.removeItem('ee_portal_token');state.token='';el('accessGate').classList.remove('hidden');el('gateError').textContent='Your access expired. Enter the workspace key again.';return true}return false}
+async function connect(event){if(event)event.preventDefault();var key=el('accessKey').value.trim();if(!key)return;state.token=key;el('connectButton').disabled=true;el('gateError').textContent='';try{await api('/api/reports?limit=1');eeKey.save(key);el('accessGate').classList.add('hidden');el('portalApp').removeAttribute('inert');el('portalApp').setAttribute('aria-hidden','false');await loadLibrary();showToast('Workspace connected')}catch(error){state.token='';el('gateError').textContent=error.status===401?'Access key not accepted.':error.message}finally{el('connectButton').disabled=false}}
+function disconnect(){eeKey.clear();state.token='';location.reload()}
+function authLost(error){if(error&&error.status===401){eeKey.clear();state.token='';el('accessGate').classList.remove('hidden');el('gateError').textContent='Your access expired. Enter the workspace key again.';return true}return false}
 function switchView(name){document.querySelectorAll('.view').forEach(function(node){node.classList.toggle('active',node.id===name+'View')});document.querySelectorAll('[data-view]').forEach(function(node){node.classList.toggle('active',node.getAttribute('data-view')===name)});if(name==='library')loadLibrary();window.scrollTo({top:0,behavior:'smooth'})}
 function upsertJob(report,kind){state.jobs[report.id]=Object.assign({},state.jobs[report.id]||{},{report:report,kind:kind});renderJobs()}
 function renderJobs(){var values=Object.keys(state.jobs).map(function(key){return state.jobs[key]});el('activeSection').classList.toggle('hidden',values.length===0);el('jobs').innerHTML=values.map(function(job){var r=job.report;var done=terminal.indexOf(r.status)>=0;var pulse=r.status==='failed'?'bad':done?'done':'';var label=job.kind==='search'?'Market scan':job.kind==='lookup'?'Company lookup':job.kind==='vip'?'VIP brief':kind==='ads'?'Ads':'Company research';var open=safeUrl(r.view_url);return '<article class="job"><div class="job-type">'+label+'</div><div><div class="job-title">'+esc(r.title)+'</div><div class="job-meta">'+esc(r.status)+' · '+esc(r.id)+'</div></div><div class="job-action"><span class="pulse '+pulse+'"></span>'+(open?'<a class="text-action" target="_blank" rel="noopener" href="'+attr(open)+'">View <span>↗</span></a>':'')+'</div></article>'}).join('')}
@@ -80,6 +85,6 @@ return out||'<div class="empty">This dossier validated no people.</div>'}
 function companyName(report){var t=String(report.title||'');return t.replace(/\s+intelligence report$/i,'').replace(/\s+ads$/i,'').trim()||t}
 async function startAds(button){var name=button.getAttribute('data-name')||'';var companyId=button.getAttribute('data-company')||'';if(!name)return;var markup=button.innerHTML;button.disabled=true;button.textContent='Starting\u2026';try{var body=await api('/api/ads-research',{method:'POST',body:JSON.stringify({name:name,companyId:companyId||undefined,requesterId:'portal'})});var view=safeUrl(body.report&&body.report.view_url);if(view){button.outerHTML='<a class="text-action" target="_blank" rel="noopener" href="'+attr(view)+'">Open ads <span>\u2197</span></a>'}else{button.textContent='Ads underway'}if(body.report)poll(body.report,'ads')}catch(error){button.disabled=false;button.innerHTML=markup;if(!authLost(error))showToast(error.message)}}
 async function startVip(button){var reportId=button.getAttribute('data-report')||'';var personId=button.getAttribute('data-person')||'';if(!reportId||!personId)return;button.disabled=true;button.textContent='Starting\u2026';try{var body=await api('/api/person-research',{method:'POST',body:JSON.stringify({companyResearchId:reportId,personId:personId,requesterId:'portal'})});var view=safeUrl(body.report&&body.report.view_url);if(view){button.outerHTML='<a class="vip" target="_blank" rel="noopener" href="'+attr(view)+'">Open brief <span>\u2197</span></a>'}else{button.textContent='Brief underway'}upsertJob(body.report,'vip');poll(body.report,'vip');showToast('VIP brief started. Follow it in Active work.')}catch(error){button.disabled=false;button.textContent='VIP brief \u2192';if(!authLost(error))showToast(error.message)}}
-(function boot(){var saved=sessionStorage.getItem('ee_portal_token');if(saved){el('accessKey').value=saved;connect()}else{setTimeout(function(){el('accessKey').focus()},80)}})();
+(function boot(){var saved=eeKey.read();if(saved){el('accessKey').value=saved;connect()}else{setTimeout(function(){el('accessKey').focus()},80)}})();
 </script></body></html>`;
 }
