@@ -53,6 +53,9 @@ function envelope(req: http.IncomingMessage, report: db.PublishedReport): Record
     completed_at: report.completed_at,
     view_url: base + '/r/' + report.public_id,
     api_url: base + '/api/' + resource + '/' + report.public_id,
+    // The company this report is about, so a caller can start ads research against
+    // the same company without having to re-resolve it from the title.
+    company_id: report.company_id == null ? null : String(report.company_id),
     error: report.error,
   };
 }

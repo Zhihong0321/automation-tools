@@ -98,3 +98,17 @@ test('a company dossier offers ads research, and links an existing run instead',
   assert.match(linked, /\/r\/BBBBBBBBBBBBBBBBBBBB/);
   assert.doesNotMatch(linked, /data-ads="1"/);
 });
+
+test('the portal itself offers ads research on a finished dossier', () => {
+  const html = page();
+  // The portal renders its OWN dossier card, separate from the /r/:id report page.
+  // Shipping the button on only one of the two surfaces is how this was missed once.
+  assert.match(html, /Ads research/);
+  assert.match(html, /async function startAds/);
+  assert.match(html, /'\/api\/ads-research'/);
+  // Only a finished company dossier -- not a business list, not a run still going.
+  assert.match(html, /deep&&ready\?'<button class="text-action"/);
+  // The crawl is keyed by the company name, with the report-title suffix stripped.
+  assert.match(html, /function companyName/);
+  assert.match(html, /intelligence report\$/);
+});
