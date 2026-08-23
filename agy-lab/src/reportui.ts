@@ -194,6 +194,62 @@ ${body}<footer class="foot"><span>EE Business Intelligence · Confidential link<
 </main>${active ? '<script>setTimeout(()=>location.reload(),8000)</script>' : ''}${isSearch ? researchScript(report.public_id) : ''}</body></html>`;
 }
 
+/**
+ * The run's trail, oldest first.
+ *
+ * This page exists because answering "where did this run stop" used to mean
+ * joining a text file on the mini, a run directory on the mini, a Postgres row
+ * and a Railway stdout buffer -- by wall-clock timestamp, by hand. One id, one
+ * page, in order.
+ */
+export function logPage(report: PublishedReport, events: Record<string, unknown>[]): string {
+  const t0 = events.length ? Date.parse(String(events[0]!.at)) : 0;
+  const rows = events.map((e) => {
+    const at = Date.parse(String(e.at));
+    const offset = t0 ? Math.round((at - t0) / 1000) : 0;
+    const event = String(e.event ?? '');
+    const tone = /failed|evicted|error/.test(event) ? 'error'
+      : /completed|done|saved/.test(event) ? 'ok' : '';
+    const detail = obj(e.detail);
+    const cells = Object.entries(detail)
+      .filter(([, v]) => v !== null && v !== '' && !(Array.isArray(v) && !v.length))
+      .map(([k, v]) => `<span class="kv"><b>${esc(k)}</b> ${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</span>`)
+      .join(' ');
+    return `<tr class="${tone}">
+      <td class="mono">+${esc(offset)}s</td>
+      <td class="mono">${esc(String(e.at).slice(11, 19))}</td>
+      <td>${esc(e.stage ?? '—')}</td>
+      <td><strong>${esc(event)}</strong></td>
+      <td class="mono">${esc(e.job_id ?? '')}</td>
+      <td class="detail">${cells || '<span class="kv muted">—</span>'}</td>
+    </tr>`;
+  }).join('');
+
+  const body = `<section class="section">
+    <h2>Run trail</h2>
+    <p class="section-note">${esc(events.length)} events, oldest first. Written as the run happened, not assembled at the end &mdash; so a run stopped by a restart still shows where it stopped.</p>
+    <style>
+      .trail{width:100%;border-collapse:collapse;font-size:13px;margin-top:16px}
+      .trail th{text-align:left;padding:6px 10px;border-bottom:2px solid currentColor;opacity:.55;font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+      .trail td{padding:7px 10px;border-bottom:1px solid rgba(128,128,128,.22);vertical-align:top}
+      .trail .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap;opacity:.75}
+      .trail tr.error td{background:rgba(200,40,40,.09)}
+      .trail tr.error strong{color:#c02626}
+      .trail tr.ok strong{color:#1a7f4b}
+      .trail .detail{max-width:520px}
+      .trail .kv{display:inline-block;margin:0 10px 3px 0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;word-break:break-word}
+      .trail .kv b{opacity:.55;font-weight:600}
+      .trail .kv.muted{opacity:.4}
+    </style>
+    <table class="trail">
+      <thead><tr><th>+</th><th>Time</th><th>Stage</th><th>Event</th><th>Job</th><th>Detail</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="6">No events recorded for this run. Runs started before the trail existed have none.</td></tr>'}</tbody>
+    </table>
+    <p class="section-note" style="margin-top:18px"><a class="text-link" href="/r/${esc(report.public_id)}">&larr; Back to the report</a></p>
+  </section>`;
+  return shell(report, body);
+}
+
 export function notFoundPage(): string {
   const fake = { public_id: '', report_type: 'business_search', status: 'failed', title: 'Report not found', error: 'This report link is invalid or no longer available.', created_at: new Date().toISOString(), updated_at: new Date().toISOString() } as PublishedReport;
   return shell(fake, '<section class="section"><div class="message error">Check that the complete report link was copied.</div></section>');

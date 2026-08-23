@@ -171,6 +171,35 @@ export function migrate(): Promise<void> {
           check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research'));
       end $$;
     `);
+    // ------------------------------------------------------------------ the run log
+    // ONE APPEND-ONLY TRAIL PER RUN, and it lives in Postgres rather than in a
+    // process, a file on the mini, or a Railway stdout buffer.
+    //
+    // Before this table there were four separate recording systems and no id
+    // joining them: the worker log knew a job id, fb-recon knew a run directory,
+    // company_research_run knew a report id, and the container's stdout knew
+    // nothing at all. Answering "where did this run stop" meant matching wall
+    // clock timestamps across three machines by hand.
+    //
+    // Append-only and written as it happens, because the failure that started
+    // this -- the gateway restarting mid-job and answering the worker's result
+    // with "no such job -- it was evicted" -- destroys anything held in memory
+    // and anything assembled at the end. A row already committed survives it.
+    await sql(`
+      create table if not exists run_event (
+        id bigserial primary key,
+        at timestamptz not null default now(),
+        report_id bigint references published_report(id) on delete cascade,
+        public_id text,
+        job_id text,
+        stage text,
+        event text not null,
+        detail jsonb not null default '{}'::jsonb
+      );
+      create index if not exists run_event_report_idx on run_event (report_id, id);
+      create index if not exists run_event_public_idx on run_event (public_id, id);
+      create index if not exists run_event_at_idx on run_event (at desc);
+    `);
     // Existing deployments already have company_research_run, so these must be
     // additive migrations rather than part of the CREATE TABLE definition only.
     // ------------------------------------------------------------------ company identity
@@ -334,7 +363,12 @@ export async function createReport(input: {
      returning *`,
     [publicId, input.type, input.title, input.userId ?? null, JSON.stringify(input.request), input.companyId ?? null],
   );
-  return out.rows[0]!;
+  const created = out.rows[0]!;
+  await logEvent({
+    reportId: created.id, publicId, stage: 'report', event: 'report.created',
+    detail: { type: input.type, title: created.title, company_id: input.companyId ?? null, request: input.request },
+  });
+  return created;
 }
 
 export async function updateReport(publicId: string, patch: {
@@ -368,6 +402,22 @@ export async function updateReport(publicId: string, patch: {
     ],
   );
   if (!out.rows[0]) throw new Error('no published report ' + publicId);
+  // Status is the one field worth a line of its own: `running` -> `partial` is
+  // the transition a caller is waiting on, and until now nothing recorded when
+  // it happened or what it was carrying. A patch that touches no status (a
+  // jobId stamp, a heartbeat) is not an event.
+  if (patch.status || patch.completed || patch.error) {
+    await logEvent({
+      reportId: out.rows[0].id, publicId, stage: 'report',
+      event: 'report.' + (patch.status ?? (patch.completed ? 'completed' : 'error')),
+      detail: {
+        ...(patch.status ? { status: patch.status } : {}),
+        ...(patch.completed ? { completed: true } : {}),
+        ...(patch.error ? { error: String(patch.error).slice(0, 1_000) } : {}),
+        ...(patch.jobId ? { job_id: patch.jobId } : {}),
+      },
+    });
+  }
   return out.rows[0];
 }
 
@@ -596,6 +646,17 @@ export async function saveRound(
      where report_id = $1`,
     [reportId, JSON.stringify(artifact), [round], status, JSON.stringify(engine)],
   );
+  // The trail entry is written from here rather than from the fifteen call
+  // sites in intel.ts, because every round transition in every report type
+  // already passes through this function. One hook, total coverage.
+  await logEvent({
+    reportId, stage: round, event: 'round.' + status,
+    detail: {
+      ...engine,
+      ...(artifact.error ? { error: String(artifact.error).slice(0, 1_000) } : {}),
+      ...(artifact.error_code ? { error_code: artifact.error_code } : {}),
+    },
+  });
   // Heartbeat the published report too. Rounds used to write only to
   // company_research_run, so published_report.updated_at stayed frozen at the
   // moment the run started and could not tell a working run from a dead one --
@@ -615,6 +676,20 @@ export async function saveFinal(
        completed_at=now(), updated_at=now() where report_id=$1`,
     [reportId, JSON.stringify(ledger), JSON.stringify(finalReport)],
   );
+  // The dossier now exists and is durable. On the Newpages run this moment was
+  // 16:20:25 and the report did not go readable until 16:24:41 -- four minutes
+  // in which the product was finished and the screen said nothing. The trail
+  // says when the deliverable landed, separately from when it was published.
+  await logEvent({
+    reportId, stage: 'final', event: 'final.saved',
+    detail: {
+      contacts: Array.isArray(finalReport.contacts) ? finalReport.contacts.length : 0,
+      people: Array.isArray(finalReport.people) ? finalReport.people.length : 0,
+      signals: Array.isArray(finalReport.signals) ? finalReport.signals.length : 0,
+      synthesis_mode: finalReport.synthesis_mode ?? null,
+      has_summary: Boolean(finalReport.summary),
+    },
+  });
 }
 
 /** Store the Chinese render separately so the canonical English evidence ledger
@@ -630,6 +705,10 @@ export async function saveTranslation(
        updated_at=now() where report_id=$1`,
     [reportId, JSON.stringify(translatedReport), JSON.stringify(metadata)],
   );
+  await logEvent({
+    reportId, stage: 'translation', event: 'translation.' + (typeof metadata.status === 'string' && metadata.status ? metadata.status : 'saved'),
+    detail: metadata,
+  });
 }
 
 export async function researchRun(reportId: string): Promise<Record<string, unknown> | null> {
@@ -729,6 +808,61 @@ export async function saveAdsResearchRun(reportId: string, patch: {
 export async function adsResearchRun(reportId: string): Promise<Record<string, unknown> | null> {
   await migrate();
   return (await sql('select * from ads_research_run where report_id=$1', [reportId])).rows[0] ?? null;
+}
+
+/**
+ * Append one line to a run's trail.
+ *
+ * NEVER THROWS. A logging layer that can kill the run it is describing is worse
+ * than no logging layer, so every failure here is swallowed after being written
+ * to stdout. The run is the product; this is the account of it.
+ */
+export async function logEvent(input: {
+  reportId?: string | number | null;
+  publicId?: string | null;
+  jobId?: string | null;
+  stage?: string | null;
+  event: string;
+  detail?: Record<string, unknown> | null;
+}): Promise<void> {
+  if (!configured()) return;
+  try {
+    // Bounded, because a round artifact can carry a whole crawl transcript and
+    // the trail is meant to stay readable and cheap to write.
+    const detail = JSON.stringify(input.detail ?? {}).slice(0, 8_000);
+    await sql(
+      `insert into run_event (report_id, public_id, job_id, stage, event, detail)
+       values ($1, $2, $3, $4, $5, $6::jsonb)`,
+      [
+        input.reportId != null && String(input.reportId).trim() ? String(input.reportId) : null,
+        input.publicId ?? null,
+        input.jobId ?? null,
+        input.stage ?? null,
+        input.event,
+        detail.startsWith('{') ? detail : '{}',
+      ],
+    );
+  } catch (err) {
+    console.error('[run_event] could not record "' + input.event + '": ' + ((err as Error).message ?? String(err)));
+  }
+}
+
+/** Every event for one run, oldest first. Accepts either id form. */
+export async function listEvents(key: { reportId?: string | number | null; publicId?: string | null }): Promise<Record<string, unknown>[]> {
+  if (!configured()) return [];
+  const { rows } = await sql<Record<string, unknown>>(
+    `select id, at, report_id, public_id, job_id, stage, event, detail
+       from run_event
+      where ($1::bigint is null or report_id = $1::bigint)
+        and ($2::text is null or public_id = $2::text)
+      order by id asc
+      limit 2000`,
+    [
+      key.reportId != null && String(key.reportId).trim() ? String(key.reportId) : null,
+      key.publicId ?? null,
+    ],
+  );
+  return rows;
 }
 
 export async function close(): Promise<void> {

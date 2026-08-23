@@ -72,11 +72,19 @@ async function runMode(mode, payload, job) {
   const record = parseJson(stdout);
   if (!record) {
     const detail = firstLine(stderr) || `fbw exited ${code} with no JSON on stdout`;
-    throw Object.assign(new Error(detail), { code: 'engine_error' });
+    throw Object.assign(new Error(detail), {
+      code: 'engine_error',
+      meta: { exit_code: code, stdout_head: String(stdout).slice(0, 800), stderr_head: String(stderr).slice(0, 800) },
+    });
   }
   // fbw reports a failed lead inside its own envelope and still exits 0, so the
   // exit code alone is not the verdict.
-  if (record.error) throw Object.assign(new Error(String(record.error)), { code: 'engine_error' });
+  // The envelope carries meta.run_dir -- the folder holding claude.json, the
+  // crawl log and every tool call the engine made. Dropping it here is what
+  // turned "403: your organization has disabled Claude subscription access",
+  // written to disk in 416ms, into the bare string "claude exited 1" on screen.
+  // The pointer rides the error so the round record can name the evidence.
+  if (record.error) throw Object.assign(new Error(String(record.error)), { code: 'engine_error', meta: record.meta ?? null });
 
   return {
     engine: 'fb-recon',

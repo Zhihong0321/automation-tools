@@ -1370,7 +1370,15 @@ async function runCompanyResearch(
       });
     } else {
       failures.push(r3Settled.error.message ?? String(r3Settled.error));
-      await db.saveRound(reportId, 'round03', { error: r3Settled.error.message }, 'failed', { model: 'fb.company@mini' });
+      // A failed round is a round: it gets the same shape as a successful one.
+      // This used to store `{ error }` alone -- five frames of our own rethrow
+      // chain and nothing about the cause -- while round01 and round04 stored
+      // ms, model and engine beside their output.
+      await db.saveRound(reportId, 'round03', {
+        error: r3Settled.error.message,
+        error_code: (r3Settled.error as Error & { code?: string }).code ?? null,
+        failed_at: new Date().toISOString(),
+      }, 'failed', { model: 'fb.company@mini', engine: 'fb-recon', ms: r3Settled.ms });
     }
 
     const ledger = buildLedger(company, parsedForLedger);
@@ -1695,6 +1703,9 @@ async function readBody(req: http.IncomingMessage): Promise<Record<string, unkno
 export async function handlePublic(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
   const p = url.pathname;
   const pageMatch = /^\/r\/([A-Za-z0-9_-]{20})$/.exec(p);
+  // The trail is part of the report, so it lives behind the same capability: the
+  // opaque id IS the permission, exactly as for the report page itself.
+  const logMatch = /^\/r\/([A-Za-z0-9_-]{20})\/log$/.exec(p);
   const jsonMatch = /^\/public\/reports\/([A-Za-z0-9_-]{20})$/.exec(p);
   const researchMatch = /^\/public\/reports\/([A-Za-z0-9_-]{20})\/research$/.exec(p);
 
@@ -1735,6 +1746,20 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
     });
     void runCompanyResearch(report.public_id, report.id, company);
     return sendJson(res, 202, { report: envelope(req, report) }), true;
+  }
+
+  if ((req.method ?? 'GET') === 'GET' && logMatch) {
+    if (!db.configured()) return sendJson(res, 503, { error: 'reports are not configured' }), true;
+    const report = await db.getReport(logMatch[1]!);
+    if (!report) {
+      res.writeHead(404, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(ui.notFoundPage());
+      return true;
+    }
+    const events = await db.listEvents({ reportId: report.id }).catch(() => []);
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
+    res.end(ui.logPage(report, events));
+    return true;
   }
 
   if ((req.method ?? 'GET') !== 'GET' || (!pageMatch && !jsonMatch)) return false;
@@ -1785,9 +1810,26 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
 export async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL, ctx: Ctx): Promise<boolean> {
   const p = url.pathname;
   const method = req.method ?? 'GET';
-  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && p !== '/api/reports') return false;
+  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/reports')) return false;
   if (!db.configured()) {
     ctx.json(res, 503, { error: 'report database is not configured; link DATABASE_URL to the Railway service' });
+    return true;
+  }
+
+  // The trail as JSON, for anything that wants to read a run without a browser.
+  const eventsMatch = /^\/api\/reports\/([A-Za-z0-9_-]{20})\/events$/.exec(p);
+  if (method === 'GET' && eventsMatch) {
+    const report = await db.getReport(eventsMatch[1]!);
+    if (!report) {
+      ctx.json(res, 404, { error: 'report not found', id: eventsMatch[1] });
+      return true;
+    }
+    const events = await db.listEvents({ reportId: report.id });
+    ctx.json(res, 200, {
+      report: { id: report.public_id, type: report.report_type, status: report.status, title: report.title },
+      events,
+      view_url: 'https://' + (req.headers.host ?? 'ee-auto.up.railway.app') + '/r/' + report.public_id + '/log',
+    });
     return true;
   }
 

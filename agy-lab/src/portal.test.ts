@@ -117,3 +117,43 @@ test('the portal itself offers ads research on a finished dossier', () => {
   assert.match(html, /function companyName/);
   assert.match(html, /intelligence report\$/);
 });
+
+test('the run trail renders every event in order, and marks the ones that failed', async () => {
+  const ui = await import('./reportui.ts');
+  const report = {
+    public_id: 'BBBBBBBBBBBBBBBBBBBB', report_type: 'company_research', status: 'partial',
+    title: 'Newpages Network Sdn Bhd intelligence report', company_id: '1042',
+    error: null, created_at: '', updated_at: '',
+  } as never;
+
+  const html = ui.logPage(report, [
+    { id: 1, at: '2026-08-23T16:14:37.024Z', stage: 'report', event: 'report.created', job_id: null, detail: { type: 'company_research' } },
+    { id: 2, at: '2026-08-23T16:14:37.042Z', stage: 'fb.company', event: 'job.created', job_id: 'd58d1a7b4dea', detail: { type: 'fb.company' } },
+    { id: 3, at: '2026-08-23T16:14:52.053Z', stage: 'fb.company', event: 'job.failed', job_id: 'd58d1a7b4dea', detail: { error: 'claude exited 1', ms: 14802 } },
+    { id: 4, at: '2026-08-23T16:20:25.148Z', stage: 'final', event: 'final.saved', job_id: null, detail: { contacts: 24, people: 12 } },
+  ] as never);
+
+  // Order is the point: the trail is read top to bottom.
+  assert.ok(html.indexOf('report.created') < html.indexOf('job.failed'));
+  assert.ok(html.indexOf('job.failed') < html.indexOf('final.saved'));
+  // Elapsed offsets from the first event, so a five-minute gap is visible at a glance.
+  assert.match(html, /\+0s/);
+  assert.match(html, /\+348s/);
+  // A failure is tinted, not just spelled.
+  assert.match(html, /<tr class="error">[\s\S]*?job\.failed/);
+  // The detail of a failure is the failure, not the exit code alone.
+  assert.match(html, /claude exited 1/);
+  assert.match(html, /d58d1a7b4dea/);
+  // And a way back to the report it describes.
+  assert.match(html, /href="\/r\/BBBBBBBBBBBBBBBBBBBB"/);
+});
+
+test('a run with no trail says so instead of rendering an empty table', async () => {
+  const ui = await import('./reportui.ts');
+  const report = {
+    public_id: 'CCCCCCCCCCCCCCCCCCCC', report_type: 'company_research', status: 'completed',
+    title: 'Older run', company_id: '1', error: null, created_at: '', updated_at: '',
+  } as never;
+  const html = ui.logPage(report, []);
+  assert.match(html, /No events recorded for this run/);
+});
