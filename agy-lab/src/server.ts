@@ -25,6 +25,7 @@ import { page } from './ui.ts';
 import { page as docsPage } from './docs.ts';
 import { document as openApiDocument } from './openapi.ts';
 import { page as portalPage } from './portal.ts';
+import { page as guidePage } from './guide.ts';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const TOKEN = process.env.LAB_TOKEN ?? '';
@@ -146,6 +147,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (method === 'GET' && (p === '/research' || p === '/research/' || p === '/portal')) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
     return void res.end(portalPage());
+  }
+
+  // The end-user guide. Public like the portal shell it explains, and for the same
+  // reason: it holds no credential, and it is the page you send someone *before*
+  // they have a key. noindex because the workspace it describes is private.
+  if (method === 'GET' && (p === '/guide' || p === '/guide.html')) {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
+    return void res.end(guidePage());
   }
 
   if (method === 'GET' && p === '/openapi.json') {
