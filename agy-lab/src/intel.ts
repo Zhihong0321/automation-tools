@@ -1773,8 +1773,12 @@ async function runAdsResearch(
     let captured: Record<string, unknown> = {};
     let failure: string | null = null;
     try {
-      const job = await runJob('ads.company', payload, 900_000);
-      captured = object(job.result);
+      // runJob already unwraps to the worker's return value (see its last line), and
+      // ads.mjs returns a FLAT record -- unlike fb.mjs, which returns an envelope with
+      // its own nested `result`. Reading `.result` here gave undefined, so a crawl that
+      // found 13 ads with 13 creatives was stored as {} / {} / [] and published as a
+      // clean "0 ads" report. The empty-is-a-finding rule made the bug invisible.
+      captured = await runJob('ads.company', payload, 900_000);
     } catch (err) {
       failure = (err as Error).message ?? String(err);
     }
