@@ -173,3 +173,20 @@ test('a run with no trail says so instead of rendering an empty table', async ()
   const html = ui.logPage(report, []);
   assert.match(html, /No events recorded for this run/);
 });
+
+test('the portal script has no undefined identifiers in its job renderer', () => {
+  const html = page();
+  // A bare `kind` inside renderJobs (where the variable is `job.kind`) threw
+  // "kind is not defined" on every render of the Active work panel, which took
+  // out company research entirely. The label chain must read job.kind throughout.
+  assert.doesNotMatch(html, /[^.\w]kind==='ads'/);
+  assert.match(html, /job\.kind==='ads'\?'Ads'/);
+
+  // And the whole inline script must actually parse. new Function does not run it,
+  // it only compiles - which is exactly the check that was missing.
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  assert.ok(scripts.length > 0, 'portal ships an inline script');
+  for (const src of scripts) {
+    assert.doesNotThrow(() => new Function(src), 'portal inline script must parse');
+  }
+});
