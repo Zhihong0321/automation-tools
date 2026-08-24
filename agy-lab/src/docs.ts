@@ -306,7 +306,7 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
       "synthesis_mode":"gemini_validated"
     },
     "final_cn": { "summary":"...", "contacts":[...], "people":[...], "candidate_people":[...], "signals":[...] },
-    "translation": { "language":"zh-CN", "model":"step-3.7-flash", "status":"completed" }
+    "translation": { "language":"zh-CN", "model":"agy", "status":"completed" }
   },
   "research_run": {
     "round01": {...}, "round02": {...}, "round03": {...}, "round04": {...},
@@ -1068,9 +1068,9 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
       <tr><td><code>PORTAL_TOKEN</code></td><td class="num">unset</td><td>optional 16+ character end-user key; authorizes only report listing, business search, and company research routes</td></tr>
       <tr><td><code>DATABASE_URL</code></td><td class="num">&mdash;</td><td>preferred durable Postgres connection for published reports; link the Railway database service</td></tr>
       <tr><td><code>PG_PROXY_URL</code> &middot; <code>PG_DB_NAME</code> &middot; <code>PG_PROXY_TOKEN</code></td><td class="num">unset</td><td>HTTP database fallback; the token expires and is not preferred for production</td></tr>
-      <tr><td><code>TRANSLATION_BASE_URL</code></td><td class="num">e-router /v1</td><td>optional OpenAI-compatible endpoint override for the Chinese company-report copy</td></tr>
-      <tr><td><code>TRANSLATION_API_KEY</code></td><td class="num">&mdash;</td><td>required bearer key for Chinese company-report translation; set as a Railway secret only</td></tr>
-      <tr><td><code>TRANSLATION_MODEL</code></td><td class="num">step-3.7-flash</td><td>model for the Simplified Chinese company-report translation</td></tr>
+      <tr><td><code>TRANSLATION_MODEL</code></td><td class="num">agy</td><td>engine for the Simplified Chinese company-report copy; any model this gateway serves. No separate endpoint or key any more &mdash; the translation goes through the same admission queue as every other call</td></tr>
+      <tr><td><code>TRANSLATION_BATCH</code></td><td class="num">60</td><td>strings per translation call</td></tr>
+      <tr><td><code>TRANSLATION_CONCURRENCY</code></td><td class="num">2</td><td>translation calls in flight; match it to the lanes serving <code>TRANSLATION_MODEL</code>, since wider only queues them one hop later</td></tr>
       <tr><td><code>DEFAULT_MODEL</code></td><td class="num">agy</td><td>what an empty or <code>auto</code> model resolves to</td></tr>
       <tr><td><code>CGPT_DEFAULT_SESSION</code></td><td class="num">first ready</td><td>which account a bare <code>chatgpt</code> means</td></tr>
       <tr><td><code>AGY_ASK_TIMEOUT_MS</code></td><td class="num">300000</td><td></td></tr>

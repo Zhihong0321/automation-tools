@@ -324,7 +324,23 @@ async function miniAsk(
   if (!answer) throw fail(502, 'the mini returned an empty answer', 'engine_error');
 
   opts.onDelta?.(answer);
-  return { answer, ms: num(out.ms, 0), model: route.model, engine: route.engine };
+  // `ms` is the WORKER's clock: how long the handler ran once a lane picked the
+  // job up. The time before that -- the job sitting `pending` because every lane
+  // serving its type was busy -- was measured by nobody and reported to nobody,
+  // and it is the single largest number in a slow run. Report
+  // 2rO7nzyANyjYDpfOf0mQ recorded `round04 {"ms": 49030}` for a round that
+  // occupied 355 seconds; the missing 306 were spent in this gap. Anything that
+  // reads a round's duration has to be able to see both halves.
+  const brokerQueuedMs = settled.startedAt
+    ? Math.max(0, Date.parse(settled.startedAt) - Date.parse(settled.createdAt))
+    : 0;
+  return {
+    answer,
+    ms: num(out.ms, 0),
+    model: route.model,
+    engine: route.engine,
+    ...(brokerQueuedMs > 250 ? { queuedMs: brokerQueuedMs } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -435,7 +451,12 @@ async function runAsk(
       if (e.status === 429) throw e;
       throw err;
     });
-  return { ...admitted.value, ...(admitted.queuedMs > 250 ? { queuedMs: admitted.queuedMs } : {}) };
+  // Two queues, one number. A mini call can wait HERE for an admission slot and
+  // then wait again in the job broker for a lane that serves its type; reporting
+  // only the first would have hidden the 306s that miniAsk now measures, and
+  // overwriting it with the first would hide it just as well. They add.
+  const queuedMs = admitted.queuedMs + (admitted.value.queuedMs ?? 0);
+  return { ...admitted.value, ...(queuedMs > 250 ? { queuedMs } : {}) };
 }
 
 /** Internal native call used by the durable business-intelligence orchestrator. */

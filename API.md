@@ -268,10 +268,12 @@ Three consequences worth planning for:
 | `GET /r/:reportId` | opaque id | mobile human report |
 | `GET /public/reports/:reportId` | opaque id | public final JSON, never raw rounds |
 
-Set `TRANSLATION_API_KEY` and optionally `TRANSLATION_BASE_URL` (defaults to
-the configured e-router `/v1` endpoint) and `TRANSLATION_MODEL` (defaults to
-`step-3.7-flash`) on the Railway service to enable the Chinese report
-translation. Keep these service variables out of the repository.
+The Chinese edition is translated by `TRANSLATION_MODEL` (defaults to `agy`)
+through this service's own gateway, so it needs no endpoint and no key of its
+own. It is produced AFTER the report is published: `GET /api/company-research/
+:reportId` returns `data.final` as soon as the English dossier is validated, and
+`data.final_cn` fills in a minute or two later. `data.translation.status` says
+which of `completed`, `completed_with_discrepancies`, `failed` it reached.
 
 The Railway service should be linked to Postgres through `DATABASE_URL`. The
 pg-proxy fallback is supported, but its short-lived bearer is not suitable as the
@@ -804,8 +806,9 @@ re-pointed onto it, so the round now produces auditable rows rather than an
 | `CGPT_DEFAULT_SESSION` | first `ready` | which account a bare `chatgpt` means |
 | `AGY_ASK_TIMEOUT_MS` | 300000 | |
 | `CGPT_ASK_TIMEOUT_MS` | 180000 | |
-| `AGY_MAX_CONCURRENT` | 2 | agy runs in flight at once |
-| `MINI_MAX_CONCURRENT` | 2 | calls in flight on the mini - that lane's width |
+| `AGY_MAX_CONCURRENT` | 2 | agy runs in flight at once **in the container** (memory guard: agy plus a headed Chrome in 4GB). Does not apply to `agy@mini` — that is `AGY_LANES` on the worker |
+| `MINI_MAX_CONCURRENT` | 5 | calls in flight on the mini - that lane's width. Keep it equal to the worker's lane count (3 ChatGPT accounts + `AGY_LANES`); wider only moves the queue into the job broker |
+| `AGY_LANES` (worker) | 2 | dedicated `agy.ask` lanes on the mini. Measured 24 Aug: three concurrent `agy -p` answer in 7/9/12s against a 9s solo baseline with no contention; the ceiling is the single Google account, not the binary |
 | `MINI_DEFAULT_SESSION` | `mini-main` | which of the mini's accounts a bare `chatgpt@mini` means |
 | `ROUTING_PREFER` | `mini` | where a bare model name goes when both locations are live |
 | `MAX_OPEN_BROWSERS` | 1 | Chrome profiles open at once - the browser lane's width |

@@ -79,11 +79,17 @@ const laneConcurrency = (lane: Lane): number =>
     : lane === 'mini'
       // ego lite runs each account in its own task space, so the mini's ceiling is
       // accounts, not browsers — unlike the container, where it is literally one
-      // Chrome. Three is the number of ChatGPT accounts actually signed in on that
-      // machine and claimed by a lane of its own: Zhihong PRO, 三专, gan gemini.
-      // Raise this only alongside a fourth lane in the worker's LANES; a width
-      // wider than the lanes behind it just moves the queue one hop later.
-      ? Math.max(1, int('MINI_MAX_CONCURRENT', 3))
+      // Chrome. Five is what the worker's LANES actually run: three ChatGPT lanes,
+      // one per signed-in account (Zhihong PRO, 三专, gan gemini), plus AGY_LANES=2
+      // of agy's own.
+      //
+      // This number must equal the lane count and never exceed it, because a width
+      // wider than the lanes behind it does not admit more work — it just moves the
+      // queue one hop later, into the job broker, where the extra calls sit
+      // `pending` and nothing measures them. That is exactly what it was doing to
+      // agy at 3: two agy calls were admitted here in the same millisecond and the
+      // second then waited 306 seconds for the single lane that served agy.ask.
+      ? Math.max(1, int('MINI_MAX_CONCURRENT', 5))
       : Math.max(1, int('MAX_OPEN_BROWSERS', 1));
 
 interface LaneState {

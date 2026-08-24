@@ -821,10 +821,33 @@ const FETCH_POLICY = 'Fetch every page with your built-in URL reading tool (read
   + 'Never use the shell, terminal, bash, curl or wget to fetch a page: a shell command here requires '
   + 'an interactive approval that nobody can give, so the attempt is denied and this entire round fails.';
 
+/**
+ * agy's five-minute cliff, told to the model instead of discovered by us.
+ *
+ * `agy -p` polls its own language server and gives up at roughly 1490 polls --
+ * about 305 seconds -- WHILE THE MODEL IS STILL STREAMING. Its log shows fresh
+ * streamGenerateContent calls a second before it quits. There is no timeout we
+ * can pass to move that: the ceiling is inside the CLI, and a round that runs
+ * into it returns NOTHING after burning the full five minutes. Five of 96 runs
+ * on the mini, three of them on 24 Aug alone, including every VIP discovery
+ * pass measured that day.
+ *
+ * A model that knows the deadline can land before it. This does not lower any
+ * cap -- a round that finishes early still returns everything it found -- it
+ * only converts "researched for five minutes and returned nothing" into
+ * "researched for four and returned what it had".
+ */
+const TIME_BUDGET = 'HARD TIME BUDGET: you have about four minutes of wall clock. The tool you are '
+  + 'running in stops printing at five and everything you have done is then lost, so treat four minutes '
+  + 'as a deadline, not a target. Track it. When you reach it, stop researching immediately and emit the '
+  + 'JSON with what you already have, even if sections are thin or empty -- a short answer is a result '
+  + 'and a missed deadline is not. Do not narrate the deadline; just meet it.';
+
 export function round01Prompt(company: Record<string, unknown>): string {
   return `You are Round 01 of a business lead-enrichment test. Research this exact company as of ${new Date().toISOString().slice(0, 10)}.
 IMMUTABLE GOOGLE MAPS INPUT: ${companyBaseline(company)}
 ${FETCH_POLICY}
+${TIME_BUDGET}
 Find complete public company contacts, verified decision-relevant people, and separately retain named people who need verification. Search these sources separately: SSM/e-Info, CTOS/CreditScan, MyHIJAU, SEDA, CIDB, Maukerja, Hiredly, Ricebowl, JobStreet, Jora, LinkedIn company and people pages, official team/careers/testimonial pages, and reputable award, association, tender and news pages.
 Rules: report everything you find and let the pipeline grade it -- never withhold a real finding because its source is only a homepage, is http rather than https, or is a registry you could not deep-link into. Give the most specific URL you actually used, as a raw https:// or http:// string and never a Markdown link; if you genuinely have no URL, name the source in evidence_url and return the row anyway. Company pages are first_party; do not infer emails/profiles/dates; no negative claims from search absence; do not explain conflicts without evidence; source date is null unless visibly published. Put a person in people only when their current role has direct URL evidence. Put a person in candidate_people when a named public source identifies them but that direct role evidence is missing; provide source_name, and source_url when known. Candidates are leads to verify, not confirmed roles.
 Return exactly one compact JSON object in one fenced code block with arrays contacts, people, candidate_people, signals, conflicts_and_unknowns. Contact fields: purpose,value_as_published,normalized_value,current_status,evidence_class,evidence_url,source_date. People: name,current_role,relevance,evidence_class,role_evidence_url,personal_profile_url,source_date. Candidate people: name,current_role,source_name,source_url,relevance,verification_note. Signals: date,fact,evidence_class,evidence_url,outreach_use. Max 20 contacts, 12 people, 24 candidate_people, 10 signals. No prose outside JSON.`;
@@ -1073,48 +1096,49 @@ function putTranslation(target: Record<string, unknown>, path: string[], text: s
   else cursor[key] = text;
 }
 
+/**
+ * One translation batch through the research gateway.
+ *
+ * Retries are two, not four, and there is no backoff ladder any more. Both of
+ * those existed to ride out e-router cold-starting behind a 503, and they are
+ * what turned a dead translation service into 232 seconds of a company report.
+ * The gateway's own admission queue is now the thing that paces this, and an
+ * engine that is genuinely unavailable is refused there in milliseconds rather
+ * than slept on here. A second try is still worth having: agy's print mode
+ * gives up on its own around the five-minute mark, and that is a lost call
+ * rather than a broken engine.
+ */
+async function translationAsk(prompt: string, timeoutMs: number): Promise<string> {
+  const model = process.env.TRANSLATION_MODEL?.trim() || 'agy';
+  const out = await gateway.askModel(model, prompt, { timeoutMs });
+  return out.answer;
+}
+
 async function translationResponse(
-  baseUrl: string,
-  apiKey: string,
-  model: string,
+  askEngine: (prompt: string, timeoutMs: number) => Promise<string>,
   texts: string[],
 ): Promise<string[]> {
   const prompt = `Translate each English string below to Simplified Chinese (zh-CN), in order. This is translation only: do not add, omit, merge, reorder, infer, or correct anything. Preserve all proper names, identifiers, URLs, email addresses, phone numbers, dates, codes, and numbers exactly if present. Return exactly one JSON object in a fenced code block: {"translations":["...same count and order..."]}.\nINPUT: ${JSON.stringify(texts)}`;
   let lastError = 'translation request failed';
-  // Four tries, and the waits are seconds rather than milliseconds. 1s and 2s
-  // are shorter than a Railway service takes to come back from a cold start, so
-  // the old backoff gave up while the router was still waking: three of five
-  // Chinese translations in the history died on a 503 that a slightly more
-  // patient caller would have ridden out.
-  const BACKOFF_MS = [2_000, 8_000, 20_000];
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const response = await fetch(baseUrl + '/chat/completions', {
-        method: 'POST', headers: { authorization: 'Bearer ' + apiKey, 'content-type': 'application/json' },
-        body: JSON.stringify({ model, messages: [
-          { role: 'system', content: 'You are a precise English-to-Simplified-Chinese translator. Return only requested JSON.' },
-          { role: 'user', content: prompt },
-        ], temperature: 0 }), signal: AbortSignal.timeout(90_000),
-      });
-      if (!response.ok) {
-        lastError = 'translation service returned HTTP ' + response.status;
-        if (response.status === 429 || response.status >= 500) {
-          const wait = BACKOFF_MS[attempt];
-          if (wait === undefined) break;
-          await new Promise((resolve) => setTimeout(resolve, wait));
-          continue;
-        }
-        throw new Error(lastError);
-      }
-      const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> };
-      const raw = payload.choices?.[0]?.message?.content;
-      const parsed = typeof raw === 'string' ? extractJson(raw) : { value: null, error: 'translation service returned no message content' };
+      const raw = await askEngine(prompt, 300_000);
+      const parsed = extractJson(raw);
       const translated = parsed.value?.translations;
-      if (!Array.isArray(translated) || translated.length !== texts.length || !translated.every((item) => typeof item === 'string')) throw new Error('translation service returned an invalid translations array');
+      if (!Array.isArray(translated) || translated.length !== texts.length || !translated.every((item) => typeof item === 'string')) {
+        throw new Error(parsed.error ?? 'translation service returned an invalid translations array');
+      }
       return translated as string[];
     } catch (err) {
       lastError = (err as Error).message ?? String(err);
-      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
+      // Pause only for a refusal, and only once. The admission queue turns a
+      // burst away with a 429, and retrying that in the same millisecond only
+      // collects a second one. A model that answered with prose instead of JSON
+      // is a different failure and wants the retry immediately -- waiting on it
+      // buys nothing, which is what the old 2s/8s/20s ladder was doing when it
+      // spent 232 seconds of a report arriving at the same result.
+      const refused = /\b429\b|too many|rate limit|retry-after|queue is|busy/i.test(lastError);
+      if (attempt === 0 && refused) await new Promise((resolve) => setTimeout(resolve, 3_000));
     }
   }
   throw new Error(lastError);
@@ -1144,6 +1168,7 @@ export function personDiscoveryPrompt(company: Record<string, unknown>, person: 
 TARGET BASELINE: ${personBaseline(company, person)}
 ${privateHint}
 ${FETCH_POLICY}
+${TIME_BUDGET}
 Research public professional business information only: the current role, public company/board affiliations, attributable interviews or talks, dated business signals, and professional publications or speaking appearances relevant to a commercial or partnership conversation. Resolve namesakes conservatively: retain a finding only when the direct source ties it to the target company/current role, when two independent public-professional sources make the match clear, or when a source contains an exact match to a caller-supplied individual email or normalized mobile. That exact resolver match is sufficient to retain a prior-company affiliation even when the source names a different employer; label it as historical, never current. For a resolver-validated row, set identity_match_basis to exact_email_match or exact_mobile_match, but never repeat any identifier value.
 Never collect or return home address, non-business phone, family, private social accounts, age, ethnicity, religion, health, political views, private wealth, breach data, data-broker records, or personal contact details. Do not infer any fact, email, profile, title, date or affiliation.
 Every retained item requires a raw full https:// direct source URL. Company-controlled pages are first_party; independent issuer/news pages are independent; public professional platforms are social_platform. Search snippets and bare homepages are not evidence.
@@ -1309,50 +1334,73 @@ Return exactly one JSON object in a fenced code block with keys summary (max 120
 
 async function ask(model: string, prompt: string, timeoutMs: number): Promise<{
   raw: string; parsed: Record<string, unknown> | null; parse_error: string | null;
-  model: string; engine: string; ms: number;
+  model: string; engine: string; ms: number; queued_ms: number; wall_ms: number;
 }> {
+  // `ms` is engine time, and engine time is not the whole story: a call can wait
+  // in the admission queue and then again in the job broker before any engine
+  // sees it. Rounds used to record `ms` alone, which is how a Round 04 that
+  // occupied 355 seconds came to be filed as 49 and nobody could see where a
+  // 13-minute report had gone. Carry the wait and the wall clock beside it.
+  const started = Date.now();
   const out = await gateway.askModel(model, prompt, { timeoutMs });
   const parsed = extractJson(out.answer);
-  return { raw: out.answer, parsed: parsed.value, parse_error: parsed.error, model: out.model, engine: out.engine, ms: out.ms };
+  return {
+    raw: out.answer, parsed: parsed.value, parse_error: parsed.error,
+    model: out.model, engine: out.engine, ms: out.ms,
+    queued_ms: out.queuedMs ?? 0, wall_ms: Date.now() - started,
+  };
 }
 
-/** OpenAI-compatible translation endpoint, isolated from the research gateway. */
-export async function translateChinese(finalReport: Record<string, unknown>): Promise<{
+/**
+ * The Chinese edition, translated by agy.
+ *
+ * It used to be an OpenAI-compatible call to e-router's `step-3.7-flash`, held
+ * deliberately outside the research gateway. That was the wrong side of the
+ * fence: e-router answered 503 on run 2rO7nzyANyjYDpfOf0mQ and the bespoke
+ * four-attempt backoff spent 232 seconds riding it out before failing anyway --
+ * on the critical path, after the English dossier was already finished and
+ * saved. agy is a model this pipeline already depends on for Rounds 01 and 04,
+ * it has two lanes on the mini and a container fallback under it, and routing
+ * through the gateway means the admission queue governs it like everything else
+ * instead of it being a private HTTP client with private retry rules.
+ *
+ * `askEngine` is injected so this is testable without a gateway, a queue or a
+ * worker in the way; nothing in production passes it.
+ */
+export async function translateChinese(
+  finalReport: Record<string, unknown>,
+  askEngine: (prompt: string, timeoutMs: number) => Promise<string> = translationAsk,
+): Promise<{
   translated: Record<string, unknown>; model: string; ms: number; validation_errors: string[];
 }> {
-  const baseUrl = (process.env.TRANSLATION_BASE_URL?.trim() || 'https://e-router.up.railway.app/v1').replace(/\/+$/, '');
-  const apiKey = process.env.TRANSLATION_API_KEY?.trim();
-  const model = process.env.TRANSLATION_MODEL?.trim() || 'step-3.7-flash';
-  if (!apiKey) throw new Error('Chinese translation is not configured; set TRANSLATION_API_KEY');
+  const model = process.env.TRANSLATION_MODEL?.trim() || 'agy';
   const started = Date.now();
   const translated = structuredClone(finalReport);
   const entries = translationEntries(finalReport);
-  // Small batches avoid provider 503s on lengthy evidence ledgers while
-  // retaining a deterministic one-to-one mapping to the canonical report.
+  // Batches were 30 because e-router 503'd on anything larger. That constraint
+  // left with e-router: agy already takes the Round 01 and Round 04 prompts,
+  // which are the whole ledger in one message. Bigger batches mean fewer round
+  // trips, and a round trip is the expensive part.
+  const size = Math.max(1, Number(process.env.TRANSLATION_BATCH) || 60);
   const batches: TranslationEntry[][] = [];
-  for (let offset = 0; offset < entries.length; offset += 30) {
-    // Large enough to avoid provider request-rate throttling, still far below
-    // the one-shot report payload that triggered upstream 503s.
-    batches.push(entries.slice(offset, offset + 30));
+  for (let offset = 0; offset < entries.length; offset += size) {
+    batches.push(entries.slice(offset, offset + size));
   }
   // The batches are independent: each carries its own texts and writes to its own
-  // paths, and the endpoint is a stateless OpenAI-compatible completion. Running
-  // them one after another was costing a full round trip per batch -- ~137s on a
-  // report with seven batches -- for no isolation the parallel version does not
-  // also have. Nothing in the queue governs this lane; it is not a browser and it
-  // is not somebody's logged-in account.
+  // paths, and each ask is a stateless completion.
   //
-  // Bounded rather than unbounded, because the 503s that motivated small batches
-  // in the first place were rate pressure, and firing twenty requests at once is
-  // exactly that pressure in a different shape.
-  const width = Math.max(1, Number(process.env.TRANSLATION_CONCURRENCY) || 4);
+  // Two, matching the agy lanes on the mini. Wider does not go faster -- it just
+  // moves the queue one hop later, into the broker, where the extra calls sit
+  // pending exactly as long. That is the same mistake MINI_MAX_CONCURRENT=3 was
+  // making for agy before the lanes were widened.
+  const width = Math.max(1, Number(process.env.TRANSLATION_CONCURRENCY) || 2);
   let next = 0;
   const worker = async (): Promise<void> => {
     for (;;) {
       const index = next++;
       const batch = batches[index];
       if (!batch) return;
-      const texts = await translationResponse(baseUrl, apiKey, model, batch.map((entry) => entry.text));
+      const texts = await translationResponse(askEngine, batch.map((entry) => entry.text));
       batch.forEach((entry, at) => putTranslation(translated, entry.path, texts[at]!));
     }
   };
@@ -1509,6 +1557,9 @@ async function runCompanyResearch(
   const failures: string[] = [];
   let produced = 0;
   let autoPersonResearch: Record<string, unknown> | null = null;
+  // Set the moment the English dossier is out. After that, nothing below may
+  // demote the report to `failed` -- see the catch at the end of this function.
+  let published = false;
   const triggerAutoPersonResearch = async (): Promise<void> => {
     if (autoPersonResearch) return;
     const topPerson = highestRankedPerson(company, parsedForLedger);
@@ -1568,7 +1619,7 @@ async function runCompanyResearch(
         parsedForLedger.push(r1.parsed);
         produced += 1;
       } else failures.push(r1.parse_error ?? 'Round 01 returned no JSON object.');
-      await db.saveRound(reportId, 'round01', r1, r1.parsed ? 'completed' : 'invalid_output', { model: r1.model, engine: r1.engine, ms: r1.ms });
+      await db.saveRound(reportId, 'round01', r1, r1.parsed ? 'completed' : 'invalid_output', { model: r1.model, engine: r1.engine, ms: r1.ms, queued_ms: r1.queued_ms, wall_ms: r1.wall_ms });
     } catch (err) {
       failures.push((err as Error).message ?? String(err));
       await db.saveRound(reportId, 'round01', { error: (err as Error).message }, 'failed', { model: 'agy' });
@@ -1678,7 +1729,7 @@ async function runCompanyResearch(
         failures.push('Final synthesis rejected: ' + fidelityErrors.join(', ') + '.');
       }
       r4Artifact = { ...r4, fidelity_errors: fidelityErrors, fallback_used: fidelityErrors.length > 0 };
-      await db.saveRound(reportId, 'round04', r4Artifact, fidelityErrors.length ? 'rejected_fallback_used' : 'completed', { model: r4.model, engine: r4.engine, ms: r4.ms });
+      await db.saveRound(reportId, 'round04', r4Artifact, fidelityErrors.length ? 'rejected_fallback_used' : 'completed', { model: r4.model, engine: r4.engine, ms: r4.ms, queued_ms: r4.queued_ms, wall_ms: r4.wall_ms });
     } catch (err) {
       failures.push((err as Error).message ?? String(err));
       r4Artifact = { error: (err as Error).message, fallback_used: true };
@@ -1686,6 +1737,22 @@ async function runCompanyResearch(
     }
     if (autoPersonResearch) finalReport = { ...finalReport, auto_person_research: autoPersonResearch };
     await db.saveFinal(reportId, ledger, finalReport);
+
+    // PUBLISH HERE. The English dossier is finished, validated and saved at this
+    // line; everything below it is the Chinese edition, which is a second
+    // document and not a precondition for reading the first.
+    //
+    // It used to be awaited before the report ever left `running`, and on run
+    // 2rO7nzyANyjYDpfOf0mQ that was 232 seconds -- 28% of the run -- during
+    // which a complete dossier sat in the database while the portal showed a
+    // spinner, and at the end of which the translation failed anyway. Nobody
+    // waiting for a company report is waiting for the translation of it.
+    const englishOutcome = publishOutcome(produced, failures);
+    await db.updateReport(publicId, {
+      status: englishOutcome.status, result: finalReport, error: englishOutcome.error, completed: true,
+    });
+    published = true;
+
     try {
       const cn = await translateChinese(finalReport);
       await db.saveTranslation(reportId, cn.translated, {
@@ -1708,15 +1775,26 @@ async function runCompanyResearch(
       // reason for `partial`, and only "no round produced anything" is `failed`.
       failures.push('Chinese translation failed: ' + ((err as Error).message ?? String(err)));
       await db.saveTranslation(reportId, {}, {
-        language: 'zh-CN', model: process.env.TRANSLATION_MODEL?.trim() || 'step-3.7-flash',
+        language: 'zh-CN', model: process.env.TRANSLATION_MODEL?.trim() || 'agy',
         status: 'failed', error: (err as Error).message ?? String(err),
       });
     }
+    // Re-grade only if the translation added a gap. The report is already
+    // published and already readable; this is the status catching up with what
+    // happened after it was, and it is deliberately not allowed to promote a
+    // report -- `failures` only ever grows.
     const outcome = publishOutcome(produced, failures);
-    await db.updateReport(publicId, {
-      status: outcome.status, result: finalReport, error: outcome.error, completed: true,
-    });
+    if (outcome.status !== englishOutcome.status || outcome.error !== englishOutcome.error) {
+      await db.updateReport(publicId, {
+        status: outcome.status, result: finalReport, error: outcome.error, completed: true,
+      });
+    }
   } catch (err) {
+    // Only before the dossier is out. Once the report is published, a throw from
+    // the translation phase below it is a missing Chinese edition -- overwriting
+    // a finished report with `status: failed` on the strength of that would
+    // destroy the thing the run exists to produce.
+    if (published) return;
     await db.updateReport(publicId, { status: 'failed', error: (err as Error).message ?? String(err), completed: true }).catch(() => {});
   } finally {
     active.delete(publicId);

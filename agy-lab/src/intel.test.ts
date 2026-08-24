@@ -370,45 +370,72 @@ test('an imperfect Chinese translation is delivered, not binned', async () => {
   assert.ok(broken.length > 0);
 });
 
-test('the Chinese translation sends its batches at once, not one after another', async () => {
-  // This is the regression that mattered: seven independent batches were awaited
-  // in a loop, one full round trip each, and the endpoint is a stateless
-  // completion API that nothing in the queue governs. If somebody puts the
-  // `for (... ) { await ... }` back, peak concurrency drops to 1 and this fails.
-  const summary: Record<string, string> = {};
-  for (let i = 0; i < 90; i++) summary['field_' + i] = 'text ' + i;
-  const finalReport = { contacts: [], people: [], signals: [], notes: summary };
-
+/** Collects the prompts translateChinese sends and records peak concurrency. */
+function fakeTranslator(): {
+  ask: (prompt: string, timeoutMs: number) => Promise<string>;
+  peak: () => number;
+  calls: () => number;
+} {
   let inflight = 0;
   let peak = 0;
-  const realFetch = globalThis.fetch;
-  const previousKey = process.env.TRANSLATION_API_KEY;
-  process.env.TRANSLATION_API_KEY = 'test-key';
-  globalThis.fetch = (async (_url: string, init: { body: string }) => {
-    inflight++;
+  let calls = 0;
+  const ask = async (prompt: string): Promise<string> => {
+    inflight++; calls++;
     peak = Math.max(peak, inflight);
-    const sent = JSON.parse(init.body) as { messages: Array<{ content: string }> };
-    const input = JSON.parse(sent.messages[1]!.content.split('INPUT: ')[1]!) as string[];
+    const input = JSON.parse(prompt.split('INPUT: ')[1]!) as string[];
     // Long enough that a serial implementation cannot overlap by luck.
     await new Promise((resolve) => setTimeout(resolve, 40));
     inflight--;
-    return {
-      ok: true,
-      json: async () => ({ choices: [{ message: { content: '```json\n' + JSON.stringify({ translations: input.map((t) => 'ZH:' + t) }) + '\n```' } }] }),
-    };
-  }) as unknown as typeof globalThis.fetch;
+    return '```json\n' + JSON.stringify({ translations: input.map((t) => 'ZH:' + t) }) + '\n```';
+  };
+  return { ask, peak: () => peak, calls: () => calls };
+}
 
-  try {
-    const out = await translateChinese(finalReport);
-    // Three batches of 30, and every one of them mapped back to its own path.
-    assert.equal(peak, 3, 'expected all three batches in flight together, saw peak ' + peak);
-    assert.equal((out.translated.notes as Record<string, string>).field_0, 'ZH:text 0');
-    assert.equal((out.translated.notes as Record<string, string>).field_89, 'ZH:text 89');
-  } finally {
-    globalThis.fetch = realFetch;
-    if (previousKey === undefined) delete process.env.TRANSLATION_API_KEY;
-    else process.env.TRANSLATION_API_KEY = previousKey;
-  }
+test('the Chinese translation sends its batches at once, not one after another', async () => {
+  // This is the regression that mattered: independent batches were awaited in a
+  // loop, one full round trip each. If somebody puts the `for (...) { await ... }`
+  // back, peak concurrency drops to 1 and this fails.
+  const summary: Record<string, string> = {};
+  for (let i = 0; i < 180; i++) summary['field_' + i] = 'text ' + i;
+  const finalReport = { contacts: [], people: [], signals: [], notes: summary };
+
+  const fake = fakeTranslator();
+  const out = await translateChinese(finalReport, fake.ask);
+
+  // 180 strings at the default batch of 60 is three calls, two of them in flight
+  // together at the default width of 2 -- which is the number of agy lanes on the
+  // mini. Wider here would not be faster; it would queue in the broker instead.
+  assert.equal(fake.calls(), 3, 'expected three batches of 60, saw ' + fake.calls());
+  assert.equal(fake.peak(), 2, 'expected two batches in flight together, saw peak ' + fake.peak());
+  assert.equal((out.translated.notes as Record<string, string>).field_0, 'ZH:text 0');
+  assert.equal((out.translated.notes as Record<string, string>).field_179, 'ZH:text 179');
+});
+
+test('a translation batch that comes back malformed is retried, not fatal', async () => {
+  // agy's print mode gives up on its own around five minutes, which loses a call
+  // rather than breaking an engine. One retry is what covers that; the four-try
+  // backoff ladder this replaced existed for e-router's 503s and was spending
+  // 232 seconds on the critical path to fail anyway.
+  const finalReport = { contacts: [], people: [], signals: [], notes: { a: 'one', b: 'two' } };
+  let attempt = 0;
+  const ask = async (prompt: string): Promise<string> => {
+    attempt++;
+    if (attempt === 1) return 'agy printed prose instead of JSON';
+    const input = JSON.parse(prompt.split('INPUT: ')[1]!) as string[];
+    return '```json\n' + JSON.stringify({ translations: input.map((t) => 'ZH:' + t) }) + '\n```';
+  };
+
+  const out = await translateChinese(finalReport, ask);
+  assert.equal(attempt, 2, 'expected exactly one retry');
+  assert.equal((out.translated.notes as Record<string, string>).a, 'ZH:one');
+});
+
+test('a translation that never parses gives up rather than looping', async () => {
+  const finalReport = { contacts: [], people: [], signals: [], notes: { a: 'one' } };
+  let attempt = 0;
+  const ask = async (): Promise<string> => { attempt++; return 'still not JSON'; };
+  await assert.rejects(() => translateChinese(finalReport, ask));
+  assert.equal(attempt, 2, 'expected two attempts and no more, saw ' + attempt);
 });
 
 function report(type: 'business_search' | 'company_research' | 'person_research'): PublishedReport {
