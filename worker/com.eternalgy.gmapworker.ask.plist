@@ -73,6 +73,36 @@
     <string>macmini-ask</string>
     <key>WORKER_TYPES</key>
     <string>chatgpt.ask,chatgpt.probe,agy.ask,agy.probe</string>
+
+    <!--
+      meta.* and muse.* are gone from this list because macmini.mjs has no
+      handlers for them any more. A worker that claims a type it cannot run is
+      worse than one that does not claim it: the gateway lists meta@mini as
+      `ready` on the strength of the claim, a pinned call queues a job, this
+      process takes it and answers "no handler for type" — a failure that reads
+      as the engine being broken rather than absent.
+
+      WORKER_SESSIONS is what turns this one pinned lane into three. Each name is
+      a key in ~/.gmap-worker/spaces.json, and each maps to its own ego lite task
+      space on its own browser profile, i.e. its own ChatGPT account:
+        mini-main -> chatgpt-pro   / Profile 3 / Zhihong PRO
+        mini-2    -> chatgpt-ask-2 / Profile 2 / ZhiHong 三专
+        mini-3    -> chatgpt-ask-3 / Profile 5 / gan gemini
+      agy is NOT one of these. It used to ride the first lane, which meant a
+      three-to-five-minute agy round held a signed-in ChatGPT account idle for
+      its whole duration, and meant only one agy call could run at a time --
+      costing report 2rO7nzyANyjYDpfOf0mQ 306 seconds while Round 04 waited
+      behind the VIP brief the same report had just started. macmini.mjs now
+      gives agy AGY_LANES (default 2) lanes of its own, named `-agy1`/`-agy2`.
+      It needs no session: it is a CLI, not a browser profile.
+
+      Keep the total in step with MINI_MAX_CONCURRENT in agy-lab's queue.ts --
+      that is sessions + AGY_LANES, so 3 + 2 = 5. A width wider than the lanes
+      here just moves the queue one hop later, into the job broker, where the
+      wait is invisible; narrower, and a lane sits idle.
+    -->
+    <key>WORKER_SESSIONS</key>
+    <string>mini-main,mini-2,mini-3</string>
   </dict>
 </dict>
 </plist>

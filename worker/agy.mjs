@@ -47,6 +47,26 @@ export async function ask(payload = {}) {
   if (timedOut) {
     throw Object.assign(new Error(`agy did not finish within ${Math.round(timeoutMs / 1000)}s`), { code: 'timeout' });
   }
+  // agy's OWN ceiling, and it is lower than any timeout we pass. `-p` polls its
+  // language server and gives up around 1490 polls -- ~305 seconds -- WHILE THE
+  // MODEL IS STILL STREAMING: the log shows fresh streamGenerateContent calls a
+  // second before it quits, and a `printed=` count that proves text was arriving.
+  // So a prompt whose answer takes longer than five minutes cannot be answered by
+  // this CLI at all, no matter what timeoutMs says, and it burns the full five
+  // minutes finding that out. Five of 96 runs on this machine, three of them on
+  // 24 Aug alone.
+  //
+  // It surfaced as `Error: Error: timeout waiting for response` with a Node stack
+  // and nothing else -- indistinguishable from a network problem. Name it, and
+  // carry the poll and print counts, so the next person reads "agy gave up" and
+  // not "the mini is broken".
+  const printMode = /Print mode: timed out after (\d+) polls \(printed=(\d+)\)/.exec(stderr);
+  if (printMode && !answer) {
+    throw Object.assign(
+      new Error(`agy's print mode gave up after ${printMode[1]} polls (~${Math.round(ms / 1000)}s) with ${printMode[2]} chunks printed and the model still streaming — the prompt needs more than one \`agy -p\` run can deliver, not a longer timeout`),
+      { code: 'print_mode_timeout' },
+    );
+  }
   // Exit code first, then the text: agy can exit 0 having printed a sign-in
   // notice, and it can exit non-zero having printed a perfectly good answer to
   // stdout with a warning on stderr. Neither reading is safe alone.

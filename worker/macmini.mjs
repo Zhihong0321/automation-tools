@@ -88,17 +88,57 @@ const LANES = (() => {
   // daemon's WORKER_TYPES from ~/.gmap-worker.env, so unpinning it is not an
   // option -- it has to widen in place.
   //
-  // First session keeps the full pinned type list, including the non-chatgpt
-  // types a pinned worker is also carrying (agy). The rest take only the ChatGPT
-  // types, because those are the only ones a second account can answer: agy is
-  // one CLI against one credential no matter how many lanes ask it.
+  // One lane per signed-in ChatGPT account, and AGY_LANES of agy's OWN beside
+  // them. agy does not ride an account's lane: a lane is serial, so an agy call
+  // sitting on one is an idle ChatGPT account for as long as it runs -- and an
+  // agy deep-research round runs for three to five minutes while a ChatGPT audit
+  // runs for twenty seconds. agy needs no session; it is a CLI, not a browser
+  // profile, which is exactly why it can have lanes of its own for free.
+  //
+  // agy used to be pinned to the first lane alone, on the reasoning that it is
+  // one CLI against one credential and three claim loops would just race the
+  // same binary. That was never measured, and the single lane is what made it
+  // unmeasurable: 96 agy runs in ~/.gemini/antigravity-cli/log, not one
+  // concurrent pair among them. Measured on 24 Aug: three `agy -p` at once
+  // answered in 7s/9s/12s against a 9s solo baseline, three correct distinct
+  // answers, ~170MB RSS each on a 16GB box. There is no race. agy is a Go
+  // binary spawned fresh per call, with a presence lock, a conversation
+  // directory and a log file PER INSTANCE and no global lock anywhere.
+  //
+  // What the one lane cost: Round 04 of a company report is an agy call, and so
+  // is the first act of the auto-VIP brief the same report kicks off ~30ms
+  // earlier. On one lane the parent's own synthesis queues behind its child,
+  // every time. Measured on report 2rO7nzyANyjYDpfOf0mQ: 306 seconds of a
+  // 13m38s run spent with nothing running at all.
+  //
+  // Two, not three. The ceiling here is not the binary, it is that all of them
+  // are one Google account -- three lanes is 3x the request rate against one
+  // personal Antigravity credential, and a rate-limit refusal is a FAILED round
+  // rather than a slow one. Two clears the parent/child collision, which is the
+  // one that was actually costing time. Raise it with AGY_LANES if the account
+  // proves it can take it.
   const sessions = (process.env.WORKER_SESSIONS ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+  const AGY_LANES = Math.max(1, Number(process.env.AGY_LANES ?? 2));
   if (pinned.length) {
-    if (sessions.length < 2) return [{ suffix: '', types: pinned, session: sessions[0] }];
     const chatgptOnly = pinned.filter((t) => t.startsWith('chatgpt.'));
-    return sessions.map((session, i) => (i === 0
-      ? { suffix: '', types: pinned, session }
-      : { suffix: '-' + (i + 1), types: chatgptOnly, session }));
+    const agyOnly = pinned.filter((t) => t.startsWith('agy.'));
+    // A single-purpose pin stays one lane. This is the scan daemon
+    // (WORKER_TYPES=ping,gmap.scan): nothing to split, and one scan at a time is
+    // the point of it.
+    if (sessions.length < 2 && !agyOnly.length) return [{ suffix: '', types: pinned, session: sessions[0] }];
+    // Whatever the pin asked for that is neither chatgpt nor agy still has to be
+    // claimed by somebody, or the pin silently stops serving it.
+    const rest = pinned.filter((t) => !chatgptOnly.includes(t) && !agyOnly.includes(t));
+    const accounts = sessions.length ? sessions : [undefined];
+    const lanes = accounts.map((session, i) => ({
+      suffix: i === 0 ? '' : '-' + (i + 1),
+      types: i === 0 ? [...chatgptOnly, ...rest] : chatgptOnly,
+      session,
+    }));
+    for (let i = 0; agyOnly.length && i < AGY_LANES; i++) {
+      lanes.push({ suffix: '-agy' + (i + 1), types: agyOnly, session: undefined });
+    }
+    return lanes.filter((l) => l.types.length);
   }
   return [
     { suffix: '', types: ['ping', 'gmap.scan'] },
@@ -113,11 +153,17 @@ const LANES = (() => {
     // does not. A job that names its own `id` still wins -- that is how a caller
     // pins a specific account on purpose.
     //
-    // agy stays on the first lane alone. It is one CLI against one credential on
-    // this box; giving it three claim loops would just race the same binary.
-    { suffix: '-ask', types: ['chatgpt.ask', 'chatgpt.probe', 'agy.ask', 'agy.probe'], session: 'mini-main' },
+    { suffix: '-ask', types: ['chatgpt.ask', 'chatgpt.probe'], session: 'mini-main' },
     { suffix: '-ask2', types: ['chatgpt.ask', 'chatgpt.probe'], session: 'mini-2' },
     { suffix: '-ask3', types: ['chatgpt.ask', 'chatgpt.probe'], session: 'mini-3' },
+    // agy's own, AGY_LANES of them, for the reasons written out at the top of
+    // this block. Two by default: enough that a report's own Round 04 never
+    // queues behind the VIP brief it just started, not so many that one Google
+    // account is answering three deep-research calls at once. Separate from the
+    // ChatGPT lanes so a five-minute agy round never idles a ChatGPT account.
+    ...Array.from({ length: AGY_LANES }, (_, i) => ({
+      suffix: '-agy' + (i + 1), types: ['agy.ask', 'agy.probe'],
+    })),
     // Its own lane for the same reason `-ask` is not the scan lane, one step
     // further out: a lead takes 1-2 minutes of paced page loads, so it would sit
     // in front of every wrapper call if it shared theirs -- and it holds ego
@@ -313,7 +359,7 @@ async function run(name, job, session) {
     // A wrapper that is merely signed out must say so in a form the gateway can
     // read, not as a stack trace: it is the difference between "fix this login"
     // and "this machine is broken".
-    const detail = err.code === 'logged_out' || err.code === 'timeout'
+    const detail = err.code === 'logged_out' || err.code === 'timeout' || err.code === 'print_mode_timeout'
       ? err.code + ': ' + err.message
       : (err.stack?.slice(0, 2000) ?? String(err));
     // `error` is a plain string all the way to the gateway -- there is no
