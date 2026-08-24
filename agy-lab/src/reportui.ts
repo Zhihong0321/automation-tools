@@ -234,6 +234,7 @@ function shell(report: PublishedReport, body: string): string {
   const active = report.status === 'queued' || report.status === 'running';
   const isSearch = report.report_type === 'business_search';
   const isPerson = report.report_type === 'person_research';
+  const isAds = report.report_type === 'ads_research';
   const statusLabel = report.status === 'completed' ? 'Research complete'
     : report.status === 'partial' ? 'Complete · noted gaps'
     : report.status === 'failed' ? 'Research failed'
@@ -245,7 +246,7 @@ function shell(report: PublishedReport, body: string): string {
     : report.status === 'completed' ? 4
     : report.status === 'partial' ? 3
     : report.status === 'queued' ? 1 : 2;
-  const reportLabel = isSearch ? 'Market scan' : isPerson ? 'VIP brief' : 'Company dossier';
+  const reportLabel = isSearch ? 'Company list' : isPerson ? 'Person research' : isAds ? 'Ads research' : 'Company dossier';
   // A re-researched company keeps every earlier dossier. Say which pass this is,
   // in the kicker and the masthead folio, so two open tabs are never ambiguous.
   const version = Number(report.version) > 1 ? 'V' + Number(report.version) : '';
@@ -260,7 +261,7 @@ function shell(report: PublishedReport, body: string): string {
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">${fonts}
 <meta name="theme-color" content="#f2f4f6"><title>${esc(report.title ?? 'Business intelligence report')}</title>
 <style>${CSS}</style></head><body class="${esc(report.report_type.replace('_', '-'))}"><div class="topbar"><nav class="topbar-in" aria-label="Report masthead">${masthead}</nav></div><main class="wrap">
-<header class="hero"><div><div class="kicker">${esc(reportLabel)} · ${esc(reportDate(report))}${version ? ' · ' + version : ''}</div><h1>${esc(report.title ?? 'Research report')}</h1><p class="hero-copy">${active ? 'Research is in progress. This permanent report link refreshes as verified findings arrive.' : report.error ? esc(report.error) : isSearch ? 'A ranked field scan of relevant businesses, with direct routes to source listings and published contact points.' : 'A source-linked intelligence brief designed for qualification, outreach and informed decision-making.'}</p></div><aside class="hero-meta"><div class="status ${esc(report.status)}"><span class="status-dot"></span>${esc(statusLabel)}</div><div class="meta-line"><span>Issued ${esc(reportDate(report))}</span>${version ? `<span>Research pass ${esc(version)}</span>` : ''}<span>${isSearch ? 'Source / Google Maps' : 'Evidence / Public sources'}</span></div>${!isSearch ? `<div class="rounds" aria-label="Four research rounds">${[0, 1, 2, 3].map((i) => `<span class="round ${i < roundsLit ? 'on' : ''}"></span>`).join('')}</div>` : ''}</aside></header>
+<header class="hero"><div><div class="kicker">${esc(reportLabel)} · ${esc(reportDate(report))}${version ? ' · ' + version : ''}</div><h1>${esc(report.title ?? 'Research report')}</h1><p class="hero-copy">${active ? 'Research is in progress. This permanent report link refreshes as verified findings arrive.' : report.error ? esc(report.error) : isSearch ? 'A ranked field scan of relevant businesses, with direct routes to source listings and published contact points.' : isAds ? 'Every ad the company is currently running, as published in the Facebook and Google ad libraries.' : 'A source-linked intelligence brief designed for qualification, outreach and informed decision-making.'}</p></div><aside class="hero-meta"><div class="status ${esc(report.status)}"><span class="status-dot"></span>${esc(statusLabel)}</div><div class="meta-line"><span>Issued ${esc(reportDate(report))}</span>${version ? `<span>Research pass ${esc(version)}</span>` : ''}<span>${isSearch ? 'Source / Google Maps' : isAds ? 'Source / Ad libraries' : 'Evidence / Public sources'}</span></div>${!isSearch && !isAds ? `<div class="rounds" aria-label="Four research rounds">${[0, 1, 2, 3].map((i) => `<span class="round ${i < roundsLit ? 'on' : ''}"></span>`).join('')}</div>` : ''}</aside></header>
 ${body}<footer class="foot"><span>EE Business Intelligence · Confidential link</span><span>Evidence opens at its original public source</span></footer>
 </main>${active ? '<script>setTimeout(()=>location.reload(),8000)</script>' : ''}${isSearch ? researchScript(report.public_id) : ''}</body></html>`;
 }
