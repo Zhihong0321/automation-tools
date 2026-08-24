@@ -1753,13 +1753,20 @@ async function runAdsResearch(
     // A type no lane is claiming would leave the job pending until it timed out.
     // Saying so up front costs the run nothing and reads honestly in the report.
     if (!jobs.liveTypes().includes('ads.company')) {
-      const status = { ads: 'skipped' };
+      // FAILED, not partial, and no ads array at all. A `partial` report holding
+      // an empty list is indistinguishable from "this advertiser runs no ads" --
+      // which is exactly how four mega-advertiser reports once came back reading
+      // as true negatives. A machine that is not plugged in is an error.
       await db.saveAdsResearchRun(reportId, {
-        status,
-        finalReport: { company: name, ads: [], networks: {}, note: 'No worker is claiming ads.company; nothing was captured for this run.' },
+        status: { ads: 'worker_offline' },
+        finalReport: { company: name, unavailable: true,
+          note: 'No worker is claiming ads.company, so no ad library was opened. This is a capture failure, not a finding about this company.' },
         completed: true,
       });
-      await db.updateReport(publicId, { status: 'partial', error: 'ads.company worker offline' });
+      await db.updateReport(publicId, {
+        status: 'failed',
+        error: 'No worker is claiming ads.company — the ads crawler on the mini is offline. Nothing was captured; this says nothing about whether the company advertises.',
+      });
       return;
     }
 
@@ -1772,11 +1779,21 @@ async function runAdsResearch(
       failure = (err as Error).message ?? String(err);
     }
 
+    if (failure) {
+      await db.saveAdsResearchRun(reportId, {
+        status: { ads: 'failed' },
+        finalReport: { company: name, unavailable: true, note: 'The ads crawl failed: ' + failure },
+        completed: true,
+      });
+      await db.updateReport(publicId, { status: 'failed', error: 'ads crawl failed: ' + failure });
+      return;
+    }
+
     const facebook = object(captured.facebook);
     const google = object(captured.google);
     const ads = rows(captured.ads);
     const status = {
-      ads: failure ? 'failed' : 'completed',
+      ads: 'completed',
       facebook: facebook.error ? str(facebook.error) : 'completed',
       google: google.error ? str(google.error) : 'completed',
     };
@@ -1794,14 +1811,13 @@ async function runAdsResearch(
           google: num(google.ads_found, 0),
         },
         creatives: num(captured.creatives_ok, 0),
+        creatives_skipped: num(captured.creatives_skipped, 0),
         ads,
       },
       completed: true,
     });
-    await db.updateReport(publicId, {
-      status: failure ? 'failed' : (ads.length ? 'completed' : 'partial'),
-      error: failure,
-    });
+    // Zero ads AFTER a real crawl is a genuine finding, so it completes.
+    await db.updateReport(publicId, { status: ads.length ? 'completed' : 'partial', error: null });
   } catch (err) {
     await db.updateReport(publicId, { status: 'failed', error: (err as Error).message ?? String(err) });
   } finally {

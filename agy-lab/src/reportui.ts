@@ -177,6 +177,19 @@ const CSS = `/* Mobile-first, dense, minimal. Every rule here is the phone layou
 /* Sections number themselves, the way a report's contents page would. */
 .wrap{counter-reset:section}.section{padding-top:26px}.section-head{display:grid;gap:4px;padding-bottom:9px;margin-bottom:12px;border-bottom:1px solid var(--ink)}.section h2{counter-increment:section;margin:0;font:600 17px/1.25 var(--sans);letter-spacing:-.02em}.section h2:before{content:counter(section,decimal-leading-zero);display:block;margin-bottom:7px;font:var(--micro);letter-spacing:var(--track);color:var(--accent-2)}.section-note{font-size:12px;line-height:1.45;color:var(--muted)}
 .sheet,.records,.contact-list,.people,.signal-list,.angles{background:var(--sheet);border:1px solid var(--line);border-radius:var(--radius)}
+/* Ad cards. The creative arrives as a data URI on the ad itself -- the images are
+   files on the mini's disk and there is no blob store between it and here -- so this
+   is the surface where a captured ad finally becomes something a person can look at. */
+.ad-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:16px;margin-top:18px}
+.ad-card{background:var(--sheet);border:1px solid var(--line);border-radius:var(--radius);display:flex;flex-direction:column;overflow:hidden}
+.ad-shot{background:#111;line-height:0}
+.ad-shot img{width:100%;height:auto;max-height:320px;object-fit:contain;display:block}
+.ad-shot.none{min-height:110px;display:flex;align-items:center;justify-content:center;padding:0 14px;text-align:center;background:repeating-linear-gradient(45deg,transparent,transparent 9px,rgba(128,128,128,.08) 9px,rgba(128,128,128,.08) 18px)}
+.ad-shot.none span{font:500 11px/1.4 var(--mono);color:var(--muted)}
+.ad-copy{padding:13px 14px;display:flex;flex-direction:column;gap:7px}
+.ad-copy h3{margin:0;font-size:14px;line-height:1.35}
+.ad-copy .body{margin:0;font-size:12.5px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:14em;overflow:auto}
+.ad-copy .nocopy{margin:0;font-size:12px;color:var(--muted);font-style:italic}
 .empty,.message{padding:22px 16px;text-align:center;font-size:13px;color:var(--muted);background:var(--sheet);border:1px solid var(--line);border-radius:var(--radius)}.message.error{border-color:#e7bdb8;border-left:3px solid var(--danger);background:#fdf5f4;color:#8f2b21}.message.warning{padding:0;text-align:left;border-color:#e8cf9f;border-left:3px solid var(--warning);background:#fffbf3;color:#6f4a08}
 
 /* Every list row carries a hover rail. It is the cheapest way to make a dense
@@ -591,6 +604,11 @@ export function adsPage(report: PublishedReport): string {
 
   // Google publishes no ad text, so its rows carry no headline or body. Say that on
   // the row rather than rendering a blank that reads as a capture failure.
+  //
+  // The creative arrives as a data URI on the ad itself: the images are files on
+  // the mini's disk and there is no blob store between it and here, so the worker
+  // downscales each one and carries it inside the job result. Without this the
+  // report is text ABOUT ads that nobody can see, which is what shipped first.
   const row = (ad: Record<string, unknown>) => {
     const net = value(ad, 'network');
     const headline = value(ad, 'headline');
@@ -601,17 +619,21 @@ export function adsPage(report: PublishedReport): string {
     const copy = headline || body
       ? `<strong>${esc(headline || '')}</strong>${body ? `<div class="source">${esc(body.slice(0, 300))}</div>` : ''}`
       : `<strong>${esc(value(ad, 'format') || 'Ad')}</strong><div class="source">${net === 'google' ? 'Google publishes no ad text — the wording is inside the creative.' : 'No text on this ad.'}</div>`;
-    return `<div class="signal"><div class="date">${esc(when || net)}</div><div>${copy}<div class="source">${esc(net)}${cta ? ' · ' + esc(cta) : ''} ${link(url, 'View in ad library')}</div></div></div>`;
+    const img = typeof ad.image === 'string' && ad.image.startsWith('data:')
+      ? `<div class="ad-shot"><img loading="lazy" src="${esc(ad.image)}" alt=""></div>`
+      : `<div class="ad-shot none"><span>${esc(value(ad, 'image_error') || 'creative not captured')}</span></div>`;
+    return `<div class="ad-card">${img}<div class="ad-copy">${copy}<div class="source">${esc(net)}${cta ? ' · ' + esc(cta) : ''}${when ? ' · ' + esc(when) : ''} ${link(url, 'View in ad library')}</div></div></div>`;
   };
 
   let out = stats;
   out += `<section class="brief"><div class="brief-label">What they are advertising</div><p>${esc(value(final, 'company') || report.title || '')} — ${ads.length} live ad${ads.length === 1 ? '' : 's'} across Facebook and Google.</p></section>`;
-  if (value(final, 'note')) out += `<section class="section"><div class="message error">${esc(value(final, 'note'))}</div></section>`;
+  if (final.unavailable) out += `<section class="section"><div class="message error"><strong>No ads were captured.</strong> ${esc(value(final, 'note'))}</div></section>`;
+  else if (value(final, 'note')) out += `<section class="section"><div class="message error">${esc(value(final, 'note'))}</div></section>`;
   if (report.status === 'failed') out += `<section class="section"><div class="message error">${esc(report.error ?? 'The ads capture failed.')}</div></section>`;
   else if (!ads.length && report.status !== 'completed' && report.status !== 'partial') out += '<section class="section"><div class="empty">Ads capture is running. This report will refresh automatically.</div></section>';
   else {
-    out += `<section class="section"><div class="section-head"><h2>Facebook Ad Library</h2><span class="section-note">${networks.facebook ?? fb.length} ad(s), copy as published.</span></div><div class="signal-list">${fb.map(row).join('') || '<div class="empty">No Facebook ads found.</div>'}</div></section>`;
-    out += `<section class="section"><div class="section-head"><h2>Google Ads Transparency</h2><span class="section-note">${networks.google ?? gg.length} ad(s) — Google publishes no ad copy as text.</span></div><div class="signal-list">${gg.map(row).join('') || '<div class="empty">No Google ads found.</div>'}</div></section>`;
+    out += `<section class="section"><div class="section-head"><h2>Facebook Ad Library</h2><span class="section-note">${networks.facebook ?? fb.length} ad(s), copy as published.</span></div><div class="ad-grid">${fb.map(row).join('') || '<div class="empty">No Facebook ads found.</div>'}</div></section>`;
+    out += `<section class="section"><div class="section-head"><h2>Google Ads Transparency</h2><span class="section-note">${networks.google ?? gg.length} ad(s) — Google publishes no ad copy as text.</span></div><div class="ad-grid">${gg.map(row).join('') || '<div class="empty">No Google ads found.</div>'}</div></section>`;
   }
   return shell(report, out);
 }

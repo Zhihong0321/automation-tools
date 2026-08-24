@@ -85,12 +85,21 @@ function authorized(req: http.IncomingMessage, url: URL): boolean {
     && crypto.timingSafeEqual(digest(supplied), digest(PORTAL_TOKEN));
 }
 
+// 1 MB is the right cap for a prompt or a lead. It is the wrong cap for a worker
+// handing back a finished crawl: ads research returns its creatives inline, because
+// the images live on the mini's disk and there is no blob store between the two.
+// Only the result route gets the larger ceiling, and only workers can reach it.
+const RESULT_ROUTE = /^\/api\/jobs\/[^/]+\/result(\?|$)/;
+const BODY_LIMIT = 1 << 20;
+const RESULT_LIMIT = Number(process.env.RESULT_BODY_LIMIT ?? 32 << 20);
+
 async function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  const cap = RESULT_ROUTE.test(req.url ?? '') ? RESULT_LIMIT : BODY_LIMIT;
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const c of req) {
     size += (c as Buffer).length;
-    if (size > 1 << 20) throw new Error('body too large');
+    if (size > cap) throw new Error(`body too large (over ${Math.round(cap / (1 << 20))}MB)`);
     chunks.push(c as Buffer);
   }
   if (!chunks.length) return {};

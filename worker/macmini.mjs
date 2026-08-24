@@ -37,6 +37,7 @@ import * as chatgpt from './chatgpt-ego.mjs';
 import * as agy from './agy.mjs';
 import * as fb from './fb.mjs';
 import * as x from './x.mjs';
+import * as ads from './ads.mjs';
 
 // Config from a file the process owner can chmod 600, so the token is not in a
 // launchd plist that every process on the box can read.
@@ -129,6 +130,12 @@ const LANES = (() => {
     // ("grok x-search" vs the crawl space), so the two do not contend for a
     // browser and can be in flight at once.
     { suffix: '-x', types: ['x.subject', 'x.company', 'x.probe'] },
+    // Its own lane, hardest case of all: Google's transparency centre costs one
+    // page load PER AD, so a 30-ad advertiser is 4-6 minutes of paced loads with
+    // ego lite's ads crawl space held throughout. It uses a THIRD task space
+    // ("ads-recon"), distinct from fb.*'s crawl space and x.*'s grok space, so
+    // all three can be in flight without contending for a browser.
+    { suffix: '-ads', types: ['ads.company', 'ads.probe'] },
   ];
 })();
 
@@ -208,6 +215,13 @@ const handlers = {
   'x.subject': x.subject,
   'x.company': x.company,
   'x.probe': x.probe,
+  // Competitor ads through ads-recon. No model is on its path at all -- it is a
+  // deterministic crawl of two public ad libraries -- so it is the one handler
+  // here that cannot be broken by a dead key. It returns its creatives inline as
+  // data URIs because the images are files on this disk and the gateway has no
+  // blob store; see ads.mjs for why that is the only route.
+  'ads.company': ads.company,
+  'ads.probe': ads.probe,
 };
 
 // ---------------------------------------------------------------- the client
