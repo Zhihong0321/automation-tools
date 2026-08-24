@@ -1802,26 +1802,28 @@ async function runAdsResearch(
       google: google.error ? str(google.error) : 'completed',
     };
 
+    const final = {
+      company: name,
+      region: payload.region,
+      ad_count: ads.length,
+      networks: { facebook: num(facebook.ads_found, 0), google: num(google.ads_found, 0) },
+      creatives: num(captured.creatives_ok, 0),
+      creatives_skipped: num(captured.creatives_skipped, 0),
+      ads,
+    };
+
     await db.saveAdsResearchRun(reportId, {
       facebook, google, ads: { items: ads },
       status,
       metadata: { worker: 'ads.company', region: payload.region },
-      finalReport: {
-        company: name,
-        region: payload.region,
-        ad_count: ads.length,
-        networks: {
-          facebook: num(facebook.ads_found, 0),
-          google: num(google.ads_found, 0),
-        },
-        creatives: num(captured.creatives_ok, 0),
-        creatives_skipped: num(captured.creatives_skipped, 0),
-        ads,
-      },
+      finalReport: final,
       completed: true,
     });
     // Zero ads AFTER a real crawl is a genuine finding, so it completes.
-    await db.updateReport(publicId, { status: ads.length ? 'completed' : 'partial', error: null });
+    await db.updateReport(publicId, {
+      status: ads.length ? 'completed' : 'partial', error: null,
+      result: final, completed: true,
+    });
   } catch (err) {
     await db.updateReport(publicId, { status: 'failed', error: (err as Error).message ?? String(err) });
   } finally {
