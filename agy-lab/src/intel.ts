@@ -108,7 +108,8 @@ function envelope(req: http.IncomingMessage, report: db.PublishedReport): Record
   const base = origin(req);
   const resource = report.report_type === 'business_search'
     ? 'business-search'
-    : report.report_type === 'person_research' ? 'person-research' : 'company-research';
+    : report.report_type === 'person_research' ? 'person-research'
+    : report.report_type === 'ads_research' ? 'ads-research' : 'company-research';
   return {
     id: report.public_id,
     type: report.report_type,
@@ -123,6 +124,9 @@ function envelope(req: http.IncomingMessage, report: db.PublishedReport): Record
     completed_at: report.completed_at,
     view_url: base + '/r/' + report.public_id,
     api_url: base + '/api/' + resource + '/' + report.public_id,
+    // The company this report is about, so a caller can start ads research against
+    // the same company without having to re-resolve it from the title.
+    company_id: report.company_id == null ? null : String(report.company_id),
     error: report.error,
   };
 }
@@ -293,7 +297,51 @@ function collectContacts(sources: Record<string, unknown>[]): Record<string, unk
       });
     }
   }
-  return [...found.values()].slice(0, 24);
+  return keepBestContacts([...found.values()]);
+}
+
+/**
+ * Which contacts survive the cap.
+ *
+ * The cap itself is fine -- a reader cannot use eighty phone numbers. What was
+ * wrong was the tiebreak: `.slice(0, 24)` keeps whoever arrived first, and
+ * arrival order is round order, not evidence order. The Eternalgy report filled
+ * all 24 slots with Round 01's five branch addresses and every social profile it
+ * could name, so every row Round 03 had actually *crawled* -- the Page phone,
+ * the Page email and all three Messenger links, one of them the route to a named
+ * person -- fell off the end and never reached the report.
+ *
+ * So rank before cutting. A row a crawler read off the live page outranks one a
+ * wrapper recalled, and better-sourced outranks worse. Survivors are emitted in
+ * their original order, so a report under the cap is byte-for-byte what it was.
+ */
+const CONTACT_CAP = 24;
+
+function keepBestContacts(contacts: Record<string, unknown>[]): Record<string, unknown>[] {
+  if (contacts.length <= CONTACT_CAP) return contacts;
+  const arrival = new Map(contacts.map((row, index) => [row, index]));
+  // Round 03 crawled a live page; nothing it read is displaced by a recollection.
+  const crawled = (row: Record<string, unknown>): number => (str(row.introduced_by) === 'round03' ? 0 : 1);
+  // Everything else takes turns. Straight priority would only move the starvation
+  // -- Round 01 files the most rows, so it would eat Round 02 whole. Each round's
+  // first row is kept before any round's second, so a round that found three
+  // numbers keeps them even next to a round that found twenty addresses.
+  const turn = new Map<Record<string, unknown>, number>();
+  const taken = new Map<string, number>();
+  for (const row of contacts) {
+    const round = str(row.introduced_by) || 'unattributed';
+    const n = taken.get(round) ?? 0;
+    turn.set(row, n);
+    taken.set(round, n + 1);
+  }
+  const sourced = (row: Record<string, unknown>): number => EVIDENCE_ORDER.indexOf(str(row.evidence_strength) as EvidenceStrength);
+  const survivors = new Set([...contacts]
+    .sort((a, b) => crawled(a) - crawled(b)
+      || turn.get(a)! - turn.get(b)!
+      || sourced(b) - sourced(a)
+      || arrival.get(a)! - arrival.get(b)!)
+    .slice(0, CONTACT_CAP));
+  return contacts.filter((row) => survivors.has(row));
 }
 
 /**
@@ -1587,7 +1635,15 @@ async function runCompanyResearch(
       });
     } else {
       failures.push(r3Settled.error.message ?? String(r3Settled.error));
-      await db.saveRound(reportId, 'round03', { error: r3Settled.error.message }, 'failed', { model: 'fb.company@mini' });
+      // A failed round is a round: it gets the same shape as a successful one.
+      // This used to store `{ error }` alone -- five frames of our own rethrow
+      // chain and nothing about the cause -- while round01 and round04 stored
+      // ms, model and engine beside their output.
+      await db.saveRound(reportId, 'round03', {
+        error: r3Settled.error.message,
+        error_code: (r3Settled.error as Error & { code?: string }).code ?? null,
+        failed_at: new Date().toISOString(),
+      }, 'failed', { model: 'fb.company@mini', engine: 'fb-recon', ms: r3Settled.ms });
     }
 
     const ledger = buildLedger(company, parsedForLedger);
@@ -1662,6 +1718,92 @@ async function runCompanyResearch(
     });
   } catch (err) {
     await db.updateReport(publicId, { status: 'failed', error: (err as Error).message ?? String(err), completed: true }).catch(() => {});
+  } finally {
+    active.delete(publicId);
+  }
+}
+
+/**
+ * Ads research -- what a company is actually advertising, on Facebook and Google.
+ *
+ * The capture is done by the `ads.*` worker at home, which drives ego lite; nothing
+ * here calls a model. A network that is offline or returns nothing is recorded and the
+ * run continues, because half a report is worth more than none.
+ */
+async function runAdsResearch(
+  publicId: string,
+  reportId: string,
+  request: Record<string, unknown>,
+): Promise<void> {
+  if (active.has(publicId)) return;
+  active.add(publicId);
+  try {
+    await db.updateReport(publicId, { status: 'running', error: null });
+    await db.initAdsResearchRun(reportId);
+
+    const name = str(request.name);
+    const payload = {
+      name,
+      region: str(request.region) || 'MY',
+      fbMax: num(request.fbMax, 0),
+      gMax: num(request.gMax, 30),
+      timeoutMs: 900_000,
+    };
+
+    // A type no lane is claiming would leave the job pending until it timed out.
+    // Saying so up front costs the run nothing and reads honestly in the report.
+    if (!jobs.liveTypes().includes('ads.company')) {
+      const status = { ads: 'skipped' };
+      await db.saveAdsResearchRun(reportId, {
+        status,
+        finalReport: { company: name, ads: [], networks: {}, note: 'No worker is claiming ads.company; nothing was captured for this run.' },
+        completed: true,
+      });
+      await db.updateReport(publicId, { status: 'partial', error: 'ads.company worker offline' });
+      return;
+    }
+
+    let captured: Record<string, unknown> = {};
+    let failure: string | null = null;
+    try {
+      const job = await runJob('ads.company', payload, 900_000);
+      captured = object(job.result);
+    } catch (err) {
+      failure = (err as Error).message ?? String(err);
+    }
+
+    const facebook = object(captured.facebook);
+    const google = object(captured.google);
+    const ads = rows(captured.ads);
+    const status = {
+      ads: failure ? 'failed' : 'completed',
+      facebook: facebook.error ? str(facebook.error) : 'completed',
+      google: google.error ? str(google.error) : 'completed',
+    };
+
+    await db.saveAdsResearchRun(reportId, {
+      facebook, google, ads: { items: ads },
+      status,
+      metadata: { worker: 'ads.company', region: payload.region },
+      finalReport: {
+        company: name,
+        region: payload.region,
+        ad_count: ads.length,
+        networks: {
+          facebook: num(facebook.ads_found, 0),
+          google: num(google.ads_found, 0),
+        },
+        creatives: num(captured.creatives_ok, 0),
+        ads,
+      },
+      completed: true,
+    });
+    await db.updateReport(publicId, {
+      status: failure ? 'failed' : (ads.length ? 'completed' : 'partial'),
+      error: failure,
+    });
+  } catch (err) {
+    await db.updateReport(publicId, { status: 'failed', error: (err as Error).message ?? String(err) });
   } finally {
     active.delete(publicId);
   }
@@ -1853,6 +1995,9 @@ async function readBody(req: http.IncomingMessage): Promise<Record<string, unkno
 export async function handlePublic(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
   const p = url.pathname;
   const pageMatch = /^\/r\/([A-Za-z0-9_-]{20})$/.exec(p);
+  // The trail is part of the report, so it lives behind the same capability: the
+  // opaque id IS the permission, exactly as for the report page itself.
+  const logMatch = /^\/r\/([A-Za-z0-9_-]{20})\/log$/.exec(p);
   const jsonMatch = /^\/public\/reports\/([A-Za-z0-9_-]{20})$/.exec(p);
   const researchMatch = /^\/public\/reports\/([A-Za-z0-9_-]{20})\/research$/.exec(p);
 
@@ -1895,6 +2040,20 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
     return sendJson(res, 202, { report: envelope(req, report) }), true;
   }
 
+  if ((req.method ?? 'GET') === 'GET' && logMatch) {
+    if (!db.configured()) return sendJson(res, 503, { error: 'reports are not configured' }), true;
+    const report = await db.getReport(logMatch[1]!);
+    if (!report) {
+      res.writeHead(404, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(ui.notFoundPage());
+      return true;
+    }
+    const events = await db.listEvents({ reportId: report.id }).catch(() => []);
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
+    res.end(ui.logPage(report, events));
+    return true;
+  }
+
   if ((req.method ?? 'GET') !== 'GET' || (!pageMatch && !jsonMatch)) return false;
   if (!db.configured()) {
     res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
@@ -1924,13 +2083,15 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
     const search = report.source_search_report_id ? await db.searchResult(report.source_search_report_id) : null;
     html = ui.searchPage(report, { report: search?.report ?? object(report.result?.search), companies: search?.companies ?? rows(report.result?.companies) });
   } else if (report.report_type === 'person_research') html = ui.personPage(report);
+  else if (report.report_type === 'ads_research') html = ui.adsPage(report);
   else {
     const run = await db.researchRun(report.id);
     const chinese = object(run?.translated_report);
     // Which people already have a VIP brief, so the page shows a link to it
     // rather than a button that would start one.
     const briefs = await db.listPersonBriefs(report.public_id).catch(() => ({}));
-    html = ui.companyPage(report, Object.keys(chinese).length ? chinese : null, briefs);
+    const adsReport = report.company_id ? await db.findAdsReport(report.company_id) : null;
+    html = ui.companyPage(report, Object.keys(chinese).length ? chinese : null, briefs, adsReport);
   }
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
   res.end(html);
@@ -1941,16 +2102,33 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
 export async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL, ctx: Ctx): Promise<boolean> {
   const p = url.pathname;
   const method = req.method ?? 'GET';
-  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/person-research') && p !== '/api/reports') return false;
+  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/reports')) return false;
   if (!db.configured()) {
     ctx.json(res, 503, { error: 'report database is not configured; link DATABASE_URL to the Railway service' });
+    return true;
+  }
+
+  // The trail as JSON, for anything that wants to read a run without a browser.
+  const eventsMatch = /^\/api\/reports\/([A-Za-z0-9_-]{20})\/events$/.exec(p);
+  if (method === 'GET' && eventsMatch) {
+    const report = await db.getReport(eventsMatch[1]!);
+    if (!report) {
+      ctx.json(res, 404, { error: 'report not found', id: eventsMatch[1] });
+      return true;
+    }
+    const events = await db.listEvents({ reportId: report.id });
+    ctx.json(res, 200, {
+      report: { id: report.public_id, type: report.report_type, status: report.status, title: report.title },
+      events,
+      view_url: 'https://' + (req.headers.host ?? 'ee-auto.up.railway.app') + '/r/' + report.public_id + '/log',
+    });
     return true;
   }
 
   if (method === 'GET' && p === '/api/reports') {
     const rawType = url.searchParams.get('type');
     const rawStatus = url.searchParams.get('status');
-    const type = rawType === 'business_search' || rawType === 'company_research' || rawType === 'person_research' ? rawType : null;
+    const type = rawType === 'business_search' || rawType === 'company_research' || rawType === 'person_research' || rawType === 'ads_research' ? rawType : null;
     const allowedStatuses = new Set(['queued', 'running', 'completed', 'partial', 'failed']);
     const status = allowedStatuses.has(rawStatus ?? '') ? rawStatus as db.ReportStatus : null;
     const limit = Math.min(Math.max(Math.round(Number(url.searchParams.get('limit') ?? 40) || 40), 1), 100);
@@ -2027,6 +2205,41 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     return true;
   }
 
+  if (method === 'POST' && p === '/api/ads-research') {
+    const body = await ctx.readJson(req);
+    const name = str(body.name || body.company).trim();
+    if (!name) {
+      ctx.json(res, 400, { error: 'name is required' });
+      return true;
+    }
+    const companyId = str(body.companyId || body.company_id).trim();
+    // Ads change week to week, so re-running is legitimate and a completed report is
+    // never a reason to refuse. A capture still IN FLIGHT is a different matter: the
+    // dossier button would otherwise start a second crawl of the same advertiser.
+    if (companyId) {
+      const running = await db.findAdsReport(companyId);
+      if (running && (running.status === 'queued' || running.status === 'running')) {
+        ctx.json(res, 200, { report: envelope(req, running) });
+        return true;
+      }
+    }
+    const request = {
+      name,
+      region: (str(body.region).trim() || 'MY').toUpperCase(),
+      fbMax: num(body.fbMax, 0),
+      gMax: num(body.gMax, 30),
+      requesterId: str(body.requesterId || body.userId) || null,
+    };
+    const report = await db.createReport({
+      type: 'ads_research', title: name + ' ads',
+      userId: str(request.requesterId) || null, request,
+      companyId: companyId || null,
+    });
+    void runAdsResearch(report.public_id, report.id, request);
+    ctx.json(res, 202, { report: envelope(req, report) });
+    return true;
+  }
+
   if (method === 'POST' && p === '/api/person-research') {
     const body = await ctx.readJson(req);
     const sourceReportId = str(body.companyResearchId || body.company_research_id).trim();
@@ -2077,10 +2290,12 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     return true;
   }
 
-  const one = /^\/api\/(business-search|company-research|person-research)\/([A-Za-z0-9_-]{20})$/.exec(p);
+  const one = /^\/api\/(business-search|company-research|person-research|ads-research)\/([A-Za-z0-9_-]{20})$/.exec(p);
   if (method === 'GET' && one) {
     const report = await db.getReport(one[2]!);
-    const expected = one[1] === 'business-search' ? 'business_search' : one[1] === 'person-research' ? 'person_research' : 'company_research';
+    const expected = one[1] === 'business-search' ? 'business_search'
+      : one[1] === 'person-research' ? 'person_research'
+      : one[1] === 'ads-research' ? 'ads_research' : 'company_research';
     if (!report || report.report_type !== expected) {
       ctx.json(res, 404, { error: 'report not found' });
       return true;
@@ -2089,7 +2304,8 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     const detail = await publicDetail(report);
     const run = report.report_type === 'company_research'
       ? await db.researchRun(report.id)
-      : report.report_type === 'person_research' ? await db.personResearchRun(report.id) : null;
+      : report.report_type === 'person_research' ? await db.personResearchRun(report.id)
+      : report.report_type === 'ads_research' ? await db.adsResearchRun(report.id) : null;
     ctx.json(res, 200, { report: envelope(req, report), data: detail, research_run: run });
     return true;
   }

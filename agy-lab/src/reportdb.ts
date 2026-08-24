@@ -92,7 +92,7 @@ export function migrate(): Promise<void> {
       create table if not exists published_report (
         id bigserial primary key,
         public_id text not null unique,
-        report_type text not null check (report_type in ('business_search', 'company_research', 'person_research')),
+        report_type text not null check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research')),
         status text not null default 'queued'
           check (status in ('queued', 'running', 'completed', 'partial', 'failed')),
         title text,
@@ -141,6 +141,18 @@ export function migrate(): Promise<void> {
         started_at timestamptz,
         completed_at timestamptz,
         updated_at timestamptz not null default now()
+      );
+      create table if not exists ads_research_run (
+        report_id bigint primary key references published_report(id) on delete cascade,
+        facebook jsonb,
+        google jsonb,
+        ads jsonb,
+        final_report jsonb,
+        run_status jsonb not null default '{}'::jsonb,
+        engine_metadata jsonb not null default '{}'::jsonb,
+        started_at timestamptz,
+        completed_at timestamptz,
+        updated_at timestamptz not null default now()
       )
     `);
     await sql(`
@@ -156,8 +168,37 @@ export function migrate(): Promise<void> {
           execute format('alter table published_report drop constraint %I', report_type_constraint);
         end if;
         alter table published_report add constraint published_report_report_type_check
-          check (report_type in ('business_search', 'company_research', 'person_research'));
+          check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research'));
       end $$;
+    `);
+    // ------------------------------------------------------------------ the run log
+    // ONE APPEND-ONLY TRAIL PER RUN, and it lives in Postgres rather than in a
+    // process, a file on the mini, or a Railway stdout buffer.
+    //
+    // Before this table there were four separate recording systems and no id
+    // joining them: the worker log knew a job id, fb-recon knew a run directory,
+    // company_research_run knew a report id, and the container's stdout knew
+    // nothing at all. Answering "where did this run stop" meant matching wall
+    // clock timestamps across three machines by hand.
+    //
+    // Append-only and written as it happens, because the failure that started
+    // this -- the gateway restarting mid-job and answering the worker's result
+    // with "no such job -- it was evicted" -- destroys anything held in memory
+    // and anything assembled at the end. A row already committed survives it.
+    await sql(`
+      create table if not exists run_event (
+        id bigserial primary key,
+        at timestamptz not null default now(),
+        report_id bigint references published_report(id) on delete cascade,
+        public_id text,
+        job_id text,
+        stage text,
+        event text not null,
+        detail jsonb not null default '{}'::jsonb
+      );
+      create index if not exists run_event_report_idx on run_event (report_id, id);
+      create index if not exists run_event_public_idx on run_event (public_id, id);
+      create index if not exists run_event_at_idx on run_event (at desc);
     `);
     // Existing deployments already have company_research_run, so these must be
     // additive migrations rather than part of the CREATE TABLE definition only.
@@ -274,7 +315,7 @@ export function migrate(): Promise<void> {
   return migrated;
 }
 
-export type ReportType = 'business_search' | 'company_research' | 'person_research';
+export type ReportType = 'business_search' | 'company_research' | 'person_research' | 'ads_research';
 export type ReportStatus = 'queued' | 'running' | 'completed' | 'partial' | 'failed';
 
 export interface PublishedReport {
@@ -322,7 +363,12 @@ export async function createReport(input: {
      returning *`,
     [publicId, input.type, input.title, input.userId ?? null, JSON.stringify(input.request), input.companyId ?? null],
   );
-  return out.rows[0]!;
+  const created = out.rows[0]!;
+  await logEvent({
+    reportId: created.id, publicId, stage: 'report', event: 'report.created',
+    detail: { type: input.type, title: created.title, company_id: input.companyId ?? null, request: input.request },
+  });
+  return created;
 }
 
 export async function updateReport(publicId: string, patch: {
@@ -356,6 +402,22 @@ export async function updateReport(publicId: string, patch: {
     ],
   );
   if (!out.rows[0]) throw new Error('no published report ' + publicId);
+  // Status is the one field worth a line of its own: `running` -> `partial` is
+  // the transition a caller is waiting on, and until now nothing recorded when
+  // it happened or what it was carrying. A patch that touches no status (a
+  // jobId stamp, a heartbeat) is not an event.
+  if (patch.status || patch.completed || patch.error) {
+    await logEvent({
+      reportId: out.rows[0].id, publicId, stage: 'report',
+      event: 'report.' + (patch.status ?? (patch.completed ? 'completed' : 'error')),
+      detail: {
+        ...(patch.status ? { status: patch.status } : {}),
+        ...(patch.completed ? { completed: true } : {}),
+        ...(patch.error ? { error: String(patch.error).slice(0, 1_000) } : {}),
+        ...(patch.jobId ? { job_id: patch.jobId } : {}),
+      },
+    });
+  }
   return out.rows[0];
 }
 
@@ -445,6 +507,27 @@ export async function findPersonBrief(sourceReportId: string, personId: string):
  * brief gets a link to it, and only a person who does not gets a button that
  * would start one.
  */
+/**
+ * The ads report already started for this company, if any.
+ *
+ * The dossier shows one ads action for the company as a whole, so it needs to know
+ * whether a run exists before deciding between a link and a button. Latest first:
+ * ads change week to week, so re-running is legitimate and the newest one is the
+ * one worth linking to.
+ */
+export async function findAdsReport(companyId: string | number): Promise<PublishedReport | null> {
+  await migrate();
+  const out = await sql<PublishedReport>(
+    `select * from published_report
+     where report_type = 'ads_research'
+       and status <> 'failed'
+       and company_id = $1::bigint
+     order by created_at desc limit 1`,
+    [String(companyId)],
+  );
+  return out.rows[0] ?? null;
+}
+
 export async function listPersonBriefs(sourceReportId: string): Promise<Record<string, PublishedReport>> {
   await migrate();
   const out = await sql<PublishedReport>(
@@ -563,6 +646,17 @@ export async function saveRound(
      where report_id = $1`,
     [reportId, JSON.stringify(artifact), [round], status, JSON.stringify(engine)],
   );
+  // The trail entry is written from here rather than from the fifteen call
+  // sites in intel.ts, because every round transition in every report type
+  // already passes through this function. One hook, total coverage.
+  await logEvent({
+    reportId, stage: round, event: 'round.' + status,
+    detail: {
+      ...engine,
+      ...(artifact.error ? { error: String(artifact.error).slice(0, 1_000) } : {}),
+      ...(artifact.error_code ? { error_code: artifact.error_code } : {}),
+    },
+  });
   // Heartbeat the published report too. Rounds used to write only to
   // company_research_run, so published_report.updated_at stayed frozen at the
   // moment the run started and could not tell a working run from a dead one --
@@ -582,6 +676,20 @@ export async function saveFinal(
        completed_at=now(), updated_at=now() where report_id=$1`,
     [reportId, JSON.stringify(ledger), JSON.stringify(finalReport)],
   );
+  // The dossier now exists and is durable. On the Newpages run this moment was
+  // 16:20:25 and the report did not go readable until 16:24:41 -- four minutes
+  // in which the product was finished and the screen said nothing. The trail
+  // says when the deliverable landed, separately from when it was published.
+  await logEvent({
+    reportId, stage: 'final', event: 'final.saved',
+    detail: {
+      contacts: Array.isArray(finalReport.contacts) ? finalReport.contacts.length : 0,
+      people: Array.isArray(finalReport.people) ? finalReport.people.length : 0,
+      signals: Array.isArray(finalReport.signals) ? finalReport.signals.length : 0,
+      synthesis_mode: finalReport.synthesis_mode ?? null,
+      has_summary: Boolean(finalReport.summary),
+    },
+  });
 }
 
 /** Store the Chinese render separately so the canonical English evidence ledger
@@ -597,6 +705,10 @@ export async function saveTranslation(
        updated_at=now() where report_id=$1`,
     [reportId, JSON.stringify(translatedReport), JSON.stringify(metadata)],
   );
+  await logEvent({
+    reportId, stage: 'translation', event: 'translation.' + (typeof metadata.status === 'string' && metadata.status ? metadata.status : 'saved'),
+    detail: metadata,
+  });
 }
 
 export async function researchRun(reportId: string): Promise<Record<string, unknown> | null> {
@@ -649,6 +761,108 @@ export async function savePersonResearchRun(reportId: string, patch: {
 export async function personResearchRun(reportId: string): Promise<Record<string, unknown> | null> {
   await migrate();
   return (await sql('select * from person_research_run where report_id=$1', [reportId])).rows[0] ?? null;
+}
+
+export async function initAdsResearchRun(reportId: string): Promise<void> {
+  await migrate();
+  await sql(
+    `insert into ads_research_run (report_id, started_at)
+     values ($1, now()) on conflict (report_id) do nothing`,
+    [reportId],
+  );
+}
+
+export async function saveAdsResearchRun(reportId: string, patch: {
+  facebook?: Record<string, unknown>;
+  google?: Record<string, unknown>;
+  ads?: Record<string, unknown>;
+  finalReport?: Record<string, unknown>;
+  status?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  completed?: boolean;
+}): Promise<void> {
+  await initAdsResearchRun(reportId);
+  await sql(
+    `update ads_research_run set
+       facebook = case when $2::boolean then $3::jsonb else facebook end,
+       google = case when $4::boolean then $5::jsonb else google end,
+       ads = case when $6::boolean then $7::jsonb else ads end,
+       final_report = case when $8::boolean then $9::jsonb else final_report end,
+       run_status = case when $10::boolean then $11::jsonb else run_status end,
+       engine_metadata = case when $12::boolean then $13::jsonb else engine_metadata end,
+       completed_at = case when $14::boolean then now() else completed_at end,
+       updated_at = now() where report_id = $1`,
+    [
+      reportId,
+      Object.prototype.hasOwnProperty.call(patch, 'facebook'), JSON.stringify(patch.facebook ?? null),
+      Object.prototype.hasOwnProperty.call(patch, 'google'), JSON.stringify(patch.google ?? null),
+      Object.prototype.hasOwnProperty.call(patch, 'ads'), JSON.stringify(patch.ads ?? null),
+      Object.prototype.hasOwnProperty.call(patch, 'finalReport'), JSON.stringify(patch.finalReport ?? null),
+      Object.prototype.hasOwnProperty.call(patch, 'status'), JSON.stringify(patch.status ?? {}),
+      Object.prototype.hasOwnProperty.call(patch, 'metadata'), JSON.stringify(patch.metadata ?? {}),
+      patch.completed === true,
+    ],
+  );
+}
+
+export async function adsResearchRun(reportId: string): Promise<Record<string, unknown> | null> {
+  await migrate();
+  return (await sql('select * from ads_research_run where report_id=$1', [reportId])).rows[0] ?? null;
+}
+
+/**
+ * Append one line to a run's trail.
+ *
+ * NEVER THROWS. A logging layer that can kill the run it is describing is worse
+ * than no logging layer, so every failure here is swallowed after being written
+ * to stdout. The run is the product; this is the account of it.
+ */
+export async function logEvent(input: {
+  reportId?: string | number | null;
+  publicId?: string | null;
+  jobId?: string | null;
+  stage?: string | null;
+  event: string;
+  detail?: Record<string, unknown> | null;
+}): Promise<void> {
+  if (!configured()) return;
+  try {
+    // Bounded, because a round artifact can carry a whole crawl transcript and
+    // the trail is meant to stay readable and cheap to write.
+    const detail = JSON.stringify(input.detail ?? {}).slice(0, 8_000);
+    await sql(
+      `insert into run_event (report_id, public_id, job_id, stage, event, detail)
+       values ($1, $2, $3, $4, $5, $6::jsonb)`,
+      [
+        input.reportId != null && String(input.reportId).trim() ? String(input.reportId) : null,
+        input.publicId ?? null,
+        input.jobId ?? null,
+        input.stage ?? null,
+        input.event,
+        detail.startsWith('{') ? detail : '{}',
+      ],
+    );
+  } catch (err) {
+    console.error('[run_event] could not record "' + input.event + '": ' + ((err as Error).message ?? String(err)));
+  }
+}
+
+/** Every event for one run, oldest first. Accepts either id form. */
+export async function listEvents(key: { reportId?: string | number | null; publicId?: string | null }): Promise<Record<string, unknown>[]> {
+  if (!configured()) return [];
+  const { rows } = await sql<Record<string, unknown>>(
+    `select id, at, report_id, public_id, job_id, stage, event, detail
+       from run_event
+      where ($1::bigint is null or report_id = $1::bigint)
+        and ($2::text is null or public_id = $2::text)
+      order by id asc
+      limit 2000`,
+    [
+      key.reportId != null && String(key.reportId).trim() ? String(key.reportId) : null,
+      key.publicId ?? null,
+    ],
+  );
+  return rows;
 }
 
 export async function close(): Promise<void> {

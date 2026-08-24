@@ -302,7 +302,12 @@ async function run(name, job, session) {
     const detail = err.code === 'logged_out' || err.code === 'timeout'
       ? err.code + ': ' + err.message
       : (err.stack?.slice(0, 2000) ?? String(err));
-    await report(name, job.id, false, null, detail).catch((e) =>
+    // `error` is a plain string all the way to the gateway -- there is no
+    // structured channel -- so evidence that is not in this string does not
+    // exist downstream. err.meta carries the run directory the engine wrote its
+    // transcript to; append it rather than lose it at the last hop.
+    const evidence = err.meta ? ' | evidence: ' + JSON.stringify(err.meta).slice(0, 600) : '';
+    await report(name, job.id, false, null, detail + evidence).catch((e) =>
       say('could not even report the failure: ' + e.message),
     );
   }

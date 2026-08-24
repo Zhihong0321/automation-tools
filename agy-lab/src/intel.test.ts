@@ -467,6 +467,31 @@ test('both public report layouts include mobile viewport and report content', ()
   assert.match(bilingual, /data-report-language-panel="zh-CN" hidden/);
 });
 
+test('a report page asks for the access key once, not once per tab', () => {
+  // The key used to live in sessionStorage, which is per-tab: every report link
+  // opened in a new tab prompted again. It now goes to a first-party cookie
+  // (mirrored to localStorage, because Safari expires script-written cookies) so
+  // one entry covers every tab, every report and every restart.
+  const deepReport = report('company_research');
+  deepReport.result = {
+    people: [{ id: 'person_bbbb', name: 'Second Person', role: 'CFO', role_url: 'https://example.com/team' }],
+  };
+  const html = companyPage(deepReport);
+  assert.match(html, /var stored=eeKey\.read\(\)/);
+  assert.match(html, /Max-Age='\+YEAR/);
+  assert.match(html, /localStorage\.setItem\(NAME,value\)/);
+  assert.doesNotMatch(html, /sessionStorage\.setItem\(KEY/);
+  // Only a key the server itself rejected is thrown away, and the prompt is
+  // reached solely when nothing is stored.
+  assert.match(html, /response\.status===401\|\|response\.status===403\)\{\s*eeKey\.clear\(\)/);
+  assert.match(html, /if\(stored\)return stored;\s*var typed=\(window\.prompt/);
+  // The stored key stays out of the wire format the server reads: bearer only.
+  assert.doesNotMatch(html, /token=/);
+  for (const script of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) {
+    assert.doesNotThrow(() => new Function(script[1]));
+  }
+});
+
 test('VIP brief layout labels public-professional scope and evidence', () => {
   const brief = report('person_research');
   brief.title = 'A Person VIP brief';
@@ -556,4 +581,57 @@ test('an existing brief is linked, and its label reflects whether it is done', (
   assert.match(html, /\/r\/zyxwvutsrqponmlkjihg/);
   assert.match(html, /Open brief/);
   assert.doesNotMatch(html, /data-person="person_dddd"/);
+});
+
+test('the contact cap keeps what was crawled, not what arrived first', () => {
+  // Replays report 4oGBOcwnj1SqbmfOVtC- (Eternalgy, 23 Aug 2026). Round 01 filed
+  // 20 contacts -- five branch addresses and every social profile -- which with
+  // the Maps phone and Round 02's three numbers filled all 24 slots. Round 03 is
+  // merged last, so the rows fb-recon had actually crawled off the live Page
+  // (its phone, its email and three Messenger links, one of them the route to a
+  // named person) were sliced off the end and never reached the report.
+  const round01 = {
+    contacts: Array.from({ length: 20 }, (_, i) => ({
+      purpose: 'branch_office', value: 'Branch ' + i + ', Johor Bahru',
+      source_url: 'https://eternalgy.me', _round: 'round01',
+    })),
+  };
+  const round02 = {
+    contacts: Array.from({ length: 3 }, (_, i) => ({
+      purpose: 'whatsapp', value: '+6011200000' + i, source_url: 'https://eternalgy.me', _round: 'round02',
+    })),
+  };
+  const round03 = facebookLedgerRows(
+    { confidence: 'confirmed', facebook_url: 'https://www.facebook.com/eternalgy',
+      phone: '011-2067 2895', email: 'admin@eternalgy.my',
+      messenger_url: 'https://m.me/eternalgy', messenger_source: 'derived' },
+    { company_url: 'https://www.facebook.com/eternalgy', people: [{
+      name: 'Odelia Wong', role: 'Solar consultant', confidence: 'likely', source: 'Personal page',
+      profile_url: 'https://www.facebook.com/profile.php?id=61592124102749',
+      messenger_url: 'https://m.me/61592124102749', messenger_source: 'derived' }] },
+  );
+  const ledger = buildLedger(
+    { id: '807', name: 'Eternalgy Sdn Bhd', phone: '011-2067 2895',
+      maps_url: 'https://www.google.com/maps/place/Eternalgy/data=!4m2!3m1!1sabc' },
+    [round01, round02, { contacts: round03.contacts, people: round03.people, signals: round03.signals }],
+  );
+  const contacts = ledger.contacts as Record<string, unknown>[];
+  const value = (purpose: string) => contacts.find((r) => r.purpose === purpose)?.value_as_published;
+
+  // The cap still holds -- this is about which 24 survive, not how many.
+  assert.equal(contacts.length, 24);
+  // Every crawled row is present, including the Messenger route to the person.
+  assert.equal(value('Messenger — Odelia Wong'), 'https://m.me/61592124102749');
+  assert.equal(value('Messenger — company page'), 'https://m.me/eternalgy');
+  assert.equal(value('Facebook Page phone'), '011-2067 2895');
+  assert.equal(value('Facebook Page email'), 'admin@eternalgy.my');
+  // The Maps phone is the entity's own identifier and is never displaced.
+  assert.equal(value('Google Maps phone'), '011-2067 2895');
+  // Survivors keep the order they were collected in: gmap, then the rounds.
+  assert.equal(contacts[0].purpose, 'Google Maps phone');
+  assert.equal(contacts[contacts.length - 1].introduced_by, 'round03');
+  // What was dropped is Round 01 filler -- and Round 02's three numbers, far
+  // fewer rows, are not starved by it.
+  assert.equal(contacts.filter((r) => r.introduced_by === 'round02').length, 3);
+  assert.equal(contacts.filter((r) => r.introduced_by === 'round01').length, 16);
 });

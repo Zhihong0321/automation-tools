@@ -26,6 +26,7 @@
 // the next sweep, up to MAX_ATTEMPTS, after which it fails with a message saying
 // so rather than cycling forever on something that kills workers.
 import http from 'node:http';
+import * as db from './reportdb.ts';
 import crypto from 'node:crypto';
 
 export interface Ctx {
@@ -239,6 +240,14 @@ export function create(type: string, payload: unknown, timeoutMs = DEFAULT_TIMEO
     error: null,
   };
   jobs.set(job.id, job);
+  // `reportId` rides the payload when the caller has one. Fire-and-forget: the
+  // broker is synchronous and a trail write must never be able to delay or fail
+  // a job handout.
+  void db.logEvent({
+    reportId: (payload as { reportId?: string })?.reportId ?? null,
+    jobId: job.id, stage: type, event: 'job.created',
+    detail: { type, timeout_ms: job.timeoutMs },
+  });
   wake(job);
   return job;
 }
@@ -307,6 +316,15 @@ export function finish(id: string, ok: boolean, result: unknown, error: string |
     if (ok) info.done += 1;
     else info.failed += 1;
   }
+  void db.logEvent({
+    reportId: (job.payload as { reportId?: string })?.reportId ?? null,
+    jobId: job.id, stage: job.type, event: ok ? 'job.done' : 'job.failed',
+    detail: {
+      type: job.type, worker: job.worker, attempts: job.attempts,
+      ms: job.startedAt ? Date.parse(job.finishedAt!) - Date.parse(job.startedAt) : null,
+      ...(ok ? {} : { error: String(job.error ?? '').slice(0, 2_000) }),
+    },
+  });
   settleFinished(job);
   return job;
 }
@@ -452,6 +470,18 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     if (!job) {
       // Almost always the ring having evicted it, or a redeploy having dropped it.
       // Say which, because "unknown job" reads like a bug in the worker.
+      // THIS is the line that ate five minutes of the mini's work at 16:56 on
+      // 23 Aug and left no durable trace anywhere: the worker was told its job
+      // no longer existed, wrote one line to a text file on a machine at home,
+      // and that was the entire record. Now it is a row.
+      void db.logEvent({
+        jobId: result[1]!, stage: 'broker', event: 'job.evicted',
+        detail: {
+          worker, reported_ok: body.ok !== false,
+          error: str(body.error).slice(0, 1_000) || null,
+          note: 'worker returned a result for a job the broker no longer had: ring eviction or a container restart mid-run',
+        },
+      });
       json(res, 404, { error: 'no such job — it was evicted, or the service restarted while it ran', id: result[1] });
       return true;
     }

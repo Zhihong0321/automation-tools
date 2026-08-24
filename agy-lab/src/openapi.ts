@@ -25,7 +25,7 @@ export const document = {
         summary: 'Browse the combined report library',
         description: 'Returns business searches and company research reports newest first. This is the data source for the end-user research workspace.',
         parameters: [
-          { name: 'type', in: 'query', schema: { type: 'string', enum: ['business_search', 'company_research', 'person_research'] } },
+          { name: 'type', in: 'query', schema: { type: 'string', enum: ['business_search', 'company_research', 'person_research', 'ads_research'] } },
           { name: 'status', in: 'query', schema: { $ref: '#/components/schemas/ReportStatus' } },
           { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 40 } },
           { name: 'offset', in: 'query', schema: { type: 'integer', minimum: 0, default: 0 } },
@@ -116,6 +116,27 @@ export const document = {
         responses: { '200': { description: 'Current VIP brief state', content: { 'application/json': { schema: { $ref: '#/components/schemas/PersonResearchResponse' } } } }, '404': { $ref: '#/components/responses/NotFound' } },
       },
     },
+    '/api/ads-research': {
+      post: {
+        operationId: 'createAdsResearch',
+        tags: ['Ads research'],
+        summary: 'Capture the ads a company is running',
+        description: 'Captures live ads for a company from the Facebook Ad Library and the Google Ads Transparency Center via the ads.company worker. Deterministic: no model is called. Google publishes no ad text, so its rows carry format and dates only \u2014 the wording exists solely inside the creative image.',
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/AdsResearchRequest' } } } },
+        responses: {
+          '200': { description: 'A capture for this companyId is already running; the existing report is returned', content: { 'application/json': { schema: { $ref: '#/components/schemas/AcceptedReport' } } } },
+          '202': { description: 'Ads capture accepted', content: { 'application/json': { schema: { $ref: '#/components/schemas/AcceptedReport' } } } },
+          '400': { $ref: '#/components/responses/BadRequest' },
+        },
+      },
+    },
+    '/api/ads-research/{reportId}': {
+      get: {
+        operationId: 'getAdsResearch', tags: ['Ads research'], summary: 'Poll an ads report',
+        parameters: [{ $ref: '#/components/parameters/ReportId' }],
+        responses: { '200': { description: 'Current ads report state', content: { 'application/json': { schema: { $ref: '#/components/schemas/AdsResearchResponse' } } } }, '404': { $ref: '#/components/responses/NotFound' } },
+      },
+    },
     '/public/reports/{reportId}': {
       get: {
         security: [],
@@ -163,7 +184,7 @@ export const document = {
         type: 'object', required: ['id', 'type', 'status', 'title', 'created_at', 'updated_at', 'view_url', 'api_url'],
         properties: {
           id: { type: 'string', pattern: '^[A-Za-z0-9_-]{20}$' },
-          type: { type: 'string', enum: ['business_search', 'company_research', 'person_research'] },
+          type: { type: 'string', enum: ['business_search', 'company_research', 'person_research', 'ads_research'] },
           status: { $ref: '#/components/schemas/ReportStatus' },
           title: { type: 'string' },
           version: { type: 'integer', minimum: 1, description: 'Which research pass this is on the same company. 1 is the first; re-researching the same company produces V2, V3, ... and never overwrites an earlier dossier. Always 1 for a business search.' },
@@ -213,6 +234,18 @@ export const document = {
           mobile: { type: 'string', pattern: '^[+()\\d.\\s-]{7,32}$', description: 'Optional caller-supplied mobile resolver. It must contain 7–15 digits and may include formatting. Used only for the live discovery pass; never persisted or published.' },
           mobileNumber: { type: 'string', pattern: '^[+()\\d.\\s-]{7,32}$', description: 'Alias for mobile.' },
           phone: { type: 'string', pattern: '^[+()\\d.\\s-]{7,32}$', description: 'Alias for mobile.' },
+          requesterId: { type: 'string' }, userId: { type: 'string' },
+        },
+      },
+      AdsResearchRequest: {
+        type: 'object', required: ['name'], additionalProperties: false,
+        properties: {
+          name: { type: 'string', minLength: 1, description: 'Company or advertiser name. company is accepted as an alias.' },
+          company: { type: 'string' },
+          region: { type: 'string', description: 'Ad-library region code. Defaults to MY.' },
+          fbMax: { type: 'integer', description: 'Cap on Facebook ads. 0 means keep going until the list stops growing.' },
+          gMax: { type: 'integer', description: 'Cap on Google ads. Google costs one page load per ad, so it is capped at 30 by default.' },
+          companyId: { type: 'string', description: "Links the report to a company dossier, and makes the call idempotent while a capture for that company is still in flight. company_id is accepted as an alias." },
           requesterId: { type: 'string' }, userId: { type: 'string' },
         },
       },
@@ -287,6 +320,25 @@ export const document = {
           report: { $ref: '#/components/schemas/ReportEnvelope' },
           data: { type: 'object', properties: { report: { $ref: '#/components/schemas/ReportEnvelope' }, final: { oneOf: [{ $ref: '#/components/schemas/FinalPersonReport' }, { type: 'null' }] } } },
           research_run: { $ref: '#/components/schemas/PersonResearchRun' },
+        },
+      },
+      AdsResearchRun: {
+        type: ['object', 'null'], description: 'Authenticated ads-capture audit record: the raw per-network captures plus execution metadata.',
+        properties: {
+          report_id: { type: 'string' },
+          facebook: { type: ['object', 'null'], additionalProperties: true },
+          google: { type: ['object', 'null'], additionalProperties: true },
+          ads: { type: ['object', 'null'], additionalProperties: true },
+          final_report: { type: ['object', 'null'], additionalProperties: true },
+          run_status: { type: 'object', additionalProperties: true }, engine_metadata: { type: 'object', additionalProperties: true },
+          started_at: { type: ['string', 'null'], format: 'date-time' }, completed_at: { type: ['string', 'null'], format: 'date-time' }, updated_at: { type: 'string', format: 'date-time' },
+        },
+      },
+      AdsResearchResponse: {
+        type: 'object', required: ['report', 'data'], properties: {
+          report: { $ref: '#/components/schemas/ReportEnvelope' },
+          data: { type: 'object', properties: { report: { $ref: '#/components/schemas/ReportEnvelope' }, final: { type: ['object', 'null'], additionalProperties: true } } },
+          research_run: { $ref: '#/components/schemas/AdsResearchRun' },
         },
       },
       PublicSearchReportResponse: { type: 'object', required: ['report', 'companies'], properties: { report: { type: 'object', additionalProperties: true }, search: { type: ['object', 'null'], additionalProperties: true }, companies: { type: 'array', items: { $ref: '#/components/schemas/Company' } } } },
