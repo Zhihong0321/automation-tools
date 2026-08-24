@@ -1994,7 +1994,7 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       ctx.json(res, 400, { error: 'keyword or place/location is required' });
       return true;
     }
-    const max = Math.min(Math.max(Math.round(num(body.max, 100)), 1), 200);
+    const max = Math.min(Math.max(Math.round(num(body.max, 100)), 1), 300);
     const request = { keyword, place: place || null, max, userId: str(body.requesterId || body.userId) || null, timeoutMs: num(body.timeoutMs, 600_000) };
     const title = keyword
       ? `${keyword}${place ? ' in ' + place : ''}`

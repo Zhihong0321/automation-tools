@@ -241,7 +241,7 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
   <div class="tbl"><table><thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Meaning</th></tr></thead><tbody>
     <tr><td><code>keyword</code></td><td>string</td><td>conditional</td><td>Business category, service or keyword. May be omitted when a location is supplied.</td></tr>
     <tr><td><code>place</code></td><td>string</td><td>conditional</td><td>City, district, state or country. May be omitted when a keyword is supplied; <code>location</code> is an alias.</td></tr>
-    <tr><td><code>max</code></td><td>integer</td><td>no</td><td>1–200; defaults to 100.</td></tr>
+    <tr><td><code>max</code></td><td>integer</td><td>no</td><td>1–300; defaults to 100.</td></tr>
     <tr><td><code>requesterId</code></td><td>string</td><td>no</td><td>Your CRM/user/job correlation id. <code>userId</code> is accepted as an alias.</td></tr>
     <tr><td><code>timeoutMs</code></td><td>integer</td><td>no</td><td>Worker deadline; defaults to 600000. It does not make the POST synchronous.</td></tr>
   </tbody></table></div>
