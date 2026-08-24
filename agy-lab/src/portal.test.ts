@@ -42,10 +42,26 @@ test('portal uses a mobile bottom navigation and scoped access gate', () => {
   assert.match(html, /You enter it once/);
 });
 
+test('the front page is three named choices, and each one opens its own form', () => {
+  const html = page();
+  // The landing used to be a market form with the company lookup hidden behind a
+  // tab -- two of the three things the workspace does were invisible on arrival.
+  assert.match(html, /id="chooser"/);
+  assert.match(html, />Business list<\/h2>/);
+  assert.match(html, />Company research<\/h2>/);
+  assert.match(html, />Completed report<\/h2>/);
+  // The form is not on screen until a choice is made, and the third choice is
+  // the library rather than a form.
+  assert.match(html, /id="searchForm" class="search-sheet hidden"/);
+  assert.match(html, /function choose\(choice\)\{if\(choice==='reports'\)return switchView\('library'\)/);
+  assert.match(html, /function goHome\(\)/);
+  assert.doesNotMatch(html, /class="mode-tab/);
+});
+
 test('a company can be researched by name, after the operator confirms the Maps match', () => {
   const html = page();
-  // Two entry modes, not one. The market scan was the only way in, so a user who
-  // knew exactly which company they wanted had to search a category and hunt.
+  // The market scan was once the only way in, so a user who knew exactly which
+  // company they wanted had to search a category and hunt.
   assert.match(html, /data-mode="market"/);
   assert.match(html, /data-mode="company"/);
   assert.match(html, /id="companyName"/);
