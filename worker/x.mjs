@@ -73,11 +73,24 @@ async function runMode(mode, payload, job) {
   if (/under your control/i.test(stderr)) {
     throw Object.assign(new Error('the grok space is under a human’s control on the mini'), { code: 'busy' });
   }
-  // The age / cookie modal. Distinct from logged_out on purpose: the session is
-  // fine, a human simply has to dismiss a dialog in that task space once, and a
-  // caller that cannot tell the two apart will chase the wrong fix.
+  // A modal is covering grok.com. Distinct from logged_out on purpose: the
+  // session is fine, a human simply has to dismiss a dialog in that task space
+  // once, and a caller that cannot tell the two apart will chase the wrong fix.
+  //
+  // The dialog's own text rides along now. This used to answer the fixed string
+  // "grok.com is showing a consent dialog that only a human may clear" and throw
+  // away what x-recon had already captured -- so on 24 Aug every VIP brief
+  // reported a consent dialog, and the thing actually blocking them was a "Meet
+  // Grok Bot" product announcement sitting on a healthy, signed-in session. One
+  // line of evidence is the difference between walking to the mini and clicking
+  // once, and hunting an auth problem that does not exist.
   if (/\[gate\]/.test(stderr) || /consent dialog/i.test(stderr)) {
-    throw Object.assign(new Error('grok.com is showing a consent dialog that only a human may clear'), { code: 'gated' });
+    const quoted = /"([^"]{4,200})"/.exec(stderr);
+    throw Object.assign(
+      new Error('a dialog is covering grok.com and only a human may dismiss it'
+        + (quoted ? ': "' + quoted[1] + '"' : '')),
+      { code: 'gated' },
+    );
   }
   if (/not signed in to grok/i.test(stderr)) {
     throw Object.assign(new Error('ego lite is not signed in to grok.com on this machine'), { code: 'logged_out' });
