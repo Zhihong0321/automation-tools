@@ -296,10 +296,33 @@ async function miniAsk(
   // same one. They fought over a single ego lite task space and two of three came
   // back `compose_failed`. Omitted, each lane answers as its own account.
   const pinned = route.engine !== 'agy' && (route as { pinnedSession?: boolean }).pinnedSession === true;
+  // THE LEASE IS NOT THE CALLER'S PATIENCE, and it used to be the same number.
+  //
+  // The broker re-hands a job whose lease expires, on the assumption the lane
+  // holding it is dead. With lease == timeoutMs that retry fired at the exact
+  // moment this function gave up, so it could never help anybody. Watched it
+  // happen on run 7_Uq2CofCNiVAfmM2OBz: an ego lite ChatGPT lane stalled on job
+  // 9c3859640ee1, the lease expired at 300s, macmini-ask-2 picked it up and
+  // ANSWERED IT IN 25 SECONDS -- five seconds after the caller had already
+  // recorded `the mini did not answer within 300s`. A good answer, produced, and
+  // thrown away. That one stalled lane cost Round 02 305 seconds instead of 30.
+  //
+  // So the browser engines get a lease well below their timeout: a stalled lane
+  // is then found in two minutes and the work moves to a healthy account with
+  // time to spare. The risk of a lease shorter than the real work is a duplicate
+  // run on a second account, which is why this is nowhere near the observed
+  // duration -- every chatgpt.ask measured on this fleet lands in 19-31s, and the
+  // lease is 120.
+  //
+  // agy keeps lease == timeoutMs. It genuinely runs for two to five minutes, and
+  // a lease under that would re-run real work rather than rescue stalled work.
+  const leaseMs = route.engine === 'agy'
+    ? timeoutMs
+    : Math.min(timeoutMs, Number(process.env.BROWSER_LEASE_MS ?? 120_000));
   const job = jobs.create(
     jobTypeFor(route.engine),
     { ...(pinned ? { id: session } : {}), prompt, timeoutMs },
-    timeoutMs,
+    leaseMs,
   );
   const settled = await jobs.wait(job.id, timeoutMs + 5_000);
 
