@@ -2147,6 +2147,21 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     return true;
   }
 
+  // Permanent removal. One report per call, addressed by its opaque public id:
+  // there is deliberately no bulk form of this, so "flush everything" stays a
+  // sequence of visible, individually confirmed deletions rather than one query.
+  const deleteMatch = /^\/api\/reports\/([A-Za-z0-9_-]{20})$/.exec(p);
+  if (method === 'DELETE' && deleteMatch) {
+    const report = await db.getReport(deleteMatch[1]!);
+    if (!report) {
+      ctx.json(res, 404, { error: 'report not found', id: deleteMatch[1] });
+      return true;
+    }
+    await db.deleteReport(report.public_id);
+    ctx.json(res, 200, { deleted: true, id: report.public_id, type: report.report_type, title: report.title });
+    return true;
+  }
+
   if (method === 'GET' && p === '/api/reports') {
     const rawType = url.searchParams.get('type');
     const rawStatus = url.searchParams.get('status');

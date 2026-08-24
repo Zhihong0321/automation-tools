@@ -37,6 +37,21 @@ export const document = {
         },
       },
     },
+    '/api/reports/{reportId}': {
+      delete: {
+        operationId: 'deleteReport',
+        tags: ['Published reports'],
+        summary: 'Delete a report permanently',
+        description: 'Removes the report, its research runs and its run trail, and kills the public /r/{reportId} link. Works on any report type and any status, including a run still in flight. The persisted company and person dataset is never touched. This cannot be undone.',
+        parameters: [{ $ref: '#/components/parameters/ReportId' }],
+        responses: {
+          '200': { description: 'Report deleted', content: { 'application/json': { schema: { $ref: '#/components/schemas/DeletedReport' } } } },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '503': { $ref: '#/components/responses/Unavailable' },
+        },
+      },
+    },
     '/api/business-search': {
       post: {
         operationId: 'createBusinessSearch',
@@ -196,6 +211,15 @@ export const document = {
       ReportListItem: { allOf: [{ $ref: '#/components/schemas/ReportEnvelope' }, { type: 'object', properties: { preview: { type: 'object', additionalProperties: true } } }] },
       ReportListResponse: { type: 'object', required: ['reports', 'total', 'limit', 'offset'], properties: { reports: { type: 'array', items: { $ref: '#/components/schemas/ReportListItem' } }, total: { type: 'integer' }, limit: { type: 'integer' }, offset: { type: 'integer' } } },
       AcceptedReport: { type: 'object', required: ['report'], properties: { report: { $ref: '#/components/schemas/ReportEnvelope' } } },
+      DeletedReport: {
+        type: 'object', required: ['deleted', 'id'],
+        properties: {
+          deleted: { type: 'boolean' },
+          id: { type: 'string', pattern: '^[A-Za-z0-9_-]{20}$' },
+          type: { type: 'string', enum: ['business_search', 'company_research', 'person_research', 'ads_research'] },
+          title: { type: ['string', 'null'] },
+        },
+      },
       BusinessSearchRequest: {
         type: 'object', additionalProperties: false,
         anyOf: [{ required: ['keyword'] }, { required: ['place'] }, { required: ['location'] }],

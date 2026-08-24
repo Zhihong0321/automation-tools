@@ -174,6 +174,23 @@ test('a run with no trail says so instead of rendering an empty table', async ()
   assert.match(html, /No events recorded for this run/);
 });
 
+test('any report can be deleted from the library, behind a confirm', () => {
+  const html = page();
+  // The button is on every row unconditionally -- any type, any status. A run
+  // still going is deletable too; the poll handler is what cleans up after it.
+  assert.match(html, /onclick="deleteReport\(this\)"/);
+  assert.match(html, /async function deleteReport/);
+  assert.match(html, /'\/api\/reports\/'\+encodeURIComponent\(id\),\{method:'DELETE'\}/);
+  // Deletion is permanent and one click away from every report, so it does not
+  // happen without the user reading what they are about to lose.
+  assert.match(html, /window\.confirm/);
+  assert.match(html, /cannot be undone/);
+  // A 404 means someone else already deleted it -- the row disappears rather
+  // than erroring, and a poll that hits 404 stops instead of retrying forever.
+  assert.match(html, /function forgetReport/);
+  assert.match(html, /error\.status===404/);
+});
+
 test('the portal script has no undefined identifiers in its job renderer', () => {
   const html = page();
   // A bare `kind` inside renderJobs (where the variable is `job.kind`) threw

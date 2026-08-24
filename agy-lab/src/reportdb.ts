@@ -464,6 +464,23 @@ export async function getReport(publicId: string): Promise<PublishedReport | nul
   return out.rows[0] ?? null;
 }
 
+/**
+ * Delete one report permanently. The ON DELETE CASCADE constraints take the
+ * research runs and the run trail with it, and the public /r/:id link 404s from
+ * this moment on. company_data and person_data are untouched: the report is a
+ * rendering of the dataset, never the dataset itself. A run still in flight
+ * survives the deletion harmlessly — its round updates match zero rows and
+ * logEvent swallows the orphaned-trail insert.
+ *
+ * RETURNING rather than rowCount, because the pg-proxy fallback path is not
+ * guaranteed to report a rowCount for statements that produce no rows.
+ */
+export async function deleteReport(publicId: string): Promise<boolean> {
+  await migrate();
+  const out = await sql<{ id: string }>('delete from published_report where public_id = $1 returning id', [publicId]);
+  return out.rows.length > 0;
+}
+
 export async function findPersonResearchReport(sourceReportId: string, personId: string): Promise<PublishedReport | null> {
   await migrate();
   const out = await sql<PublishedReport>(

@@ -77,7 +77,7 @@ function authorized(req: http.IncomingMessage, url: URL): boolean {
   const supplied = header.startsWith('Bearer ') ? header.slice(7) : (url.searchParams.get('token') ?? '');
   const digest = (value: string): Buffer => crypto.createHash('sha256').update(value).digest();
   if (crypto.timingSafeEqual(digest(supplied), digest(TOKEN))) return true;
-  const productRoute = url.pathname === '/api/reports'
+  const productRoute = url.pathname.startsWith('/api/reports')
     || url.pathname.startsWith('/api/business-search')
     || url.pathname.startsWith('/api/company-research')
     || url.pathname.startsWith('/api/person-research');
