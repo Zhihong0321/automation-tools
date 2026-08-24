@@ -243,11 +243,40 @@ export function migrate(): Promise<void> {
       update published_report p set company_id = c.merged_into
       from company_data c where p.company_id = c.id and c.merged_into is not null;
     `);
+    // Collapse the scan links BEFORE remapping them, and collapse them against
+    // where every row is ABOUT to point, not only against where rows already
+    // point.
+    //
+    // The first version of this deleted a link only when the merge target was
+    // already linked to the same report. That misses the case that actually
+    // happens on a wide scan: one report links to X and to Y, both of which merge
+    // into Z, and neither is Z. Nothing is deleted, both are then updated to Z,
+    // and the update violates search_report_company_pkey -- which takes down
+    // migrate(), and migrate() runs at the top of every query, so the entire
+    // report API answers `duplicate key value violates unique constraint
+    // "search_report_company_pkey"` until someone redeploys with a fix. Seen in
+    // production on 24 Aug after a 117-company scan of "solar installer in
+    // malaysia" produced two branches of one registered name.
+    //
+    // So: resolve every row on a report to its final company, and where several
+    // resolve to the same one, keep the lowest company_id and drop the rest. A
+    // dropped row is a duplicate link, never a lost one -- the survivor names the
+    // same company on the same report.
     await sql(`
-      delete from search_report_company a using company_data c
-      where a.company_id = c.id and c.merged_into is not null
-        and exists (select 1 from search_report_company b
-                    where b.report_id = a.report_id and b.company_id = c.merged_into);
+      delete from search_report_company a
+      using company_data ca
+      where ca.id = a.company_id
+        and exists (
+          select 1
+          from search_report_company b
+          join company_data cb on cb.id = b.company_id
+          where b.report_id = a.report_id
+            and b.company_id <> a.company_id
+            and coalesce(cb.merged_into, cb.id) = coalesce(ca.merged_into, ca.id)
+            and b.company_id < a.company_id
+        );
+    `);
+    await sql(`
       update search_report_company a set company_id = c.merged_into
       from company_data c where a.company_id = c.id and c.merged_into is not null;
     `);
