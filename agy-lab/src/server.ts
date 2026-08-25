@@ -81,7 +81,16 @@ function authorized(req: http.IncomingMessage, url: URL): boolean {
   const productRoute = url.pathname.startsWith('/api/reports')
     || url.pathname.startsWith('/api/business-search')
     || url.pathname.startsWith('/api/company-research')
-    || url.pathname.startsWith('/api/person-research');
+    || url.pathname.startsWith('/api/person-research')
+    // Ads market research is a /research workspace tool with its own form, so an
+    // end user holding only PORTAL_TOKEN has to be able to start one. Its cost
+    // profile is the same as business-search: one paced crawl on the mini.
+    //
+    // NOTE: /api/ads-research is deliberately NOT added here. It is missing from
+    // this list today, which means the portal's ads button already requires
+    // LAB_TOKEN, and quietly widening an existing route's audience is not this
+    // change's business.
+    || url.pathname.startsWith('/api/ads-market');
   return productRoute && PORTAL_TOKEN.length >= 16
     && crypto.timingSafeEqual(digest(supplied), digest(PORTAL_TOKEN));
 }
