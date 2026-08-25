@@ -42,13 +42,14 @@ test('portal uses a mobile bottom navigation and scoped access gate', () => {
   assert.match(html, /You enter it once/);
 });
 
-test('the front page is three named choices, and each one opens its own form', () => {
+test('the front page is four named choices, and each one opens its own form', () => {
   const html = page();
   // The landing used to be a market form with the company lookup hidden behind a
   // tab -- two of the three things the workspace does were invisible on arrival.
   assert.match(html, /id="chooser"/);
   assert.match(html, />Business list<\/h2>/);
   assert.match(html, />Company research<\/h2>/);
+  assert.match(html, />Ads market research<\/h2>/);
   assert.match(html, />Completed report<\/h2>/);
   // The form is not on screen until a choice is made, and the third choice is
   // the library rather than a form.
@@ -118,6 +119,21 @@ test('a company dossier offers ads research, and links an existing run instead',
   );
   assert.match(linked, /\/r\/BBBBBBBBBBBBBBBBBBBB/);
   assert.doesNotMatch(linked, /data-ads="1"/);
+});
+
+test('ads market research takes a product keyword and defaults to Malaysia', () => {
+  const html = page();
+  assert.match(html, /id="adsGrid"/);
+  assert.match(html, /<label for="adsKeyword">Product keyword<\/label>/);
+  // Malaysia is the default and must be the SELECTED option, not merely first in
+  // the list -- a country picker that quietly starts somewhere else would send
+  // every run to the wrong ad library region.
+  assert.match(html, /<option value="Malaysia" selected>Malaysia<\/option>/);
+  assert.match(html, /\/api\/ads-market/);
+  // The form must route to its own starter; falling through to startLookup would
+  // run a Google Maps search instead of an ad library crawl.
+  assert.match(html, /if\(state\.mode==='adsmarket'\)return startAdsMarket\(\)/);
+  assert.match(html, /data-filter="ads_market"/);
 });
 
 test('the portal itself offers ads research on a finished dossier', () => {

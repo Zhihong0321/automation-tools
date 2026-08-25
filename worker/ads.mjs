@@ -25,6 +25,13 @@ import os from 'node:os';
 import path from 'node:path';
 
 const ADS = process.env.ADS_BIN ?? path.join(os.homedir(), 'project/gmap-recon/ads-recon/ads');
+// `kw` is the keyword/market half of the same repo. Separate binary, separate
+// question: `ads` is one company across two networks, `kw` is one market across
+// many advertisers on Facebook only.
+const KW = process.env.KW_BIN ?? path.join(os.homedir(), 'project/gmap-recon/ads-recon/kw');
+// The fetch is ~90s for three keywords and the write is ~95s. 25 minutes leaves
+// room for a wider keyword set without ever being the thing that kills a run.
+const KW_TIMEOUT_MS = Number(process.env.KW_TIMEOUT_MS ?? 1_500_000);
 // Facebook is one page load for the whole grid; Google costs one page load PER
 // AD, which is what dominates a run. 30 Google ads is roughly 4-6 minutes.
 const DEFAULT_TIMEOUT_MS = Number(process.env.ADS_TIMEOUT_MS ?? 900_000);
@@ -101,6 +108,124 @@ export async function company(payload, job) {
     // The creatives are inside the payload now; the copy on disk is scratch.
     try { fs.rmSync(runDir, { recursive: true, force: true }); } catch {}
   }
+}
+
+/**
+ * Keyword MARKET research: every live ad matching each keyword, rolled up, then
+ * one written report.
+ *
+ * Two shell-outs, in order, and the split is the whole point. `kw fetch` stores
+ * ads in SQLite on this machine; `kw report` reads that store and spends one
+ * model call. If the model half fails, the ads are still on disk and the digest
+ * is still returned -- so this returns whatever it got rather than throwing away
+ * a good crawl over a bad write. Only a failed FETCH is an error here.
+ *
+ * No creatives travel. ads.company embeds downscaled images because a company
+ * report is something you look at; a market report is 500+ ads and something you
+ * read, and 500 data URIs would not fit in a job result or a Postgres row.
+ */
+export async function market(payload, job) {
+  const p = payload ?? {};
+  const keywords = (Array.isArray(p.keywords) ? p.keywords : [p.keyword])
+    .map((k) => String(k ?? '').trim()).filter(Boolean).slice(0, 8);
+  if (!keywords.length) throw new Error('ads.market needs "keywords"');
+
+  const region = String(p.region ?? 'MY').toUpperCase();
+  const pages = Number(p.pages) > 0 ? Math.min(Number(p.pages), 40) : 12;
+  const effort = ['low', 'medium', 'high'].includes(String(p.effort)) ? String(p.effort) : 'high';
+  const timeoutMs = Number(p.timeoutMs) > 0 ? Number(p.timeoutMs) : KW_TIMEOUT_MS;
+
+  // KW_DATA, not --db. `--db` moves only the database; the raw NDJSON, the digest
+  // and the report all hang off kw's data directory, and left alone they would be
+  // written into the checked-out repo and shared between concurrent runs.
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-run-'));
+  const env = { KW_DATA: workDir };
+  const db = path.join(workDir, 'ads.db');
+  const reportFile = path.join(workDir, 'report.md');
+  const startedAt = Date.now();
+
+  try {
+    // ---------------------------------------------------------------- fetch
+    const fetchArgs = ['fetch', ...keywords, '--region', region, '--pages', String(pages)];
+    const fetched = await exec(KW, fetchArgs, timeoutMs, env);
+    if (fetched.spawnError) throw Object.assign(new Error(fetched.spawnError), { code: 'engine_error' });
+    if (fetched.timedOut) {
+      throw Object.assign(new Error(`kw fetch did not finish within ${Math.round(timeoutMs / 1000)}s`), { code: 'timeout' });
+    }
+    if (/holds the browser lock/i.test(fetched.stderr)) {
+      throw Object.assign(new Error('another ads-recon run holds the browser lock'), { code: 'busy' });
+    }
+    if (/under your control|user has taken control/i.test(fetched.stderr)) {
+      throw Object.assign(new Error('the ads crawl space is under a human\u2019s control on the mini'), { code: 'busy' });
+    }
+    if (!fs.existsSync(db)) {
+      throw Object.assign(new Error(firstLine(fetched.stderr) || `kw fetch exited ${fetched.code} without writing a database`), {
+        code: 'engine_error',
+        meta: { exit_code: fetched.code, stderr_head: String(fetched.stderr).slice(0, 800) },
+      });
+    }
+
+    // Per-keyword truth, parsed from the summary the fetch writes next to the raw
+    // capture. This is what carries "the cap bit and more ads exist" upward; a run
+    // that lost it would read as complete coverage.
+    const fetchStats = readFetchStats(workDir, fetched.stderr, keywords);
+
+    // ---------------------------------------------------------------- report
+    // The topic is the first keyword: it is the one the user actually typed, and
+    // kwdigest scopes by keywords containing it.
+    const reportArgs = ['report', keywords[0], '--out', reportFile,
+      '--keywords', keywords.join(','), '--effort', effort];
+    const wrote = await exec(KW, reportArgs, timeoutMs, env);
+
+    const digest = findDigest(path.join(workDir, 'reports')) ?? findDigest(workDir);
+    const reportMd = fs.existsSync(reportFile) ? fs.readFileSync(reportFile, 'utf8') : null;
+    const ms = Date.now() - startedAt;
+
+    return {
+      engine: 'ads-recon/kw',
+      keywords,
+      region,
+      fetch_stats: fetchStats,
+      digest: digest ?? {},
+      report_md: reportMd,
+      report_engine: reportMd ? 'agy' : null,
+      report_model: reportMd ? `gemini-3.7-flash-${effort}` : null,
+      // A failed WRITE is reported, not thrown: the ads and the digest are the
+      // expensive half and they are already in hand.
+      report_error: reportMd ? null : (firstLine(wrote.stderr) || `kw report exited ${wrote.code}`),
+      meta: { ms, pages, effort, exit_code: fetched.code },
+      at: new Date().toISOString(),
+      ...(job?.id ? { jobId: job.id } : {}),
+    };
+  } finally {
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
+/** Per-keyword page/ad counts and cap warnings from the fetch summary. */
+function readFetchStats(rawDir, stderr, keywords) {
+  // kw writes data/raw/<ts>.summary.json next to the NDJSON. Take the newest.
+  try {
+    const dir = path.join(rawDir, 'raw');
+    const summaries = fs.readdirSync(dir).filter((f) => f.endsWith('.summary.json')).sort();
+    if (summaries.length) {
+      const s = readJson(path.join(dir, summaries[summaries.length - 1]));
+      if (s?.per_keyword) return s.per_keyword;
+    }
+  } catch {}
+  // Fall back to the warning lines rather than returning nothing: losing the cap
+  // flag is the one loss that makes a partial crawl read as a whole market.
+  const out = {};
+  for (const k of keywords) out[k] = { truncated: new RegExp(`"${k}" hit --pages`).test(String(stderr)) };
+  return out;
+}
+
+/** The digest kw wrote. Named <topic-slug>-digest.json, so match on the suffix. */
+function findDigest(dir) {
+  try {
+    const hit = fs.readdirSync(dir).find((f) => f.endsWith('-digest.json'));
+    return hit ? readJson(path.join(dir, hit)) : null;
+  } catch { return null; }
 }
 
 /**
@@ -194,7 +319,7 @@ function execSyncQuiet(bin, args) {
   try { return spawnSync(bin, args, { stdio: 'ignore' }).status === 0; } catch { return false; }
 }
 
-function exec(bin, args, timeoutMs) {
+function exec(bin, args, timeoutMs, extraEnv = {}) {
   return new Promise((resolve) => {
     const child = spawn(bin, args, {
       cwd: path.dirname(bin),
@@ -205,6 +330,7 @@ function exec(bin, args, timeoutMs) {
         ...process.env,
         PATH: [path.join(os.homedir(), '.local/bin'), path.dirname(process.execPath),
           process.env.PATH ?? '', '/usr/bin', '/bin'].filter(Boolean).join(':'),
+        ...extraEnv,
       },
     });
     let stdout = '';

@@ -152,6 +152,27 @@ export const document = {
         responses: { '200': { description: 'Current ads report state', content: { 'application/json': { schema: { $ref: '#/components/schemas/AdsResearchResponse' } } } }, '404': { $ref: '#/components/responses/NotFound' } },
       },
     },
+    '/api/ads-market': {
+      post: {
+        operationId: 'createAdsMarket',
+        tags: ['Ads research'],
+        summary: 'Research a whole market from a product keyword',
+        description: 'Captures every live Facebook ad matching the keyword via the ads.market worker, rolls it up deterministically, then writes one report from that rollup. Facebook only: the Google Ads Transparency Center has no keyword search of ad content. The Ad Library carries no spend, impressions or reach for commercial ads, so advertisers are ranked by ad count, distinct creatives and days running \u2014 never by budget.',
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/AdsMarketRequest' } } } },
+        responses: {
+          '200': { description: 'A capture for these keywords is already in flight; the existing report is returned', content: { 'application/json': { schema: { $ref: '#/components/schemas/AcceptedReport' } } } },
+          '202': { description: 'Market research accepted', content: { 'application/json': { schema: { $ref: '#/components/schemas/AcceptedReport' } } } },
+          '400': { $ref: '#/components/responses/BadRequest' },
+        },
+      },
+    },
+    '/api/ads-market/{reportId}': {
+      get: {
+        operationId: 'getAdsMarket', tags: ['Ads research'], summary: 'Poll a market report',
+        parameters: [{ $ref: '#/components/parameters/ReportId' }],
+        responses: { '200': { description: 'Current market report state', content: { 'application/json': { schema: { $ref: '#/components/schemas/AdsMarketResponse' } } } }, '404': { $ref: '#/components/responses/NotFound' } },
+      },
+    },
     '/public/reports/{reportId}': {
       get: {
         security: [],
@@ -271,6 +292,26 @@ export const document = {
           gMax: { type: 'integer', description: 'Cap on Google ads. Google costs one page load per ad, so it is capped at 30 by default.' },
           companyId: { type: 'string', description: "Links the report to a company dossier, and makes the call idempotent while a capture for that company is still in flight. company_id is accepted as an alias." },
           requesterId: { type: 'string' }, userId: { type: 'string' },
+        },
+      },
+      AdsMarketRequest: {
+        type: 'object', additionalProperties: false,
+        properties: {
+          keyword: { type: 'string', minLength: 1, description: 'The product keyword to research. product and query are accepted as aliases.' },
+          keywords: { type: 'array', items: { type: 'string' }, description: 'Several keywords, fetched concurrently. Capped at 8. Supply this or keyword.' },
+          product: { type: 'string' }, query: { type: 'string' },
+          country: { type: 'string', description: 'Country name, mapped to the ad-library region. Defaults to Malaysia.' },
+          region: { type: 'string', description: 'Two-letter ad-library region, if you would rather set it directly. Defaults to MY.' },
+          pages: { type: 'integer', description: 'Pages per keyword at 30 ads each, 1-40. Defaults to 12, so up to 360 ads per keyword. A keyword that hits this cap is reported as truncated.' },
+          effort: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Reasoning tier for the single report call. Defaults to high.' },
+          requesterId: { type: 'string' }, userId: { type: 'string' },
+        },
+      },
+      AdsMarketResponse: {
+        type: 'object', required: ['report', 'data'], properties: {
+          report: { $ref: '#/components/schemas/ReportEnvelope' },
+          data: { type: 'object', properties: { report: { $ref: '#/components/schemas/ReportEnvelope' }, final: { type: ['object', 'null'], additionalProperties: true } } },
+          research_run: { type: ['object', 'null'], additionalProperties: true, description: 'The ads_market_run row: keywords, region, per-keyword fetch stats, the digest the report was written from, the report markdown, and the promoted counts.' },
         },
       },
       Company: {

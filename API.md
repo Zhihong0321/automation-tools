@@ -263,8 +263,10 @@ Three consequences worth planning for:
 | `GET /api/business-search/:reportId` | bearer | status and `data.companies` |
 | `POST /api/company-research` | bearer | `202` and report envelope |
 | `POST /api/ads-research` | bearer | `202` and report envelope |
+| `POST /api/ads-market` | bearer | `202` and report envelope |
 | `GET /api/company-research/:reportId` | bearer | status, `data.final`, and raw benchmark rounds |
 | `GET /api/ads-research/:reportId` | bearer | status, `data.final`, and the raw per-network captures |
+| `GET /api/ads-market/:reportId` | bearer | status, `data.final`, the digest, and the written report |
 | `GET /r/:reportId` | opaque id | mobile human report |
 | `GET /public/reports/:reportId` | opaque id | public final JSON, never raw rounds |
 
@@ -282,6 +284,52 @@ permanent production connection.
 Set a separate 16+ character `PORTAL_TOKEN` before giving `/research` to end
 users. That token is accepted only by the business-search, company-research, and
 report-library routes; it cannot access the operator shell or model/session APIs.
+
+---
+
+## Ads market research — `ads-market`
+
+`ads-research` answers *what is this company running?*. `ads-market` answers *what is
+happening in this market?* — one product keyword, every live Facebook ad matching it,
+rolled up and written into a report.
+
+```bash
+curl -s https://ee-auto.up.railway.app/api/ads-market \
+  -H "Authorization: Bearer $LAB_TOKEN" -H 'content-type: application/json' \
+  -d '{"keyword":"solar panel","country":"Malaysia"}'
+```
+
+| Field | Default | Does |
+|---|---|---|
+| `keyword` | required | the product keyword. `keywords: []` is also accepted, up to 8, fetched concurrently |
+| `country` | `Malaysia` | mapped to the Ad Library's 2-letter region |
+| `pages` | `12` | pages per keyword, 30 ads each — so 12 is up to 360 ads |
+| `effort` | `high` | agy reasoning tier: `low` \| `medium` \| `high` |
+
+**Facebook only, and not by choice.** The Google Ads Transparency Center has no keyword
+search of ad content — its search is autocomplete over advertisers and websites. There
+is no Google half of this question to capture.
+
+**There is no spend, impressions or reach data in it.** Measured over 672 ads: all three
+are null on 100% of Malaysian commercial ads; they carry data only for political and
+issue ads under disclosure mandates. Advertisers are therefore ranked by ad count,
+distinct creatives, and how long an ad has been running — never by budget. The report
+page states this on its face and the model is instructed never to infer spend from
+volume.
+
+**Two stages, reported separately.** `ads.market` on the mini runs the crawl (~90s for
+three keywords) and then one model call (~95s). They fail for different reasons — a
+browser lock versus a model call — so a run whose crawl succeeded and whose write failed
+comes back `partial` with the digest and every count intact, not `failed`. The ads are
+the expensive half and they are never thrown away over missing prose.
+
+**A capped run says so.** `truncated` is set when any keyword hit its page limit, and it
+surfaces as a banner on the report and a column in the library. A capped capture read as
+a whole market is the failure this guards against.
+
+No creatives travel. `ads-research` embeds downscaled images because a company report is
+something you look at; a market report is hundreds of ads and something you read, and
+that many data URIs fit in neither a job result nor a Postgres row.
 
 ---
 

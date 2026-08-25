@@ -181,7 +181,11 @@ const LANES = (() => {
     // ego lite's ads crawl space held throughout. It uses a THIRD task space
     // ("ads-recon"), distinct from fb.*'s crawl space and x.*'s grok space, so
     // all three can be in flight without contending for a browser.
-    { suffix: '-ads', types: ['ads.company', 'ads.probe'] },
+    // ads.market shares this lane rather than getting its own, and that is
+    // deliberate: both hold the SAME "ads-recon" task space in ego lite, and
+    // ads-recon serialises on runs/.lock anyway. A second lane would only produce
+    // two jobs discovering they cannot both have the browser.
+    { suffix: '-ads', types: ['ads.company', 'ads.market', 'ads.probe'] },
   ];
 })();
 
@@ -267,6 +271,11 @@ const handlers = {
   // data URIs because the images are files on this disk and the gateway has no
   // blob store; see ads.mjs for why that is the only route.
   'ads.company': ads.company,
+  // Keyword market research. Talks to the Ad Library's own GraphQL pagination
+  // instead of scraping the rendered grid, so it returns hundreds of ads in the
+  // time ads.company takes for a few dozen -- and returns no creatives at all,
+  // because 500 data URIs fit in neither a job result nor a Postgres row.
+  'ads.market': ads.market,
   'ads.probe': ads.probe,
 };
 

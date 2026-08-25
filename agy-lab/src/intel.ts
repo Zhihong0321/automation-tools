@@ -109,7 +109,8 @@ function envelope(req: http.IncomingMessage, report: db.PublishedReport): Record
   const resource = report.report_type === 'business_search'
     ? 'business-search'
     : report.report_type === 'person_research' ? 'person-research'
-    : report.report_type === 'ads_research' ? 'ads-research' : 'company-research';
+    : report.report_type === 'ads_research' ? 'ads-research'
+    : report.report_type === 'ads_market' ? 'ads-market' : 'company-research';
   return {
     id: report.public_id,
     type: report.report_type,
@@ -1909,6 +1910,143 @@ async function runAdsResearch(
   }
 }
 
+/**
+ * Country name -> Ad Library region code. The form offers a country; the library
+ * takes ISO-3166 alpha-2. An unknown name falls back to MY rather than erroring:
+ * the default is Malaysia and a typo should not lose the run.
+ */
+function countryToRegion(input: string): string {
+  const raw = str(input).trim();
+  if (!raw) return 'MY';
+  if (/^[A-Za-z]{2}$/.test(raw)) return raw.toUpperCase();
+  const map: Record<string, string> = {
+    malaysia: 'MY', singapore: 'SG', indonesia: 'ID', thailand: 'TH', philippines: 'PH',
+    vietnam: 'VN', 'viet nam': 'VN', brunei: 'BN', cambodia: 'KH', myanmar: 'MM',
+    'hong kong': 'HK', taiwan: 'TW', china: 'CN', japan: 'JP', 'south korea': 'KR',
+    india: 'IN', australia: 'AU', 'new zealand': 'NZ', 'united kingdom': 'GB', uk: 'GB',
+    'united states': 'US', usa: 'US', us: 'US', canada: 'CA',
+  };
+  return map[raw.toLowerCase()] ?? 'MY';
+}
+
+/**
+ * Keyword market research: fetch every live ad matching the keywords, then write
+ * one report from the rollup.
+ *
+ * TWO STAGES, REPORTED SEPARATELY. The crawl is ~90s and the write is ~95s, and
+ * they fail for completely different reasons -- a browser lock on the mini versus
+ * a model call. Collapsing them into one status makes a failed WRITE look like a
+ * failed capture, and the captured ads are the expensive half. So a run whose
+ * fetch succeeded and whose report failed is `partial` with the digest intact,
+ * never `failed`: the numbers are all there and only the prose is missing.
+ */
+async function runAdsMarket(
+  publicId: string,
+  reportId: string,
+  request: Record<string, unknown>,
+): Promise<void> {
+  if (active.has(publicId)) return;
+  active.add(publicId);
+  try {
+    const keywords = rows(request.keywords).map((k) => str(k)).filter(Boolean);
+    const region = str(request.region) || 'MY';
+    await db.updateReport(publicId, { status: 'running', error: null });
+    await db.initAdsMarketRun(reportId, keywords, region);
+
+    // A type no lane is claiming would sit pending until it timed out. Say so now.
+    if (!jobs.liveTypes().includes('ads.market')) {
+      await db.saveAdsMarketRun(reportId, {
+        status: { fetch: 'worker_offline' },
+        adsTotal: 0,
+        completed: true,
+      });
+      await db.updateReport(publicId, {
+        status: 'failed',
+        error: 'No worker is claiming ads.market — the ads crawler on the mini is offline. Nothing was captured; this says nothing about whether this market is advertised in.',
+      });
+      return;
+    }
+
+    const payload = {
+      keywords,
+      region,
+      pages: num(request.pages, 12),
+      effort: str(request.effort) || 'high',
+      timeoutMs: 1_500_000,
+    };
+
+    let captured: Record<string, unknown> = {};
+    try {
+      // ads.mjs returns a FLAT record, not an envelope with a nested `result` --
+      // the same shape ads.company returns, and the same place a previous version
+      // of this feature silently stored {} by reading `.result`.
+      captured = await runJob('ads.market', payload, 1_500_000);
+    } catch (err) {
+      const failure = (err as Error).message ?? String(err);
+      await db.saveAdsMarketRun(reportId, {
+        status: { fetch: 'failed' }, adsTotal: 0, completed: true,
+      });
+      await db.updateReport(publicId, { status: 'failed', error: 'ads market crawl failed: ' + failure });
+      return;
+    }
+
+    const digest = object(captured.digest);
+    const totals = object(digest.totals);
+    const fetchStats = object(captured.fetch_stats);
+    const reportMd = str(captured.report_md) || null;
+    const adsTotal = num(totals.ads, 0);
+    // Truncated is per keyword in the worker's stats; ANY keyword hitting its cap
+    // means the market is bigger than what was captured.
+    const truncated = Object.values(fetchStats).some(
+      (v) => object(v as Record<string, unknown>).truncated === true,
+    );
+
+    const final = {
+      keywords,
+      region,
+      country: str(request.country) || 'Malaysia',
+      ads: adsTotal,
+      ads_on_topic: num(totals.on_topic_ads, 0),
+      advertisers: num(totals.advertisers, 0),
+      unique_creatives: num(totals.unique_creatives, 0),
+      truncated,
+      report_md: reportMd,
+      engine: str(captured.report_engine) || null,
+      model: str(captured.report_model) || null,
+      // The digest travels with the report so the page can draw its own tables
+      // and a reader can check any number in the prose against it.
+      digest,
+    };
+
+    await db.saveAdsMarketRun(reportId, {
+      fetchStats, digest, reportMd,
+      reportEngine: str(captured.report_engine) || null,
+      reportModel: str(captured.report_model) || null,
+      adsTotal,
+      adsOnTopic: num(totals.on_topic_ads, 0),
+      advertisers: num(totals.advertisers, 0),
+      uniqueCreatives: num(totals.unique_creatives, 0),
+      truncated,
+      status: { fetch: adsTotal ? 'completed' : 'no_results', report: reportMd ? 'completed' : 'failed' },
+      metadata: { worker: 'ads.market', region, keywords },
+      completed: true,
+    });
+
+    // Zero ads after a real crawl is a genuine finding about the market, so it
+    // completes rather than failing. A missing report over real ads is partial.
+    await db.updateReport(publicId, {
+      status: adsTotal && reportMd ? 'completed' : 'partial',
+      error: adsTotal && !reportMd ? 'the ads were captured but the written report failed — the digest and counts are intact' : null,
+      result: final,
+      completed: true,
+    });
+  } catch (err) {
+    await db.updateReport(publicId, { status: 'failed', error: (err as Error).message ?? String(err) });
+  } finally {
+    active.delete(publicId);
+  }
+}
+
 async function runPersonResearch(
   publicId: string,
   reportId: string,
@@ -2184,6 +2322,7 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
     html = ui.searchPage(report, { report: search?.report ?? object(report.result?.search), companies: search?.companies ?? rows(report.result?.companies) });
   } else if (report.report_type === 'person_research') html = ui.personPage(report);
   else if (report.report_type === 'ads_research') html = ui.adsPage(report);
+  else if (report.report_type === 'ads_market') html = ui.adsMarketPage(report);
   else {
     const run = await db.researchRun(report.id);
     const chinese = object(run?.translated_report);
@@ -2202,7 +2341,7 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
 export async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL, ctx: Ctx): Promise<boolean> {
   const p = url.pathname;
   const method = req.method ?? 'GET';
-  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/reports')) return false;
+  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/ads-market') && !p.startsWith('/api/reports')) return false;
   if (!db.configured()) {
     ctx.json(res, 503, { error: 'report database is not configured; link DATABASE_URL to the Railway service' });
     return true;
@@ -2243,7 +2382,7 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
   if (method === 'GET' && p === '/api/reports') {
     const rawType = url.searchParams.get('type');
     const rawStatus = url.searchParams.get('status');
-    const type = rawType === 'business_search' || rawType === 'company_research' || rawType === 'person_research' || rawType === 'ads_research' ? rawType : null;
+    const type = rawType === 'business_search' || rawType === 'company_research' || rawType === 'person_research' || rawType === 'ads_research' || rawType === 'ads_market' ? rawType : null;
     const allowedStatuses = new Set(['queued', 'running', 'completed', 'partial', 'failed']);
     const status = allowedStatuses.has(rawStatus ?? '') ? rawStatus as db.ReportStatus : null;
     const limit = Math.min(Math.max(Math.round(Number(url.searchParams.get('limit') ?? 40) || 40), 1), 100);
@@ -2355,6 +2494,46 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     return true;
   }
 
+  if (method === 'POST' && p === '/api/ads-market') {
+    const body = await ctx.readJson(req);
+    // The form sends ONE product keyword. The pipeline is built around several,
+    // fetched concurrently, so accept both shapes and always store an array.
+    const raw = Array.isArray(body.keywords) ? body.keywords : [body.keyword ?? body.product ?? body.query];
+    const keywords = raw.map((k: unknown) => str(k).trim()).filter(Boolean).slice(0, 8);
+    if (!keywords.length) {
+      ctx.json(res, 400, { error: 'keyword is required' });
+      return true;
+    }
+    // The form offers a country name; the Ad Library takes a 2-letter region.
+    const region = countryToRegion(str(body.country || body.region));
+    const request = {
+      keywords,
+      region,
+      country: str(body.country).trim() || 'Malaysia',
+      pages: Math.min(Math.max(num(body.pages, 12), 1), 40),
+      effort: ['low', 'medium', 'high'].includes(str(body.effort)) ? str(body.effort) : 'high',
+      requesterId: str(body.requesterId || body.userId) || null,
+    };
+    // A market moves week to week, so a COMPLETED report never blocks a re-run.
+    // One already in flight for the same keywords does: the crawl is ~90s of a
+    // single browser lock on the mini, and two of them would just queue and
+    // fight over it.
+    const running = await db.findAdsMarketReport(keywords, region);
+    if (running) {
+      ctx.json(res, 200, { report: envelope(req, running) });
+      return true;
+    }
+    const report = await db.createReport({
+      type: 'ads_market',
+      title: keywords[0] + ' — ads market (' + region + ')',
+      userId: str(request.requesterId) || null,
+      request,
+    });
+    void runAdsMarket(report.public_id, report.id, request);
+    ctx.json(res, 202, { report: envelope(req, report) });
+    return true;
+  }
+
   if (method === 'POST' && p === '/api/person-research') {
     const body = await ctx.readJson(req);
     const sourceReportId = str(body.companyResearchId || body.company_research_id).trim();
@@ -2405,12 +2584,13 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     return true;
   }
 
-  const one = /^\/api\/(business-search|company-research|person-research|ads-research)\/([A-Za-z0-9_-]{20})$/.exec(p);
+  const one = /^\/api\/(business-search|company-research|person-research|ads-research|ads-market)\/([A-Za-z0-9_-]{20})$/.exec(p);
   if (method === 'GET' && one) {
     const report = await db.getReport(one[2]!);
     const expected = one[1] === 'business-search' ? 'business_search'
       : one[1] === 'person-research' ? 'person_research'
-      : one[1] === 'ads-research' ? 'ads_research' : 'company_research';
+      : one[1] === 'ads-research' ? 'ads_research'
+      : one[1] === 'ads-market' ? 'ads_market' : 'company_research';
     if (!report || report.report_type !== expected) {
       ctx.json(res, 404, { error: 'report not found' });
       return true;
@@ -2420,7 +2600,8 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     const run = report.report_type === 'company_research'
       ? await db.researchRun(report.id)
       : report.report_type === 'person_research' ? await db.personResearchRun(report.id)
-      : report.report_type === 'ads_research' ? await db.adsResearchRun(report.id) : null;
+      : report.report_type === 'ads_research' ? await db.adsResearchRun(report.id)
+      : report.report_type === 'ads_market' ? await db.adsMarketRun(report.id) : null;
     ctx.json(res, 200, { report: envelope(req, report), data: detail, research_run: run });
     return true;
   }

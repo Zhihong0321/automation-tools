@@ -19,6 +19,55 @@ const value = (row: Record<string, unknown>, ...keys: string[]): string => {
   return '';
 };
 
+const num = (v: unknown): number => {
+  const n = typeof v === 'number' ? v : Number(String(v ?? '').replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(n) ? n : 0;
+};
+
+/**
+ * The smallest markdown renderer that does this job, and it escapes FIRST.
+ *
+ * This text was written by a model. Escaping every character before a single
+ * formatting rule runs means no combination of what it wrote can produce a tag --
+ * the alternative is auditing a renderer for injection, forever, on input nobody
+ * controls. Formatting is then applied to already-safe text.
+ */
+function markdown(src: unknown): string {
+  const lines = esc(String(src ?? '')).split('\n');
+  const inline = (t: string) => t
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+  const out: string[] = [];
+  let list = false, table = false, para: string[] = [];
+  const flushPara = () => { if (para.length) { out.push('<p>' + inline(para.join(' ')) + '</p>'); para = []; } };
+  const flushList = () => { if (list) { out.push('</ul>'); list = false; } };
+  const flushTable = () => { if (table) { out.push('</tbody></table>'); table = false; } };
+  const flushAll = () => { flushPara(); flushList(); flushTable(); };
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) { flushAll(); continue; }
+    const h = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (h) { flushAll(); const n = Math.min(h[1]!.length + 1, 6); out.push(`<h${n}>${inline(h[2]!)}</h${n}>`); continue; }
+    // A separator row (|---|---|) is what turns the previous row into a header.
+    if (/^\|[\s:|-]+\|$/.test(line) && table) continue;
+    if (line.startsWith('|') && line.endsWith('|')) {
+      const cells = line.slice(1, -1).split('|').map((c) => inline(c.trim()));
+      if (!table) { flushPara(); flushList(); out.push('<table class="data"><tbody>'); table = true; }
+      out.push('<tr>' + cells.map((c) => `<td>${c}</td>`).join('') + '</tr>');
+      continue;
+    }
+    flushTable();
+    const li = /^[-*]\s+(.*)$/.exec(line);
+    if (li) { flushPara(); if (!list) { out.push('<ul>'); list = true; } out.push(`<li>${inline(li[1]!)}</li>`); continue; }
+    flushList();
+    if (/^-{3,}$/.test(line)) { flushPara(); continue; }
+    para.push(line);
+  }
+  flushAll();
+  return out.join('');
+}
+
 const reportDate = (report: PublishedReport): string => {
   const raw = report.completed_at ?? report.updated_at ?? report.created_at;
   const date = new Date(raw);
@@ -159,6 +208,20 @@ const CSS = `/* Mobile-first, dense, minimal. Every rule here is the phone layou
 :root{--paper:#f2f4f6;--sheet:#ffffff;--ink:#111418;--ink-2:#1c2229;--muted:#5a6472;--faint:#8d97a4;--line:#dfe3e8;--soft:#eef1f4;--accent:#17356b;--accent-2:#2f5fb8;--danger:#b42318;--warning:#a15c07;--ok:#0a6b47;--sans:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,"SFMono-Regular",Consolas,"Liberation Mono",monospace;--radius:2px;--micro:600 9px/1.3 var(--sans);--track:.14em}
 *{box-sizing:border-box}html{background:var(--paper);scroll-behavior:smooth;-webkit-text-size-adjust:100%}body{margin:0;color:var(--ink);background:var(--paper);font:14px/1.5 var(--sans);font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}a{color:inherit}
 .wrap{max-width:1120px;margin:0 auto;padding:0 16px 40px}
+
+/* Market-report tables and rendered markdown. Wide tables scroll inside their own
+   box: the market grids are 5 columns and the page these open on is a phone, so
+   without this the whole document scrolls sideways. */
+table.data{width:100%;border-collapse:collapse;font-size:14px;margin:8px 0;display:block;overflow-x:auto;white-space:nowrap}
+table.data th,table.data td{border-bottom:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+table.data th{font-weight:600;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+table.data td.num,table.data th.num{text-align:right;font-variant-numeric:tabular-nums}
+table.data tr:last-child td{border-bottom:none}
+.markdown{font-size:15px;line-height:1.62}
+.markdown h2{font-size:19px;margin:22px 0 6px}.markdown h3{font-size:16px;margin:18px 0 4px}
+.markdown p{margin:0 0 10px}.markdown ul{margin:0 0 12px;padding-left:20px}.markdown li{margin:0 0 5px}
+.markdown code{background:var(--soft);padding:1px 5px;border-radius:4px;font-size:13px}
+.markdown table.data{white-space:normal}
 
 /* Masthead: a full-width ink band, so the page opens as a document with a
    publisher rather than as a card on a white screen. */
@@ -634,6 +697,91 @@ export function adsPage(report: PublishedReport): string {
   else {
     out += `<section class="section"><div class="section-head"><h2>Facebook Ad Library</h2><span class="section-note">${networks.facebook ?? fb.length} ad(s), copy as published.</span></div><div class="ad-grid">${fb.map(row).join('') || '<div class="empty">No Facebook ads found.</div>'}</div></section>`;
     out += `<section class="section"><div class="section-head"><h2>Google Ads Transparency</h2><span class="section-note">${networks.google ?? gg.length} ad(s) — Google publishes no ad copy as text.</span></div><div class="ad-grid">${gg.map(row).join('') || '<div class="empty">No Google ads found.</div>'}</div></section>`;
+  }
+  return shell(report, out);
+}
+
+/**
+ * The market report page.
+ *
+ * Two things it must never do, both of which come from what the data actually is:
+ *
+ * 1. Never present ads_total as the market size. Facebook's keyword_unordered
+ *    matches loosely -- 98 of 576 captured ads in the first real run were window
+ *    tint, lighting and property listings that merely contained the word. The
+ *    on-topic count is the honest figure and gets the prominent tile.
+ * 2. Never render a truncated run as a whole market. If any keyword hit its page
+ *    cap, that is a banner at the top, not a footnote.
+ */
+export function adsMarketPage(report: PublishedReport): string {
+  const final = obj(report.result);
+  const digest = obj(final.digest);
+  const totals = obj(digest.totals);
+  const dist = obj(digest.distributions);
+  const advertisers = arr(digest.advertisers_top);
+  const networks = arr(digest.advertiser_networks);
+  const keywords = strings(final.keywords);
+  const onTopic = num(final.ads_on_topic) || num(totals.on_topic_ads);
+  const total = num(final.ads) || num(totals.ads);
+
+  const stats = `<div class="metrics">
+    <div class="metric"><strong>${onTopic || '—'}</strong><span>On-topic ads</span></div>
+    <div class="metric"><strong>${num(final.advertisers) || '—'}</strong><span>Advertisers</span></div>
+    <div class="metric"><strong>${num(final.unique_creatives) || '—'}</strong><span>Unique creatives</span></div>
+    <div class="metric"><strong>${esc(value(final, 'region') || '—')}</strong><span>Region</span></div>
+  </div>`;
+
+  const table = (title: string, note: string, pairs: Array<[string, unknown]>) => pairs.length
+    ? `<section class="section"><div class="section-head"><h2>${esc(title)}</h2><span class="section-note">${esc(note)}</span></div>
+       <table class="data"><tbody>${pairs.slice(0, 12).map(([k, v]) =>
+         `<tr><td>${esc(k)}</td><td class="num">${esc(String(v))}</td></tr>`).join('')}</tbody></table></section>`
+    : '';
+
+  let out = stats;
+  out += `<section class="brief"><div class="brief-label">What was searched</div><p>${
+    keywords.map((k) => '<strong>' + esc(k) + '</strong>').join(', ')} in ${esc(value(final, 'country') || value(final, 'region') || '')} — ${
+    total} ads captured, ${onTopic} of them on topic across ${num(final.advertisers)} advertisers.</p></section>`;
+
+  if (final.truncated) {
+    out += `<section class="section"><div class="message error"><strong>This is a capped capture.</strong> At least one keyword hit its page limit, so more ads exist in this market than were captured. Treat every count below as a floor, not a total.</div></section>`;
+  }
+  // Stated on the page, not only in the prose: it is the single fact most likely
+  // to be assumed the other way by someone skimming advertiser counts.
+  out += `<section class="section"><div class="message"><strong>No spend, impressions or reach data exists here.</strong> Those fields are empty on every Malaysian commercial ad in the Ad Library. Ranking below is by ad count, unique creatives and days running — never by budget.</div></section>`;
+
+  if (report.status === 'failed') {
+    out += `<section class="section"><div class="message error">${esc(report.error ?? 'The market capture failed.')}</div></section>`;
+    return shell(report, out);
+  }
+  if (!total && report.status !== 'completed' && report.status !== 'partial') {
+    out += '<section class="section"><div class="empty">Market capture is running. This report will refresh automatically.</div></section>';
+    return shell(report, out);
+  }
+
+  if (networks.length) {
+    out += `<section class="section"><div class="section-head"><h2>Advertiser networks</h2><span class="section-note">One brand advertising from several Pages. A name match, not proof of common ownership.</span></div>
+      <table class="data"><thead><tr><th>Brand</th><th class="num">Pages</th><th class="num">Ads</th><th class="num">Creatives</th></tr></thead><tbody>${
+      networks.slice(0, 8).map((n) => `<tr><td>${esc(value(n, 'stem'))}</td><td class="num">${num(n.pages)}</td><td class="num">${num(n.total_ads)}</td><td class="num">${num(n.unique_creatives)}</td></tr>`).join('')
+    }</tbody></table></section>`;
+  }
+
+  if (advertisers.length) {
+    out += `<section class="section"><div class="section-head"><h2>Who is advertising</h2><span class="section-note">Top ${Math.min(advertisers.length, 20)} by ad count. "Creatives" is distinct copy — the gap from "Ads" is repetition.</span></div>
+      <table class="data"><thead><tr><th>Advertiser</th><th class="num">Ads</th><th class="num">Creatives</th><th class="num">On topic</th><th class="num">Longest run</th></tr></thead><tbody>${
+      advertisers.slice(0, 20).map((a) => `<tr><td>${esc(value(a, 'advertiser') || '—')}</td><td class="num">${num(a.ads)}</td><td class="num">${num(a.unique_creatives)}</td><td class="num">${num(a.on_topic_ads)}</td><td class="num">${num(a.max_days_running)}d</td></tr>`).join('')
+    }</tbody></table></section>`;
+  }
+
+  out += table('Call to action', 'What the buttons say — how this market actually converts.', Object.entries(obj(dist.cta)));
+  out += table('Landing destination', 'Where the click goes.', Object.entries(obj(dist.landing_domain)));
+  out += table('Platform', 'Where the ads run.', Object.entries(obj(dist.platform)));
+
+  const md = value(final, 'report_md');
+  if (md) {
+    out += `<section class="section"><div class="section-head"><h2>The report</h2><span class="section-note">${
+      esc(value(final, 'model') || value(final, 'engine') || '')}</span></div><div class="markdown">${markdown(md)}</div></section>`;
+  } else if (report.status === 'partial') {
+    out += `<section class="section"><div class="message error"><strong>The ads were captured; the written report was not.</strong> Every number above is from the capture and is intact — only the prose is missing.</div></section>`;
   }
   return shell(report, out);
 }

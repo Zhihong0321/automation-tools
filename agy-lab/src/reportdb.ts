@@ -92,7 +92,7 @@ export function migrate(): Promise<void> {
       create table if not exists published_report (
         id bigserial primary key,
         public_id text not null unique,
-        report_type text not null check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research')),
+        report_type text not null check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research', 'ads_market')),
         status text not null default 'queued'
           check (status in ('queued', 'running', 'completed', 'partial', 'failed')),
         title text,
@@ -155,6 +155,62 @@ export function migrate(): Promise<void> {
         updated_at timestamptz not null default now()
       )
     `);
+    // Keyword MARKET research, which is a different question from ads_research
+    // above. That one is one COMPANY across two networks; this is one MARKET
+    // across many advertisers, Facebook only -- the Google Ads Transparency
+    // Center has no keyword search of ad content, only advertiser and website
+    // lookup, so there is no Google half to store.
+    await sql(`
+      create table if not exists ads_market_run (
+        report_id bigint primary key references published_report(id) on delete cascade,
+        -- Plural even though the form takes one product keyword: the crawler
+        -- fetches keywords concurrently and expanding one term into variants is
+        -- the obvious next step. A single text column would need a migration the
+        -- first time that happens.
+        keywords text[] not null default '{}',
+        region text not null default 'MY',
+        -- What the fetch actually got, per keyword, before any interpretation:
+        -- pages, ads, whether the cap bit, errors, timings.
+        fetch_stats jsonb,
+        -- The deterministic SQL rollup the report was written from. Every number
+        -- in report_md comes from here, so keeping it is what makes the report
+        -- auditable and lets the report page draw its tables without a model.
+        digest jsonb,
+        report_md text,
+        report_engine text,
+        report_model text,
+        -- Promoted out of digest so the library can sort and filter without
+        -- parsing jsonb, and so a truncated run is visible in a LIST rather than
+        -- only after somebody opens it.
+        ads_total integer,
+        ads_on_topic integer,
+        advertisers integer,
+        unique_creatives integer,
+        truncated boolean not null default false,
+        run_status jsonb not null default '{}'::jsonb,
+        engine_metadata jsonb not null default '{}'::jsonb,
+        started_at timestamptz,
+        completed_at timestamptz,
+        updated_at timestamptz not null default now(),
+        -- Same shape of rule as search_report.blocked_scan_has_no_count: a run
+        -- that claims it finished must carry the counts that say what it covered.
+        constraint ads_market_completed_has_counts
+          check (completed_at is null or ads_total is not null)
+      )
+    `);
+    await sql(`create index if not exists ads_market_run_keywords_idx on ads_market_run using gin (keywords)`);
+    // There is deliberately NO spend, impressions or reach column. Those fields
+    // are null on 100% of Malaysian commercial ads in the Ad Library -- measured
+    // over 672 -- and a nullable column is an invitation to read null as zero
+    // later. A column that does not exist cannot be misread.
+    await sql(`
+      comment on column ads_market_run.ads_on_topic is
+        'Ads whose own copy contains the topic terms. Facebook keyword_unordered matches loosely (98 of 576 measured), so this, not ads_total, is the real market size.'
+    `);
+    await sql(`
+      comment on column ads_market_run.truncated is
+        'A per-keyword page cap was hit, so more ads exist than were captured. Surfaced at list level because a capped run must never read as a complete market.'
+    `);
     await sql(`
       do $$
       declare report_type_constraint text;
@@ -168,7 +224,7 @@ export function migrate(): Promise<void> {
           execute format('alter table published_report drop constraint %I', report_type_constraint);
         end if;
         alter table published_report add constraint published_report_report_type_check
-          check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research'));
+          check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research', 'ads_market'));
       end $$;
     `);
     // ------------------------------------------------------------------ the run log
@@ -344,7 +400,7 @@ export function migrate(): Promise<void> {
   return migrated;
 }
 
-export type ReportType = 'business_search' | 'company_research' | 'person_research' | 'ads_research';
+export type ReportType = 'business_search' | 'company_research' | 'person_research' | 'ads_research' | 'ads_market';
 export type ReportStatus = 'queued' | 'running' | 'completed' | 'partial' | 'failed';
 
 export interface PublishedReport {
@@ -854,6 +910,103 @@ export async function saveAdsResearchRun(reportId: string, patch: {
 export async function adsResearchRun(reportId: string): Promise<Record<string, unknown> | null> {
   await migrate();
   return (await sql('select * from ads_research_run where report_id=$1', [reportId])).rows[0] ?? null;
+}
+
+export async function initAdsMarketRun(reportId: string, keywords: string[], region: string): Promise<void> {
+  await migrate();
+  await sql(
+    `insert into ads_market_run (report_id, keywords, region, started_at)
+     values ($1, $2::text[], $3, now()) on conflict (report_id) do nothing`,
+    [reportId, keywords, region],
+  );
+}
+
+/**
+ * Patch a market run. Same has-own-property gate as saveAdsResearchRun: passing a
+ * key writes it, omitting it leaves the stored value alone, so a later stage never
+ * blanks an earlier one by not knowing about it.
+ *
+ * The counts are written from the digest by the caller rather than derived here --
+ * the digest is the one place that counts, and a second implementation of the same
+ * arithmetic is a second chance to disagree with it.
+ */
+export async function saveAdsMarketRun(reportId: string, patch: {
+  fetchStats?: Record<string, unknown>;
+  digest?: Record<string, unknown>;
+  reportMd?: string | null;
+  reportEngine?: string | null;
+  reportModel?: string | null;
+  adsTotal?: number | null;
+  adsOnTopic?: number | null;
+  advertisers?: number | null;
+  uniqueCreatives?: number | null;
+  truncated?: boolean;
+  status?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  completed?: boolean;
+}): Promise<void> {
+  await migrate();
+  const has = (k: string) => Object.prototype.hasOwnProperty.call(patch, k);
+  await sql(
+    `update ads_market_run set
+       fetch_stats = case when $2::boolean then $3::jsonb else fetch_stats end,
+       digest = case when $4::boolean then $5::jsonb else digest end,
+       report_md = case when $6::boolean then $7::text else report_md end,
+       report_engine = case when $8::boolean then $9::text else report_engine end,
+       report_model = case when $10::boolean then $11::text else report_model end,
+       ads_total = case when $12::boolean then $13::integer else ads_total end,
+       ads_on_topic = case when $14::boolean then $15::integer else ads_on_topic end,
+       advertisers = case when $16::boolean then $17::integer else advertisers end,
+       unique_creatives = case when $18::boolean then $19::integer else unique_creatives end,
+       truncated = case when $20::boolean then $21::boolean else truncated end,
+       run_status = case when $22::boolean then $23::jsonb else run_status end,
+       engine_metadata = case when $24::boolean then $25::jsonb else engine_metadata end,
+       completed_at = case when $26::boolean then now() else completed_at end,
+       updated_at = now() where report_id = $1`,
+    [
+      reportId,
+      has('fetchStats'), JSON.stringify(patch.fetchStats ?? null),
+      has('digest'), JSON.stringify(patch.digest ?? null),
+      has('reportMd'), patch.reportMd ?? null,
+      has('reportEngine'), patch.reportEngine ?? null,
+      has('reportModel'), patch.reportModel ?? null,
+      has('adsTotal'), patch.adsTotal ?? null,
+      has('adsOnTopic'), patch.adsOnTopic ?? null,
+      has('advertisers'), patch.advertisers ?? null,
+      has('uniqueCreatives'), patch.uniqueCreatives ?? null,
+      has('truncated'), patch.truncated === true,
+      has('status'), JSON.stringify(patch.status ?? {}),
+      has('metadata'), JSON.stringify(patch.metadata ?? {}),
+      patch.completed === true,
+    ],
+  );
+}
+
+export async function adsMarketRun(reportId: string): Promise<Record<string, unknown> | null> {
+  await migrate();
+  return (await sql('select * from ads_market_run where report_id=$1', [reportId])).rows[0] ?? null;
+}
+
+/**
+ * An in-flight market run for the same keyword set and region.
+ *
+ * Only queued/running counts. A market moves week to week, so re-running a
+ * finished keyword is legitimate and a completed report must never block one --
+ * the same rule findAdsReport applies to advertisers.
+ */
+export async function findAdsMarketReport(keywords: string[], region: string): Promise<PublishedReport | null> {
+  await migrate();
+  const out = await sql<PublishedReport>(
+    `select r.* from published_report r
+     join ads_market_run m on m.report_id = r.id
+     where r.report_type = 'ads_market'
+       and r.status in ('queued', 'running')
+       and m.region = $2
+       and m.keywords @> $1::text[] and m.keywords <@ $1::text[]
+     order by r.created_at desc limit 1`,
+    [keywords, region],
+  );
+  return out.rows[0] ?? null;
 }
 
 /**

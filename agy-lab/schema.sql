@@ -108,7 +108,7 @@ comment on column company_data.reviews is 'Null when Maps served a signed-out li
 create table if not exists published_report (
   id                      bigserial primary key,
   public_id               text not null unique,
-  report_type             text not null check (report_type in ('business_search', 'company_research', 'person_research')),
+  report_type             text not null check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research', 'ads_market')),
   status                  text not null default 'queued'
                                   check (status in ('queued', 'running', 'completed', 'partial', 'failed')),
   title                   text,
@@ -175,3 +175,71 @@ comment on column company_research_run.round04 is 'Raw final Gemini synthesis pl
 comment on column person_research_run.discovery is 'Validated public-professional evidence discovered across primary web, Facebook/Instagram/Threads, and xAI/X lanes for the VIP brief; caller-supplied email and mobile identity resolvers are never retained.';
 comment on column person_research_run.synthesis is 'Final-synthesis acceptance metadata; raw model text is intentionally not retained.';
 comment on column company_research_run.translated_report is 'Chinese (zh-CN) translation of final_report. URLs, IDs and contact values remain canonical.';
+
+-- ---------------------------------------------------------------- ads
+-- These two were previously only in reportdb.ts's migrate(), so this file --
+-- which calls itself the recreate path -- could not actually recreate the
+-- database. Added here so a wiped database has a way back for all of it.
+
+-- One COMPANY's live ads, across Facebook and Google.
+create table if not exists ads_research_run (
+  report_id       bigint primary key references published_report(id) on delete cascade,
+  facebook        jsonb,
+  google          jsonb,
+  ads             jsonb,
+  final_report    jsonb,
+  run_status      jsonb not null default '{}'::jsonb,
+  engine_metadata jsonb not null default '{}'::jsonb,
+  started_at      timestamptz,
+  completed_at    timestamptz,
+  updated_at      timestamptz not null default now()
+);
+
+-- One MARKET, from a product keyword: many advertisers, Facebook only. The
+-- Google Ads Transparency Center has no keyword search of ad content -- only
+-- advertiser and website lookup -- so there is no Google half to store here.
+create table if not exists ads_market_run (
+  report_id        bigint primary key references published_report(id) on delete cascade,
+  -- Plural even though the form takes one product keyword: the crawler fetches
+  -- keywords concurrently and expanding a term into variants is the obvious next
+  -- step. A single text column would need a migration the first time that happens.
+  keywords         text[] not null default '{}',
+  region           text not null default 'MY',
+  -- Per keyword: pages, ads, whether the cap bit, errors, timings. Before any
+  -- interpretation, so a thin report can be told from a thin market.
+  fetch_stats      jsonb,
+  -- The deterministic rollup the report was written from. Every number in
+  -- report_md comes from here, which is what makes the report auditable and lets
+  -- the report page draw its tables without calling a model again.
+  digest           jsonb,
+  report_md        text,
+  report_engine    text,
+  report_model     text,
+  -- Promoted out of digest so the library sorts and filters without parsing
+  -- jsonb, and so a truncated run is visible in a LIST rather than only after
+  -- somebody opens it.
+  ads_total        integer,
+  ads_on_topic     integer,
+  advertisers      integer,
+  unique_creatives integer,
+  truncated        boolean not null default false,
+  run_status       jsonb not null default '{}'::jsonb,
+  engine_metadata  jsonb not null default '{}'::jsonb,
+  started_at       timestamptz,
+  completed_at     timestamptz,
+  updated_at       timestamptz not null default now(),
+  -- Same rule as search_report.blocked_scan_has_no_count: a run that claims it
+  -- finished must carry the counts that say what it covered.
+  constraint ads_market_completed_has_counts
+    check (completed_at is null or ads_total is not null)
+);
+create index if not exists ads_market_run_keywords_idx on ads_market_run using gin (keywords);
+
+-- There is deliberately NO spend, impressions or reach column. Measured over 672
+-- ads on 2026-08-25: all three are null on 100% of Malaysian commercial ads --
+-- they carry data only for political and issue ads under disclosure mandates. A
+-- nullable column is an invitation to read null as zero later; a column that does
+-- not exist cannot be misread.
+comment on column ads_market_run.ads_on_topic is 'Ads whose own copy contains the topic terms. Facebook keyword_unordered matches loosely (98 of 576 measured), so this, not ads_total, is the real market size.';
+comment on column ads_market_run.truncated is 'A per-keyword page cap was hit, so more ads exist than were captured. Surfaced at list level because a capped run must never read as a complete market.';
+comment on column ads_market_run.digest is 'The SQL rollup the report was written from: totals, advertiser table, multi-Page networks, CTA/platform/domain distributions and the ad copy sample.';
