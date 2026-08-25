@@ -1948,7 +1948,12 @@ async function runAdsMarket(
   if (active.has(publicId)) return;
   active.add(publicId);
   try {
-    const keywords = rows(request.keywords).map((k) => str(k)).filter(Boolean);
+    // NOT rows(): that helper keeps only objects, so an array of plain strings
+    // comes back empty. Caught in production on the first real request -- the row
+    // stored keywords [] and the job would have been dispatched with none.
+    const keywords = Array.isArray(request.keywords)
+      ? request.keywords.map((k) => str(k).trim()).filter(Boolean)
+      : [];
     const region = str(request.region) || 'MY';
     await db.updateReport(publicId, { status: 'running', error: null });
     await db.initAdsMarketRun(reportId, keywords, region);

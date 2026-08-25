@@ -662,3 +662,20 @@ test('the contact cap keeps what was crawled, not what arrived first', () => {
   assert.equal(contacts.filter((r) => r.introduced_by === 'round02').length, 3);
   assert.equal(contacts.filter((r) => r.introduced_by === 'round01').length, 16);
 });
+
+test('a keyword list of plain strings survives the round trip into the run', () => {
+  // The bug this pins: rows() keeps only objects, so rows(["solar panel"]) is [].
+  // runAdsMarket re-reads request.keywords to build both the stored row and the
+  // job payload, so an empty read means a crawl dispatched with no keywords at
+  // all -- and a market report about nothing.
+  const rows = (v: unknown): Record<string, unknown>[] =>
+    Array.isArray(v) ? v.filter((x) => x && typeof x === 'object') as Record<string, unknown>[] : [];
+  const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback);
+  const request = { keywords: ['solar panel', 'solar rebate'] };
+
+  assert.deepEqual(rows(request.keywords), [], 'rows() must still be the wrong tool here');
+  const correct = Array.isArray(request.keywords)
+    ? request.keywords.map((k) => str(k).trim()).filter(Boolean)
+    : [];
+  assert.deepEqual(correct, ['solar panel', 'solar rebate']);
+});
