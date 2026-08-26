@@ -679,3 +679,26 @@ test('a keyword list of plain strings survives the round trip into the run', () 
     : [];
   assert.deepEqual(correct, ['solar panel', 'solar rebate']);
 });
+
+test('a split emoji cannot reach a jsonb parameter', () => {
+  // The failure this pins: slicing scraped ad copy at a fixed length cuts an
+  // emoji's surrogate pair in half. JSON.stringify escapes the orphan as
+  // "\\ud83c" -- legal JSON syntax, illegal json data -- and Postgres answers
+  // with a bare "invalid input syntax for type json" that names no column and no
+  // value. One real market run died on exactly this.
+  const split = '\u{1F31E} solar'.slice(0, 1); // a lone high surrogate
+  assert.equal(split.length, 1);
+  assert.match(JSON.stringify({ body: split }), /\\ud83c/i, 'stringify escapes the orphan, which is what Postgres rejects');
+
+  // What reportdb's jsonParam does, reproduced here so the guard has a test that
+  // does not need a database.
+  const jsonParam = (value: unknown): string =>
+    JSON.stringify(value ?? null, (_k, v) => (typeof v === 'string' ? v.toWellFormed() : v)) ?? 'null';
+
+  assert.doesNotMatch(jsonParam({ body: split }), /\\ud[89ab][0-9a-f]{2}/i);
+  // Nested, because a digest is objects inside arrays inside objects.
+  assert.doesNotMatch(jsonParam({ ads: [{ copy: { text: split } }] }), /\\ud[89ab][0-9a-f]{2}/i);
+  // A WHOLE emoji must survive untouched -- the repair must not eat valid text.
+  assert.match(jsonParam({ body: '\u{1F31E} solar' }), /solar/);
+  assert.equal(JSON.parse(jsonParam({ body: '\u{1F31E}' })).body, '\u{1F31E}');
+});

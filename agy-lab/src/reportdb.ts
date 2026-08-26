@@ -40,6 +40,26 @@ function directPool(): InstanceType<typeof Pool> {
   return pool;
 }
 
+/**
+ * Stringify a value for a ::jsonb parameter, with lone surrogates repaired.
+ *
+ * Postgres REJECTS a lone surrogate in json. JSON.stringify escapes one as
+ * "\ud83c", which is legal JSON syntax and illegal json data, and the error that
+ * comes back is the bare "invalid input syntax for type json" -- naming no column,
+ * no value and no row.
+ *
+ * They arrive from any pipeline that slices scraped text at a fixed length: an
+ * emoji is a surrogate PAIR, so `body.slice(0, 420)` can cut one in half. Measured
+ * on one 576-ad capture: 20 slices ended on a split emoji. It is invisible in
+ * testing because writing a lone surrogate to a UTF-8 file silently replaces it --
+ * only the database ever sees the broken half.
+ *
+ * toWellFormed() replaces each with U+FFFD. Applied through a replacer so it
+ * reaches every nested string, not just the top level.
+ */
+const jsonParam = (value: unknown): string =>
+  JSON.stringify(value ?? null, (_k, v) => (typeof v === 'string' ? v.toWellFormed() : v)) ?? 'null';
+
 export async function sql<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<QueryResult<T>> {
   if (directConfigured()) {
     const out = await directPool().query(text, params);
@@ -482,7 +502,7 @@ export async function updateReport(publicId: string, patch: {
     [
       publicId, patch.status ?? null, patch.title ?? null, patch.searchReportId ?? null,
       patch.companyId ?? null, patch.jobId ?? null,
-      Object.prototype.hasOwnProperty.call(patch, 'result'), JSON.stringify(patch.result ?? null),
+      Object.prototype.hasOwnProperty.call(patch, 'result'), jsonParam(patch.result),
       Object.prototype.hasOwnProperty.call(patch, 'error'), patch.error ?? null, patch.completed === true,
     ],
   );
@@ -849,12 +869,12 @@ export async function savePersonResearchRun(reportId: string, patch: {
        updated_at = now() where report_id = $1`,
     [
       reportId,
-      Object.prototype.hasOwnProperty.call(patch, 'discovery'), JSON.stringify(patch.discovery ?? null),
-      Object.prototype.hasOwnProperty.call(patch, 'synthesis'), JSON.stringify(patch.synthesis ?? null),
-      Object.prototype.hasOwnProperty.call(patch, 'ledger'), JSON.stringify(patch.ledger ?? null),
-      Object.prototype.hasOwnProperty.call(patch, 'finalReport'), JSON.stringify(patch.finalReport ?? null),
-      Object.prototype.hasOwnProperty.call(patch, 'status'), JSON.stringify(patch.status ?? {}),
-      Object.prototype.hasOwnProperty.call(patch, 'metadata'), JSON.stringify(patch.metadata ?? {}),
+      Object.prototype.hasOwnProperty.call(patch, 'discovery'), jsonParam(patch.discovery),
+      Object.prototype.hasOwnProperty.call(patch, 'synthesis'), jsonParam(patch.synthesis),
+      Object.prototype.hasOwnProperty.call(patch, 'ledger'), jsonParam(patch.ledger),
+      Object.prototype.hasOwnProperty.call(patch, 'finalReport'), jsonParam(patch.finalReport),
+      Object.prototype.hasOwnProperty.call(patch, 'status'), jsonParam(patch.status ?? {}),
+      Object.prototype.hasOwnProperty.call(patch, 'metadata'), jsonParam(patch.metadata ?? {}),
       patch.completed === true,
     ],
   );
@@ -896,12 +916,12 @@ export async function saveAdsResearchRun(reportId: string, patch: {
        updated_at = now() where report_id = $1`,
     [
       reportId,
-      Object.prototype.hasOwnProperty.call(patch, 'facebook'), JSON.stringify(patch.facebook ?? null),
-      Object.prototype.hasOwnProperty.call(patch, 'google'), JSON.stringify(patch.google ?? null),
-      Object.prototype.hasOwnProperty.call(patch, 'ads'), JSON.stringify(patch.ads ?? null),
-      Object.prototype.hasOwnProperty.call(patch, 'finalReport'), JSON.stringify(patch.finalReport ?? null),
-      Object.prototype.hasOwnProperty.call(patch, 'status'), JSON.stringify(patch.status ?? {}),
-      Object.prototype.hasOwnProperty.call(patch, 'metadata'), JSON.stringify(patch.metadata ?? {}),
+      Object.prototype.hasOwnProperty.call(patch, 'facebook'), jsonParam(patch.facebook),
+      Object.prototype.hasOwnProperty.call(patch, 'google'), jsonParam(patch.google),
+      Object.prototype.hasOwnProperty.call(patch, 'ads'), jsonParam(patch.ads),
+      Object.prototype.hasOwnProperty.call(patch, 'finalReport'), jsonParam(patch.finalReport),
+      Object.prototype.hasOwnProperty.call(patch, 'status'), jsonParam(patch.status ?? {}),
+      Object.prototype.hasOwnProperty.call(patch, 'metadata'), jsonParam(patch.metadata ?? {}),
       patch.completed === true,
     ],
   );
@@ -965,9 +985,9 @@ export async function saveAdsMarketRun(reportId: string, patch: {
        updated_at = now() where report_id = $1`,
     [
       reportId,
-      has('fetchStats'), JSON.stringify(patch.fetchStats ?? null),
-      has('digest'), JSON.stringify(patch.digest ?? null),
-      has('reportMd'), patch.reportMd ?? null,
+      has('fetchStats'), jsonParam(patch.fetchStats),
+      has('digest'), jsonParam(patch.digest),
+      has('reportMd'), patch.reportMd == null ? null : patch.reportMd.toWellFormed(),
       has('reportEngine'), patch.reportEngine ?? null,
       has('reportModel'), patch.reportModel ?? null,
       has('adsTotal'), patch.adsTotal ?? null,
@@ -975,8 +995,8 @@ export async function saveAdsMarketRun(reportId: string, patch: {
       has('advertisers'), patch.advertisers ?? null,
       has('uniqueCreatives'), patch.uniqueCreatives ?? null,
       has('truncated'), patch.truncated === true,
-      has('status'), JSON.stringify(patch.status ?? {}),
-      has('metadata'), JSON.stringify(patch.metadata ?? {}),
+      has('status'), jsonParam(patch.status ?? {}),
+      has('metadata'), jsonParam(patch.metadata ?? {}),
       patch.completed === true,
     ],
   );
