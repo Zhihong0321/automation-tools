@@ -133,6 +133,9 @@ export async function market(payload, job) {
   const region = String(p.region ?? 'MY').toUpperCase();
   const pages = Number(p.pages) > 0 ? Math.min(Number(p.pages), 40) : 12;
   const effort = ['low', 'medium', 'high'].includes(String(p.effort)) ? String(p.effort) : 'high';
+  // Creatives for the teardown gallery. Capped because each is a separate CDN
+  // fetch: 150 is about a minute and is more tiles than anyone scrolls.
+  const media = Number.isFinite(Number(p.media)) ? Math.min(Math.max(Number(p.media), 0), 400) : 150;
   const timeoutMs = Number(p.timeoutMs) > 0 ? Number(p.timeoutMs) : KW_TIMEOUT_MS;
 
   // KW_DATA, not --db. `--db` moves only the database; the raw NDJSON, the digest
@@ -145,7 +148,7 @@ export async function market(payload, job) {
 
   try {
     // ---------------------------------------------------------------- fetch
-    const fetchArgs = ['fetch', ...keywords, '--region', region, '--pages', String(pages)];
+    const fetchArgs = ['fetch', ...keywords, '--region', region, '--pages', String(pages), '--media', String(media)];
     const fetched = await exec(KW, fetchArgs, timeoutMs, env);
     if (fetched.spawnError) throw Object.assign(new Error(fetched.spawnError), { code: 'engine_error' });
     if (fetched.timedOut) {
@@ -193,7 +196,7 @@ export async function market(payload, job) {
       // A failed WRITE is reported, not thrown: the ads and the digest are the
       // expensive half and they are already in hand.
       report_error: reportHtml ? null : (firstLine(wrote.stderr) || `kw teardown exited ${wrote.code}`),
-      meta: { ms, pages, effort, exit_code: fetched.code },
+      meta: { ms, pages, effort, media, exit_code: fetched.code },
       at: new Date().toISOString(),
       ...(job?.id ? { jobId: job.id } : {}),
     };
