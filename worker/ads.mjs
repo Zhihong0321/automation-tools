@@ -141,7 +141,6 @@ export async function market(payload, job) {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-run-'));
   const env = { KW_DATA: workDir };
   const db = path.join(workDir, 'ads.db');
-  const reportFile = path.join(workDir, 'report.md');
   const startedAt = Date.now();
 
   try {
@@ -173,12 +172,13 @@ export async function market(payload, job) {
     // ---------------------------------------------------------------- report
     // The topic is the first keyword: it is the one the user actually typed, and
     // kwdigest scopes by keywords containing it.
-    const reportArgs = ['report', keywords[0], '--out', reportFile,
-      '--keywords', keywords.join(','), '--effort', effort];
+    // teardown, not report: the deliverable is the page, and kw builds it whole.
+    const reportArgs = ['teardown', keywords[0], '--keywords', keywords.join(','), '--effort', effort];
     const wrote = await exec(KW, reportArgs, timeoutMs, env);
+    const built = String(wrote.stdout || '').trim().split('\n').pop();
 
     const digest = findDigest(path.join(workDir, 'reports')) ?? findDigest(workDir);
-    const reportMd = fs.existsSync(reportFile) ? fs.readFileSync(reportFile, 'utf8') : null;
+    const reportHtml = built && fs.existsSync(built) ? fs.readFileSync(built, 'utf8') : null;
     const ms = Date.now() - startedAt;
 
     return {
@@ -187,12 +187,12 @@ export async function market(payload, job) {
       region,
       fetch_stats: fetchStats,
       digest: digest ?? {},
-      report_md: reportMd,
-      report_engine: reportMd ? 'agy' : null,
-      report_model: reportMd ? `gemini-3.7-flash-${effort}` : null,
+      report_html: reportHtml,
+      report_engine: reportHtml ? 'agy' : null,
+      report_model: reportHtml ? `gemini-3.7-flash-${effort}` : null,
       // A failed WRITE is reported, not thrown: the ads and the digest are the
       // expensive half and they are already in hand.
-      report_error: reportMd ? null : (firstLine(wrote.stderr) || `kw report exited ${wrote.code}`),
+      report_error: reportHtml ? null : (firstLine(wrote.stderr) || `kw teardown exited ${wrote.code}`),
       meta: { ms, pages, effort, exit_code: fetched.code },
       at: new Date().toISOString(),
       ...(job?.id ? { jobId: job.id } : {}),

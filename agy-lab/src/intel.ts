@@ -1998,7 +1998,7 @@ async function runAdsMarket(
     const digest = object(captured.digest);
     const totals = object(digest.totals);
     const fetchStats = object(captured.fetch_stats);
-    const reportMd = str(captured.report_md) || null;
+    const reportHtml = str(captured.report_html) || null;
     const adsTotal = num(totals.ads, 0);
     // Truncated is per keyword in the worker's stats; ANY keyword hitting its cap
     // means the market is bigger than what was captured.
@@ -2015,7 +2015,7 @@ async function runAdsMarket(
       advertisers: num(totals.advertisers, 0),
       unique_creatives: num(totals.unique_creatives, 0),
       truncated,
-      report_md: reportMd,
+      has_page: !!reportHtml,
       engine: str(captured.report_engine) || null,
       model: str(captured.report_model) || null,
       // The digest travels with the report so the page can draw its own tables
@@ -2024,7 +2024,7 @@ async function runAdsMarket(
     };
 
     await db.saveAdsMarketRun(reportId, {
-      fetchStats, digest, reportMd,
+      fetchStats, digest, reportHtml,
       reportEngine: str(captured.report_engine) || null,
       reportModel: str(captured.report_model) || null,
       adsTotal,
@@ -2032,7 +2032,7 @@ async function runAdsMarket(
       advertisers: num(totals.advertisers, 0),
       uniqueCreatives: num(totals.unique_creatives, 0),
       truncated,
-      status: { fetch: adsTotal ? 'completed' : 'no_results', report: reportMd ? 'completed' : 'failed' },
+      status: { fetch: adsTotal ? 'completed' : 'no_results', report: reportHtml ? 'completed' : 'failed' },
       metadata: { worker: 'ads.market', region, keywords },
       completed: true,
     });
@@ -2040,8 +2040,8 @@ async function runAdsMarket(
     // Zero ads after a real crawl is a genuine finding about the market, so it
     // completes rather than failing. A missing report over real ads is partial.
     await db.updateReport(publicId, {
-      status: adsTotal && reportMd ? 'completed' : 'partial',
-      error: adsTotal && !reportMd ? 'the ads were captured but the written report failed — the digest and counts are intact' : null,
+      status: adsTotal && reportHtml ? 'completed' : 'partial',
+      error: adsTotal && !reportHtml ? 'the ads were captured but the teardown page failed to build — the digest and counts are intact' : null,
       result: final,
       completed: true,
     });
@@ -2327,7 +2327,15 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
     html = ui.searchPage(report, { report: search?.report ?? object(report.result?.search), companies: search?.companies ?? rows(report.result?.companies) });
   } else if (report.report_type === 'person_research') html = ui.personPage(report);
   else if (report.report_type === 'ads_research') html = ui.adsPage(report);
-  else if (report.report_type === 'ads_market') html = ui.adsMarketPage(report);
+  else if (report.report_type === 'ads_market') {
+    // The teardown IS the page. kw builds a complete self-contained document --
+    // inline styles, no assets but Google Fonts -- so serving it verbatim is the
+    // whole job. ui.adsMarketPage is the fallback for a run whose page failed to
+    // build, so the counts still reach the reader instead of a blank screen.
+    const run = await db.adsMarketRun(report.id);
+    const page = run && typeof run.report_html === 'string' ? run.report_html : '';
+    html = page.trim() ? page : ui.adsMarketPage(report);
+  }
   else {
     const run = await db.researchRun(report.id);
     const chinese = object(run?.translated_report);

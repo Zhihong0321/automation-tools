@@ -197,6 +197,10 @@ export function migrate(): Promise<void> {
         -- auditable and lets the report page draw its tables without a model.
         digest jsonb,
         report_md text,
+        -- The finished teardown page: one self-contained HTML document, inline
+        -- styles, no assets but Google Fonts. Stored here so /r/:id can serve it
+        -- directly rather than standing up a second host for one file.
+        report_html text,
         report_engine text,
         report_model text,
         -- Promoted out of digest so the library can sort and filter without
@@ -219,6 +223,7 @@ export function migrate(): Promise<void> {
       )
     `);
     await sql(`create index if not exists ads_market_run_keywords_idx on ads_market_run using gin (keywords)`);
+    await sql(`alter table ads_market_run add column if not exists report_html text`);
     // There is deliberately NO spend, impressions or reach column. Those fields
     // are null on 100% of Malaysian commercial ads in the Ad Library -- measured
     // over 672 -- and a nullable column is an invitation to read null as zero
@@ -954,6 +959,7 @@ export async function saveAdsMarketRun(reportId: string, patch: {
   fetchStats?: Record<string, unknown>;
   digest?: Record<string, unknown>;
   reportMd?: string | null;
+  reportHtml?: string | null;
   reportEngine?: string | null;
   reportModel?: string | null;
   adsTotal?: number | null;
@@ -972,6 +978,7 @@ export async function saveAdsMarketRun(reportId: string, patch: {
        fetch_stats = case when $2::boolean then $3::jsonb else fetch_stats end,
        digest = case when $4::boolean then $5::jsonb else digest end,
        report_md = case when $6::boolean then $7::text else report_md end,
+       report_html = case when $27::boolean then $28::text else report_html end,
        report_engine = case when $8::boolean then $9::text else report_engine end,
        report_model = case when $10::boolean then $11::text else report_model end,
        ads_total = case when $12::boolean then $13::integer else ads_total end,
@@ -998,6 +1005,7 @@ export async function saveAdsMarketRun(reportId: string, patch: {
       has('status'), jsonParam(patch.status ?? {}),
       has('metadata'), jsonParam(patch.metadata ?? {}),
       patch.completed === true,
+      has('reportHtml'), patch.reportHtml == null ? null : patch.reportHtml.toWellFormed(),
     ],
   );
 }
