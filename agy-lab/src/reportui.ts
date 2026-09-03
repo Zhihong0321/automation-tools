@@ -1,5 +1,6 @@
 import type { PublishedReport } from './reportdb.ts';
 import { TOKEN_STORE_JS } from './tokenstore.ts';
+import { CLIENT_NAV, navHtml } from './nav.ts';
 
 const esc = (value: unknown): string => String(value ?? '').replace(/[&<>"']/g, (c) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -226,6 +227,10 @@ table.data tr:last-child td{border-bottom:none}
 /* Masthead: a full-width ink band, so the page opens as a document with a
    publisher rather than as a card on a white screen. */
 .topbar{background:var(--ink);color:#fff}.topbar-in{display:flex;align-items:center;justify-content:space-between;gap:12px;max-width:1120px;margin:0 auto;padding:0 16px;height:46px}.wordmark{display:flex;align-items:center;gap:9px;font:var(--micro);letter-spacing:var(--track);text-transform:uppercase;color:#fff}.mark{display:grid;place-items:center;width:22px;height:22px;border-radius:var(--radius);background:#fff;color:var(--ink);font:700 9px/1 var(--sans);letter-spacing:.02em}.folio{font:500 9px/1.5 var(--mono);color:#93a0b1;text-align:right;text-transform:uppercase;letter-spacing:.06em}
+/* The way out. A report tab is opened with target="_blank" and so has no Back
+   button of its own; without these two links the page is terminal. */
+.wordmark{text-decoration:none}.wordmark-text{display:none}
+.topnav{display:flex;align-items:center;gap:13px;margin-right:auto;font:var(--micro);letter-spacing:var(--track);text-transform:uppercase}.topnav a{padding:2px 0;border-bottom:1px solid transparent;color:#93a0b1;text-decoration:none;white-space:nowrap}.topnav a:hover{color:#fff}.topnav a[aria-current="page"]{color:#fff;border-bottom-color:#fff}
 
 .hero{display:grid;gap:16px;padding:22px 0 20px}.kicker{display:flex;align-items:center;gap:9px;font:var(--micro);letter-spacing:var(--track);text-transform:uppercase;color:var(--accent-2)}.kicker:before{content:"";width:18px;height:2px;background:var(--accent-2)}.hero h1{margin:0;font:600 clamp(24px,6.4vw,38px)/1.12 var(--sans);letter-spacing:-.028em;text-wrap:balance}.hero-copy{max-width:60ch;margin:0;font-size:13px;line-height:1.55;color:var(--muted)}
 /* The run card. Status, issue date and round progress are the provenance of the
@@ -292,7 +297,7 @@ table.data tr:last-child td{border-bottom:none}
 @media(hover:none){.company:hover,.person:hover,.contact:hover,.signal:hover{background:transparent;box-shadow:none}}
 
 @media(min-width:760px){
-.wrap{padding:0 28px 56px}.topbar-in{height:52px;padding:0 28px}
+.wrap{padding:0 28px 56px}.topbar-in{height:52px;padding:0 28px}.wordmark-text{display:inline}
 .hero{grid-template-columns:minmax(0,1fr) 268px;gap:36px;padding:34px 0 28px}.hero-meta{align-self:start;padding:15px 16px}
 .metrics{grid-template-columns:repeat(4,1fr)}.metric{padding:15px 16px 13px}.metric:before{left:16px}.metric strong{font-size:26px}
 .section{padding-top:34px}.section-head{grid-template-columns:minmax(0,1fr) minmax(200px,340px);align-items:end;gap:24px}.section-note{text-align:right;padding-bottom:2px}
@@ -328,7 +333,7 @@ function shell(report: PublishedReport, body: string): string {
   const version = Number(report.version) > 1 ? 'V' + Number(report.version) : '';
   // The masthead sits outside the measure so its ink band runs the full width
   // of the viewport rather than stopping at the text column.
-  const masthead = `<div class="wordmark"><span class="mark">EE</span><span>Business intelligence</span></div><div class="folio">${esc(reportLabel)}${version ? ' · ' + version : ''}<br>${esc(report.public_id)}</div>`;
+  const masthead = `<a class="wordmark" href="/research"><span class="mark">EE</span><span class="wordmark-text">Business intelligence</span></a><div class="topnav">${navHtml(CLIENT_NAV, '')}</div><div class="folio">${esc(reportLabel)}${version ? ' · ' + version : ''}<br>${esc(report.public_id)}</div>`;
   // Inter is the report typeface, not merely first in a fallback stack. The
   // stack in --sans only covers the moment before the webfont lands.
   const fonts = '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">';
@@ -336,7 +341,7 @@ function shell(report: PublishedReport, body: string): string {
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">${fonts}
 <meta name="theme-color" content="#f2f4f6"><title>${esc(report.title ?? 'Business intelligence report')}</title>
-<style>${CSS}</style></head><body class="${esc(report.report_type.replace('_', '-'))}"><div class="topbar"><nav class="topbar-in" aria-label="Report masthead">${masthead}</nav></div><main class="wrap">
+<style>${CSS}</style></head><body class="${esc(report.report_type.replace('_', '-'))}"><div class="topbar"><nav class="topbar-in" aria-label="Site">${masthead}</nav></div><main class="wrap">
 <header class="hero"><div><div class="kicker">${esc(reportLabel)} · ${esc(reportDate(report))}${version ? ' · ' + version : ''}</div><h1>${esc(report.title ?? 'Research report')}</h1><p class="hero-copy">${active ? 'Research is in progress. This permanent report link refreshes as verified findings arrive.' : report.error ? esc(report.error) : isSearch ? 'A ranked field scan of relevant businesses, with direct routes to source listings and published contact points.' : isAds ? 'Every ad the company is currently running, as published in the Facebook and Google ad libraries.' : 'A source-linked intelligence brief designed for qualification, outreach and informed decision-making.'}</p></div><aside class="hero-meta"><div class="status ${esc(report.status)}"><span class="status-dot"></span>${esc(statusLabel)}</div><div class="meta-line"><span>Issued ${esc(reportDate(report))}</span>${version ? `<span>Research pass ${esc(version)}</span>` : ''}<span>${isSearch ? 'Source / Google Maps' : isAds ? 'Source / Ad libraries' : 'Evidence / Public sources'}</span></div>${!isSearch && !isAds ? `<div class="rounds" aria-label="Four research rounds">${[0, 1, 2, 3].map((i) => `<span class="round ${i < roundsLit ? 'on' : ''}"></span>`).join('')}</div>` : ''}</aside></header>
 ${body}<footer class="foot"><span>EE Business Intelligence · Confidential link</span><span>Evidence opens at its original public source</span></footer>
 </main>${active ? '<script>setTimeout(()=>location.reload(),8000)</script>' : ''}${isSearch ? researchScript(report.public_id) : ''}</body></html>`;

@@ -26,6 +26,7 @@ import { page as docsPage } from './docs.ts';
 import { document as openApiDocument } from './openapi.ts';
 import { page as portalPage } from './portal.ts';
 import { page as guidePage } from './guide.ts';
+import { missingPage } from './nav.ts';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const TOKEN = process.env.LAB_TOKEN ?? '';
@@ -179,7 +180,17 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // /v1/* is the gateway - the OpenAI-shaped surface other tools point at. It sits
   // behind the same token because a bearer header is exactly what an OpenAI client
   // already sends, so pointing one here costs a base URL and nothing else.
-  if (!p.startsWith('/api/') && !p.startsWith('/v1/')) return json(res, 404, { error: 'not found' });
+  // A mistyped path answered {"error":"not found"} to a browser, which is both
+  // true and a dead end -- there is nothing on that response to click. A caller
+  // asking for JSON still gets JSON; a person gets the same fact with the four
+  // real pages listed under it.
+  if (!p.startsWith('/api/') && !p.startsWith('/v1/')) {
+    if (method === 'GET' && (req.headers.accept ?? '').includes('text/html')) {
+      res.writeHead(404, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      return void res.end(missingPage(p));
+    }
+    return json(res, 404, { error: 'not found' });
+  }
 
   // Log from here down, before the auth gate, so a rejected token is recorded too:
   // a 401 nobody can see is how a misconfigured client stays misconfigured. The
