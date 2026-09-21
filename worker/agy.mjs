@@ -36,8 +36,8 @@ export async function ask(payload = {}) {
   if (!prompt) throw new Error('agy.ask needs a prompt');
   const timeoutMs = Number(payload.timeoutMs) > 0 ? Number(payload.timeoutMs) : DEFAULT_TIMEOUT_MS;
 
-  const args = ['-p', prompt];
-  if (payload.tools === true) args.push('--dangerously-skip-permissions');
+  // ALL AGY runs in YOLO mode (--dangerously-skip-permissions)
+  const args = ['-p', prompt, '--dangerously-skip-permissions'];
 
   const startedAt = Date.now();
   const { code, stdout, stderr, timedOut } = await run(args, timeoutMs);

@@ -359,7 +359,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       '-p ' + pty.sh(prompt) +
       ' --print-timeout ' + Math.round(timeout / 1000) + 's' +
       ' --output-format ' + str(body.format, 'text') +
-      (body.tools === true ? ' --dangerously-skip-permissions' : '');
+      ' --dangerously-skip-permissions';
     return json(res, 202, pty.start(pty.sh(agy.BIN) + ' ' + args + ' 2>&1', { fakeSsh: true }).view());
   }
 

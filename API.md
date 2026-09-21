@@ -714,13 +714,13 @@ side is what has been measured (8.9s for a pair, not 16.1s serial).
 Slots are per lane; spacing, caps and counters are per engine, because the lane is
 a machine limit and the account that gets rate-limited is not.
 
-Three refusals, all 429 with `Retry-After` and a `queue` snapshot in the body:
+Calls are queued FIFO and paced safely rather than rejected. **An admitted call waits; it never fails** - an
+answer at +40s beats an error at +0s. Hourly caps and inter-call gaps pace execution smoothly.
 
-| `type` | Fires when |
+| Mode | Behavior |
 |---|---|
-| `rate_limit_exceeded` | the engine's hourly cap is used up (off unless `*_HOURLY_LIMIT` is set) |
-| `queue_full` | more than `QUEUE_MAX_DEPTH` (10) are already waiting in that lane |
-| `queue_too_slow` | the estimate exceeds `QUEUE_MAX_WAIT_MS` (300s) |
+| **Zero rejection (default)** | Incoming calls queue FIFO and wait their turn. When an hourly cap is set, calls pause and wait until the 1-hour rolling window frees a slot rather than returning 429. |
+| `QUEUE_REJECT=true` | Legacy load-shedding mode. Throws 429 with `Retry-After` on `rate_limit_exceeded`, `queue_full` (> `QUEUE_MAX_DEPTH`), or `queue_too_slow` (> `QUEUE_MAX_WAIT_MS`). |
 
 A call that waited reports `agy_lab.queuedMs` (native shape: `queuedMs`). A queued
 **stream** narrates the wait in SSE comment lines - `: queued ahead=3 eta=41s`, then
@@ -872,10 +872,12 @@ re-pointed onto it, so the round now produces auditable rows rather than an
 | `ROUTING_PREFER` | `mini` | where a bare model name goes when both locations are live |
 | `MAX_OPEN_BROWSERS` | 1 | Chrome profiles open at once - the browser lane's width |
 | `CGPT_MIN_GAP_MS` | 2000 | spacing between calls to that account |
-| `AGY_MIN_GAP_MS` | 0 | |
-| `QUEUE_MAX_DEPTH` | 10 | waiting calls before 429; `CGPT_MAX_QUEUE` etc. override per engine |
-| `QUEUE_MAX_WAIT_MS` | 300000 | longest wait the gateway will promise |
-| `*_HOURLY_LIMIT` | off | calls per rolling hour, per engine |
+| `AGY_MIN_GAP_MS` | 2000 | spacing between calls to the local Google Antigravity account |
+| `QUEUE_REJECT` | `false` | `true` re-enables fast-fail 429 shedding instead of queue waiting |
+| `QUEUE_MAX_DEPTH` | 10 | waiting calls before 429 when `QUEUE_REJECT=true` |
+| `QUEUE_MAX_WAIT_MS` | 300000 | longest wait threshold when `QUEUE_REJECT=true` |
+| `*_HOURLY_LIMIT` | off | calls per rolling hour, per engine (paces wait instead of throwing) |
+| `WORKER_COOLDOWN_MS` | random | worker cooldown between jobs (default: 2.5-4.5s for ChatGPT, 1.5-2.5s for AGY; `0` disables) |
 | `LOG_MEMORY` | 1000 | records kept in memory |
 | `LOG_PROMPTS` | on | `0` drops prompt previews |
 

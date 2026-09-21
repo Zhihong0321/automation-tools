@@ -321,7 +321,7 @@ async function miniAsk(
     : Math.min(timeoutMs, Number(process.env.BROWSER_LEASE_MS ?? 120_000));
   const job = jobs.create(
     jobTypeFor(route.engine),
-    { ...(pinned ? { id: session } : {}), prompt, timeoutMs },
+    { ...(pinned ? { id: session } : {}), prompt, timeoutMs, tools: true },
     leaseMs,
   );
   const settled = await jobs.wait(job.id, timeoutMs + 5_000);
@@ -502,7 +502,7 @@ async function engineAsk(
     // A dead session and a slow one are different problems with different fixes,
     // and the status code is the only part of this most clients will read.
     const out = await agy
-      .ask(prompt, { timeoutMs: opts.timeoutMs ?? AGY_TIMEOUT_MS, tools: opts.tools })
+      .ask(prompt, { timeoutMs: opts.timeoutMs ?? AGY_TIMEOUT_MS, tools: true })
       .catch((err: unknown) => {
         const e = err as { code?: string; message?: string };
         if (e.code === 'logged_out') throw fail(503, 'agy is not signed in: ' + e.message, 'engine_unavailable');

@@ -2479,7 +2479,7 @@ async function runContactResearch(
     let discoveryMeta: Record<string, unknown> = { model, engine: 'agy', status: 'failed' };
 
     try {
-      const askResult = await ask(model, prompt, 180_000);
+      const askResult = await ask(model, prompt, 420_000);
       discoveryMeta = { model: askResult.model, engine: askResult.engine, ms: askResult.ms };
       if (askResult.parsed) {
         discoveryRaw = askResult.parsed;

@@ -393,6 +393,27 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
   });
 }
 
+const DEFAULT_CGPT_COOLDOWN_MIN = 2500;
+const DEFAULT_CGPT_COOLDOWN_MAX = 4500;
+const DEFAULT_AGY_COOLDOWN_MIN = 1500;
+const DEFAULT_AGY_COOLDOWN_MAX = 2500;
+
+function calculateCooldown(type) {
+  if (process.env.WORKER_COOLDOWN_MS !== undefined) {
+    const override = Number(process.env.WORKER_COOLDOWN_MS);
+    return Number.isFinite(override) && override >= 0 ? override : 0;
+  }
+  if (typeof type === 'string') {
+    if (type.startsWith('chatgpt.')) {
+      return DEFAULT_CGPT_COOLDOWN_MIN + Math.floor(Math.random() * (DEFAULT_CGPT_COOLDOWN_MAX - DEFAULT_CGPT_COOLDOWN_MIN));
+    }
+    if (type.startsWith('agy.')) {
+      return DEFAULT_AGY_COOLDOWN_MIN + Math.floor(Math.random() * (DEFAULT_AGY_COOLDOWN_MAX - DEFAULT_AGY_COOLDOWN_MIN));
+    }
+  }
+  return 0;
+}
+
 /**
  * One lane's claim loop. Never exits on purpose: a worker that quits on a
  * network blip is a worker that is offline until someone notices, and the whole
@@ -414,6 +435,12 @@ async function lane(name, types, session) {
           await run(name, job, session);
         } finally {
           stop();
+        }
+        // Human cooldown jitter between jobs to avoid machine-burst detection.
+        // A real user doesn't open temporary chats or send CLI queries 2ms after finishing one.
+        const cooldown = calculateCooldown(job.type);
+        if (cooldown > 0 && !stopping) {
+          await new Promise((r) => setTimeout(r, cooldown));
         }
       }
     } catch (err) {

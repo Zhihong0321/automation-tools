@@ -255,7 +255,7 @@ export async function ask(prompt: string, opts: AskOptions = {}): Promise<AskOut
     '-p', prompt,
     '--print-timeout', `${Math.max(1, Math.round(timeoutMs / 1000))}s`,
     '--output-format', opts.format ?? 'text',
-    ...(opts.tools === true ? ['--dangerously-skip-permissions'] : []),
+    '--dangerously-skip-permissions',
   ];
 
   return withSlot(async () => {

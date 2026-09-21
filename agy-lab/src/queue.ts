@@ -62,13 +62,18 @@ function policy(engine: Engine): {
   maxDepth: number;
   maxWaitMs: number;
   hourlyLimit: number;
+  neverReject: boolean;
 } {
   const prefix = engine === 'chatgpt' ? 'CGPT' : engine.toUpperCase();
+  // Never reject by default: requests queue FIFO and wait their turn instead of being shed with 429.
+  // Set QUEUE_REJECT=true to opt into legacy 429 load shedding.
+  const neverReject = process.env.QUEUE_REJECT !== 'true';
   return {
-    minGapMs: int(prefix + '_MIN_GAP_MS', engine === 'agy' ? 0 : 2000),
+    minGapMs: int(prefix + '_MIN_GAP_MS', 2000),
     maxDepth: int(prefix + '_MAX_QUEUE', int('QUEUE_MAX_DEPTH', 10)),
     maxWaitMs: int(prefix + '_MAX_WAIT_MS', int('QUEUE_MAX_WAIT_MS', 300_000)),
     hourlyLimit: int(prefix + '_HOURLY_LIMIT', 0),
+    neverReject,
   };
 }
 
@@ -197,39 +202,43 @@ export async function run<T>(
   const p = policy(engine);
   const arrived = Date.now();
 
-  const hits = recentHits(engine);
-  if (p.hourlyLimit && hits.length >= p.hourlyLimit) {
-    const oldest = hits[0] ?? arrived;
-    const freeIn = (oldest + 3_600_000 - arrived) / 1000;
-    throw busy(
-      'rate_limit_exceeded',
-      `${engine} has used its hourly allowance (${hits.length}/${p.hourlyLimit}). It frees up in ${Math.ceil(freeIn / 60)} min.`,
-      freeIn,
-      engine,
-    );
+  // If legacy rejection is explicitly enabled, fast-fail with 429 when limits are reached:
+  if (!p.neverReject) {
+    const hits = recentHits(engine);
+    if (p.hourlyLimit && hits.length >= p.hourlyLimit) {
+      const oldest = hits[0] ?? arrived;
+      const freeIn = (oldest + 3_600_000 - arrived) / 1000;
+      throw busy(
+        'rate_limit_exceeded',
+        `${engine} has used its hourly allowance (${hits.length}/${p.hourlyLimit}). It frees up in ${Math.ceil(freeIn / 60)} min.`,
+        freeIn,
+        engine,
+      );
+    }
+
+    if (l.waiting.length >= p.maxDepth) {
+      const wait = estimateWaitMs(lane, engine);
+      throw busy(
+        'queue_full',
+        `System busy: ${l.waiting.length} calls are already waiting for ${lane === 'agy' ? 'agy' : lane === 'mini' ? 'the mini' : 'the browser'} and the queue is capped at ${p.maxDepth}. Retry in about ${Math.ceil(wait / 1000)}s.`,
+        wait / 1000,
+        engine,
+      );
+    }
+
+    const estimatedWaitMs = estimateWaitMs(lane, engine);
+    if (estimatedWaitMs > p.maxWaitMs) {
+      throw busy(
+        'queue_too_slow',
+        `System busy: the wait is about ${Math.ceil(estimatedWaitMs / 1000)}s, past the ${Math.round(p.maxWaitMs / 1000)}s this gateway will hold a request. Retry shortly.`,
+        estimatedWaitMs / 1000,
+        engine,
+      );
+    }
   }
 
   const ahead = l.waiting.length + l.inflight;
-  if (l.waiting.length >= p.maxDepth) {
-    const wait = estimateWaitMs(lane, engine);
-    throw busy(
-      'queue_full',
-      `System busy: ${l.waiting.length} calls are already waiting for ${lane === 'agy' ? 'agy' : lane === 'mini' ? 'the mini' : 'the browser'} and the queue is capped at ${p.maxDepth}. Retry in about ${Math.ceil(wait / 1000)}s.`,
-      wait / 1000,
-      engine,
-    );
-  }
-
   const estimatedWaitMs = estimateWaitMs(lane, engine);
-  if (estimatedWaitMs > p.maxWaitMs) {
-    throw busy(
-      'queue_too_slow',
-      `System busy: the wait is about ${Math.ceil(estimatedWaitMs / 1000)}s, past the ${Math.round(p.maxWaitMs / 1000)}s this gateway will hold a request. Retry shortly.`,
-      estimatedWaitMs / 1000,
-      engine,
-    );
-  }
-
   if (ahead > 0 && hooks.onQueued) hooks.onQueued({ ahead, estimatedWaitMs });
 
   // ---- wait for a slot, FIFO -------------------------------------------
@@ -239,6 +248,16 @@ export async function run<T>(
   l.inflight++;
 
   try {
+    // ---- hourly cap pacing (never reject: wait until quota opens) --------
+    if (p.hourlyLimit) {
+      while (recentHits(engine).length >= p.hourlyLimit) {
+        const hits = recentHits(engine);
+        const oldest = hits[0] ?? Date.now();
+        const waitMs = Math.max(500, oldest + 3_600_000 - Date.now() + 100);
+        await sleep(waitMs);
+      }
+    }
+
     // ---- space it out --------------------------------------------------
     const s = engines[engine];
     const since = Date.now() - s.lastStartedAt;
@@ -296,6 +315,7 @@ export function snapshot(engine?: Engine): Record<string, unknown> {
       maxQueue: p.maxDepth,
       maxWaitMs: p.maxWaitMs,
       hourlyLimit: p.hourlyLimit || null,
+      neverReject: p.neverReject,
       usedThisHour: recentHits(e).length,
       answered: s.ok,
       failed: s.failed,
@@ -306,7 +326,21 @@ export function snapshot(engine?: Engine): Record<string, unknown> {
   };
   if (engine) return { engine, ...engineView(engine), lanes: { [laneOf(engine)]: laneView(laneOf(engine)) } };
   return {
-    lanes: { agy: laneView('agy'), browser: laneView('browser') },
+    lanes: { agy: laneView('agy'), browser: laneView('browser'), mini: laneView('mini') },
     engines: { agy: engineView('agy'), chatgpt: engineView('chatgpt'), meta: engineView('meta') },
   };
 }
+
+/** Reset in-memory queue and engine state for deterministic test suites. */
+export function resetForTests(): void {
+  for (const lane of ['agy', 'browser', 'mini'] as Lane[]) {
+    lanes[lane].inflight = 0;
+    lanes[lane].waiting = [];
+    lanes[lane].samples = 0;
+    lanes[lane].emaMs = lane === 'mini' ? 8000 : lane === 'browser' ? 13000 : 20000;
+  }
+  for (const eng of ['agy', 'chatgpt', 'meta'] as Engine[]) {
+    engines[eng] = fresh();
+  }
+}
+
