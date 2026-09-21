@@ -2783,7 +2783,13 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       const s = String(val == null ? '' : val);
       return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const header = ['ID', 'Company Name', 'Category', 'Phone', 'Address', 'Website', 'Maps URL', 'Rating', 'Reviews', 'Lead Status', 'Assigned To', 'Assigned At', 'Research Dossier ID', 'Research Status', 'Notes'];
+    const header = [
+      'ID', 'Company Name', 'Category', 'Phone', 'Address', 'Website', 'Maps URL',
+      'Rating', 'Reviews', 'Lead Status', 'Assigned To', 'Assigned At',
+      'Research Dossier ID', 'Research Status',
+      'Contact Sheet ID', 'Contact Status', 'Contact Phones Count', 'Decision Makers Count',
+      'Notes',
+    ];
     const lines = [header.join(',')];
     for (const lead of result.leads) {
       lines.push([
@@ -2801,6 +2807,10 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
         escapeCsv(lead.assigned_at),
         escapeCsv(lead.research_public_id),
         escapeCsv(lead.research_status),
+        escapeCsv(lead.contact_public_id),
+        escapeCsv(lead.contact_status),
+        escapeCsv(lead.contact_phones_count),
+        escapeCsv(lead.contact_decision_makers_count),
         escapeCsv(lead.lead_notes),
       ].join(','));
     }

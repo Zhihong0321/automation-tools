@@ -282,6 +282,9 @@ table.data tr:last-child td{border-bottom:none}
    table feel handled rather than dumped. */
 .company,.person,.contact,.signal{transition:background .14s,box-shadow .14s}.company:hover,.person:hover,.contact:hover,.signal:hover{background:#fafbfc;box-shadow:inset 2px 0 0 var(--accent-2)}
 .records .company{display:grid;grid-template-columns:28px minmax(0,1fr);gap:4px 10px;padding:13px 14px;border-bottom:1px solid var(--line)}.company:last-child,.person:last-child,.contact:last-child,.signal:last-child{border-bottom:0}.record-no{font:600 10px/1.8 var(--sans);letter-spacing:.06em;color:var(--faint)}.company h3,.person h3{margin:0;font:600 15px/1.32 var(--sans);letter-spacing:-.012em}.record-meta{margin-top:3px;font-size:12px;color:var(--muted)}.record-address{grid-column:2;font-size:12px;line-height:1.45;color:var(--muted)}.record-contact{grid-column:2;display:grid;gap:9px;margin-top:2px}.phone{font:600 15px/1.2 var(--sans);letter-spacing:-.01em}
+.records .company.has-contact-research{background:#f3fbf7;border-left:4px solid var(--ok)}
+.contact-pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;background:#e6f7ef;border:1px solid #b7ebd3;border-radius:3px;font:700 11px/1.3 var(--sans);color:var(--ok);margin-top:5px;width:fit-content}
+.contact-pill strong{font-weight:800}
 .actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:0 13px;border:1px solid var(--ink);border-radius:var(--radius);background:var(--ink);color:#fff;font:var(--micro);font-size:10px;letter-spacing:.1em;text-transform:uppercase;text-decoration:none;cursor:pointer;transition:background .15s,border-color .15s,color .15s}.button:hover{background:var(--accent);border-color:var(--accent)}
 .text-link{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 11px;border:1px solid var(--line);border-radius:var(--radius);background:var(--sheet);color:var(--muted);font:var(--micro);font-size:10px;letter-spacing:.1em;text-transform:uppercase;text-decoration:none;transition:color .15s,border-color .15s,background .15s}.text-link:hover{color:var(--ink);border-color:var(--ink);background:var(--soft)}.text-link span{color:var(--accent-2)}.id-tag{font:500 9px/1 var(--mono);color:var(--faint);text-transform:uppercase}
@@ -447,7 +450,18 @@ export function searchPage(report: PublishedReport, detail: { report?: Record<st
     const website = value(company, 'website');
     const maps = value(company, 'maps_url', 'mapsUrl');
     const companyId = value(company, 'id');
-    return `<article class="company"><div class="record-no">${esc(rank(company.rank ?? index + 1))}</div><div><h3>${esc(name)}</h3><div class="record-meta">${esc(value(company, 'category') || 'Business')}${rating ? ` · ★ ${esc(rating)}${reviews ? ` / ${esc(reviews)} reviews` : ''}` : ''}</div></div><div class="record-address">${esc(value(company, 'address') || 'Address not published')}</div><div class="record-contact">${phone ? `<div class="phone">${esc(phone)}</div>` : '<span class="record-meta">Phone not published</span>'}<div class="actions">${phone ? `<a class="button" href="tel:${esc(phone.replace(/[^+\d]/g, ''))}">Call now</a>` : ''}${link(website, 'Website')}${link(maps, 'Maps')}${companyId ? `<button class="button research" type="button" data-company="${esc(companyId)}" data-name="${esc(name)}">Research \u2192</button>` : ''}${companyId ? `<button class="button" style="background:#0a6b47;color:#fff;border-color:#0a6b47" type="button" data-contact="${esc(companyId)}" data-name="${esc(name)}">Contacts ⚡</button>` : ''}</div></div></article>`;
+    const contactPublicId = value(company, 'contact_public_id');
+    const contactStatus = value(company, 'contact_status');
+    const contactPhones = Number(company.contact_phones_count) || 0;
+    const contactDMs = Number(company.contact_decision_makers_count) || 0;
+    const hasContact = Boolean(contactPublicId && (contactStatus === 'completed' || contactStatus === 'partial'));
+    const contactPill = hasContact
+      ? `<div class="contact-pill">📞 <strong>${contactPhones} Contact Number${contactPhones === 1 ? '' : 's'} Found</strong>${contactDMs > 0 ? ` · ${contactDMs} Leader${contactDMs === 1 ? '' : 's'}` : ''}</div>`
+      : '';
+    const contactAction = hasContact
+      ? `<a class="button" style="background:#0a6b47;color:#fff;border-color:#0a6b47;font-weight:700" target="_blank" rel="noopener" href="/r/${esc(contactPublicId)}">Contacts (${contactPhones} phones) ↗</a>`
+      : (companyId ? `<button class="button" style="background:#0a6b47;color:#fff;border-color:#0a6b47" type="button" data-contact="${esc(companyId)}" data-name="${esc(name)}">Contacts ⚡</button>` : '');
+    return `<article class="company${hasContact ? ' has-contact-research' : ''}"><div class="record-no">${esc(rank(company.rank ?? index + 1))}</div><div><h3>${esc(name)}</h3><div class="record-meta">${esc(value(company, 'category') || 'Business')}${rating ? ` · ★ ${esc(rating)}${reviews ? ` / ${esc(reviews)} reviews` : ''}` : ''}</div>${contactPill}</div><div class="record-address">${esc(value(company, 'address') || 'Address not published')}</div><div class="record-contact">${phone ? `<div class="phone">${esc(phone)}</div>` : '<span class="record-meta">Phone not published</span>'}<div class="actions">${phone ? `<a class="button" href="tel:${esc(phone.replace(/[^+\d]/g, ''))}">Call now</a>` : ''}${link(website, 'Website')}${link(maps, 'Maps')}${companyId ? `<button class="button research" type="button" data-company="${esc(companyId)}" data-name="${esc(name)}">Research \u2192</button>` : ''}${contactAction}</div></div></article>`;
   }).join('');
   const body = report.status === 'failed'
     ? `<section class="section"><div class="message error">${esc(report.error ?? 'The search failed.')}</div></section>`

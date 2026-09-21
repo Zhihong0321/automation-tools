@@ -804,9 +804,41 @@ export async function searchResult(reportId: string): Promise<{ report: Record<s
   if (!report) return null;
   const companies = (
     await sql(
-      `select c.*, src.rank
+      `select c.*, src.rank,
+         crep.public_id as contact_public_id,
+         crep.status as contact_status,
+         coalesce(
+           case
+             when jsonb_typeof(crep.result->'phone_contacts') = 'array'
+             then jsonb_array_length(crep.result->'phone_contacts')
+             when jsonb_typeof(crep.result->'contacts') = 'array'
+             then jsonb_array_length(crep.result->'contacts')
+             when crep.result->'preview'->>'phones' is not null
+             then (crep.result->'preview'->>'phones')::int
+             else null
+           end,
+           0
+         )::int as contact_phones_count,
+         coalesce(
+           case
+             when jsonb_typeof(crep.result->'decision_makers') = 'array'
+             then jsonb_array_length(crep.result->'decision_makers')
+             when jsonb_typeof(crep.result->'people') = 'array'
+             then jsonb_array_length(crep.result->'people')
+             when crep.result->'preview'->>'decision_makers' is not null
+             then (crep.result->'preview'->>'decision_makers')::int
+             else null
+           end,
+           0
+         )::int as contact_decision_makers_count
        from search_report_company src
        join company_data c on c.id = src.company_id
+       left join lateral (
+         select public_id, status, result
+         from published_report
+         where company_id = c.id and report_type = 'contact_research'
+         order by version desc, created_at desc limit 1
+       ) crep on true
        where src.report_id = $1 order by src.rank asc`,
       [reportId],
     )
@@ -1226,6 +1258,12 @@ export interface LeadItem {
   research_public_id: string | null;
   research_status: string | null;
   research_version: number | null;
+  contact_public_id: string | null;
+  contact_status: string | null;
+  contact_version: number | null;
+  contact_phones_count: number;
+  contact_decision_makers_count: number;
+  contact_emails_count: number;
   branch_count: number;
 }
 
@@ -1237,6 +1275,7 @@ export interface LeadStats {
   interested: number;
   not_interested: number;
   do_not_call: number;
+  contacts_found: number;
 }
 
 export async function listLeads(options: {
@@ -1275,7 +1314,11 @@ export async function listLeads(options: {
     }
   }
 
-  if (options.researchStatus === 'researched') {
+  if (options.researchStatus === 'contacts_found') {
+    whereConditions.push(`crep.public_id is not null and crep.status in ('completed', 'partial')`);
+  } else if (options.researchStatus === 'no_contacts') {
+    whereConditions.push(`crep.public_id is null`);
+  } else if (options.researchStatus === 'researched') {
     whereConditions.push(`rep.public_id is not null`);
   } else if (options.researchStatus === 'unresearched') {
     whereConditions.push(`rep.public_id is null`);
@@ -1299,6 +1342,45 @@ export async function listLeads(options: {
          rep.public_id as research_public_id,
          rep.status as research_status,
          rep.version as research_version,
+         crep.public_id as contact_public_id,
+         crep.status as contact_status,
+         crep.version as contact_version,
+         coalesce(
+           case
+             when jsonb_typeof(crep.result->'phone_contacts') = 'array'
+             then jsonb_array_length(crep.result->'phone_contacts')
+             when jsonb_typeof(crep.result->'contacts') = 'array'
+             then jsonb_array_length(crep.result->'contacts')
+             when crep.result->'preview'->>'phones' is not null
+             then (crep.result->'preview'->>'phones')::int
+             else null
+           end,
+           0
+         )::int as contact_phones_count,
+         coalesce(
+           case
+             when jsonb_typeof(crep.result->'decision_makers') = 'array'
+             then jsonb_array_length(crep.result->'decision_makers')
+             when jsonb_typeof(crep.result->'people') = 'array'
+             then jsonb_array_length(crep.result->'people')
+             when crep.result->'preview'->>'decision_makers' is not null
+             then (crep.result->'preview'->>'decision_makers')::int
+             else null
+           end,
+           0
+         )::int as contact_decision_makers_count,
+         coalesce(
+           case
+             when jsonb_typeof(crep.result->'email_contacts') = 'array'
+             then jsonb_array_length(crep.result->'email_contacts')
+             when jsonb_typeof(crep.result->'emails') = 'array'
+             then jsonb_array_length(crep.result->'emails')
+             when crep.result->'preview'->>'emails' is not null
+             then (crep.result->'preview'->>'emails')::int
+             else null
+           end,
+           0
+         )::int as contact_emails_count,
          coalesce(b.cnt, 0)::int as branch_count
        from company_data c
        left join lateral (
@@ -1307,6 +1389,12 @@ export async function listLeads(options: {
          where company_id = c.id and report_type = 'company_research'
          order by version desc, created_at desc limit 1
        ) rep on true
+       left join lateral (
+         select public_id, status, version, result
+         from published_report
+         where company_id = c.id and report_type = 'contact_research'
+         order by version desc, created_at desc limit 1
+       ) crep on true
        left join lateral (
          select count(*) as cnt from company_data br where br.merged_into = c.id
        ) b on true
@@ -1323,6 +1411,11 @@ export async function listLeads(options: {
          where company_id = c.id and report_type = 'company_research'
          order by version desc, created_at desc limit 1
        ) rep on true
+       left join lateral (
+         select public_id, status from published_report
+         where company_id = c.id and report_type = 'contact_research'
+         order by version desc, created_at desc limit 1
+       ) crep on true
        where ${whereClause}`,
       params,
     ),
@@ -1334,16 +1427,24 @@ export async function listLeads(options: {
       interested: string;
       not_interested: string;
       do_not_call: string;
+      contacts_found: string;
     }>(
       `select
          count(*)::text as total,
-         count(*) filter (where coalesce(lead_status, 'unassigned') = 'unassigned')::text as unassigned,
-         count(*) filter (where lead_status = 'assigned')::text as assigned,
-         count(*) filter (where lead_status = 'contacted')::text as contacted,
-         count(*) filter (where lead_status = 'interested')::text as interested,
-         count(*) filter (where lead_status = 'not_interested')::text as not_interested,
-         count(*) filter (where lead_status = 'do_not_call')::text as do_not_call
-       from company_data where merged_into is null`,
+         count(*) filter (where coalesce(c.lead_status, 'unassigned') = 'unassigned')::text as unassigned,
+         count(*) filter (where c.lead_status = 'assigned')::text as assigned,
+         count(*) filter (where c.lead_status = 'contacted')::text as contacted,
+         count(*) filter (where c.lead_status = 'interested')::text as interested,
+         count(*) filter (where c.lead_status = 'not_interested')::text as not_interested,
+         count(*) filter (where c.lead_status = 'do_not_call')::text as do_not_call,
+         count(distinct c.id) filter (where crep.public_id is not null and crep.status in ('completed', 'partial'))::text as contacts_found
+       from company_data c
+       left join lateral (
+         select public_id, status from published_report
+         where company_id = c.id and report_type = 'contact_research'
+         order by version desc, created_at desc limit 1
+       ) crep on true
+       where c.merged_into is null`,
     ),
   ]);
 
@@ -1356,6 +1457,7 @@ export async function listLeads(options: {
     interested: Number(statsRow?.interested ?? 0),
     not_interested: Number(statsRow?.not_interested ?? 0),
     do_not_call: Number(statsRow?.do_not_call ?? 0),
+    contacts_found: Number(statsRow?.contacts_found ?? 0),
   };
 
   return {
