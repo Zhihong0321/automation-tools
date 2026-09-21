@@ -3,6 +3,8 @@
 // No framework and no build step, which is durability rather than minimalism —
 // this page has to work on the day the thing it is inspecting does not, and a
 // page with no toolchain cannot break because a toolchain changed.
+import { OPERATOR_NAV, navHtml } from './nav.ts';
+
 export function page(): string {
   return String.raw`<!doctype html>
 <html lang="en">
@@ -21,6 +23,14 @@ export function page(): string {
   .wrap { max-width:1080px; margin:0 auto; }
   h1 { font-size:20px; margin:0 0 2px; letter-spacing:-.01em; }
   .sub { color:var(--muted); font-size:13px; margin:0 0 22px; }
+  /* Every surface, from every surface. The console used to name none of the
+     other three, so /docs and /research were things you had to already know. */
+  .sitenav { display:flex; flex-wrap:wrap; gap:4px; margin:0 0 20px; padding-bottom:16px;
+    border-bottom:1px solid var(--line); }
+  .sitenav a { color:var(--muted); font-size:13px; font-weight:550; padding:5px 10px;
+    border:1px solid transparent; border-radius:8px; text-decoration:none; }
+  .sitenav a:hover { color:var(--ink); background:#1e222a; border-color:var(--line); }
+  .sitenav a[aria-current="page"] { color:var(--ink); background:#1e222a; border-color:var(--line); }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:16px; }
   .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:0 0 12px; font-weight:600; }
   .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
@@ -52,6 +62,7 @@ export function page(): string {
 <div class="wrap">
   <h1>agy-lab</h1>
   <p class="sub">Install, authenticate and drive the Antigravity CLI inside this container.</p>
+  <nav class="sitenav" aria-label="Site">${navHtml(OPERATOR_NAV, '/')}</nav>
 
   <div class="card">
     <h2>Access</h2>

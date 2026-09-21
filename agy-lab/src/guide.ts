@@ -14,6 +14,8 @@
 // research" once a company dossier has finished -- so a user who does not know the
 // chain never finds them. The chain diagram comes before the prose for that reason.
 
+import { CLIENT_NAV, navHtml } from './nav.ts';
+
 interface Step {
   no: string;
   name: string;
@@ -267,6 +269,12 @@ html[data-lang="en"] .lang-zh,html[data-lang="zh"] .lang-en{display:none}
 .mast-inner{height:100%;max-width:880px;margin:auto;padding:0 26px;display:flex;align-items:center;justify-content:space-between;gap:16px}
 .brand{display:flex;align-items:center;gap:11px;font:750 11px/1 var(--sans);letter-spacing:.13em;text-transform:uppercase}
 .mark{display:grid;place-items:center;width:29px;height:29px;background:var(--sheet);color:var(--ink);font:850 10px/1 var(--sans)}
+/* The guide is the page someone is sent before they have a key, so it has to
+   say where the workspace is rather than only describing it. */
+.mast-nav{display:flex;align-items:center;gap:14px;margin-right:auto;font:700 10px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase}
+.mast-nav a{padding:3px 0;border-bottom:1px solid transparent;color:#a5a29a;text-decoration:none;white-space:nowrap}
+.mast-nav a:hover{color:var(--sheet)}
+.mast-nav a[aria-current="page"]{color:var(--sheet);border-bottom-color:var(--sheet)}
 .switch{display:flex;border:1px solid #3b3b38}
 .switch button{border:0;background:transparent;color:#a5a29a;min-height:34px;padding:0 13px;font:700 10px/1 var(--sans);letter-spacing:.1em;cursor:pointer}
 .switch button[aria-pressed="true"]{background:var(--sheet);color:var(--ink)}
@@ -318,6 +326,8 @@ main{max-width:880px;margin:auto;padding:0 26px 90px}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 @media(max-width:760px){
   .mast-inner,main{padding-left:18px;padding-right:18px}
+  .mast-inner{gap:12px}
+  .brand-word{display:none}
   .hero{padding-top:36px}
   .chain{grid-template-columns:1fr}
   .link{flex-direction:row;align-items:baseline;flex-wrap:wrap;gap:10px;padding:14px 16px}
@@ -326,7 +336,8 @@ main{max-width:880px;margin:auto;padding:0 26px 90px}
 }
 </style></head><body>
 <header class="mast"><div class="mast-inner">
-  <div class="brand"><span class="mark">EE</span><span>Guide</span></div>
+  <div class="brand"><span class="mark">EE</span><span class="brand-word">Guide</span></div>
+  <nav class="mast-nav" aria-label="Site">${navHtml(CLIENT_NAV, '/guide', { bilingual: true })}</nav>
   <div class="switch" role="group" aria-label="Language / 语言">
     <button type="button" data-set-lang="en" aria-pressed="true">EN</button>
     <button type="button" data-set-lang="zh" aria-pressed="false">中文</button>

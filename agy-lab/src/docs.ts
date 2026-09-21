@@ -10,6 +10,8 @@
 //
 // Single palette, no light theme, on purpose: this is the console's own dark
 // surface (the same tokens as ui.ts), and the page is read next to a terminal.
+import { OPERATOR_NAV, navHtml } from './nav.ts';
+
 export function body(): string {
   return String.raw`<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <style>
@@ -40,6 +42,13 @@ export function body(): string {
   .brand .dot { width:7px; height:7px; border-radius:50%; background:var(--ok);
     box-shadow:0 0 0 3px rgba(95,212,160,.14); }
   .brand-sub { color:var(--faint); font-size:12px; margin:2px 0 22px 15px; }
+  /* Cross-surface links, above the table of contents and looking unlike it:
+     these leave the page, the anchors below do not. */
+  .surfaces { display:flex; flex-direction:column; gap:1px; margin:0 0 6px;
+    padding-bottom:14px; border-bottom:1px solid var(--line-soft); }
+  .surfaces a { color:var(--ink); font-size:13.5px; font-weight:600; padding:4px 8px; border-radius:6px; }
+  .surfaces a:hover { background:var(--panel); text-decoration:none; }
+  .surfaces a[aria-current="page"] { color:var(--accent); }
   .nav nav { display:flex; flex-direction:column; gap:1px; }
   .nav nav a { color:var(--muted); font-size:13.5px; padding:4px 8px; border-radius:6px; }
   .nav nav a:hover { color:var(--ink); background:var(--panel); text-decoration:none; }
@@ -133,7 +142,8 @@ export function body(): string {
     .doc { grid-template-columns:1fr; }
     .nav { position:static; height:auto; border-right:none; border-bottom:1px solid var(--line-soft);
       padding:20px 22px 16px; }
-    .nav nav { flex-flow:row wrap; gap:2px 4px; }
+    .nav nav, .surfaces { flex-flow:row wrap; gap:2px 4px; }
+    .surfaces { margin-bottom:10px; padding-bottom:10px; }
     .nav-label { display:none; }
     main { padding:26px 22px 70px; }
     h1 { font-size:28px; }
@@ -148,7 +158,9 @@ export function body(): string {
 <aside class="nav">
   <div class="brand"><span class="dot"></span>EE Auto</div>
   <div class="brand-sub">business intelligence API</div>
+  <div class="surfaces">${navHtml(OPERATOR_NAV, '/docs')}</div>
   <nav>
+    <span class="nav-label">On this page</span>
     <a href="#start">Start here</a>
     <a href="#intel">Pipeline reference</a>
     <a href="#engines">The three engines</a>
