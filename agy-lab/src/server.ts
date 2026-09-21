@@ -92,7 +92,9 @@ function authorized(req: http.IncomingMessage, url: URL): boolean {
     // this list today, which means the portal's ads button already requires
     // LAB_TOKEN, and quietly widening an existing route's audience is not this
     // change's business.
-    || url.pathname.startsWith('/api/ads-market');
+    || url.pathname.startsWith('/api/ads-market')
+    || url.pathname.startsWith('/api/leads')
+    || url.pathname.startsWith('/api/telemarketers');
   return productRoute && PORTAL_TOKEN.length >= 16
     && crypto.timingSafeEqual(digest(supplied), digest(PORTAL_TOKEN));
 }
