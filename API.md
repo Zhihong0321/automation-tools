@@ -187,7 +187,7 @@ request such as `{"place":"Petaling Jaya","max":25}` is valid.
 |---|---:|---|
 | `keyword` | conditional | business category, service, or keyword; omit when searching only by location |
 | `place` | conditional | city, district, state, or country; omit when searching only by keyword; `location` is an alias |
-| `max` | no | 1–200, default 100 |
+| `max` | no | 1–600, default 200 |
 | `requesterId` | no | caller-owned correlation id; `userId` is an alias |
 | `timeoutMs` | no | worker deadline, default 600000; the POST remains asynchronous |
 

@@ -280,7 +280,8 @@ async function harvest(conn, url, max) {
   let last = -1;
   let stable = 0;
   let scrolls = 0;
-  for (; scrolls < MAX_SCROLLS && stable < PLATEAU_ROUNDS; scrolls++) {
+  const maxScrolls = Math.max(MAX_SCROLLS, Math.ceil((max || 200) / 3));
+  for (; scrolls < maxScrolls && stable < PLATEAU_ROUNDS; scrolls++) {
     const n = await conn.evaluate(`(() => {
       const f = document.querySelector('[role="feed"]');
       if (f) f.scrollTop = f.scrollHeight;

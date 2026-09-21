@@ -54,6 +54,7 @@ test('the front page is four named choices, and each one opens its own form', ()
   // The form is not on screen until a choice is made, and the third choice is
   // the library rather than a form.
   assert.match(html, /id="searchForm" class="search-sheet hidden"/);
+  assert.match(html, /id="maxResults"><option value="200" selected>200<\/option><option value="400">400<\/option><option value="600">600<\/option>/);
   assert.match(html, /function choose\(choice\)\{if\(choice==='reports'\)return switchView\('library'\)/);
   assert.match(html, /function goHome\(\)/);
   assert.doesNotMatch(html, /class="mode-tab/);

@@ -292,7 +292,7 @@ export const document = {
           keyword: { type: 'string', minLength: 1, description: 'Business category, service or keyword. Optional when place/location is supplied.' },
           place: { type: 'string', minLength: 1, description: 'City, district, state or country. Optional when keyword is supplied.' },
           location: { type: 'string', minLength: 1, description: 'Alias for place.' },
-          max: { type: 'integer', minimum: 1, maximum: 300, default: 100 },
+          max: { type: 'integer', minimum: 1, maximum: 600, default: 200 },
           requesterId: { type: 'string', description: 'Optional caller-owned correlation id. userId is accepted as an alias.' },
           userId: { type: 'string', description: 'Alias for requesterId.' },
           timeoutMs: { type: 'integer', minimum: 1, default: 600000, description: 'Worker deadline; this does not make the POST synchronous.' },
