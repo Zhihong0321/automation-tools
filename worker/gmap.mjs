@@ -281,19 +281,59 @@ async function harvest(conn, url, max) {
   let stable = 0;
   let scrolls = 0;
   const maxScrolls = Math.max(MAX_SCROLLS, Math.ceil((max || 200) / 3));
+
   for (; scrolls < maxScrolls && stable < PLATEAU_ROUNDS; scrolls++) {
-    const n = await conn.evaluate(`(() => {
+    const check = await conn.evaluate(`(() => {
       const f = document.querySelector('[role="feed"]');
       if (f) f.scrollTop = f.scrollHeight;
-      return document.querySelectorAll('a[href*="/maps/place/"]').length;
+      const count = document.querySelectorAll('a[href*="/maps/place/"]').length;
+      const ended = f ? Boolean(
+        f.querySelector('.HlvSq') ||
+        /(you've reached the end|end of the list|no more results|没有更多结果)/i.test(f.innerText || '')
+      ) : false;
+      return { count, ended };
     })()`);
+
+    const n = check?.count ?? 0;
+    if (check?.ended) {
+      last = n;
+      break;
+    }
     if (n === last) stable++;
     else {
       stable = 0;
       last = n;
     }
     if (last >= max) break;
-    await sleep(SCROLL_PAUSE_MS);
+
+    // Adaptive wait: poll every 100ms for new cards to appear, then apply natural 400ms human pause
+    const startWait = Date.now();
+    let batchLoaded = false;
+    while (Date.now() - startWait < 1500) {
+      await sleep(100);
+      const pollCheck = await conn.evaluate(`(() => {
+        const f = document.querySelector('[role="feed"]');
+        const count = document.querySelectorAll('a[href*="/maps/place/"]').length;
+        const ended = f ? Boolean(
+          f.querySelector('.HlvSq') ||
+          /(you've reached the end|end of the list|no more results|没有更多结果)/i.test(f.innerText || '')
+        ) : false;
+        return { count, ended };
+      })()`);
+      if (pollCheck?.ended) {
+        last = pollCheck.count;
+        stable = PLATEAU_ROUNDS;
+        batchLoaded = true;
+        break;
+      }
+      if (pollCheck && pollCheck.count > last) {
+        last = pollCheck.count;
+        stable = 0;
+        batchLoaded = true;
+        await sleep(400);
+        break;
+      }
+    }
   }
   const page = await conn.evaluate(EXTRACT);
   return { page, scrolls };
@@ -359,6 +399,18 @@ export async function scan(payload, job = null) {
     const conn = await connect();
     ws = conn.ws;
     await conn.cdp('Page.enable');
+    try {
+      await conn.cdp('Network.enable');
+      await conn.cdp('Network.setBlockedURLs', {
+        urls: [
+          '*.png', '*.jpg', '*.jpeg', '*.webp', '*.gif', '*.svg',
+          '*google-analytics.com*', '*googletagmanager.com*',
+          '*/maps/vt*', '*/vt/data=*', '*/khms*'
+        ],
+      });
+    } catch {
+      /* non-fatal if Network domain is unavailable */
+    }
 
     let { page, scrolls } = await harvest(conn, MAPS + encodeURIComponent(query) + '?hl=en', max);
     let businesses = page.businesses.filter((b) => b.name);
@@ -444,4 +496,27 @@ export async function scan(payload, job = null) {
     try { ws?.close(); } catch { /* already gone */ }
     chrome.kill('SIGKILL');
   }
+}
+
+if (process.argv[1] && (process.argv[1].endsWith('gmap.mjs') || process.argv[1].endsWith('gmap'))) {
+  const keyword = process.argv[2] ?? '';
+  const place = process.argv[3] ?? '';
+  const max = Number(process.argv[4]) > 0 ? Number(process.argv[4]) : 20;
+  console.log(`[gmap.mjs CLI] Starting scan: keyword="${keyword}", place="${place}", max=${max}`);
+  scan({ keyword, place, max })
+    .then((r) => {
+      console.log(`[gmap.mjs CLI] Completed in ${r.tookMs}ms (${(r.tookMs / 1000).toFixed(1)}s).`);
+      console.log(`Results: ${r.businesses.length} businesses, found=${r.found}, capped=${r.capped}, blocked=${r.blocked}, scrolls=${r.scrolls}`);
+      console.log('--- Sample Businesses ---');
+      r.businesses.slice(0, 10).forEach((b, i) => {
+        console.log(`${i + 1}. ${b.name} | Phone: ${b.phone || 'N/A'} | Category: ${b.category || 'N/A'} | Address: ${b.address || 'N/A'}`);
+      });
+      if (r.businesses.length > 10) {
+        console.log(`... and ${r.businesses.length - 10} more businesses.`);
+      }
+    })
+    .catch((err) => {
+      console.error('[gmap.mjs CLI] Failed:', err);
+      process.exit(1);
+    });
 }
