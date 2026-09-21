@@ -156,3 +156,100 @@ test('leads with contact research are highlighted with contact numbers found', (
   assert.match(capturedHtml, /class="lead-row"/);
   assert.match(capturedHtml, /onclick="startContact\(this\)">Contacts ⚡<\/button>/);
 });
+
+test('leads master UI supports hide/unhide and separate hidden list', () => {
+  const html = page();
+
+  // Metric card for Hidden Leads
+  assert.match(html, /id="statHidden"/);
+  assert.match(html, /Hidden Leads/);
+
+  // Status filter tab for Hidden Leads
+  assert.match(html, /data-lead-status="hidden"/);
+  assert.match(html, /id="countHidden"/);
+
+  // Bulk action buttons for hide & unhide
+  assert.match(html, /id="btnBulkHide"/);
+  assert.match(html, /bulkHideSelected\(true\)/);
+  assert.match(html, /id="btnBulkUnhide"/);
+  assert.match(html, /bulkHideSelected\(false\)/);
+
+  // Script functions exist
+  const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1];
+  assert.ok(script);
+  assert.match(script, /function toggleHideLead\(/);
+  assert.match(script, /function bulkHideSelected\(/);
+
+  // Verify renderLeads formats Hide and Unhide buttons properly
+  const leadNormal = {
+    id: '201',
+    name: 'Active Normal Shop',
+    category: 'Cafe',
+    address: 'Johor Bahru',
+    phone: '012-1111111',
+    website: null,
+    maps_url: null,
+    rating: null,
+    reviews: null,
+    lead_status: 'unassigned',
+    assigned_to: null,
+    lead_notes: null,
+    branch_count: 0,
+    is_hidden: false,
+    research_public_id: null,
+    contact_public_id: null,
+    contact_status: null,
+    contact_phones_count: 0,
+    contact_decision_makers_count: 0,
+  };
+
+  const leadHidden = {
+    id: '202',
+    name: 'Hidden Old Business',
+    category: 'Hardware',
+    address: 'Kulai',
+    phone: '07-6661234',
+    website: null,
+    maps_url: null,
+    rating: null,
+    reviews: null,
+    lead_status: 'unassigned',
+    assigned_to: null,
+    lead_notes: null,
+    branch_count: 0,
+    is_hidden: true,
+    research_public_id: null,
+    contact_public_id: null,
+    contact_status: null,
+    contact_phones_count: 0,
+    contact_decision_makers_count: 0,
+  };
+
+  let capturedHtml = '';
+  const leadState = { selected: {}, telemarketers: [], statusFilter: 'all' };
+  const el = (id: string) => ({
+    set innerHTML(val: string) { capturedHtml = val; },
+    get innerHTML() { return capturedHtml; },
+  });
+  const esc = (s: any) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const attr = (s: any) => String(s == null ? '' : s).replace(/"/g, '&quot;');
+  const safeUrl = (s: any) => s;
+
+  const renderLeadsMatch = /function renderLeads\(leads\)\{([\s\S]*?)\}\nvar teleState/.exec(script);
+  assert.ok(renderLeadsMatch, 'found renderLeads in script');
+
+  const runner = new Function('leads', 'leadState', 'el', 'esc', 'attr', 'safeUrl', `
+    ${renderLeadsMatch[0]}
+    return renderLeads(leads);
+  `);
+
+  runner([leadNormal, leadHidden], leadState, el, esc, attr, safeUrl);
+
+  // Active lead has Hide button
+  assert.match(capturedHtml, /toggleHideLead\('201', true\)/);
+  assert.match(capturedHtml, />🚫 Hide<\/button>/);
+
+  // Hidden lead has Unhide button
+  assert.match(capturedHtml, /toggleHideLead\('202', false\)/);
+  assert.match(capturedHtml, />👁️ Unhide<\/button>/);
+});
