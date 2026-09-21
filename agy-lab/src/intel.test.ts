@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLedger, classifyEvidence, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, keepDiscoveryEvidenceFromHosts, normaliseUrls, normalizeMobileHint, personDiscoveryPrompt, publishOutcome, redactIdentityHintsFromDiscovery, round01Prompt, scoutParsed, seniorityScore, translateChinese, unwrapUrl, validateChineseTranslation, validateFinal, validatePersonFinal } from './intel.ts';
-import { companyPage, personPage, searchPage } from './reportui.ts';
+import { buildLedger, classifyEvidence, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, keepDiscoveryEvidenceFromHosts, normaliseUrls, normalizeMobileHint, personDiscoveryPrompt, publishOutcome, redactIdentityHintsFromDiscovery, round01Prompt, scoutParsed, seniorityScore, translateChinese, unwrapUrl, validateChineseTranslation, validateFinal, validatePersonFinal, normalizePhoneNumber, contactResearchPrompt, buildContactLedger } from './intel.ts';
+import { companyPage, personPage, searchPage, contactPage } from './reportui.ts';
 import type { PublishedReport } from './reportdb.ts';
 
 test('extractJson accepts fenced output and rejects prose without an object', () => {
@@ -701,4 +701,174 @@ test('a split emoji cannot reach a jsonb parameter', () => {
   // A WHOLE emoji must survive untouched -- the repair must not eat valid text.
   assert.match(jsonParam({ body: '\u{1F31E} solar' }), /solar/);
   assert.equal(JSON.parse(jsonParam({ body: '\u{1F31E}' })).body, '\u{1F31E}');
+});
+
+test('normalizePhoneNumber formats Malaysian numbers, detects mobile/WhatsApp, and handles edge cases', () => {
+  // Malaysian mobile 012
+  const mob1 = normalizePhoneNumber('012-345 6789');
+  assert.equal(mob1.e164, '+60123456789');
+  assert.equal(mob1.isMobile, true);
+  assert.equal(mob1.whatsappUrl, 'https://wa.me/60123456789');
+  assert.equal(mob1.dialUrl, 'tel:+60123456789');
+
+  // Malaysian mobile with country code +60 16
+  const mob2 = normalizePhoneNumber('+60 16-712 7666');
+  assert.equal(mob2.e164, '+60167127666');
+  assert.equal(mob2.isMobile, true);
+  assert.equal(mob2.whatsappUrl, 'https://wa.me/60167127666');
+
+  // Malaysian mobile 018 raw digits
+  const mob3 = normalizePhoneNumber('60183999247');
+  assert.equal(mob3.e164, '+60183999247');
+  assert.equal(mob3.isMobile, true);
+  assert.equal(mob3.whatsappUrl, 'https://wa.me/60183999247');
+
+  // Malaysian landline 03
+  const landline = normalizePhoneNumber('03-2142 1234');
+  assert.equal(landline.e164, '+60321421234');
+  assert.equal(landline.isMobile, false);
+  assert.equal(landline.whatsappUrl, null);
+  assert.equal(landline.dialUrl, 'tel:+60321421234');
+
+  // Short / invalid digits
+  const invalid = normalizePhoneNumber('123');
+  assert.equal(invalid.e164, null);
+  assert.equal(invalid.isMobile, false);
+  assert.equal(invalid.whatsappUrl, null);
+});
+
+test('contactResearchPrompt focuses strictly on decision makers, phones, and gatekeeper script', () => {
+  const company = {
+    id: '123',
+    name: 'Solarvest Energy Sdn Bhd',
+    phone: '03-2142 1234',
+    website: 'https://solarvest.my',
+    address: 'Petaling Jaya, Selangor',
+  };
+
+  const prompt = contactResearchPrompt(company, 'Head of Procurement');
+  assert.match(prompt, /TARGET COMPANY:.*Solarvest Energy Sdn Bhd/);
+  assert.match(prompt, /Target persona \/ role focus: Head of Procurement/);
+  assert.match(prompt, /Telemarketing Cheat Sheet/);
+  assert.match(prompt, /gatekeeper_phrase/);
+  assert.match(prompt, /decision_makers/);
+  assert.match(prompt, /phone_contacts/);
+  assert.match(prompt, /email_contacts/);
+});
+
+test('buildContactLedger normalizes contacts, ranks decision makers, and creates telemarketer cheat sheet', () => {
+  const company = {
+    id: '42',
+    name: 'Acme Clean Energy Sdn Bhd',
+    phone: '03-7722 1100',
+    website: 'https://acme.my',
+  };
+
+  const discovery = {
+    decision_makers: [
+      { name: 'John Doe', role: 'Sales Executive', direct_phone: '012-333 4444' },
+      { name: 'Dato Tan Sri Wong', role: 'Managing Director', direct_phone: '019-222 3333', direct_email: 'wong@acme.my' },
+      { name: 'Alice Lee', role: 'Operations Manager', direct_phone: '017-888 9999' },
+    ],
+    phone_contacts: [
+      { number_raw: '019-222 3333', type: 'mobile_whatsapp', label: 'MD Direct Mobile' },
+      { number_raw: '03-7722 1100', type: 'switchboard', label: 'Main Office' },
+    ],
+    email_contacts: [
+      { email: 'info@acme.my', label: 'General Desk' },
+      { email: 'wong@acme.my', label: 'MD Email' },
+    ],
+  };
+
+  const fbData = {
+    phone: '016-555 6666',
+    email: 'acme.facebook@gmail.com',
+    facebook_url: 'https://facebook.com/acmenergy',
+  };
+
+  const ledger = buildContactLedger(company, discovery, fbData);
+
+  // Decision makers must be ranked by seniority: Managing Director first
+  const leaders = ledger.decision_makers as Record<string, unknown>[];
+  assert.ok(leaders.length >= 3);
+  assert.equal(leaders[0].name, 'Dato Tan Sri Wong');
+  assert.equal(leaders[0].role, 'Managing Director');
+
+  // Telemarketer Cheat Sheet
+  const sheet = ledger.cheat_sheet as Record<string, unknown>;
+  assert.equal(sheet.primary_decision_maker_name, 'Dato Tan Sri Wong');
+  assert.match(String(sheet.primary_decision_maker), /Dato Tan Sri Wong \(Managing Director\)/);
+  assert.ok(sheet.primary_phone);
+  assert.match(String(sheet.gatekeeper_phrase), /Dato Tan Sri Wong, Managing Director/);
+
+  // Phone routes: should include deduplicated Maps phone, FB phone, and discovery phones
+  const phones = ledger.phone_contacts as Record<string, unknown>[];
+  const e164List = phones.map((p) => p.number_e164);
+  assert.ok(e164List.includes('+60377221100'));
+  assert.ok(e164List.includes('+60192223333'));
+  assert.ok(e164List.includes('+60165556666'));
+
+  // Mobile phones must have WhatsApp URLs
+  const mdPhone = phones.find((p) => p.number_e164 === '+60192223333')!;
+  assert.equal(mdPhone.whatsapp_url, 'https://wa.me/60192223333');
+  assert.equal(mdPhone.type, 'mobile_whatsapp');
+
+  // Emails should include direct and general
+  const emails = ledger.email_contacts as Record<string, unknown>[];
+  const emailList = emails.map((e) => e.email);
+  assert.ok(emailList.includes('wong@acme.my'));
+  assert.ok(emailList.includes('info@acme.my'));
+  assert.ok(emailList.includes('acme.facebook@gmail.com'));
+});
+
+test('contactPage renders telemarketer cheat sheet, 1-click actions, and decision makers', () => {
+  const report: PublishedReport = {
+    id: 999,
+    public_id: 'CONTACT1234567890123',
+    report_type: 'contact_research',
+    title: 'Telemarketing Contact Research — Acme Energy',
+    company_id: '42',
+    status: 'completed',
+    error: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    result: {
+      entity: { name: 'Acme Energy Sdn Bhd', address: 'Kuala Lumpur', phone: '03-7722 1100' },
+      cheat_sheet: {
+        primary_decision_maker: 'Dato Tan Sri Wong (Managing Director)',
+        primary_decision_maker_name: 'Dato Tan Sri Wong',
+        primary_decision_maker_role: 'Managing Director',
+        primary_phone: '+60192223333',
+        primary_channel: 'WhatsApp / Mobile',
+        whatsapp_url: 'https://wa.me/60192223333',
+        dial_url: 'tel:+60192223333',
+        gatekeeper_phrase: 'Hello, may I speak with Dato Tan Sri Wong, Managing Director, please?',
+      },
+      decision_makers: [
+        { name: 'Dato Tan Sri Wong', role: 'Managing Director', seniority: 95, direct_phone: '+60192223333', direct_email: 'wong@acme.my' },
+      ],
+      phone_contacts: [
+        { type: 'mobile_whatsapp', number_raw: '019-222 3333', number_e164: '+60192223333', whatsapp_url: 'https://wa.me/60192223333', dial_url: 'tel:+60192223333', label: 'MD Direct Mobile', is_mobile: true },
+        { type: 'switchboard', number_raw: '03-7722 1100', number_e164: '+60377221100', whatsapp_url: null, dial_url: 'tel:+60377221100', label: 'Office Line', is_mobile: false },
+      ],
+      email_contacts: [
+        { type: 'direct', email: 'wong@acme.my', label: 'Direct Work Email' },
+      ],
+      summary: 'Key contact is Dato Tan Sri Wong (Managing Director). Best reach via WhatsApp / Mobile.',
+    },
+  };
+
+  const html = contactPage(report);
+  assert.match(html, /Telemarketer Call Cheat Sheet/);
+  assert.match(html, /Target Person/);
+  assert.match(html, /Dato Tan Sri Wong/);
+  assert.match(html, /\+60192223333/);
+  assert.match(html, /📞 Call Now/);
+  assert.match(html, /💬 WhatsApp/);
+  assert.match(html, /https:\/\/wa\.me\/60192223333/);
+  assert.match(html, /Receptionist \/ Gatekeeper Script/);
+  assert.match(html, /Hello, may I speak with Dato Tan Sri Wong, Managing Director, please\?/);
+  assert.match(html, /Decision Makers & Leadership/);
+  assert.match(html, /Dialable Phone Numbers/);
+  assert.match(html, /Email Channels/);
 });

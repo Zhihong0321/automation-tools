@@ -311,6 +311,7 @@ function shell(report: PublishedReport, body: string): string {
   const isSearch = report.report_type === 'business_search';
   const isPerson = report.report_type === 'person_research';
   const isAds = report.report_type === 'ads_research';
+  const isContact = report.report_type === 'contact_research';
   const statusLabel = report.status === 'completed' ? 'Research complete'
     : report.status === 'partial' ? 'Complete · noted gaps'
     : report.status === 'failed' ? 'Research failed'
@@ -322,7 +323,7 @@ function shell(report: PublishedReport, body: string): string {
     : report.status === 'completed' ? 4
     : report.status === 'partial' ? 3
     : report.status === 'queued' ? 1 : 2;
-  const reportLabel = isSearch ? 'Company list' : isPerson ? 'Person research' : isAds ? 'Ads research' : 'Company dossier';
+  const reportLabel = isSearch ? 'Company list' : isPerson ? 'Person research' : isAds ? 'Ads research' : isContact ? 'Contact research' : 'Company dossier';
   // A re-researched company keeps every earlier dossier. Say which pass this is,
   // in the kicker and the masthead folio, so two open tabs are never ambiguous.
   const version = Number(report.version) > 1 ? 'V' + Number(report.version) : '';
@@ -337,7 +338,7 @@ function shell(report: PublishedReport, body: string): string {
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">${fonts}
 <meta name="theme-color" content="#f2f4f6"><title>${esc(report.title ?? 'Business intelligence report')}</title>
 <style>${CSS}</style></head><body class="${esc(report.report_type.replace('_', '-'))}"><div class="topbar"><nav class="topbar-in" aria-label="Report masthead">${masthead}</nav></div><main class="wrap">
-<header class="hero"><div><div class="kicker">${esc(reportLabel)} · ${esc(reportDate(report))}${version ? ' · ' + version : ''}</div><h1>${esc(report.title ?? 'Research report')}</h1><p class="hero-copy">${active ? 'Research is in progress. This permanent report link refreshes as verified findings arrive.' : report.error ? esc(report.error) : isSearch ? 'A ranked field scan of relevant businesses, with direct routes to source listings and published contact points.' : isAds ? 'Every ad the company is currently running, as published in the Facebook and Google ad libraries.' : 'A source-linked intelligence brief designed for qualification, outreach and informed decision-making.'}</p></div><aside class="hero-meta"><div class="status ${esc(report.status)}"><span class="status-dot"></span>${esc(statusLabel)}</div><div class="meta-line"><span>Issued ${esc(reportDate(report))}</span>${version ? `<span>Research pass ${esc(version)}</span>` : ''}<span>${isSearch ? 'Source / Google Maps' : isAds ? 'Source / Ad libraries' : 'Evidence / Public sources'}</span></div>${!isSearch && !isAds ? `<div class="rounds" aria-label="Four research rounds">${[0, 1, 2, 3].map((i) => `<span class="round ${i < roundsLit ? 'on' : ''}"></span>`).join('')}</div>` : ''}</aside></header>
+<header class="hero"><div><div class="kicker">${esc(reportLabel)} · ${esc(reportDate(report))}${version ? ' · ' + version : ''}</div><h1>${esc(report.title ?? 'Research report')}</h1><p class="hero-copy">${active ? 'Research is in progress. This permanent report link refreshes as verified findings arrive.' : report.error ? esc(report.error) : isSearch ? 'A ranked field scan of relevant businesses, with direct routes to source listings and published contact points.' : isAds ? 'Every ad the company is currently running, as published in the Facebook and Google ad libraries.' : isContact ? 'Telemarketing-focused decision maker and contact intelligence for outbound sales.' : 'A source-linked intelligence brief designed for qualification, outreach and informed decision-making.'}</p></div><aside class="hero-meta"><div class="status ${esc(report.status)}"><span class="status-dot"></span>${esc(statusLabel)}</div><div class="meta-line"><span>Issued ${esc(reportDate(report))}</span>${version ? `<span>Research pass ${esc(version)}</span>` : ''}<span>${isSearch ? 'Source / Google Maps' : isAds ? 'Source / Ad libraries' : 'Evidence / Public sources'}</span></div>${!isSearch && !isAds && !isContact ? `<div class="rounds" aria-label="Four research rounds">${[0, 1, 2, 3].map((i) => `<span class="round ${i < roundsLit ? 'on' : ''}"></span>`).join('')}</div>` : ''}</aside></header>
 ${body}<footer class="foot"><span>EE Business Intelligence · Confidential link</span><span>Evidence opens at its original public source</span></footer>
 </main>${active ? '<script>setTimeout(()=>location.reload(),8000)</script>' : ''}${isSearch ? researchScript(report.public_id) : ''}</body></html>`;
 }
@@ -823,5 +824,181 @@ export function personPage(report: PublishedReport): string {
     if (angles.length) body += `<section class="section"><div class="section-head"><h2>Research angles</h2><span class="section-note">Use as prompts for informed qualification, not as asserted facts.</span></div><div class="angles">${angles.map((item) => `<div class="angle">${esc(item)}</div>`).join('')}</div></section>`;
     body += `<section class="section"><div class="section-head"><h2>Business signals</h2><span class="section-note">Dated, source-linked signals only.</span></div><div class="signal-list">${signalRows || '<div class="empty">No validated business signals.</div>'}</div></section>`;
   }
+  return shell(report, body);
+}
+
+export function contactPage(report: PublishedReport): string {
+  const final = obj(report.result);
+  const entity = obj(final.entity);
+  const cheatSheet = obj(final.cheat_sheet);
+  const decisionMakers = arr(final.decision_makers);
+  const phoneContacts = arr(final.phone_contacts);
+  const emailContacts = arr(final.email_contacts);
+
+  const stats = `<div class="metrics">
+    <div class="metric"><strong>${decisionMakers.length || '—'}</strong><span>Decision makers</span></div>
+    <div class="metric"><strong>${phoneContacts.length || '—'}</strong><span>Phone routes</span></div>
+    <div class="metric"><strong>${emailContacts.length || '—'}</strong><span>Email channels</span></div>
+    <div class="metric"><strong>${esc(value(cheatSheet, 'primary_channel') || 'Phone')}</strong><span>Best outreach</span></div>
+  </div>`;
+
+  let body = stats;
+
+  if (report.status === 'failed') {
+    body += `<section class="section"><div class="message error">${esc(report.error ?? 'Contact research failed to produce findings.')}</div></section>`;
+    return shell(report, body);
+  }
+
+  if (!decisionMakers.length && !phoneContacts.length && report.status !== 'completed' && report.status !== 'partial') {
+    body += '<section class="section"><div class="empty">Telemarketing contact research is running. This report will refresh automatically.</div></section>';
+    return shell(report, body);
+  }
+
+  // 1. Cheat Sheet Card
+  const primaryDM = value(cheatSheet, 'primary_decision_maker') || 'Decision Maker';
+  const primaryPhone = value(cheatSheet, 'primary_phone');
+  const gatekeeper = value(cheatSheet, 'gatekeeper_phrase');
+  const dialUrl = value(cheatSheet, 'dial_url') || (primaryPhone ? `tel:${primaryPhone.replace(/[^+\d]/g, '')}` : '');
+  const waUrl = value(cheatSheet, 'whatsapp_url');
+
+  body += `<section class="section">
+    <div class="section-head">
+      <h2>Telemarketer Call Cheat Sheet</h2>
+      <span class="section-note">Key decision maker, best direct number, and receptionist gatekeeper script.</span>
+    </div>
+    <div class="sheet" style="padding:16px 18px;display:grid;gap:12px;background:#fff;border-left:4px solid var(--accent-2)">
+      <div style="display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px">
+        <div>
+          <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">Target Person</span>
+          <div style="font-size:18px;font-weight:600;margin-top:2px">${esc(primaryDM)}</div>
+        </div>
+        ${primaryPhone ? `
+        <div style="text-align:right">
+          <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">Dial Direct</span>
+          <div style="font-size:18px;font-weight:700;color:var(--accent);margin-top:2px">${esc(primaryPhone)}</div>
+        </div>` : ''}
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:10px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)">
+        ${dialUrl ? `<a class="button" href="${esc(dialUrl)}" style="background:var(--accent);color:#fff;font-weight:600;padding:6px 14px">📞 Call Now</a>` : ''}
+        ${waUrl ? `<a class="button" href="${esc(waUrl)}" target="_blank" rel="noopener" style="background:#0a6b47;color:#fff;font-weight:600;padding:6px 14px">💬 WhatsApp</a>` : ''}
+        ${primaryPhone ? `<button class="button" type="button" onclick="navigator.clipboard.writeText('${esc(primaryPhone)}');this.textContent='Copied!'">Copy Phone</button>` : ''}
+      </div>
+      ${gatekeeper ? `
+      <div>
+        <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">Receptionist / Gatekeeper Script</span>
+        <blockquote style="margin:6px 0 0;padding:8px 12px;background:var(--soft);border-left:3px solid var(--accent);border-radius:var(--radius);font-style:italic;font-size:13.5px">
+          "${esc(gatekeeper)}"
+        </blockquote>
+      </div>` : ''}
+    </div>
+  </section>`;
+
+  // 2. Decision Makers List
+  const dmRows = decisionMakers.map((row) => {
+    const name = value(row, 'name');
+    const role = value(row, 'role');
+    const seniority = value(row, 'seniority');
+    const directPhone = value(row, 'direct_phone');
+    const directEmail = value(row, 'direct_email');
+    const profileUrl = value(row, 'profile_url');
+    const evidence = value(row, 'role_evidence_url');
+
+    return `<div class="person" style="display:grid;grid-template-columns:1fr auto;gap:12px;padding:12px 14px;border-bottom:1px solid var(--line)">
+      <div>
+        <div style="font-size:15px;font-weight:600">${esc(name)} <span style="font-size:12px;font-weight:500;color:var(--muted);background:var(--soft);padding:2px 6px;border-radius:3px">Seniority: ${esc(seniority || '—')}</span></div>
+        <div style="color:var(--accent-2);font-weight:500;margin-top:2px">${esc(role)}</div>
+        <div style="font-size:12.5px;color:var(--muted);margin-top:4px">
+          ${directPhone ? `<span>Direct Phone: <strong>${esc(directPhone)}</strong></span>` : ''}
+          ${directEmail ? ` · <span>Direct Email: <strong>${esc(directEmail)}</strong></span>` : ''}
+        </div>
+        ${evidence ? `<div style="font-size:11.5px;color:var(--faint);margin-top:3px"><a href="${esc(evidence)}" target="_blank" rel="noopener">Role evidence ↗</a></div>` : ''}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end">
+        ${directPhone ? `<a class="button" href="tel:${esc(directPhone.replace(/[^+\d]/g, ''))}">Call</a>` : ''}
+        ${directEmail ? `<a class="button" href="mailto:${esc(directEmail)}">Email</a>` : ''}
+        ${profileUrl ? `<a class="button" href="${esc(profileUrl)}" target="_blank" rel="noopener">LinkedIn ↗</a>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  body += `<section class="section">
+    <div class="section-head">
+      <h2>Decision Makers & Leadership</h2>
+      <span class="section-note">Ranked by seniority for outbound qualification and cold outreach.</span>
+    </div>
+    <div class="people">${dmRows || '<div class="empty">No specific decision makers identified. Use switchboard.</div>'}</div>
+  </section>`;
+
+  // 3. Dialable Phone Contacts
+  const phoneRows = phoneContacts.map((row) => {
+    const raw = value(row, 'number_raw');
+    const e164 = value(row, 'number_e164') || raw;
+    const type = value(row, 'type');
+    const label = value(row, 'label') || (type === 'mobile_whatsapp' ? 'Mobile / WhatsApp' : 'Office Phone');
+    const wa = value(row, 'whatsapp_url');
+    const evidence = value(row, 'evidence_url');
+
+    return `<div class="contact" style="display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)">
+      <div style="font:var(--micro);text-transform:uppercase;padding:3px 7px;border-radius:3px;background:${type === 'mobile_whatsapp' ? '#e6f4ea;color:#0a6b47' : 'var(--soft);color:var(--muted)'}">
+        ${esc(label)}
+      </div>
+      <div>
+        <div style="font-size:15px;font-weight:600;letter-spacing:.02em">${esc(raw)}${e164 && e164 !== raw ? ` <span style="font-size:12px;color:var(--muted)">(${esc(e164)})</span>` : ''}</div>
+        ${evidence ? `<div class="source"><a href="${esc(evidence)}" target="_blank" rel="noopener">evidence source ↗</a></div>` : ''}
+      </div>
+      <div style="display:flex;gap:6px">
+        <a class="button" href="tel:${esc(e164.replace(/[^+\d]/g, ''))}">Call</a>
+        ${wa ? `<a class="button" href="${esc(wa)}" target="_blank" rel="noopener" style="background:#0a6b47;color:#fff">WhatsApp</a>` : ''}
+        <button class="button" type="button" onclick="navigator.clipboard.writeText('${esc(e164)}');this.textContent='Copied!'">Copy</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  body += `<section class="section">
+    <div class="section-head">
+      <h2>Dialable Phone Numbers</h2>
+      <span class="section-note">Verified office desk lines, switchboard lines, and WhatsApp mobile routes.</span>
+    </div>
+    <div class="contact-list">${phoneRows || '<div class="empty">No verified phone numbers found.</div>'}</div>
+  </section>`;
+
+  // 4. Email Contacts
+  if (emailContacts.length) {
+    const emailRows = emailContacts.map((row) => {
+      const email = value(row, 'email');
+      const label = value(row, 'label') || 'Email';
+      const evidence = value(row, 'evidence_url');
+      return `<div class="contact" style="display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)">
+        <div style="font:var(--micro);text-transform:uppercase;padding:3px 7px;border-radius:3px;background:var(--soft);color:var(--muted)">${esc(label)}</div>
+        <div>
+          <div style="font-size:14.5px;font-weight:600">${esc(email)}</div>
+          ${evidence ? `<div class="source"><a href="${esc(evidence)}" target="_blank" rel="noopener">evidence source ↗</a></div>` : ''}
+        </div>
+        <a class="button" href="mailto:${esc(email)}">Send Email</a>
+      </div>`;
+    }).join('');
+
+    body += `<section class="section">
+      <div class="section-head">
+        <h2>Email Channels</h2>
+        <span class="section-note">Direct personal emails and general inquiry channels.</span>
+      </div>
+      <div class="contact-list">${emailRows}</div>
+    </section>`;
+  }
+
+  // 5. Company Details
+  body += `<section class="section">
+    <div class="section-head">
+      <h2>Company Baseline</h2>
+    </div>
+    <div class="sheet" style="padding:14px 16px;display:grid;gap:6px;font-size:13.5px">
+      <div><strong>Company:</strong> ${esc(value(entity, 'name'))}</div>
+      ${value(entity, 'address') ? `<div><strong>Address:</strong> ${esc(value(entity, 'address'))}</div>` : ''}
+      ${value(entity, 'website') ? `<div><strong>Website:</strong> <a href="${esc(value(entity, 'website'))}" target="_blank" rel="noopener">${esc(value(entity, 'website'))} ↗</a></div>` : ''}
+      ${value(entity, 'maps_url') ? `<div><strong>Google Maps:</strong> <a href="${esc(value(entity, 'maps_url'))}" target="_blank" rel="noopener">View Google Maps listing ↗</a></div>` : ''}
+    </div>
+  </section>`;
+
   return shell(report, body);
 }

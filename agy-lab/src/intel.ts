@@ -110,7 +110,8 @@ function envelope(req: http.IncomingMessage, report: db.PublishedReport): Record
     ? 'business-search'
     : report.report_type === 'person_research' ? 'person-research'
     : report.report_type === 'ads_research' ? 'ads-research'
-    : report.report_type === 'ads_market' ? 'ads-market' : 'company-research';
+    : report.report_type === 'ads_market' ? 'ads-market'
+    : report.report_type === 'contact_research' ? 'contact-research' : 'company-research';
   return {
     id: report.public_id,
     type: report.report_type,
@@ -843,6 +844,298 @@ const TIME_BUDGET = 'HARD TIME BUDGET: you have about four minutes of wall clock
   + 'as a deadline, not a target. Track it. When you reach it, stop researching immediately and emit the '
   + 'JSON with what you already have, even if sections are thin or empty -- a short answer is a result '
   + 'and a missed deadline is not. Do not narrate the deadline; just meet it.';
+
+export function normalizePhoneNumber(raw: string, defaultCountry = 'MY'): {
+  raw: string;
+  e164: string | null;
+  digits: string;
+  isMobile: boolean;
+  whatsappUrl: string | null;
+  dialUrl: string;
+} {
+  const clean = str(raw).trim();
+  const digits = clean.replace(/\D/g, '');
+  if (!digits || digits.length < 7) {
+    return { raw: clean, e164: null, digits, isMobile: false, whatsappUrl: null, dialUrl: `tel:${clean.replace(/[^+\d]/g, '')}` };
+  }
+
+  let e164: string | null = null;
+  let isMobile = false;
+
+  if (defaultCountry === 'MY' || digits.startsWith('60') || clean.startsWith('+60') || digits.startsWith('01')) {
+    let national = digits;
+    if (national.startsWith('60')) national = '0' + national.slice(2);
+    else if (!national.startsWith('0')) national = '0' + national;
+
+    // Malaysian mobile prefixes: 010, 011, 012, 013, 014, 015, 016, 017, 018, 019
+    isMobile = /^01[0-9]/.test(national);
+    const intlDigits = '60' + national.slice(1);
+    e164 = '+' + intlDigits;
+    const whatsappUrl = isMobile ? `https://wa.me/${intlDigits}` : null;
+    return {
+      raw: clean,
+      e164,
+      digits: intlDigits,
+      isMobile,
+      whatsappUrl,
+      dialUrl: `tel:${e164}`,
+    };
+  }
+
+  if (clean.startsWith('+')) {
+    e164 = '+' + digits;
+  } else {
+    e164 = '+' + digits;
+  }
+  return {
+    raw: clean,
+    e164,
+    digits,
+    isMobile: false,
+    whatsappUrl: null,
+    dialUrl: `tel:${e164 || digits}`,
+  };
+}
+
+export function contactResearchPrompt(company: Record<string, unknown>, targetRole?: string | null): string {
+  const roleHint = targetRole
+    ? `Target persona / role focus: ${targetRole}. Prioritize finding this role or equivalent decision-makers.`
+    : 'Target key decision-makers: Owner, Founder, CEO, Managing Director, General Manager, Head of Procurement/Purchasing, Head of Sales/Marketing, Operations Director.';
+  return `You are a high-speed B2B telemarketing contact research specialist researching as of ${new Date().toISOString().slice(0, 10)}.
+TARGET COMPANY: ${companyBaseline(company)}
+${roleHint}
+${FETCH_POLICY}
+${TIME_BUDGET}
+
+OBJECTIVE:
+Find actionable telemarketing contact details and key decision-makers to call.
+Strictly focus on:
+1. Decision makers / Leaders: Full Name, Current Role/Title, Seniority Rank (1-100), direct personal phone/mobile (if found), direct email (if found), direct LinkedIn or profile URL, direct role evidence URL.
+2. Dialable Phone Numbers:
+   - Mobile / WhatsApp numbers: (E.164 + local format, state if WhatsApp is supported).
+   - Direct desk lines or department lines (e.g. Sales, Procurement, General Manager's office).
+   - Switchboard / General office phone (Google Maps phone or main reception).
+3. Email Addresses:
+   - Direct personal work emails (e.g. name@company.com).
+   - General inquiries or department emails (e.g. sales@, procurement@, info@).
+4. Telemarketing Cheat Sheet:
+   - Primary decision maker to ask for when calling (Name & Role).
+   - Best dialable number (mobile/WhatsApp preferred, then direct desk, then switchboard).
+   - Gatekeeper phrase (concise, polite English sentence for the telemarketer when speaking to the receptionist or gatekeeper, asking directly for the decision maker by name and title).
+
+RULES:
+- Return raw literal URLs in evidence_url, role_evidence_url, profile_url.
+- Do NOT guess or hallucinate phone numbers or emails. Only report numbers and emails that exist in public sources (official site, contact page, team page, job portals, social pages, directories, registries).
+- Prioritize Malaysian mobile prefixes (010, 011, 012, 013, 014, 016, 017, 018, 019) as mobile_whatsapp when in Malaysia.
+- Normalise phone numbers into E.164 (e.g. +60183999247) when clear.
+
+Return exactly ONE compact JSON object in a single fenced code block with keys:
+{
+  "cheat_sheet": {
+    "primary_decision_maker": "Name (Title)",
+    "primary_phone": "+60...",
+    "primary_channel": "WhatsApp / Mobile" | "Direct Desk" | "Switchboard Line",
+    "gatekeeper_phrase": "Hello, may I speak with..."
+  },
+  "decision_makers": [
+    {
+      "name": "Full Name",
+      "role": "Current Title",
+      "seniority": 100,
+      "direct_phone": "+60...",
+      "direct_email": "name@...",
+      "profile_url": "https://linkedin.com/in/...",
+      "role_evidence_url": "https://..."
+    }
+  ],
+  "phone_contacts": [
+    {
+      "type": "mobile_whatsapp" | "direct_desk" | "switchboard",
+      "number_raw": "018-399 9247",
+      "number_e164": "+60183999247",
+      "whatsapp_url": "https://wa.me/60183999247",
+      "label": "Direct Mobile / WhatsApp" | "Head Office" | "Sales Desk",
+      "evidence_url": "https://..."
+    }
+  ],
+  "email_contacts": [
+    {
+      "type": "direct" | "general",
+      "email": "name@company.com",
+      "label": "Personal Work Email" | "General Inquiries",
+      "evidence_url": "https://..."
+    }
+  ]
+}
+Max 8 decision_makers, 10 phone_contacts, 6 email_contacts. No prose outside JSON.`;
+}
+
+export function buildContactLedger(
+  company: Record<string, unknown>,
+  discovery: Record<string, unknown> | null,
+  fbData?: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const entity = {
+    company_id: String(company.id ?? ''),
+    name: str(company.name),
+    category: company.category ?? null,
+    address: company.address ?? null,
+    phone: company.phone ?? null,
+    website: company.website ?? null,
+    maps_url: company.maps_url ?? null,
+    rating: company.rating ?? null,
+    reviews: company.reviews ?? null,
+  };
+
+  const rawPhones: Array<{ raw: string; type?: string; label?: string; evidence_url?: string | null }> = [];
+  
+  if (company.phone) {
+    rawPhones.push({
+      raw: str(company.phone),
+      type: 'switchboard',
+      label: 'Google Maps Phone',
+      evidence_url: directUrl(company.maps_url) ?? null,
+    });
+  }
+
+  if (fbData && fbData.phone) {
+    rawPhones.push({
+      raw: str(fbData.phone),
+      type: 'facebook',
+      label: 'Facebook Page Phone',
+      evidence_url: directUrl(fbData.facebook_url) ?? null,
+    });
+  }
+
+  for (const p of rows(discovery?.phone_contacts ?? discovery?.contacts)) {
+    const raw = first(p, ['number_raw', 'value_as_published', 'value', 'raw_value', 'phone']);
+    if (raw) {
+      rawPhones.push({
+        raw,
+        type: first(p, ['type', 'channel', 'purpose']),
+        label: first(p, ['label', 'purpose']) || 'Business Phone',
+        evidence_url: directUrl(first(p, ['evidence_url', 'source_url', 'url'])),
+      });
+    }
+  }
+
+  const phoneContacts: Record<string, unknown>[] = [];
+  const seenPhones = new Set<string>();
+
+  for (const item of rawPhones) {
+    const norm = normalizePhoneNumber(item.raw);
+    const key = norm.e164 || norm.digits || item.raw.toLowerCase();
+    if (!key || seenPhones.has(key)) continue;
+    seenPhones.add(key);
+
+    let finalType = item.type || (norm.isMobile ? 'mobile_whatsapp' : 'switchboard');
+    if (norm.isMobile && finalType !== 'direct_desk') finalType = 'mobile_whatsapp';
+
+    phoneContacts.push({
+      id: id('phone', [key]),
+      type: finalType,
+      number_raw: norm.raw,
+      number_e164: norm.e164,
+      whatsapp_url: norm.whatsappUrl,
+      dial_url: norm.dialUrl,
+      is_mobile: norm.isMobile,
+      label: item.label || (norm.isMobile ? 'Mobile / WhatsApp' : 'Office Line'),
+      evidence_url: item.evidence_url ?? null,
+    });
+  }
+
+  const seenPeople = new Map<string, Record<string, unknown>>();
+  for (const person of rows(discovery?.decision_makers ?? discovery?.people)) {
+    const name = first(person, ['name']);
+    const role = first(person, ['role', 'current_role', 'position']) || 'Key Contact';
+    if (!name) continue;
+    const key = personKey(name);
+    const existing = seenPeople.get(key);
+    const roleUrl = directUrl(first(person, ['role_evidence_url', 'evidence_url', 'role_url', 'source_url']));
+    const profileUrl = directUrl(first(person, ['profile_url', 'personal_profile_url', 'linkedin_url']));
+    const directPhone = first(person, ['direct_phone', 'phone', 'mobile']);
+    const directEmail = first(person, ['direct_email', 'email']);
+    const score = seniorityScore(role);
+
+    if (!existing || score > num(existing.seniority, 0)) {
+      seenPeople.set(key, {
+        id: id('person', [name, role]),
+        name,
+        role,
+        seniority: score,
+        direct_phone: directPhone ? normalizePhoneNumber(directPhone).e164 || directPhone : null,
+        direct_email: directEmail || null,
+        profile_url: profileUrl,
+        role_evidence_url: roleUrl,
+      });
+    }
+  }
+
+  const decisionMakers = [...seenPeople.values()]
+    .sort((a, b) => num(b.seniority, 0) - num(a.seniority, 0))
+    .slice(0, 10);
+
+  const emailContacts: Record<string, unknown>[] = [];
+  const seenEmails = new Set<string>();
+
+  if (fbData && fbData.email) {
+    const fbEmail = str(fbData.email).trim().toLowerCase();
+    if (fbEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fbEmail)) {
+      seenEmails.add(fbEmail);
+      emailContacts.push({
+        id: id('email', [fbEmail]),
+        type: 'general',
+        email: fbEmail,
+        label: 'Facebook Page Email',
+        evidence_url: directUrl(fbData.facebook_url) ?? null,
+      });
+    }
+  }
+
+  for (const e of rows(discovery?.email_contacts ?? discovery?.contacts)) {
+    const email = first(e, ['email', 'value_as_published', 'value']).trim().toLowerCase();
+    if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && !seenEmails.has(email)) {
+      seenEmails.add(email);
+      const isGeneral = /^(info|sales|enquiry|support|contact|admin|hello|office)@/i.test(email);
+      emailContacts.push({
+        id: id('email', [email]),
+        type: isGeneral ? 'general' : 'direct',
+        email,
+        label: isGeneral ? 'General Inquiry' : 'Direct Work Email',
+        evidence_url: directUrl(first(e, ['evidence_url', 'source_url', 'url'])),
+      });
+    }
+  }
+
+  const primaryDM = decisionMakers[0];
+  const primaryPhone = phoneContacts.find((p) => p.type === 'mobile_whatsapp') || phoneContacts.find((p) => p.type === 'direct_desk') || phoneContacts[0];
+
+  const gatekeeperPhrase = primaryDM
+    ? `Hello, may I speak with ${primaryDM.name}, ${primaryDM.role}, please?`
+    : `Hello, could you please connect me with the person in charge of business operations or partnerships?`;
+
+  const cheatSheet = {
+    primary_decision_maker: primaryDM ? `${primaryDM.name} (${primaryDM.role})` : null,
+    primary_decision_maker_name: primaryDM ? str(primaryDM.name) : null,
+    primary_decision_maker_role: primaryDM ? str(primaryDM.role) : null,
+    primary_phone: primaryPhone ? str(primaryPhone.number_e164 || primaryPhone.number_raw) : null,
+    primary_channel: primaryPhone ? (primaryPhone.is_mobile ? 'WhatsApp / Mobile' : 'Switchboard Line') : null,
+    whatsapp_url: primaryPhone && primaryPhone.whatsapp_url ? str(primaryPhone.whatsapp_url) : null,
+    dial_url: primaryPhone ? str(primaryPhone.dial_url) : null,
+    gatekeeper_phrase: gatekeeperPhrase,
+  };
+
+  return {
+    entity,
+    cheat_sheet: cheatSheet,
+    decision_makers: decisionMakers,
+    phone_contacts: phoneContacts,
+    email_contacts: emailContacts,
+    summary: primaryDM
+      ? `Key contact is ${primaryDM.name} (${primaryDM.role}). Best reach via ${cheatSheet.primary_channel ?? 'phone'}.`
+      : `Telemarketing research for ${str(company.name)}. ${phoneContacts.length} phone routes found.`,
+  };
+}
 
 export function round01Prompt(company: Record<string, unknown>): string {
   return `You are Round 01 of a business lead-enrichment test. Research this exact company as of ${new Date().toISOString().slice(0, 10)}.
@@ -2165,10 +2458,85 @@ async function runPersonResearch(
   }
 }
 
+async function runContactResearch(
+  publicId: string,
+  reportId: string,
+  company: Record<string, unknown>,
+  request: Record<string, unknown> = {},
+): Promise<void> {
+  if (active.has(publicId)) return;
+  active.add(publicId);
+  try {
+    await db.updateReport(publicId, { status: 'running', error: null });
+    await db.initContactResearchRun(reportId);
+
+    const model = process.env.CONTACT_RESEARCH_MODEL?.trim() || 'agy';
+    const targetRole = str(request.targetRole || request.persona) || null;
+    const prompt = contactResearchPrompt(company, targetRole);
+
+    let discoveryRaw: Record<string, unknown> | null = null;
+    let discoveryMeta: Record<string, unknown> = { model, engine: 'agy', status: 'failed' };
+
+    try {
+      const askResult = await ask(model, prompt, 180_000);
+      discoveryMeta = { model: askResult.model, engine: askResult.engine, ms: askResult.ms };
+      if (askResult.parsed) {
+        discoveryRaw = askResult.parsed;
+        discoveryMeta.status = 'completed';
+      } else {
+        discoveryMeta.status = 'invalid_output';
+      }
+    } catch (err) {
+      discoveryMeta.status = 'failed';
+      discoveryMeta.error = (err as Error).message ?? String(err);
+    }
+
+    let fbData: Record<string, unknown> | null = null;
+    const website = str(company.website);
+    if (website.includes('facebook.com') && jobs.liveTypes().includes('fb.company')) {
+      try {
+        const fbLookup = await runJob('fb.company', { ...company, timeoutMs: 30_000 }, 30_000);
+        fbData = object(fbLookup.result);
+      } catch {
+        // Opportunistic Facebook extraction; ignore error if worker unavailable
+      }
+    }
+
+    const ledger = buildContactLedger(company, discoveryRaw, fbData);
+
+    await db.saveContactResearchRun(reportId, {
+      discovery: discoveryRaw ?? {},
+      ledger,
+      finalReport: ledger,
+      status: { discovery: discoveryMeta.status },
+      metadata: { discovery: discoveryMeta },
+      completed: true,
+    });
+
+    const status = discoveryRaw ? 'completed' : 'failed';
+    const error = discoveryRaw ? null : (str(discoveryMeta.error) || 'Contact research returned no valid findings.');
+
+    await db.updateReport(publicId, {
+      status,
+      result: ledger,
+      error,
+      completed: true,
+    });
+  } catch (err) {
+    await db.updateReport(publicId, { status: 'failed', error: (err as Error).message ?? String(err), completed: true }).catch(() => {});
+  } finally {
+    active.delete(publicId);
+  }
+}
+
 async function publicDetail(report: db.PublishedReport): Promise<Record<string, unknown>> {
   if (report.report_type === 'business_search') {
     const search = report.source_search_report_id ? await db.searchResult(report.source_search_report_id) : null;
     return { report, search: search?.report ?? report.result?.search ?? null, companies: search?.companies ?? report.result?.companies ?? [] };
+  }
+  if (report.report_type === 'contact_research') {
+    const run = await db.contactResearchRun(report.id);
+    return { report, final: report.result, contact_run: run };
   }
   const run = report.report_type === 'company_research' ? await db.researchRun(report.id) : null;
   const chinese = object(run?.translated_report);
@@ -2203,6 +2571,11 @@ async function ensureRunning(report: db.PublishedReport): Promise<void> {
   if (report.report_type === 'person_research') {
     const input = await personResearchInput(report);
     if (input) void runPersonResearch(report.public_id, report.id, input.company, input.person);
+    return;
+  }
+  if (report.report_type === 'contact_research') {
+    const company = report.company_id ? await db.getCompany(report.company_id) : object(object(report.request).companySnapshot);
+    if (company) void runContactResearch(report.public_id, report.id, company, object(report.request));
     return;
   }
   if (report.company_id) {
@@ -2325,7 +2698,8 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
   if (report.report_type === 'business_search') {
     const search = report.source_search_report_id ? await db.searchResult(report.source_search_report_id) : null;
     html = ui.searchPage(report, { report: search?.report ?? object(report.result?.search), companies: search?.companies ?? rows(report.result?.companies) });
-  } else if (report.report_type === 'person_research') html = ui.personPage(report);
+  } else if (report.report_type === 'contact_research') html = ui.contactPage(report);
+  else if (report.report_type === 'person_research') html = ui.personPage(report);
   else if (report.report_type === 'ads_research') html = ui.adsPage(report);
   else if (report.report_type === 'ads_market') {
     // The teardown IS the page. kw builds a complete self-contained document --
@@ -2354,7 +2728,7 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
 export async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL, ctx: Ctx): Promise<boolean> {
   const p = url.pathname;
   const method = req.method ?? 'GET';
-  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/ads-market') && !p.startsWith('/api/reports')) return false;
+  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/contact-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/ads-market') && !p.startsWith('/api/reports')) return false;
   if (!db.configured()) {
     ctx.json(res, 503, { error: 'report database is not configured; link DATABASE_URL to the Railway service' });
     return true;
@@ -2395,7 +2769,7 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
   if (method === 'GET' && p === '/api/reports') {
     const rawType = url.searchParams.get('type');
     const rawStatus = url.searchParams.get('status');
-    const type = rawType === 'business_search' || rawType === 'company_research' || rawType === 'person_research' || rawType === 'ads_research' || rawType === 'ads_market' ? rawType : null;
+    const type = rawType === 'business_search' || rawType === 'company_research' || rawType === 'contact_research' || rawType === 'person_research' || rawType === 'ads_research' || rawType === 'ads_market' ? rawType : null;
     const allowedStatuses = new Set(['queued', 'running', 'completed', 'partial', 'failed']);
     const status = allowedStatuses.has(rawStatus ?? '') ? rawStatus as db.ReportStatus : null;
     const limit = Math.min(Math.max(Math.round(Number(url.searchParams.get('limit') ?? 40) || 40), 1), 100);
@@ -2414,6 +2788,13 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
           contacts: rows(result.contacts).length,
           people: rows(result.people).length,
           signals: rows(result.signals ?? result.business_signals).length,
+        } : report.report_type === 'contact_research' ? {
+          company_id: report.company_id,
+          entity: finalEntity,
+          cheat_sheet: object(result.cheat_sheet),
+          decision_makers: rows(result.decision_makers).length,
+          phones: rows(result.phone_contacts).length,
+          emails: rows(result.email_contacts).length,
         } : report.report_type === 'person_research' ? {
           company_id: report.company_id,
           person: object(result.person),
@@ -2446,6 +2827,66 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       : `Businesses in ${place}`;
     const report = await db.createReport({ type: 'business_search', title, userId: str(request.userId) || null, request });
     void runBusinessSearch(report.public_id, report.id, request);
+    ctx.json(res, 202, { report: envelope(req, report) });
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/contact-research') {
+    const body = await ctx.readJson(req);
+    const companyId = str(body.companyId || body.company_id).trim();
+    const name = str(body.name || body.companyName || body.company).trim();
+    if (!companyId && !name) {
+      ctx.json(res, 400, { error: 'companyId or company name is required' });
+      return true;
+    }
+    let company: Record<string, unknown> | null = null;
+    if (companyId) {
+      if (!/^\d+$/.test(companyId)) {
+        ctx.json(res, 400, { error: 'companyId must be a numeric company id' });
+        return true;
+      }
+      company = await db.getCompany(companyId);
+      if (!company) {
+        ctx.json(res, 404, { error: 'company not found', companyId });
+        return true;
+      }
+    } else {
+      company = await db.findOrCreateCompany({
+        name,
+        address: str(body.address) || null,
+        phone: str(body.phone) || null,
+        website: str(body.website) || null,
+        category: str(body.category) || null,
+      });
+    }
+    const resolvedCompanyId = String(company.id ?? '');
+    const running = await db.findContactReport(resolvedCompanyId);
+    if (running) {
+      ctx.json(res, 200, { report: envelope(req, running) });
+      return true;
+    }
+    const targetRole = str(body.targetRole || body.role || body.persona).trim() || null;
+    const request = {
+      companyId: resolvedCompanyId,
+      name: str(company.name),
+      targetRole,
+      requesterId: str(body.requesterId || body.userId) || null,
+      companySnapshot: {
+        id: resolvedCompanyId,
+        name: company.name,
+        phone: company.phone,
+        website: company.website,
+        address: company.address,
+      },
+    };
+    const report = await db.createReport({
+      type: 'contact_research',
+      title: str(company.name, 'Company') + ' — contact & telemarketing research',
+      userId: request.requesterId,
+      request,
+      companyId: resolvedCompanyId,
+    });
+    void runContactResearch(report.public_id, report.id, company, request);
     ctx.json(res, 202, { report: envelope(req, report) });
     return true;
   }
@@ -2597,13 +3038,14 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     return true;
   }
 
-  const one = /^\/api\/(business-search|company-research|person-research|ads-research|ads-market)\/([A-Za-z0-9_-]{20})$/.exec(p);
+  const one = /^\/api\/(business-search|company-research|contact-research|person-research|ads-research|ads-market)\/([A-Za-z0-9_-]{20})$/.exec(p);
   if (method === 'GET' && one) {
     const report = await db.getReport(one[2]!);
     const expected = one[1] === 'business-search' ? 'business_search'
       : one[1] === 'person-research' ? 'person_research'
       : one[1] === 'ads-research' ? 'ads_research'
-      : one[1] === 'ads-market' ? 'ads_market' : 'company_research';
+      : one[1] === 'ads-market' ? 'ads_market'
+      : one[1] === 'contact-research' ? 'contact_research' : 'company_research';
     if (!report || report.report_type !== expected) {
       ctx.json(res, 404, { error: 'report not found' });
       return true;
@@ -2613,6 +3055,7 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     const run = report.report_type === 'company_research'
       ? await db.researchRun(report.id)
       : report.report_type === 'person_research' ? await db.personResearchRun(report.id)
+      : report.report_type === 'contact_research' ? await db.contactResearchRun(report.id)
       : report.report_type === 'ads_research' ? await db.adsResearchRun(report.id)
       : report.report_type === 'ads_market' ? await db.adsMarketRun(report.id) : null;
     ctx.json(res, 200, { report: envelope(req, report), data: detail, research_run: run });

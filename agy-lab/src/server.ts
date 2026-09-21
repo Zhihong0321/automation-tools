@@ -81,6 +81,7 @@ function authorized(req: http.IncomingMessage, url: URL): boolean {
   const productRoute = url.pathname.startsWith('/api/reports')
     || url.pathname.startsWith('/api/business-search')
     || url.pathname.startsWith('/api/company-research')
+    || url.pathname.startsWith('/api/contact-research')
     || url.pathname.startsWith('/api/person-research')
     // Ads market research is a /research workspace tool with its own form, so an
     // end user holding only PORTAL_TOKEN has to be able to start one. Its cost

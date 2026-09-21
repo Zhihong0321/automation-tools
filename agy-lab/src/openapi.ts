@@ -109,6 +109,50 @@ export const document = {
         },
       },
     },
+    '/api/contact-research': {
+      post: {
+        operationId: 'createContactResearch',
+        tags: ['Contact research'],
+        summary: 'Start telemarketing contact and decision-maker research',
+        description: 'Lightweight, fast contact research optimized for outbound sales and telemarketing. Either companyId or company name is required. Returns verified decision makers, dialable phone numbers (with WhatsApp links and E.164 normalization), and gatekeeper call scripts.',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  companyId: { type: 'string', description: 'Numeric company ID from a business search.' },
+                  name: { type: 'string', description: 'Company name if researching without a prior Maps scan.' },
+                  targetRole: { type: 'string', description: 'Optional target persona or role filter (e.g. Procurement, CEO, GM).' },
+                  requesterId: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Research already in flight for this company; existing report returned', content: { 'application/json': { schema: { $ref: '#/components/schemas/AcceptedReport' } } } },
+          '202': { description: 'Contact research accepted', content: { 'application/json': { schema: { $ref: '#/components/schemas/AcceptedReport' } } } },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '404': { $ref: '#/components/responses/NotFound' },
+        },
+      },
+    },
+    '/api/contact-research/{reportId}': {
+      get: {
+        operationId: 'getContactResearch',
+        tags: ['Contact research'],
+        summary: 'Poll a contact research report',
+        parameters: [{ $ref: '#/components/parameters/ReportId' }],
+        responses: {
+          '200': { description: 'Current contact research report state', content: { 'application/json': { schema: { $ref: '#/components/schemas/ReportEnvelope' } } } },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '404': { $ref: '#/components/responses/NotFound' },
+        },
+      },
+    },
     '/api/person-research': {
       post: {
         operationId: 'createPersonResearch',

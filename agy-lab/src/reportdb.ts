@@ -112,7 +112,7 @@ export function migrate(): Promise<void> {
       create table if not exists published_report (
         id bigserial primary key,
         public_id text not null unique,
-        report_type text not null check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research', 'ads_market')),
+        report_type text not null check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research', 'ads_market', 'contact_research')),
         status text not null default 'queued'
           check (status in ('queued', 'running', 'completed', 'partial', 'failed')),
         title text,
@@ -134,6 +134,9 @@ export function migrate(): Promise<void> {
       create unique index if not exists published_report_auto_person_unique_idx
         on published_report ((request->>'sourceReportId'), (request->>'personId'))
         where report_type = 'person_research' and request->>'autoTriggered' = 'true';
+      alter table published_report drop constraint if exists published_report_report_type_check;
+      alter table published_report add constraint published_report_report_type_check
+        check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research', 'ads_market', 'contact_research'));
       create table if not exists company_research_run (
         report_id bigint primary key references published_report(id) on delete cascade,
         round01 jsonb,
@@ -162,6 +165,17 @@ export function migrate(): Promise<void> {
         completed_at timestamptz,
         updated_at timestamptz not null default now()
       );
+      create table if not exists contact_research_run (
+        report_id bigint primary key references published_report(id) on delete cascade,
+        discovery jsonb,
+        ledger jsonb,
+        final_report jsonb,
+        run_status jsonb not null default '{}'::jsonb,
+        engine_metadata jsonb not null default '{}'::jsonb,
+        started_at timestamptz,
+        completed_at timestamptz,
+        updated_at timestamptz not null default now()
+      );
       create table if not exists ads_research_run (
         report_id bigint primary key references published_report(id) on delete cascade,
         facebook jsonb,
@@ -173,7 +187,7 @@ export function migrate(): Promise<void> {
         started_at timestamptz,
         completed_at timestamptz,
         updated_at timestamptz not null default now()
-      )
+      );
     `);
     // Keyword MARKET research, which is a different question from ads_research
     // above. That one is one COMPANY across two networks; this is one MARKET
@@ -425,7 +439,7 @@ export function migrate(): Promise<void> {
   return migrated;
 }
 
-export type ReportType = 'business_search' | 'company_research' | 'person_research' | 'ads_research' | 'ads_market';
+export type ReportType = 'business_search' | 'company_research' | 'person_research' | 'ads_research' | 'ads_market' | 'contact_research';
 export type ReportStatus = 'queued' | 'running' | 'completed' | 'partial' | 'failed';
 
 export interface PublishedReport {
@@ -730,6 +744,40 @@ export async function findCompanyReport(companyId: string): Promise<PublishedRep
   return out.rows[0] ?? null;
 }
 
+export async function findContactReport(companyId: string): Promise<PublishedReport | null> {
+  await migrate();
+  const out = await sql<PublishedReport>(
+    `select * from published_report
+     where company_id = $1 and report_type = 'contact_research'
+       and status in ('queued', 'running')
+     order by id desc limit 1`,
+    [companyId],
+  );
+  return out.rows[0] ?? null;
+}
+
+export async function findOrCreateCompany(data: {
+  name: string;
+  address?: string | null;
+  phone?: string | null;
+  website?: string | null;
+  maps_url?: string | null;
+  category?: string | null;
+}): Promise<Record<string, unknown>> {
+  await migrate();
+  const name = (data.name || '').trim();
+  const found = await sql('select * from company_data where lower(name) = lower($1) and merged_into is null order by id asc limit 1', [name]);
+  if (found.rows[0]) return found.rows[0];
+  const placeId = 'manual:' + crypto.randomBytes(8).toString('hex');
+  const inserted = await sql(
+    `insert into company_data (place_id, name, address, phone, website, maps_url, category, source)
+     values ($1, $2, $3, $4, $5, $6, $7, 'manual')
+     returning *`,
+    [placeId, name, data.address || null, data.phone || null, data.website || null, data.maps_url || null, data.category || null],
+  );
+  return inserted.rows[0]!;
+}
+
 export async function searchResult(reportId: string): Promise<{ report: Record<string, unknown>; companies: Record<string, unknown>[] } | null> {
   await migrate();
   const report = (await sql('select * from search_report where id = $1', [reportId])).rows[0];
@@ -888,6 +936,50 @@ export async function savePersonResearchRun(reportId: string, patch: {
 export async function personResearchRun(reportId: string): Promise<Record<string, unknown> | null> {
   await migrate();
   return (await sql('select * from person_research_run where report_id=$1', [reportId])).rows[0] ?? null;
+}
+
+export async function initContactResearchRun(reportId: string): Promise<void> {
+  await migrate();
+  await sql(
+    `insert into contact_research_run (report_id, started_at)
+     values ($1, now()) on conflict (report_id) do nothing`,
+    [reportId],
+  );
+}
+
+export async function saveContactResearchRun(reportId: string, patch: {
+  discovery?: Record<string, unknown>;
+  ledger?: Record<string, unknown>;
+  finalReport?: Record<string, unknown>;
+  status?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  completed?: boolean;
+}): Promise<void> {
+  await initContactResearchRun(reportId);
+  await sql(
+    `update contact_research_run set
+       discovery = case when $2::boolean then $3::jsonb else discovery end,
+       ledger = case when $4::boolean then $5::jsonb else ledger end,
+       final_report = case when $6::boolean then $7::jsonb else final_report end,
+       run_status = case when $8::boolean then $9::jsonb else run_status end,
+       engine_metadata = case when $10::boolean then $11::jsonb else engine_metadata end,
+       completed_at = case when $12::boolean then now() else completed_at end,
+       updated_at = now() where report_id = $1`,
+    [
+      reportId,
+      Object.prototype.hasOwnProperty.call(patch, 'discovery'), jsonParam(patch.discovery),
+      Object.prototype.hasOwnProperty.call(patch, 'ledger'), jsonParam(patch.ledger),
+      Object.prototype.hasOwnProperty.call(patch, 'finalReport'), jsonParam(patch.finalReport),
+      Object.prototype.hasOwnProperty.call(patch, 'status'), jsonParam(patch.status ?? {}),
+      Object.prototype.hasOwnProperty.call(patch, 'metadata'), jsonParam(patch.metadata ?? {}),
+      patch.completed === true,
+    ],
+  );
+}
+
+export async function contactResearchRun(reportId: string): Promise<Record<string, unknown> | null> {
+  await migrate();
+  return (await sql('select * from contact_research_run where report_id=$1', [reportId])).rows[0] ?? null;
 }
 
 export async function initAdsResearchRun(reportId: string): Promise<void> {

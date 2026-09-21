@@ -108,7 +108,7 @@ comment on column company_data.reviews is 'Null when Maps served a signed-out li
 create table if not exists published_report (
   id                      bigserial primary key,
   public_id               text not null unique,
-  report_type             text not null check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research', 'ads_market')),
+  report_type             text not null check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research', 'ads_market', 'contact_research')),
   status                  text not null default 'queued'
                                   check (status in ('queued', 'running', 'completed', 'partial', 'failed')),
   title                   text,
@@ -159,6 +159,19 @@ create table if not exists person_research_run (
   discovery        jsonb,
   synthesis        jsonb,
   validated_ledger jsonb,
+  final_report     jsonb,
+  run_status       jsonb not null default '{}'::jsonb,
+  engine_metadata  jsonb not null default '{}'::jsonb,
+  started_at       timestamptz,
+  completed_at     timestamptz,
+  updated_at       timestamptz not null default now()
+);
+
+-- Fast telemarketing contact & decision-maker research run.
+create table if not exists contact_research_run (
+  report_id        bigint primary key references published_report(id) on delete cascade,
+  discovery        jsonb,
+  ledger           jsonb,
   final_report     jsonb,
   run_status       jsonb not null default '{}'::jsonb,
   engine_metadata  jsonb not null default '{}'::jsonb,

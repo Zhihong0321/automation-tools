@@ -49,6 +49,8 @@ test('OpenAPI contract exposes each research workflow and resolves local referen
   assert.ok(document.paths['/api/company-research/{reportId}'].get);
   assert.ok(document.paths['/api/person-research'].post);
   assert.ok(document.paths['/api/person-research/{reportId}'].get);
+  assert.ok(document.paths['/api/contact-research'].post);
+  assert.ok(document.paths['/api/contact-research/{reportId}'].get);
   assert.ok(document.paths['/public/reports/{reportId}'].get);
   assert.deepEqual(document.paths['/public/reports/{reportId}'].get.security, []);
   const searchRequest = document.components.schemas.BusinessSearchRequest;
