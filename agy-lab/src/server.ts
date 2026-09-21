@@ -94,7 +94,8 @@ function authorized(req: http.IncomingMessage, url: URL): boolean {
     // change's business.
     || url.pathname.startsWith('/api/ads-market')
     || url.pathname.startsWith('/api/leads')
-    || url.pathname.startsWith('/api/telemarketers');
+    || url.pathname.startsWith('/api/telemarketers')
+    || url.pathname.startsWith('/api/territories');
   return productRoute && PORTAL_TOKEN.length >= 16
     && crypto.timingSafeEqual(digest(supplied), digest(PORTAL_TOKEN));
 }

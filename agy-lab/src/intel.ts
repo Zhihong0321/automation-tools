@@ -8,6 +8,7 @@ import * as jobs from './jobs.ts';
 import * as gateway from './gateway.ts';
 import * as db from './reportdb.ts';
 import * as ui from './reportui.ts';
+import * as territories from './territories.ts';
 
 export interface Ctx {
   json: (res: http.ServerResponse, status: number, body: unknown) => void;
@@ -2756,9 +2757,18 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
 export async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL, ctx: Ctx): Promise<boolean> {
   const p = url.pathname;
   const method = req.method ?? 'GET';
-  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/contact-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/ads-market') && !p.startsWith('/api/reports') && !p.startsWith('/api/leads') && !p.startsWith('/api/telemarketers')) return false;
+  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/contact-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/ads-market') && !p.startsWith('/api/reports') && !p.startsWith('/api/leads') && !p.startsWith('/api/telemarketers') && !p.startsWith('/api/territories')) return false;
   if (!db.configured()) {
     ctx.json(res, 503, { error: 'report database is not configured; link DATABASE_URL to the Railway service' });
+    return true;
+  }
+
+  // ---- Telemarketing territory / lead-map --------------------------------
+  if (method === 'GET' && p === '/api/territories') {
+    const state = url.searchParams.get('state') || 'johor';
+    const scans = await db.getTerritoryScanStats();
+    const result = territories.buildTerritoryResponse(state, scans);
+    ctx.json(res, 200, result);
     return true;
   }
 

@@ -43,6 +43,34 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
 .status-select.not_interested{color:var(--bad);border-color:var(--bad)}
 .status-select.do_not_call{color:#fff;background:var(--bad);border-color:var(--bad)}
 .tele-select{height:34px;padding:0 8px;font:600 11px/1 var(--sans);border:1px solid var(--line);background:var(--sheet);border-radius:3px;cursor:pointer;max-width:180px}
+.district-card{border:1px solid var(--line);background:var(--sheet);margin-bottom:14px;border-radius:6px;overflow:hidden;transition:border-color .15s}
+.district-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;cursor:pointer;user-select:none;background:var(--sheet)}
+.district-head:hover{background:#f4f5f7}
+.district-title{display:flex;align-items:center;gap:12px}
+.district-title h3{margin:0;font-size:18px;font-weight:700;letter-spacing:-.015em}
+.district-badge{font:650 10px/1 var(--mono);background:#e0e7ff;color:var(--accent);padding:3px 8px;border-radius:4px;text-transform:uppercase}
+.district-chevron{font-size:14px;color:var(--muted);transition:transform .2s}
+.district-card.expanded .district-chevron{transform:rotate(180deg)}
+.district-body{display:none;padding:12px 18px 20px;border-top:1px solid var(--soft);background:#fafbfc}
+.district-card.expanded .district-body{display:block}
+.town-block{margin-top:14px;padding:14px 16px;background:#fff;border:1px solid var(--line);border-radius:6px}
+.town-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px}
+.town-title{font-size:15px;font-weight:700;color:var(--ink)}
+.town-scan-btn{height:28px;padding:0 10px;font:700 9.5px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;background:var(--soft);color:var(--ink);border:1px solid var(--line);border-radius:4px;cursor:pointer}
+.town-scan-btn:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+.taman-grid{display:flex;flex-wrap:wrap;gap:8px}
+.taman-pill{display:inline-flex;align-items:center;gap:8px;padding:6px 11px;background:#f8f9fa;border:1px solid var(--line);border-radius:4px;font-size:12.5px;color:var(--ink)}
+.taman-pill.scanned{border-color:var(--ok);background:#f4fbf7}
+.taman-pill.scanning{border-color:var(--warn);background:#fffdf0}
+.taman-pip{width:7px;height:7px;border-radius:50%;background:#b4b2ac;flex-shrink:0}
+.taman-pip.scanned{background:var(--ok)}
+.taman-pip.scanning{background:var(--warn);animation:pulse 1.8s infinite}
+.taman-name{font-weight:550}
+.taman-link{color:var(--ok);font:600 11px/1 var(--mono);text-decoration:none}
+.taman-link:hover{text-decoration:underline}
+.taman-scan-action{border:0;background:var(--ink);color:#fff;font:700 9px/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;padding:4px 8px;border-radius:3px;cursor:pointer}
+.taman-scan-action:hover{background:var(--accent)}
+.taman-scan-action:disabled{opacity:.5;cursor:wait}
 @media(max-width:820px){
   .lead-row{grid-template-columns:26px 1fr;gap:12px 10px;padding:18px 0}
   .lead-row>div:nth-child(3),.lead-row>div:nth-child(4),.lead-row>div:nth-child(5){grid-column:2}
@@ -50,7 +78,7 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
 </style></head><body>
 <div id="accessGate" class="gate"><div class="gate-panel"><div class="gate-mark">EE</div><h1>Private intelligence workspace.</h1><p>Enter the access key supplied by the workspace owner. You enter it once: it stays in this browser and is never added to a report link.</p><form class="gate-form" onsubmit="connect(event)"><input id="accessKey" type="password" autocomplete="current-password" placeholder="Workspace access key" aria-label="Workspace access key"><button id="connectButton" class="primary" type="submit">Enter</button></form><p id="gateError" class="gate-error" role="alert"></p><p class="gate-help"><a href="/guide" target="_blank" rel="noopener">New here? Read the guide first ↗ · 新手指南</a></p></div></div>
 <div id="portalApp" class="app" aria-hidden="true" inert>
-  <header class="mast"><div class="mast-inner"><button type="button" class="brand" aria-label="Home" onclick="switchView('discover')"><span class="mark">EE</span><span>Business intelligence</span></button><nav class="desktop-nav" aria-label="Workspace"><button class="nav-button active" data-view="discover" onclick="switchView('discover')">Home</button><button class="nav-button" data-view="leads" onclick="switchView('leads')">Leads Master</button><button class="nav-button" data-view="library" onclick="switchView('library')">Reports</button><a class="nav-button" href="/guide" target="_blank" rel="noopener">Guide</a><span class="access"><span class="access-dot"></span>Connected</span><button class="signout" onclick="disconnect()">Sign out</button></nav><button class="signout" onclick="disconnect()">Exit</button></div></header>
+  <header class="mast"><div class="mast-inner"><button type="button" class="brand" aria-label="Home" onclick="switchView('discover')"><span class="mark">EE</span><span>Business intelligence</span></button><nav class="desktop-nav" aria-label="Workspace"><button class="nav-button active" data-view="discover" onclick="switchView('discover')">Home</button><button class="nav-button" data-view="telemarketing" onclick="switchView('telemarketing')">Telemarketing</button><button class="nav-button" data-view="leads" onclick="switchView('leads')">Leads Master</button><button class="nav-button" data-view="library" onclick="switchView('library')">Reports</button><a class="nav-button" href="/guide" target="_blank" rel="noopener">Guide</a><span class="access"><span class="access-dot"></span>Connected</span><button class="signout" onclick="disconnect()">Sign out</button></nav><button class="signout" onclick="disconnect()">Exit</button></div></header>
   <main class="content">
     <section id="discoverView" class="view active">
       <div class="hero"><div class="eyebrow" id="heroEyebrow">Live market discovery</div><h1 id="heroTitle">Find the companies worth knowing.</h1><p id="heroCopy">Pick one. Nothing is researched until you say so.</p></div>
@@ -60,6 +88,54 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
         <section id="activeSection" class="hidden"><div class="section-head"><h2>Active work</h2><span class="section-note">Research continues in the background. You may switch views safely.</span></div><div id="jobs" class="jobs"></div></section>
         <section id="searchOutput" class="hidden"><div class="section-head"><h2 id="resultTitle">Search results</h2><span id="resultNote" class="section-note"></span></div><div id="resultSummary" class="result-summary"></div><div id="companies" class="company-list"></div></section>
         <section id="discoverEmpty"><div class="empty">Your latest business list will appear here.</div></section>
+      </div>
+    </section>
+    <section id="telemarketingView" class="view">
+      <div class="library-hero">
+        <div class="eyebrow">Territory Coverage & Market Scans</div>
+        <h1>Telemarketing Lead Map.</h1>
+        <p>Systematically blanket commercial zones and neighborhoods across Johor. Drill down by District, Town, and Taman to dispatch Google Maps business market scans.</p>
+      </div>
+      <div class="result-summary" style="margin-top:24px;">
+        <div class="metric"><strong id="teleDistrictsCount">10</strong><span>Districts</span></div>
+        <div class="metric"><strong id="teleTownsCount">70</strong><span>Towns & Zones</span></div>
+        <div class="metric"><strong id="teleTamansCount">771</strong><span>Total Tamans</span></div>
+        <div class="metric"><strong id="teleScannedCount" style="color:var(--ok);">0</strong><span>Tamans Scanned</span></div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin:24px 0 20px;padding:16px 20px;background:#f8f9fa;border:1px solid var(--line);border-radius:6px;">
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;flex:1;min-width:280px;">
+          <div style="display:flex;flex-direction:column;gap:3px;">
+            <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">State</span>
+            <select class="input select" id="teleStateSelect" onchange="loadTelemarketingView()" style="height:38px;font-size:13px;font-weight:600;min-width:110px;">
+              <option value="johor" selected>Johor</option>
+            </select>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:3px;">
+            <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">Search Term / Category</span>
+            <input class="input" id="teleCategory" value="business" placeholder="e.g. business, cafe, clinic, contractor" style="height:38px;font-size:13.5px;max-width:240px;" title="Keyword prepended to search, e.g. 'business in Ros Merah, Johor Jaya'">
+          </div>
+          <div style="display:flex;flex-direction:column;gap:3px;">
+            <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">Max Results</span>
+            <select class="input select" id="teleMaxResults" style="height:38px;font-size:13px;width:110px;">
+              <option value="200" selected>200 leads</option>
+              <option value="400">400 leads</option>
+              <option value="600">600 leads</option>
+              <option value="100">100 leads</option>
+            </select>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:180px;">
+            <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">Filter Territory</span>
+            <input class="input" id="teleFilterInput" oninput="filterTerritoryCards()" placeholder="Search town or taman (e.g. Ros Merah, Austin)..." style="height:38px;font-size:13.5px;">
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:flex-end;">
+          <button class="filter" type="button" onclick="expandAllDistricts(true)">Expand All</button>
+          <button class="filter" type="button" onclick="expandAllDistricts(false)">Collapse All</button>
+          <button class="primary" type="button" onclick="loadTelemarketingView()" style="height:38px;padding:0 14px;">Refresh</button>
+        </div>
+      </div>
+      <div id="teleTerritoryContainer">
+        <div class="empty">Loading Johor territory directory…</div>
       </div>
     </section>
     <section id="leadsView" class="view">
@@ -131,7 +207,7 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
     </section>
     <section id="libraryView" class="view"><div class="library-hero"><div class="eyebrow">Persistent knowledge base</div><h1>Research library.</h1><p>Browse every market scan, company dossier and VIP brief in one place. Completed public reports keep the same permanent link.</p></div><div class="filters" role="group" aria-label="Report type"><button class="filter active" data-filter="all" onclick="setFilter('all')">All reports</button><button class="filter" data-filter="company_research" onclick="setFilter('company_research')">Company research</button><button class="filter" data-filter="contact_research" onclick="setFilter('contact_research')">Contacts</button><button class="filter" data-filter="person_research" onclick="setFilter('person_research')">VIP briefs</button><button class="filter" data-filter="ads_research" onclick="setFilter('ads_research')">Ads</button><button class="filter" data-filter="ads_market" onclick="setFilter('ads_market')">Ads market</button><button class="filter" data-filter="business_search" onclick="setFilter('business_search')">Business lists</button></div><div id="reportList" class="report-list"><div class="empty">Loading research library…</div></div></section>
   </main>
-  <nav class="mobile-nav" aria-label="Workspace"><button class="mobile-tab active" data-view="discover" onclick="switchView('discover')"><span></span>Home</button><button class="mobile-tab" data-view="leads" onclick="switchView('leads')"><span></span>Leads</button><button class="mobile-tab" data-view="library" onclick="switchView('library')"><span></span>Reports</button><a class="mobile-tab" href="/guide" target="_blank" rel="noopener"><span></span>Guide</a></nav>
+  <nav class="mobile-nav" aria-label="Workspace"><button class="mobile-tab active" data-view="discover" onclick="switchView('discover')"><span></span>Home</button><button class="mobile-tab" data-view="telemarketing" onclick="switchView('telemarketing')"><span></span>Map</button><button class="mobile-tab" data-view="leads" onclick="switchView('leads')"><span></span>Leads</button><button class="mobile-tab" data-view="library" onclick="switchView('library')"><span></span>Reports</button><a class="mobile-tab" href="/guide" target="_blank" rel="noopener"><span></span>Guide</a></nav>
 </div><div id="toast" class="toast" role="status"></div>
 <script>
 'use strict';
@@ -149,7 +225,7 @@ async function api(path,options){options=options||{};var headers=Object.assign({
 async function connect(event){if(event)event.preventDefault();var key=el('accessKey').value.trim();if(!key)return;state.token=key;el('connectButton').disabled=true;el('gateError').textContent='';try{await api('/api/reports?limit=1');eeKey.save(key);el('accessGate').classList.add('hidden');el('portalApp').removeAttribute('inert');el('portalApp').setAttribute('aria-hidden','false');await loadLibrary();showToast('Workspace connected')}catch(error){state.token='';el('gateError').textContent=error.status===401?'Access key not accepted.':error.message}finally{el('connectButton').disabled=false}}
 function disconnect(){eeKey.clear();state.token='';location.reload()}
 function authLost(error){if(error&&error.status===401){eeKey.clear();state.token='';el('accessGate').classList.remove('hidden');el('gateError').textContent='Your access expired. Enter the workspace key again.';return true}return false}
-function switchView(name){document.querySelectorAll('.view').forEach(function(node){node.classList.toggle('active',node.id===name+'View')});document.querySelectorAll('[data-view]').forEach(function(node){node.classList.toggle('active',node.getAttribute('data-view')===name)});if(name==='library')loadLibrary();else if(name==='leads')loadLeadsView();else goHome();window.scrollTo({top:0,behavior:'smooth'})}
+function switchView(name){document.querySelectorAll('.view').forEach(function(node){node.classList.toggle('active',node.id===name+'View')});document.querySelectorAll('[data-view]').forEach(function(node){node.classList.toggle('active',node.getAttribute('data-view')===name)});if(name==='library')loadLibrary();else if(name==='leads')loadLeadsView();else if(name==='telemarketing')loadTelemarketingView();else goHome();window.scrollTo({top:0,behavior:'smooth'})}
 function upsertJob(report,kind){state.jobs[report.id]=Object.assign({},state.jobs[report.id]||{},{report:report,kind:kind});renderJobs()}
 function renderJobs(){var values=Object.keys(state.jobs).map(function(key){return state.jobs[key]});el('activeSection').classList.toggle('hidden',values.length===0);el('jobs').innerHTML=values.map(function(job){var r=job.report;var done=terminal.indexOf(r.status)>=0;var pulse=r.status==='failed'?'bad':done?'done':'';var label=job.kind==='search'?'Market scan':job.kind==='lookup'?'Company lookup':job.kind==='vip'?'VIP brief':job.kind==='ads'?'Ads':job.kind==='contact'?'Contact research':'Company research';var open=safeUrl(r.view_url);return '<article class="job"><div class="job-type">'+label+'</div><div><div class="job-title">'+esc(r.title)+'</div><div class="job-meta">'+esc(r.status)+' · '+esc(r.id)+'</div></div><div class="job-action"><span class="pulse '+pulse+'"></span>'+(open?'<a class="text-action" target="_blank" rel="noopener" href="'+attr(open)+'">View <span>↗</span></a>':'')+'</div></article>'}).join('')}
 function poll(report,kind){upsertJob(report,kind);if(terminal.indexOf(report.status)>=0)return;setTimeout(async function(){try{var body=await api(report.api_url);upsertJob(body.report,kind);if(terminal.indexOf(body.report.status)<0){poll(body.report,kind);return}await loadLibrary();if((kind==='search'||kind==='lookup')&&body.report.status!=='failed'){renderSearch(body,kind)}if(kind==='deep'){showToast(body.report.status==='failed'?'Company research failed':'Company dossier is ready')}if(kind==='vip'){showToast(body.report.status==='failed'?'VIP brief failed':'VIP brief is ready')}if(kind==='adsmarket'){showToast(body.report.status==='failed'?'Ads market research failed':'Ads market report is ready')}if(kind==='contact'){showToast(body.report.status==='failed'?'Contact research failed':'Contact details are ready')}if(body.report.status==='failed')showToast(body.report.error||'Research failed')}catch(error){if(!authLost(error)){showToast(error.message);if(error.status===404){forgetReport(report.id)}else{poll(report,kind)}}}},5000)}
@@ -202,6 +278,140 @@ async function promptAddTelemarketer(){var name=window.prompt('Enter new telemar
 async function runDedupAction(){if(!window.confirm('Run deduplication pass across company registry?\n\nThis merges duplicate company branches and duplicate phone contacts into their canonical primary record.'))return;try{var res=await api('/api/leads/dedup',{method:'POST'});showToast('Dedup completed: '+(res.merged||0)+' duplicates consolidated');await loadLeads()}catch(err){if(!authLost(err))showToast('Dedup failed: '+err.message)}}
 function exportLeadsCsv(){var q='/api/leads/export?token='+encodeURIComponent(state.token);if(leadState.statusFilter!=='all')q+='&status='+encodeURIComponent(leadState.statusFilter);if(leadState.search)q+='&search='+encodeURIComponent(leadState.search);if(leadState.teleFilter!=='all')q+='&assignedTo='+encodeURIComponent(leadState.teleFilter);if(leadState.researchFilter!=='all')q+='&researchStatus='+encodeURIComponent(leadState.researchFilter);window.open(q,'_blank')}
 function renderLeads(leads){var wrapper=el('leadTableWrapper');if(!wrapper)return;if(!leads.length){wrapper.innerHTML='<div class="empty">No companies found matching the filter.</div>';return}wrapper.innerHTML=leads.map(function(lead){var checked=Boolean(leadState.selected[lead.id]);var phone=lead.phone||'';var website=safeUrl(lead.website);var maps=safeUrl(lead.maps_url);var rating=lead.rating?(' · ★ '+lead.rating+(lead.reviews?' / '+lead.reviews:'')):'';var branchBadge=lead.branch_count>0?(' <span class="branch-tag" title="'+lead.branch_count+' branches consolidated">'+lead.branch_count+' branch'+(lead.branch_count>1?'es':'')+'</span>'):'';var dossierControl='';if(lead.research_public_id){dossierControl='<a class="vip" target="_blank" rel="noopener" href="/r/'+attr(lead.research_public_id)+'">Dossier V'+(lead.research_version||1)+' ↗</a>'}else{dossierControl='<button class="research" data-company="'+attr(lead.id)+'" data-name="'+attr(lead.name)+'" onclick="startResearch(this)">Research →</button>'}var teleOpts='<option value="">(Unassigned)</option>';leadState.telemarketers.forEach(function(t){var sel=(lead.assigned_to===t)?' selected':'';teleOpts+='<option value="'+attr(t)+'"'+sel+'>'+esc(t)+'</option>'});var statuses=['unassigned','assigned','contacted','interested','not_interested','do_not_call'];var statusOpts=statuses.map(function(s){var sel=(lead.lead_status===s)?' selected':'';var lbl=s==='do_not_call'?'DNC':s.replace('_',' ');return '<option value="'+s+'"'+sel+'>'+lbl+'</option>'}).join('');var notesSnippet=lead.lead_notes?(esc(lead.lead_notes.slice(0,60))+(lead.lead_notes.length>60?'…':'')):'Add notes';return '<article class="lead-row">'+'<div><input type="checkbox" id="leadCheck-'+attr(lead.id)+'" class="lead-check" '+(checked?'checked ':'')+'onchange="toggleSelectLead(\''+attr(lead.id)+'\', this.checked)"></div>'+'<div>'+'<h3>'+esc(lead.name)+branchBadge+'</h3>'+'<div class="meta">'+esc(lead.category||'Business')+esc(rating)+'</div>'+'<div class="address" style="margin-top:4px;">'+esc(lead.address||'Address not published')+'</div>'+'</div>'+'<div class="company-contact">'+'<div class="phone">'+(phone?('<a class="source-link" href="tel:'+attr(phone.replace(/[^+\d]/g,''))+'" style="font-size:13px;">'+esc(phone)+'</a>'):'<span class="meta">No phone</span>')+'</div>'+'<div class="actions" style="display:flex;gap:8px;margin-top:4px;">'+(website?('<a class="source-link" target="_blank" rel="noopener" href="'+attr(website)+'">Web</a>'):'')+(maps?('<a class="source-link" target="_blank" rel="noopener" href="'+attr(maps)+'">Maps</a>'):'')+'</div>'+'<div style="margin-top:8px;">'+dossierControl+'</div>'+'</div>'+'<div style="display:grid;gap:8px;">'+'<div>'+'<label style="display:block;font:700 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Assigned to</label>'+'<select class="tele-select" onchange="updateLeadAssignee(\''+attr(lead.id)+'\', this)">'+teleOpts+'</select>'+'</div>'+'<div>'+'<label style="display:block;font:700 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Status</label>'+'<select class="status-select '+attr(lead.lead_status||'unassigned')+'" onchange="updateLeadStatus(\''+attr(lead.id)+'\', this)">'+statusOpts+'</select>'+'</div>'+'</div>'+'<div style="display:grid;gap:6px;align-content:start;">'+'<button class="filter" type="button" style="min-height:30px;padding:0 8px;font-size:9px;white-space:nowrap;" onclick="editLeadNotes(\''+attr(lead.id)+'\', '+attr(JSON.stringify(lead.lead_notes||''))+')">📝 '+(lead.lead_notes?'Notes':'+ Note')+'</button>'+(lead.lead_notes?('<span style="font-size:11px;color:var(--muted);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+attr(lead.lead_notes)+'">'+notesSnippet+'</span>'):'')+'</div>'+'</article>'}).join('')}
+var teleState={data:null,expanded:{},filter:''};
+async function loadTelemarketingView(){
+  if(!state.token)return;
+  var cont=el('teleTerritoryContainer');
+  if(cont&&!teleState.data)cont.innerHTML='<div class="empty">Loading Johor territory directory…</div>';
+  var stateVal=el('teleStateSelect')?el('teleStateSelect').value:'johor';
+  try{
+    var body=await api('/api/territories?state='+encodeURIComponent(stateVal));
+    teleState.data=body;
+    renderTeleSummary(body.stats||{});
+    renderTerritoryCards();
+  }catch(err){
+    if(cont)cont.innerHTML='<div class="empty error">'+esc(err.message)+'</div>';
+    if(!authLost(err))showToast('Failed to load territories: '+err.message);
+  }
+}
+function renderTeleSummary(stats){
+  var d=el('teleDistrictsCount');var tw=el('teleTownsCount');var tm=el('teleTamansCount');var sc=el('teleScannedCount');
+  if(d)d.textContent=stats.totalDistricts||10;
+  if(tw)tw.textContent=stats.totalTowns||70;
+  if(tm)tm.textContent=stats.totalTamans||771;
+  if(sc)sc.textContent=(stats.scannedTamans||0)+' ('+(stats.totalLeads||0)+' leads)';
+}
+function expandAllDistricts(expand){
+  if(!teleState.data||!teleState.data.districts)return;
+  teleState.data.districts.forEach(function(d){teleState.expanded[d.id]=expand});
+  renderTerritoryCards();
+}
+function filterTerritoryCards(){
+  var input=el('teleFilterInput');
+  teleState.filter=input?input.value.trim().toLowerCase():'';
+  if(teleState.filter&&teleState.data&&teleState.data.districts){
+    teleState.data.districts.forEach(function(d){teleState.expanded[d.id]=true});
+  }
+  renderTerritoryCards();
+}
+function toggleDistrict(id){
+  teleState.expanded[id]=!teleState.expanded[id];
+  var card=el('distCard-'+id);
+  if(card)card.classList.toggle('expanded',teleState.expanded[id]);
+}
+function renderTerritoryCards(){
+  var cont=el('teleTerritoryContainer');
+  if(!cont||!teleState.data)return;
+  var districts=teleState.data.districts||[];
+  var f=teleState.filter;
+  var html='';
+  districts.forEach(function(d){
+    var filteredTowns=d.towns;
+    if(f){
+      filteredTowns=d.towns.filter(function(t){
+        if(t.name.toLowerCase().indexOf(f)>=0)return true;
+        return t.tamans.some(function(tm){return tm.name.toLowerCase().indexOf(f)>=0});
+      });
+      if(!filteredTowns.length&&d.name.toLowerCase().indexOf(f)<0)return;
+    }
+    var isExpanded=f?true:!!teleState.expanded[d.id];
+    var scannedRatio=(d.scannedTamans||0)+'/'+(d.totalTamans||d.towns.reduce(function(a,t){return a+t.tamans.length},0))+' scanned';
+    html+='<div class="district-card '+(isExpanded?'expanded':'')+'" id="distCard-'+attr(d.id)+'">';
+    html+='<div class="district-head" onclick="toggleDistrict(\''+attr(d.id)+'\')">';
+    html+='<div class="district-title"><h3>'+esc(d.num)+'. Daerah '+esc(d.name)+'</h3><span class="district-badge">'+esc(scannedRatio)+'</span></div>';
+    html+='<span class="district-chevron">&#9660;</span></div>';
+    html+='<div class="district-body">';
+    var townsToRender=f&&filteredTowns.length?filteredTowns:d.towns;
+    townsToRender.forEach(function(t){
+      var filteredTamans=t.tamans;
+      if(f&&t.name.toLowerCase().indexOf(f)<0){
+        filteredTamans=t.tamans.filter(function(tm){return tm.name.toLowerCase().indexOf(f)>=0});
+      }
+      var tScan=t.scan;
+      var tScanned=tScan&&tScan.status==='completed';
+      var tScanning=tScan&&terminal.indexOf(tScan.status)<0;
+      html+='<div class="town-block"><div class="town-head">';
+      html+='<div style="display:flex;align-items:center;gap:10px;"><div class="town-title">'+esc(t.name)+'</div>';
+      if(tScanned){html+='<a class="taman-link" target="_blank" rel="noopener" href="/r/'+attr(tScan.publicId)+'">&#9679; '+esc(tScan.count)+' leads &#8599;</a>'}
+      else if(tScanning){html+='<span style="font-size:11px;color:var(--warn);">&#9679; Scanning...</span>'}
+      html+='</div>';
+      html+='<button class="town-scan-btn" type="button" onclick="queueTerritoryScan(this,\''+attr(t.queryPlace)+'\',\''+attr(t.name)+'\')">&#9889; Scan Whole Town</button>';
+      html+='</div>';
+      html+='<div class="taman-grid">';
+      filteredTamans.forEach(function(tm){
+        var scan=tm.scan;
+        var isScanned=scan&&scan.status==='completed';
+        var isScanning=scan&&terminal.indexOf(scan.status)<0;
+        var pillClass=isScanned?'scanned':isScanning?'scanning':'';
+        var pipClass=isScanned?'scanned':isScanning?'scanning':'';
+        html+='<div class="taman-pill '+pillClass+'">';
+        html+='<span class="taman-pip '+pipClass+'"></span>';
+        html+='<span class="taman-name">'+esc(tm.name)+'</span>';
+        if(isScanned){
+          html+='<a class="taman-link" target="_blank" rel="noopener" href="/r/'+attr(scan.publicId)+'" title="Open search report">'+esc(scan.count)+' leads &#8599;</a>';
+          html+='<button class="taman-scan-action" style="background:transparent;color:var(--muted);border:1px solid var(--line);" type="button" onclick="queueTerritoryScan(this,\''+attr(tm.queryPlace)+'\',\''+attr(tm.name)+'\')" title="Re-scan market">&#8635;</button>';
+        }else if(isScanning){
+          html+='<span style="font-size:11px;color:var(--warn);">Scanning...</span>';
+        }else{
+          html+='<button class="taman-scan-action" type="button" onclick="queueTerritoryScan(this,\''+attr(tm.queryPlace)+'\',\''+attr(tm.name)+'\')">&#9889; Scan</button>';
+        }
+        html+='</div>';
+      });
+      html+='</div></div>';
+    });
+    html+='</div></div>';
+  });
+  cont.innerHTML=html||'<div class="empty">No territories matching filter.</div>';
+}
+async function queueTerritoryScan(btn,targetPlace,label){
+  var catInput=el('teleCategory');
+  var keyword=catInput?catInput.value.trim():'business';
+  var maxInput=el('teleMaxResults');
+  var maxCount=maxInput?Number(maxInput.value)||200:200;
+  var origText=btn.textContent;
+  btn.disabled=true;
+  btn.textContent='Queueing\u2026';
+  try{
+    var body=await api('/api/business-search',{
+      method:'POST',
+      body:JSON.stringify({keyword:keyword||undefined,place:targetPlace,max:maxCount,requesterId:'telemarketing:'+label})
+    });
+    showToast('Queued search for '+keyword+' in '+label);
+    upsertJob(body.report,'search');
+    poll(body.report,'search');
+    btn.textContent='Scanning\u2026';
+    var pNode=btn.closest&&btn.closest('.taman-pill');
+    if(pNode){
+      pNode.className='taman-pill scanning';
+      var pip=pNode.querySelector('.taman-pip');
+      if(pip)pip.className='taman-pip scanning';
+    }
+  }catch(err){
+    btn.disabled=false;
+    btn.textContent=origText;
+    if(!authLost(err))showToast('Failed to queue scan: '+err.message);
+  }
+}
 (function boot(){var saved=eeKey.read();if(saved){el('accessKey').value=saved;connect()}else{setTimeout(function(){el('accessKey').focus()},80)}})();
 </script></body></html>`;
 }

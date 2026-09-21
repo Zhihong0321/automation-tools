@@ -1542,6 +1542,38 @@ export async function dedupCompanies(): Promise<{ merged: number }> {
   return { merged };
 }
 
+export interface TerritoryScanStat {
+  public_id: string;
+  status: string;
+  place: string;
+  keyword: string | null;
+  company_count: number;
+  created_at: string;
+}
+
+export async function getTerritoryScanStats(): Promise<TerritoryScanStat[]> {
+  if (!configured()) return [];
+  await migrate();
+  const res = await sql<TerritoryScanStat>(`
+    select
+      r.public_id,
+      r.status,
+      lower(trim(r.request->>'place')) as place,
+      r.request->>'keyword' as keyword,
+      coalesce(
+        case when jsonb_typeof(r.result->'companies') = 'array' then jsonb_array_length(r.result->'companies') else null end,
+        (select count(*)::int from search_report_company sc where sc.report_id = r.source_search_report_id),
+        0
+      )::int as company_count,
+      r.created_at::text
+    from published_report r
+    where r.report_type = 'business_search'
+      and r.request->>'place' is not null
+    order by r.created_at desc
+  `);
+  return res.rows;
+}
+
 export async function close(): Promise<void> {
   if (pool) await pool.end();
   pool = null;

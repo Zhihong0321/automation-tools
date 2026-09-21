@@ -277,6 +277,7 @@ Three consequences worth planning for:
 | `GET /api/leads/export` | bearer/portal | export leads master list as CSV for telemarketer calling sheets |
 | `GET /api/telemarketers` | bearer/portal | list active telemarketers roster |
 | `POST /api/telemarketers` | bearer/portal | add a new telemarketer to roster |
+| `GET /api/territories` | bearer/portal | state territory hierarchy (districts, towns, tamans) with live scan coverage |
 
 The Chinese edition is translated by `TRANSLATION_MODEL` (defaults to `agy`)
 through this service's own gateway, so it needs no endpoint and no key of its
