@@ -37,12 +37,14 @@ create table if not exists company_data (
   assigned_to   text,
   assigned_at   timestamptz,
   lead_notes    text,
+  is_hidden     boolean not null default false,
   lead_updated_at timestamptz not null default now()
 );
 create index if not exists company_data_name_idx  on company_data (lower(name));
 create index if not exists company_data_phone_idx on company_data (phone);
 create index if not exists company_data_lead_status_idx on company_data (lead_status);
 create index if not exists company_data_assigned_to_idx on company_data (assigned_to);
+create index if not exists company_data_is_hidden_idx on company_data (is_hidden);
 
 -- Telemarketer roster for lead assignment
 create table if not exists telemarketer (
