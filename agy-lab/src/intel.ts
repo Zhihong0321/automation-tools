@@ -2884,12 +2884,29 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     if (Object.prototype.hasOwnProperty.call(body, 'notes') || Object.prototype.hasOwnProperty.call(body, 'lead_notes')) {
       patch.notes = body.notes == null && body.lead_notes == null ? null : str(body.notes || body.lead_notes);
     }
+    if (Object.prototype.hasOwnProperty.call(body, 'isHidden') || Object.prototype.hasOwnProperty.call(body, 'is_hidden')) {
+      patch.isHidden = Boolean(body.isHidden ?? body.is_hidden);
+    }
     const updated = await db.updateLead(companyId, patch);
     if (!updated) {
       ctx.json(res, 404, { error: 'company not found or merged into another entity', companyId });
       return true;
     }
     ctx.json(res, 200, { ok: true, lead: updated });
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/leads/hide') {
+    const body = await ctx.readJson(req);
+    const rawIds = Array.isArray(body.companyIds) ? body.companyIds : (body.companyId != null ? [body.companyId] : []);
+    const companyIds = rawIds.map((id: unknown) => String(id)).filter(Boolean);
+    const hide = body.hide !== undefined ? Boolean(body.hide) : (body.isHidden !== undefined ? Boolean(body.isHidden) : (body.is_hidden !== undefined ? Boolean(body.is_hidden) : true));
+    if (!companyIds.length) {
+      ctx.json(res, 400, { error: 'companyIds is required' });
+      return true;
+    }
+    const result = await db.hideLeads(companyIds, hide);
+    ctx.json(res, 200, { ok: true, hide, ...result });
     return true;
   }
 
