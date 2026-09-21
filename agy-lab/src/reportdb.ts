@@ -263,7 +263,7 @@ export function migrate(): Promise<void> {
           execute format('alter table published_report drop constraint %I', report_type_constraint);
         end if;
         alter table published_report add constraint published_report_report_type_check
-          check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research', 'ads_market'));
+          check (report_type in ('business_search', 'company_research', 'person_research', 'ads_research', 'ads_market', 'contact_research'));
       end $$;
     `);
     // ------------------------------------------------------------------ the run log
