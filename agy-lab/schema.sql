@@ -30,10 +30,27 @@ create table if not exists company_data (
   maps_url      text,
   source        text not null default 'gmap',
   first_seen_at timestamptz not null default now(),
-  last_seen_at  timestamptz not null default now()
+  last_seen_at  timestamptz not null default now(),
+  -- Lead distribution & telemarketer assignment
+  lead_status   text not null default 'unassigned'
+                  check (lead_status in ('unassigned', 'assigned', 'contacted', 'interested', 'not_interested', 'do_not_call')),
+  assigned_to   text,
+  assigned_at   timestamptz,
+  lead_notes    text,
+  lead_updated_at timestamptz not null default now()
 );
 create index if not exists company_data_name_idx  on company_data (lower(name));
 create index if not exists company_data_phone_idx on company_data (phone);
+create index if not exists company_data_lead_status_idx on company_data (lead_status);
+create index if not exists company_data_assigned_to_idx on company_data (assigned_to);
+
+-- Telemarketer roster for lead assignment
+create table if not exists telemarketer (
+  id         serial primary key,
+  name       text not null unique,
+  active     boolean not null default true,
+  created_at timestamptz not null default now()
+);
 
 -- People attached to a company. Created and indexed now; the research chain
 -- (Phase 3) is what fills it. Nothing writes this table yet.

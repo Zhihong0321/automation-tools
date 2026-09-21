@@ -418,6 +418,22 @@ export function migrate(): Promise<void> {
       alter table company_research_run add column if not exists translation_metadata jsonb not null default '{}'::jsonb;
       comment on column company_research_run.translated_report is 'Chinese (zh-CN) translation of final_report. URLs, IDs and contact values remain canonical.';
     `);
+    await sql(`
+      alter table company_data add column if not exists lead_status text not null default 'unassigned';
+      alter table company_data add column if not exists assigned_to text;
+      alter table company_data add column if not exists assigned_at timestamptz;
+      alter table company_data add column if not exists lead_notes text;
+      alter table company_data add column if not exists lead_updated_at timestamptz default now();
+      create index if not exists company_data_lead_status_idx on company_data (lead_status);
+      create index if not exists company_data_assigned_to_idx on company_data (assigned_to);
+
+      create table if not exists telemarketer (
+        id serial primary key,
+        name text not null unique,
+        active boolean not null default true,
+        created_at timestamptz not null default now()
+      );
+    `);
   })().catch((err) => {
     migrated = null;
     throw err;
@@ -1092,7 +1108,350 @@ export async function listEvents(key: { reportId?: string | number | null; publi
   return rows;
 }
 
+export type LeadStatus = 'unassigned' | 'assigned' | 'contacted' | 'interested' | 'not_interested' | 'do_not_call';
+
+export interface LeadItem {
+  id: string;
+  name: string;
+  category: string | null;
+  address: string | null;
+  phone: string | null;
+  website: string | null;
+  maps_url: string | null;
+  rating: number | null;
+  reviews: number | null;
+  lead_status: LeadStatus;
+  assigned_to: string | null;
+  assigned_at: string | null;
+  lead_notes: string | null;
+  lead_updated_at: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+  research_public_id: string | null;
+  research_status: string | null;
+  research_version: number | null;
+  branch_count: number;
+}
+
+export interface LeadStats {
+  total: number;
+  unassigned: number;
+  assigned: number;
+  contacted: number;
+  interested: number;
+  not_interested: number;
+  do_not_call: number;
+}
+
+export async function listLeads(options: {
+  search?: string | null;
+  status?: string | null;
+  assignedTo?: string | null;
+  researchStatus?: string | null;
+  limit?: number;
+  offset?: number;
+  sort?: string | null;
+} = {}): Promise<{ leads: LeadItem[]; total: number; stats: LeadStats; limit: number; offset: number }> {
+  await migrate();
+  const limit = Math.min(Math.max(Math.round(options.limit ?? 50), 1), 100);
+  const offset = Math.max(Math.round(options.offset ?? 0), 0);
+
+  const whereConditions: string[] = ['c.merged_into is null'];
+  const params: unknown[] = [];
+
+  if (options.search && options.search.trim()) {
+    params.push(`%${options.search.trim()}%`);
+    const pIdx = params.length;
+    whereConditions.push(`(c.name ilike $${pIdx} or coalesce(c.phone,'') ilike $${pIdx} or coalesce(c.address,'') ilike $${pIdx} or coalesce(c.category,'') ilike $${pIdx})`);
+  }
+
+  if (options.status && options.status !== 'all') {
+    params.push(options.status.trim());
+    whereConditions.push(`c.lead_status = $${params.length}`);
+  }
+
+  if (options.assignedTo && options.assignedTo !== 'all') {
+    if (options.assignedTo === 'unassigned') {
+      whereConditions.push(`c.assigned_to is null`);
+    } else {
+      params.push(options.assignedTo.trim());
+      whereConditions.push(`c.assigned_to = $${params.length}`);
+    }
+  }
+
+  if (options.researchStatus === 'researched') {
+    whereConditions.push(`rep.public_id is not null`);
+  } else if (options.researchStatus === 'unresearched') {
+    whereConditions.push(`rep.public_id is null`);
+  }
+
+  const whereClause = whereConditions.join(' and ');
+
+  let orderBy = 'c.last_seen_at desc, c.id desc';
+  if (options.sort === 'name') orderBy = 'lower(c.name) asc';
+  else if (options.sort === 'assigned_at') orderBy = 'c.assigned_at desc nulls last, c.id desc';
+  else if (options.sort === 'rating') orderBy = 'c.rating desc nulls last, c.reviews desc nulls last';
+
+  const [items, countRes, statsRes] = await Promise.all([
+    sql<LeadItem>(
+      `select
+         c.id::text, c.name, c.category, c.address, c.phone, c.website, c.maps_url,
+         c.rating::float, c.reviews,
+         coalesce(c.lead_status, 'unassigned') as lead_status,
+         c.assigned_to, c.assigned_at, c.lead_notes, c.lead_updated_at,
+         c.first_seen_at, c.last_seen_at,
+         rep.public_id as research_public_id,
+         rep.status as research_status,
+         rep.version as research_version,
+         coalesce(b.cnt, 0)::int as branch_count
+       from company_data c
+       left join lateral (
+         select public_id, status, version
+         from published_report
+         where company_id = c.id and report_type = 'company_research'
+         order by version desc, created_at desc limit 1
+       ) rep on true
+       left join lateral (
+         select count(*) as cnt from company_data br where br.merged_into = c.id
+       ) b on true
+       where ${whereClause}
+       order by ${orderBy}
+       limit $${params.length + 1} offset $${params.length + 2}`,
+      [...params, limit, offset],
+    ),
+    sql<{ total: string }>(
+      `select count(*)::text as total
+       from company_data c
+       left join lateral (
+         select public_id from published_report
+         where company_id = c.id and report_type = 'company_research'
+         order by version desc, created_at desc limit 1
+       ) rep on true
+       where ${whereClause}`,
+      params,
+    ),
+    sql<{
+      total: string;
+      unassigned: string;
+      assigned: string;
+      contacted: string;
+      interested: string;
+      not_interested: string;
+      do_not_call: string;
+    }>(
+      `select
+         count(*)::text as total,
+         count(*) filter (where coalesce(lead_status, 'unassigned') = 'unassigned')::text as unassigned,
+         count(*) filter (where lead_status = 'assigned')::text as assigned,
+         count(*) filter (where lead_status = 'contacted')::text as contacted,
+         count(*) filter (where lead_status = 'interested')::text as interested,
+         count(*) filter (where lead_status = 'not_interested')::text as not_interested,
+         count(*) filter (where lead_status = 'do_not_call')::text as do_not_call
+       from company_data where merged_into is null`,
+    ),
+  ]);
+
+  const statsRow = statsRes.rows[0];
+  const stats: LeadStats = {
+    total: Number(statsRow?.total ?? 0),
+    unassigned: Number(statsRow?.unassigned ?? 0),
+    assigned: Number(statsRow?.assigned ?? 0),
+    contacted: Number(statsRow?.contacted ?? 0),
+    interested: Number(statsRow?.interested ?? 0),
+    not_interested: Number(statsRow?.not_interested ?? 0),
+    do_not_call: Number(statsRow?.do_not_call ?? 0),
+  };
+
+  return {
+    leads: items.rows,
+    total: Number(countRes.rows[0]?.total ?? 0),
+    stats,
+    limit,
+    offset,
+  };
+}
+
+export async function assignLeads(
+  companyIds: (string | number)[],
+  assignedTo: string,
+  notes?: string | null,
+): Promise<{ updated: number }> {
+  await migrate();
+  const trimmed = assignedTo.trim();
+  if (!trimmed) throw new Error('assignedTo is required');
+  const ids = companyIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0);
+  if (!ids.length) return { updated: 0 };
+
+  await sql(
+    `insert into telemarketer (name) values ($1) on conflict (name) do update set active = true`,
+    [trimmed],
+  );
+
+  const res = await sql(
+    `update company_data set
+       assigned_to = $1,
+       assigned_at = now(),
+       lead_status = case when coalesce(lead_status, 'unassigned') = 'unassigned' then 'assigned' else lead_status end,
+       lead_notes = case when $2::text is not null and $2 <> ''
+                         then case when lead_notes is not null and lead_notes <> ''
+                                   then lead_notes || E'\n' || $2
+                                   else $2 end
+                         else lead_notes end,
+       lead_updated_at = now()
+     where id = any($3::bigint[]) and merged_into is null
+     returning id`,
+    [trimmed, notes?.trim() || null, ids],
+  );
+  return { updated: res.rows.length };
+}
+
+export async function unassignLeads(companyIds: (string | number)[]): Promise<{ updated: number }> {
+  await migrate();
+  const ids = companyIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0);
+  if (!ids.length) return { updated: 0 };
+
+  const res = await sql(
+    `update company_data set
+       assigned_to = null,
+       assigned_at = null,
+       lead_status = 'unassigned',
+       lead_updated_at = now()
+     where id = any($1::bigint[]) and merged_into is null
+     returning id`,
+    [ids],
+  );
+  return { updated: res.rows.length };
+}
+
+export async function updateLead(
+  companyId: string | number,
+  patch: {
+    leadStatus?: LeadStatus;
+    assignedTo?: string | null;
+    notes?: string | null;
+  },
+): Promise<Record<string, unknown> | null> {
+  await migrate();
+  const id = Number(companyId);
+  if (!Number.isFinite(id) || id <= 0) throw new Error('invalid company id');
+
+  if (patch.assignedTo && patch.assignedTo.trim()) {
+    await sql(
+      `insert into telemarketer (name) values ($1) on conflict (name) do update set active = true`,
+      [patch.assignedTo.trim()],
+    );
+  }
+
+  const hasStatus = Object.prototype.hasOwnProperty.call(patch, 'leadStatus');
+  const hasAssignedTo = Object.prototype.hasOwnProperty.call(patch, 'assignedTo');
+  const hasNotes = Object.prototype.hasOwnProperty.call(patch, 'notes');
+
+  const res = await sql(
+    `update company_data set
+       lead_status = case when $2::boolean then $3 else lead_status end,
+       assigned_to = case when $4::boolean then $5 else assigned_to end,
+       assigned_at = case when $4::boolean then (case when $5 is null then null else coalesce(assigned_at, now()) end) else assigned_at end,
+       lead_notes = case when $6::boolean then $7 else lead_notes end,
+       lead_updated_at = now()
+     where id = $1 and merged_into is null
+     returning *`,
+    [
+      id,
+      hasStatus, patch.leadStatus ?? null,
+      hasAssignedTo, patch.assignedTo?.trim() || null,
+      hasNotes, patch.notes ?? null,
+    ],
+  );
+  return res.rows[0] ?? null;
+}
+
+export async function listTelemarketers(): Promise<string[]> {
+  await migrate();
+  const res = await sql<{ name: string }>(`
+    select distinct name from (
+      select name from telemarketer where active = true
+      union
+      select distinct assigned_to as name from company_data where assigned_to is not null and assigned_to <> ''
+    ) t where name is not null and name <> '' order by name asc
+  `);
+  return res.rows.map((r) => r.name);
+}
+
+export async function addTelemarketer(name: string): Promise<string> {
+  await migrate();
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error('telemarketer name is required');
+  await sql(
+    `insert into telemarketer (name) values ($1) on conflict (name) do update set active = true`,
+    [trimmed],
+  );
+  return trimmed;
+}
+
+export async function dedupCompanies(): Promise<{ merged: number }> {
+  await migrate();
+  const r1 = await sql<{ id: string }>(`
+    with registered as (
+      select id, ${NAME_KEY_SQL} as k from company_data
+      where merged_into is null and ${NAME_KEY_SQL} ${REGISTERED_SQL}
+    ),
+    groups as (
+      select k, min(id) as keep from registered group by k having count(*) > 1
+    )
+    update company_data c set merged_into = g.keep
+    from registered r join groups g on g.k = r.k
+    where c.id = r.id and r.id <> g.keep
+    returning c.id;
+  `);
+
+  const r2 = await sql<{ id: string }>(`
+    with dup_phones as (
+      select id, ${NAME_KEY_SQL} || '|' || regexp_replace(phone, '[^0-9]', '', 'g') as k
+      from company_data
+      where merged_into is null
+        and phone is not null
+        and length(regexp_replace(phone, '[^0-9]', '', 'g')) >= 7
+    ),
+    groups as (
+      select k, min(id) as keep from dup_phones group by k having count(*) > 1
+    )
+    update company_data c set merged_into = g.keep
+    from dup_phones p join groups g on g.k = p.k
+    where c.id = p.id and p.id <> g.keep
+    returning c.id;
+  `);
+
+  await sql(`
+    update published_report p set company_id = c.merged_into
+    from company_data c where p.company_id = c.id and c.merged_into is not null;
+  `);
+
+  await sql(`
+    delete from search_report_company a
+    using company_data ca
+    where ca.id = a.company_id
+      and exists (
+        select 1
+        from search_report_company b
+        join company_data cb on cb.id = b.company_id
+        where b.report_id = a.report_id
+          and b.company_id <> a.company_id
+          and coalesce(cb.merged_into, cb.id) = coalesce(ca.merged_into, ca.id)
+          and b.company_id < a.company_id
+      );
+  `);
+
+  await sql(`
+    update search_report_company a set company_id = c.merged_into
+    from company_data c where a.company_id = c.id and c.merged_into is not null;
+  `);
+
+  const merged = (r1.rows?.length ?? 0) + (r2.rows?.length ?? 0);
+  return { merged };
+}
+
 export async function close(): Promise<void> {
   if (pool) await pool.end();
   pool = null;
 }
+

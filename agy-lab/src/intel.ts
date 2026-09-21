@@ -2353,10 +2353,144 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
 /** Authenticated product API routes. */
 export async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL, ctx: Ctx): Promise<boolean> {
   const p = url.pathname;
-  const method = req.method ?? 'GET';
-  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/ads-market') && !p.startsWith('/api/reports')) return false;
+  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/ads-market') && !p.startsWith('/api/reports') && !p.startsWith('/api/leads') && !p.startsWith('/api/telemarketers')) return false;
   if (!db.configured()) {
     ctx.json(res, 503, { error: 'report database is not configured; link DATABASE_URL to the Railway service' });
+    return true;
+  }
+
+  // ---- Lead distribution & telemarketer assignment -----------------------
+  if (method === 'GET' && p === '/api/leads/export') {
+    const search = url.searchParams.get('search');
+    const status = url.searchParams.get('status');
+    const assignedTo = url.searchParams.get('assignedTo') || url.searchParams.get('assigned_to');
+    const researchStatus = url.searchParams.get('researchStatus') || url.searchParams.get('research_status');
+    const result = await db.listLeads({ search, status, assignedTo, researchStatus, limit: 1000, offset: 0 });
+    const escapeCsv = (val: unknown) => {
+      const s = String(val == null ? '' : val);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = ['ID', 'Company Name', 'Category', 'Phone', 'Address', 'Website', 'Maps URL', 'Rating', 'Reviews', 'Lead Status', 'Assigned To', 'Assigned At', 'Research Dossier ID', 'Research Status', 'Notes'];
+    const lines = [header.join(',')];
+    for (const lead of result.leads) {
+      lines.push([
+        escapeCsv(lead.id),
+        escapeCsv(lead.name),
+        escapeCsv(lead.category),
+        escapeCsv(lead.phone),
+        escapeCsv(lead.address),
+        escapeCsv(lead.website),
+        escapeCsv(lead.maps_url),
+        escapeCsv(lead.rating),
+        escapeCsv(lead.reviews),
+        escapeCsv(lead.lead_status),
+        escapeCsv(lead.assigned_to),
+        escapeCsv(lead.assigned_at),
+        escapeCsv(lead.research_public_id),
+        escapeCsv(lead.research_status),
+        escapeCsv(lead.lead_notes),
+      ].join(','));
+    }
+    const csvData = lines.join('\r\n');
+    res.writeHead(200, {
+      'content-type': 'text/csv; charset=utf-8',
+      'content-disposition': `attachment; filename="leads-${new Date().toISOString().slice(0, 10)}.csv"`,
+      'cache-control': 'no-store',
+    });
+    res.end(csvData);
+    return true;
+  }
+
+  if (method === 'GET' && p === '/api/leads') {
+    const search = url.searchParams.get('search');
+    const status = url.searchParams.get('status');
+    const assignedTo = url.searchParams.get('assignedTo') || url.searchParams.get('assigned_to');
+    const researchStatus = url.searchParams.get('researchStatus') || url.searchParams.get('research_status');
+    const limit = Number(url.searchParams.get('limit') ?? 50);
+    const offset = Number(url.searchParams.get('offset') ?? 0);
+    const sort = url.searchParams.get('sort');
+    const result = await db.listLeads({ search, status, assignedTo, researchStatus, limit, offset, sort });
+    ctx.json(res, 200, result);
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/leads/assign') {
+    const body = await ctx.readJson(req);
+    const rawIds = Array.isArray(body.companyIds) ? body.companyIds : [body.companyId];
+    const companyIds = rawIds.map((id: unknown) => String(id)).filter(Boolean);
+    const assignedTo = str(body.assignedTo || body.assigned_to).trim();
+    const notes = str(body.notes).trim() || null;
+    if (!companyIds.length) {
+      ctx.json(res, 400, { error: 'companyIds is required' });
+      return true;
+    }
+    if (!assignedTo) {
+      ctx.json(res, 400, { error: 'assignedTo is required' });
+      return true;
+    }
+    const result = await db.assignLeads(companyIds, assignedTo, notes);
+    ctx.json(res, 200, { ok: true, ...result, assignedTo });
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/leads/unassign') {
+    const body = await ctx.readJson(req);
+    const rawIds = Array.isArray(body.companyIds) ? body.companyIds : [body.companyId];
+    const companyIds = rawIds.map((id: unknown) => String(id)).filter(Boolean);
+    if (!companyIds.length) {
+      ctx.json(res, 400, { error: 'companyIds is required' });
+      return true;
+    }
+    const result = await db.unassignLeads(companyIds);
+    ctx.json(res, 200, { ok: true, ...result });
+    return true;
+  }
+
+  const leadMatch = /^\/api\/leads\/(\d+)$/.exec(p);
+  if (method === 'PATCH' && leadMatch) {
+    const companyId = leadMatch[1]!;
+    const body = await ctx.readJson(req);
+    const validStatuses = new Set(['unassigned', 'assigned', 'contacted', 'interested', 'not_interested', 'do_not_call']);
+    const rawStatus = str(body.leadStatus || body.lead_status || body.status).trim();
+    const leadStatus = validStatuses.has(rawStatus) ? rawStatus as db.LeadStatus : undefined;
+    const patch: Parameters<typeof db.updateLead>[1] = {};
+    if (leadStatus) patch.leadStatus = leadStatus;
+    if (Object.prototype.hasOwnProperty.call(body, 'assignedTo') || Object.prototype.hasOwnProperty.call(body, 'assigned_to')) {
+      patch.assignedTo = body.assignedTo == null && body.assigned_to == null ? null : str(body.assignedTo || body.assigned_to).trim() || null;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'notes') || Object.prototype.hasOwnProperty.call(body, 'lead_notes')) {
+      patch.notes = body.notes == null && body.lead_notes == null ? null : str(body.notes || body.lead_notes);
+    }
+    const updated = await db.updateLead(companyId, patch);
+    if (!updated) {
+      ctx.json(res, 404, { error: 'company not found or merged into another entity', companyId });
+      return true;
+    }
+    ctx.json(res, 200, { ok: true, lead: updated });
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/leads/dedup') {
+    const result = await db.dedupCompanies();
+    ctx.json(res, 200, { ok: true, ...result });
+    return true;
+  }
+
+  if (method === 'GET' && p === '/api/telemarketers') {
+    const telemarketers = await db.listTelemarketers();
+    ctx.json(res, 200, { telemarketers });
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/telemarketers') {
+    const body = await ctx.readJson(req);
+    const name = str(body.name).trim();
+    if (!name) {
+      ctx.json(res, 400, { error: 'name is required' });
+      return true;
+    }
+    const added = await db.addTelemarketer(name);
+    ctx.json(res, 201, { ok: true, name: added });
     return true;
   }
 

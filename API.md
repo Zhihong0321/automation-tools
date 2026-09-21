@@ -269,6 +269,14 @@ Three consequences worth planning for:
 | `GET /api/ads-market/:reportId` | bearer | status, `data.final`, the digest, and the written report |
 | `GET /r/:reportId` | opaque id | mobile human report |
 | `GET /public/reports/:reportId` | opaque id | public final JSON, never raw rounds |
+| `GET /api/leads` | bearer/portal | company master list, filtered and paginated with distribution metrics |
+| `POST /api/leads/assign` | bearer/portal | assign single or batch companies to a telemarketer |
+| `POST /api/leads/unassign` | bearer/portal | unassign single or batch companies |
+| `PATCH /api/leads/:companyId` | bearer/portal | update company lead status, notes, or assignee |
+| `POST /api/leads/dedup` | bearer/portal | run deduplication pass across company master list |
+| `GET /api/leads/export` | bearer/portal | export leads master list as CSV for telemarketer calling sheets |
+| `GET /api/telemarketers` | bearer/portal | list active telemarketers roster |
+| `POST /api/telemarketers` | bearer/portal | add a new telemarketer to roster |
 
 The Chinese edition is translated by `TRANSLATION_MODEL` (defaults to `agy`)
 through this service's own gateway, so it needs no endpoint and no key of its
