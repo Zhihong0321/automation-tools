@@ -274,10 +274,11 @@ async function bulkUnassignSelected(){var keys=Object.keys(leadState.selected).f
 async function updateLeadStatus(companyId,selectEl){var status=selectEl.value;selectEl.className='status-select '+status;try{await api('/api/leads/'+encodeURIComponent(companyId),{method:'PATCH',body:JSON.stringify({leadStatus:status})});showToast('Status updated to '+status)}catch(err){if(!authLost(err))showToast('Failed to update status: '+err.message)}}
 async function updateLeadAssignee(companyId,selectEl){var assignee=selectEl.value.trim();try{await api('/api/leads/'+encodeURIComponent(companyId),{method:'PATCH',body:JSON.stringify({assignedTo:assignee||null,leadStatus:assignee?'assigned':'unassigned'})});showToast(assignee?'Assigned to '+assignee:'Lead unassigned');await loadLeads()}catch(err){if(!authLost(err))showToast('Failed to update assignment: '+err.message)}}
 async function editLeadNotes(companyId,currentNotes){var note=window.prompt('Lead notes / telemarketer feedback:',currentNotes||'');if(note==null)return;try{await api('/api/leads/'+encodeURIComponent(companyId),{method:'PATCH',body:JSON.stringify({notes:note.trim()})});showToast('Notes saved');await loadLeads()}catch(err){if(!authLost(err))showToast('Failed to save notes: '+err.message)}}
+function promptLeadNotes(btn){var id=btn.getAttribute('data-id');var notes=btn.getAttribute('data-notes')||'';return editLeadNotes(id,notes)}
 async function promptAddTelemarketer(){var name=window.prompt('Enter new telemarketer name:');if(!name||!name.trim())return;try{await api('/api/telemarketers',{method:'POST',body:JSON.stringify({name:name.trim()})});showToast('Added '+name.trim()+' to telemarketers');await loadTelemarketers()}catch(err){if(!authLost(err))showToast('Failed to add telemarketer: '+err.message)}}
 async function runDedupAction(){if(!window.confirm('Run deduplication pass across company registry?\n\nThis merges duplicate company branches and duplicate phone contacts into their canonical primary record.'))return;try{var res=await api('/api/leads/dedup',{method:'POST'});showToast('Dedup completed: '+(res.merged||0)+' duplicates consolidated');await loadLeads()}catch(err){if(!authLost(err))showToast('Dedup failed: '+err.message)}}
 function exportLeadsCsv(){var q='/api/leads/export?token='+encodeURIComponent(state.token);if(leadState.statusFilter!=='all')q+='&status='+encodeURIComponent(leadState.statusFilter);if(leadState.search)q+='&search='+encodeURIComponent(leadState.search);if(leadState.teleFilter!=='all')q+='&assignedTo='+encodeURIComponent(leadState.teleFilter);if(leadState.researchFilter!=='all')q+='&researchStatus='+encodeURIComponent(leadState.researchFilter);window.open(q,'_blank')}
-function renderLeads(leads){var wrapper=el('leadTableWrapper');if(!wrapper)return;if(!leads.length){wrapper.innerHTML='<div class="empty">No companies found matching the filter.</div>';return}wrapper.innerHTML=leads.map(function(lead){var checked=Boolean(leadState.selected[lead.id]);var phone=lead.phone||'';var website=safeUrl(lead.website);var maps=safeUrl(lead.maps_url);var rating=lead.rating?(' · ★ '+lead.rating+(lead.reviews?' / '+lead.reviews:'')):'';var branchBadge=lead.branch_count>0?(' <span class="branch-tag" title="'+lead.branch_count+' branches consolidated">'+lead.branch_count+' branch'+(lead.branch_count>1?'es':'')+'</span>'):'';var dossierControl='';if(lead.research_public_id){dossierControl='<a class="vip" target="_blank" rel="noopener" href="/r/'+attr(lead.research_public_id)+'">Dossier V'+(lead.research_version||1)+' ↗</a>'}else{dossierControl='<button class="research" data-company="'+attr(lead.id)+'" data-name="'+attr(lead.name)+'" onclick="startResearch(this)">Research →</button>'}var teleOpts='<option value="">(Unassigned)</option>';leadState.telemarketers.forEach(function(t){var sel=(lead.assigned_to===t)?' selected':'';teleOpts+='<option value="'+attr(t)+'"'+sel+'>'+esc(t)+'</option>'});var statuses=['unassigned','assigned','contacted','interested','not_interested','do_not_call'];var statusOpts=statuses.map(function(s){var sel=(lead.lead_status===s)?' selected':'';var lbl=s==='do_not_call'?'DNC':s.replace('_',' ');return '<option value="'+s+'"'+sel+'>'+lbl+'</option>'}).join('');var notesSnippet=lead.lead_notes?(esc(lead.lead_notes.slice(0,60))+(lead.lead_notes.length>60?'…':'')):'Add notes';return '<article class="lead-row">'+'<div><input type="checkbox" id="leadCheck-'+attr(lead.id)+'" class="lead-check" '+(checked?'checked ':'')+'onchange="toggleSelectLead(\''+attr(lead.id)+'\', this.checked)"></div>'+'<div>'+'<h3>'+esc(lead.name)+branchBadge+'</h3>'+'<div class="meta">'+esc(lead.category||'Business')+esc(rating)+'</div>'+'<div class="address" style="margin-top:4px;">'+esc(lead.address||'Address not published')+'</div>'+'</div>'+'<div class="company-contact">'+'<div class="phone">'+(phone?('<a class="source-link" href="tel:'+attr(phone.replace(/[^+\d]/g,''))+'" style="font-size:13px;">'+esc(phone)+'</a>'):'<span class="meta">No phone</span>')+'</div>'+'<div class="actions" style="display:flex;gap:8px;margin-top:4px;">'+(website?('<a class="source-link" target="_blank" rel="noopener" href="'+attr(website)+'">Web</a>'):'')+(maps?('<a class="source-link" target="_blank" rel="noopener" href="'+attr(maps)+'">Maps</a>'):'')+'</div>'+'<div style="margin-top:8px;">'+dossierControl+'</div>'+'</div>'+'<div style="display:grid;gap:8px;">'+'<div>'+'<label style="display:block;font:700 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Assigned to</label>'+'<select class="tele-select" onchange="updateLeadAssignee(\''+attr(lead.id)+'\', this)">'+teleOpts+'</select>'+'</div>'+'<div>'+'<label style="display:block;font:700 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Status</label>'+'<select class="status-select '+attr(lead.lead_status||'unassigned')+'" onchange="updateLeadStatus(\''+attr(lead.id)+'\', this)">'+statusOpts+'</select>'+'</div>'+'</div>'+'<div style="display:grid;gap:6px;align-content:start;">'+'<button class="filter" type="button" style="min-height:30px;padding:0 8px;font-size:9px;white-space:nowrap;" onclick="editLeadNotes(\''+attr(lead.id)+'\', '+attr(JSON.stringify(lead.lead_notes||''))+')">📝 '+(lead.lead_notes?'Notes':'+ Note')+'</button>'+(lead.lead_notes?('<span style="font-size:11px;color:var(--muted);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+attr(lead.lead_notes)+'">'+notesSnippet+'</span>'):'')+'</div>'+'</article>'}).join('')}
+function renderLeads(leads){var wrapper=el('leadTableWrapper');if(!wrapper)return;if(!leads.length){wrapper.innerHTML='<div class="empty">No companies found matching the filter.</div>';return}wrapper.innerHTML=leads.map(function(lead){var checked=Boolean(leadState.selected[lead.id]);var phone=lead.phone||'';var website=safeUrl(lead.website);var maps=safeUrl(lead.maps_url);var rating=lead.rating?(' · ★ '+lead.rating+(lead.reviews?' / '+lead.reviews:'')):'';var branchBadge=lead.branch_count>0?(' <span class="branch-tag" title="'+lead.branch_count+' branches consolidated">'+lead.branch_count+' branch'+(lead.branch_count>1?'es':'')+'</span>'):'';var dossierControl='';if(lead.research_public_id){dossierControl='<a class="vip" target="_blank" rel="noopener" href="/r/'+attr(lead.research_public_id)+'">Dossier V'+(lead.research_version||1)+' ↗</a>'}else{dossierControl='<button class="research" data-company="'+attr(lead.id)+'" data-name="'+attr(lead.name)+'" onclick="startResearch(this)">Research →</button>'}var teleOpts='<option value="">(Unassigned)</option>';leadState.telemarketers.forEach(function(t){var sel=(lead.assigned_to===t)?' selected':'';teleOpts+='<option value="'+attr(t)+'"'+sel+'>'+esc(t)+'</option>'});var statuses=['unassigned','assigned','contacted','interested','not_interested','do_not_call'];var statusOpts=statuses.map(function(s){var sel=(lead.lead_status===s)?' selected':'';var lbl=s==='do_not_call'?'DNC':s.replace('_',' ');return '<option value="'+s+'"'+sel+'>'+lbl+'</option>'}).join('');var notesSnippet=lead.lead_notes?(esc(lead.lead_notes.slice(0,60))+(lead.lead_notes.length>60?'…':'')):'Add notes';return '<article class="lead-row">'+'<div><input type="checkbox" id="leadCheck-'+attr(lead.id)+'" class="lead-check" '+(checked?'checked ':'')+'onchange="toggleSelectLead(\''+attr(lead.id)+'\', this.checked)"></div>'+'<div>'+'<h3>'+esc(lead.name)+branchBadge+'</h3>'+'<div class="meta">'+esc(lead.category||'Business')+esc(rating)+'</div>'+'<div class="address" style="margin-top:4px;">'+esc(lead.address||'Address not published')+'</div>'+'</div>'+'<div class="company-contact">'+'<div class="phone">'+(phone?('<a class="source-link" href="tel:'+attr(phone.replace(/[^+\d]/g,''))+'" style="font-size:13px;">'+esc(phone)+'</a>'):'<span class="meta">No phone</span>')+'</div>'+'<div class="actions" style="display:flex;gap:8px;margin-top:4px;">'+(website?('<a class="source-link" target="_blank" rel="noopener" href="'+attr(website)+'">Web</a>'):'')+(maps?('<a class="source-link" target="_blank" rel="noopener" href="'+attr(maps)+'">Maps</a>'):'')+'</div>'+'<div style="margin-top:8px;">'+dossierControl+'</div>'+'</div>'+'<div style="display:grid;gap:8px;">'+'<div>'+'<label style="display:block;font:700 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Assigned to</label>'+'<select class="tele-select" onchange="updateLeadAssignee(\''+attr(lead.id)+'\', this)">'+teleOpts+'</select>'+'</div>'+'<div>'+'<label style="display:block;font:700 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Status</label>'+'<select class="status-select '+attr(lead.lead_status||'unassigned')+'" onchange="updateLeadStatus(\''+attr(lead.id)+'\', this)">'+statusOpts+'</select>'+'</div>'+'</div>'+'<div style="display:grid;gap:6px;align-content:start;">'+'<button class="filter" type="button" style="min-height:30px;padding:0 8px;font-size:9px;white-space:nowrap;" data-id="'+attr(lead.id)+'" data-notes="'+attr(lead.lead_notes||'')+'" onclick="promptLeadNotes(this)">📝 '+(lead.lead_notes?'Notes':'+ Note')+'</button>'+(lead.lead_notes?('<span style="font-size:11px;color:var(--muted);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+attr(lead.lead_notes)+'">'+notesSnippet+'</span>'):'')+'</div>'+'</article>'}).join('')}
 var teleState={data:null,expanded:{},filter:''};
 async function loadTelemarketingView(){
   if(!state.token)return;
@@ -319,6 +320,16 @@ function toggleDistrict(id){
   var card=el('distCard-'+id);
   if(card)card.classList.toggle('expanded',teleState.expanded[id]);
 }
+function toggleDistrictCard(headEl){
+  var card=headEl.closest('.district-card');
+  if(card){
+    var id=card.getAttribute('data-dist-id');
+    if(id){
+      teleState.expanded[id]=!teleState.expanded[id];
+      card.classList.toggle('expanded',Boolean(teleState.expanded[id]));
+    }
+  }
+}
 function renderTerritoryCards(){
   var cont=el('teleTerritoryContainer');
   if(!cont||!teleState.data)return;
@@ -336,8 +347,8 @@ function renderTerritoryCards(){
     }
     var isExpanded=f?true:!!teleState.expanded[d.id];
     var scannedRatio=(d.scannedTamans||0)+'/'+(d.totalTamans||d.towns.reduce(function(a,t){return a+t.tamans.length},0))+' scanned';
-    html+='<div class="district-card '+(isExpanded?'expanded':'')+'" id="distCard-'+attr(d.id)+'">';
-    html+='<div class="district-head" onclick="toggleDistrict(\''+attr(d.id)+'\')">';
+    html+='<div class="district-card '+(isExpanded?'expanded':'')+'" id="distCard-'+attr(d.id)+'" data-dist-id="'+attr(d.id)+'">';
+    html+='<div class="district-head" onclick="toggleDistrictCard(this)">';
     html+='<div class="district-title"><h3>'+esc(d.num)+'. Daerah '+esc(d.name)+'</h3><span class="district-badge">'+esc(scannedRatio)+'</span></div>';
     html+='<span class="district-chevron">&#9660;</span></div>';
     html+='<div class="district-body">';
@@ -355,7 +366,7 @@ function renderTerritoryCards(){
       if(tScanned){html+='<a class="taman-link" target="_blank" rel="noopener" href="/r/'+attr(tScan.publicId)+'">&#9679; '+esc(tScan.count)+' leads &#8599;</a>'}
       else if(tScanning){html+='<span style="font-size:11px;color:var(--warn);">&#9679; Scanning...</span>'}
       html+='</div>';
-      html+='<button class="town-scan-btn" type="button" onclick="queueTerritoryScan(this,\''+attr(t.queryPlace)+'\',\''+attr(t.name)+'\')">&#9889; Scan Whole Town</button>';
+      html+='<button class="town-scan-btn" type="button" data-place="'+attr(t.queryPlace)+'" data-name="'+attr(t.name)+'" onclick="queueTerritoryFromBtn(this)">&#9889; Scan Whole Town</button>';
       html+='</div>';
       html+='<div class="taman-grid">';
       filteredTamans.forEach(function(tm){
@@ -369,11 +380,11 @@ function renderTerritoryCards(){
         html+='<span class="taman-name">'+esc(tm.name)+'</span>';
         if(isScanned){
           html+='<a class="taman-link" target="_blank" rel="noopener" href="/r/'+attr(scan.publicId)+'" title="Open search report">'+esc(scan.count)+' leads &#8599;</a>';
-          html+='<button class="taman-scan-action" style="background:transparent;color:var(--muted);border:1px solid var(--line);" type="button" onclick="queueTerritoryScan(this,\''+attr(tm.queryPlace)+'\',\''+attr(tm.name)+'\')" title="Re-scan market">&#8635;</button>';
+          html+='<button class="taman-scan-action" style="background:transparent;color:var(--muted);border:1px solid var(--line);" type="button" data-place="'+attr(tm.queryPlace)+'" data-name="'+attr(tm.name)+'" onclick="queueTerritoryFromBtn(this)" title="Re-scan market">&#8635;</button>';
         }else if(isScanning){
           html+='<span style="font-size:11px;color:var(--warn);">Scanning...</span>';
         }else{
-          html+='<button class="taman-scan-action" type="button" onclick="queueTerritoryScan(this,\''+attr(tm.queryPlace)+'\',\''+attr(tm.name)+'\')">&#9889; Scan</button>';
+          html+='<button class="taman-scan-action" type="button" data-place="'+attr(tm.queryPlace)+'" data-name="'+attr(tm.name)+'" onclick="queueTerritoryFromBtn(this)">&#9889; Scan</button>';
         }
         html+='</div>';
       });
@@ -382,6 +393,11 @@ function renderTerritoryCards(){
     html+='</div></div>';
   });
   cont.innerHTML=html||'<div class="empty">No territories matching filter.</div>';
+}
+function queueTerritoryFromBtn(btn){
+  var p=btn.getAttribute('data-place');
+  var n=btn.getAttribute('data-name');
+  return queueTerritoryScan(btn,p,n);
 }
 async function queueTerritoryScan(btn,targetPlace,label){
   var catInput=el('teleCategory');

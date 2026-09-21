@@ -2766,7 +2766,7 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
   // ---- Telemarketing territory / lead-map --------------------------------
   if (method === 'GET' && p === '/api/territories') {
     const state = url.searchParams.get('state') || 'johor';
-    const scans = await db.getTerritoryScanStats();
+    const scans = await db.getTerritoryScanStats().catch(() => []);
     const result = territories.buildTerritoryResponse(state, scans);
     ctx.json(res, 200, result);
     return true;

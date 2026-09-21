@@ -3774,16 +3774,27 @@ function cleanStr(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
+export interface TerritoryScanStatInput {
+  public_id: string;
+  status: string;
+  place: string;
+  keyword: string | null;
+  company_count: number;
+  created_at: string;
+}
+
+function pickBestScan(matches: TerritoryScanStatInput[]): TerritoryScanStatInput | undefined {
+  if (!matches.length) return undefined;
+  const active = matches.find((s) => s.status === 'running' || s.status === 'queued');
+  if (active) return active;
+  const completed = matches.find((s) => s.status === 'completed');
+  if (completed) return completed;
+  return matches[0];
+}
+
 export function buildTerritoryResponse(
   stateName = 'johor',
-  scans: Array<{
-    public_id: string;
-    status: string;
-    place: string;
-    keyword: string | null;
-    company_count: number;
-    created_at: string;
-  }> = []
+  scans: TerritoryScanStatInput[] = []
 ) {
   const base = ALL_TERRITORIES[stateName.toLowerCase()] ?? JOHOR_TERRITORY;
   const districts: DistrictLocation[] = JSON.parse(JSON.stringify(base.districts));
@@ -3803,10 +3814,11 @@ export function buildTerritoryResponse(
       const townQueryNorm = cleanStr(t.queryPlace);
       const townNameNorm = cleanStr(t.name);
 
-      const matchingTownScan = scans.find((s) => {
+      const townMatches = scans.filter((s) => {
         const p = cleanStr(s.place);
         return p === townQueryNorm || p === townNameNorm || p.startsWith(townNameNorm + ' johor');
       });
+      const matchingTownScan = pickBestScan(townMatches);
 
       if (matchingTownScan) {
         t.scan = {
@@ -3824,12 +3836,13 @@ export function buildTerritoryResponse(
         const tamanQueryNorm = cleanStr(tm.queryPlace);
         const tamanNameNorm = cleanStr(tm.name.replace(/^(taman|jalan|bandar|desa|kampung)\s+/i, ''));
 
-        const matchingTamanScan = scans.find((s) => {
+        const tamanMatches = scans.filter((s) => {
           const p = cleanStr(s.place);
           if (p === tamanQueryNorm) return true;
           if (tamanNameNorm.length >= 3 && tamanNameNorm !== townNameNorm && p.includes(tamanNameNorm) && p.includes(townNameNorm)) return true;
           return false;
         });
+        const matchingTamanScan = pickBestScan(tamanMatches);
 
         if (matchingTamanScan) {
           tm.scan = {

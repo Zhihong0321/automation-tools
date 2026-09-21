@@ -95,4 +95,37 @@ test('telemarketing Lead-Map is integrated into portal navigation and UI', () =>
   assert.match(html, /function loadTelemarketingView\(\)/);
   assert.match(html, /function renderTerritoryCards\(\)/);
   assert.match(html, /function queueTerritoryScan\(/);
+  assert.match(html, /function queueTerritoryFromBtn\(/);
+  assert.match(html, /function promptLeadNotes\(/);
+  assert.match(html, /data-place="/);
 });
+
+test('buildTerritoryResponse prioritizes active running scan over completed scan', () => {
+  const scans = [
+    {
+      public_id: 'report_old_completed',
+      status: 'completed',
+      place: 'taman mount austin, tebrau, johor',
+      keyword: 'business',
+      company_count: 88,
+      created_at: '2026-09-19T10:00:00Z',
+    },
+    {
+      public_id: 'report_new_running',
+      status: 'running',
+      place: 'taman mount austin, tebrau, johor',
+      keyword: 'cafe',
+      company_count: 0,
+      created_at: '2026-09-21T10:00:00Z',
+    },
+  ];
+
+  const res = buildTerritoryResponse('johor', scans);
+  const jb = res.districts.find((d) => d.name === 'Johor Bahru');
+  const tebrau = jb?.towns.find((t) => t.name.includes('Tebrau'));
+  const austin = tebrau?.tamans.find((tm) => tm.name === 'Taman Mount Austin');
+  assert.ok(austin);
+  assert.equal(austin.scan?.status, 'running');
+  assert.equal(austin.scan?.publicId, 'report_new_running');
+});
+

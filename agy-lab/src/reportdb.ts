@@ -1570,6 +1570,7 @@ export async function getTerritoryScanStats(): Promise<TerritoryScanStat[]> {
     where r.report_type = 'business_search'
       and r.request->>'place' is not null
     order by r.created_at desc
+    limit 2000
   `);
   return res.rows;
 }
