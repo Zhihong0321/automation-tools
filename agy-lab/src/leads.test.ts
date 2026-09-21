@@ -20,6 +20,7 @@ test('leads master UI is integrated in portal navigation and views', () => {
   assert.match(html, /id="statUnassigned"/);
   assert.match(html, /id="statAssigned"/);
   assert.match(html, /id="statContacted"/);
+  assert.match(html, /id="statHidden"/);
 
   // Filtering & controls
   assert.match(html, /id="leadSearch"/);
@@ -29,12 +30,15 @@ test('leads master UI is integrated in portal navigation and views', () => {
   assert.match(html, /data-lead-status="unassigned"/);
   assert.match(html, /data-lead-status="assigned"/);
   assert.match(html, /data-lead-status="contacted"/);
+  assert.match(html, /data-lead-status="hidden"/);
 
-  // Bulk assignment bar
+  // Bulk assignment & hide bar
   assert.match(html, /id="bulkBar"/);
   assert.match(html, /id="bulkAssignSelect"/);
   assert.match(html, /bulkAssignSelected\(\)/);
   assert.match(html, /bulkUnassignSelected\(\)/);
+  assert.match(html, /bulkHideSelected\(true\)/);
+  assert.match(html, /bulkHideSelected\(false\)/);
 
   // Table wrapper & pagination
   assert.match(html, /id="leadTableWrapper"/);
@@ -48,10 +52,11 @@ test('leads master UI is integrated in portal navigation and views', () => {
   assert.doesNotThrow(() => new Function(script));
 });
 
-test('reportdb exports lead distribution and dedup interfaces', () => {
+test('reportdb exports lead distribution, hide and dedup interfaces', () => {
   assert.equal(typeof db.listLeads, 'function');
   assert.equal(typeof db.assignLeads, 'function');
   assert.equal(typeof db.unassignLeads, 'function');
+  assert.equal(typeof db.hideLeads, 'function');
   assert.equal(typeof db.updateLead, 'function');
   assert.equal(typeof db.listTelemarketers, 'function');
   assert.equal(typeof db.addTelemarketer, 'function');
