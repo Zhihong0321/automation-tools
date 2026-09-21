@@ -9,6 +9,9 @@ import * as gateway from './gateway.ts';
 import * as db from './reportdb.ts';
 import * as ui from './reportui.ts';
 import * as territories from './territories.ts';
+import * as contacts from './contacts.ts';
+import { normalizePhoneNumber } from './phone.ts';
+export { normalizePhoneNumber };
 
 export interface Ctx {
   json: (res: http.ServerResponse, status: number, body: unknown) => void;
@@ -845,58 +848,6 @@ const TIME_BUDGET = 'HARD TIME BUDGET: you have about four minutes of wall clock
   + 'as a deadline, not a target. Track it. When you reach it, stop researching immediately and emit the '
   + 'JSON with what you already have, even if sections are thin or empty -- a short answer is a result '
   + 'and a missed deadline is not. Do not narrate the deadline; just meet it.';
-
-export function normalizePhoneNumber(raw: string, defaultCountry = 'MY'): {
-  raw: string;
-  e164: string | null;
-  digits: string;
-  isMobile: boolean;
-  whatsappUrl: string | null;
-  dialUrl: string;
-} {
-  const clean = str(raw).trim();
-  const digits = clean.replace(/\D/g, '');
-  if (!digits || digits.length < 7) {
-    return { raw: clean, e164: null, digits, isMobile: false, whatsappUrl: null, dialUrl: `tel:${clean.replace(/[^+\d]/g, '')}` };
-  }
-
-  let e164: string | null = null;
-  let isMobile = false;
-
-  if (defaultCountry === 'MY' || digits.startsWith('60') || clean.startsWith('+60') || digits.startsWith('01')) {
-    let national = digits;
-    if (national.startsWith('60')) national = '0' + national.slice(2);
-    else if (!national.startsWith('0')) national = '0' + national;
-
-    // Malaysian mobile prefixes: 010, 011, 012, 013, 014, 015, 016, 017, 018, 019
-    isMobile = /^01[0-9]/.test(national);
-    const intlDigits = '60' + national.slice(1);
-    e164 = '+' + intlDigits;
-    const whatsappUrl = isMobile ? `https://wa.me/${intlDigits}` : null;
-    return {
-      raw: clean,
-      e164,
-      digits: intlDigits,
-      isMobile,
-      whatsappUrl,
-      dialUrl: `tel:${e164}`,
-    };
-  }
-
-  if (clean.startsWith('+')) {
-    e164 = '+' + digits;
-  } else {
-    e164 = '+' + digits;
-  }
-  return {
-    raw: clean,
-    e164,
-    digits,
-    isMobile: false,
-    whatsappUrl: null,
-    dialUrl: `tel:${e164 || digits}`,
-  };
-}
 
 export function contactResearchPrompt(company: Record<string, unknown>, targetRole?: string | null): string {
   const roleHint = targetRole
@@ -2757,7 +2708,7 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
 export async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL, ctx: Ctx): Promise<boolean> {
   const p = url.pathname;
   const method = req.method ?? 'GET';
-  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/contact-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/ads-market') && !p.startsWith('/api/reports') && !p.startsWith('/api/leads') && !p.startsWith('/api/telemarketers') && !p.startsWith('/api/territories')) return false;
+  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/contact-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/ads-market') && !p.startsWith('/api/reports') && !p.startsWith('/api/leads') && !p.startsWith('/api/telemarketers') && !p.startsWith('/api/territories') && !p.startsWith('/api/contacts')) return false;
   if (!db.configured()) {
     ctx.json(res, 503, { error: 'report database is not configured; link DATABASE_URL to the Railway service' });
     return true;
@@ -2907,6 +2858,35 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     }
     const result = await db.hideLeads(companyIds, hide);
     ctx.json(res, 200, { ok: true, hide, ...result });
+    return true;
+  }
+
+  // ---- Master People & Contact Directory ----------------------------------
+  if (method === 'GET' && p === '/api/contacts/export') {
+    const search = url.searchParams.get('search');
+    const filter = url.searchParams.get('filter') || url.searchParams.get('type');
+    const assignedTo = url.searchParams.get('assignedTo') || url.searchParams.get('assigned_to');
+    const rows = await db.getCompanyContactRows({ search, assignedTo, researchedOnly: filter === 'researched' });
+    const result = contacts.buildMasterContactsResponse(rows, { search, filter, limit: 10000 });
+    const csvData = contacts.generateContactsCsv(result.groups);
+    res.writeHead(200, {
+      'content-type': 'text/csv; charset=utf-8',
+      'content-disposition': `attachment; filename="contacts-master-${new Date().toISOString().slice(0, 10)}.csv"`,
+      'cache-control': 'no-store',
+    });
+    res.end(csvData);
+    return true;
+  }
+
+  if (method === 'GET' && p === '/api/contacts') {
+    const search = url.searchParams.get('search');
+    const filter = url.searchParams.get('filter') || url.searchParams.get('type');
+    const assignedTo = url.searchParams.get('assignedTo') || url.searchParams.get('assigned_to');
+    const limit = Number(url.searchParams.get('limit') ?? 25);
+    const offset = Number(url.searchParams.get('offset') ?? 0);
+    const rows = await db.getCompanyContactRows({ search, assignedTo, researchedOnly: filter === 'researched' });
+    const result = contacts.buildMasterContactsResponse(rows, { search, filter, assignedTo, limit, offset });
+    ctx.json(res, 200, result);
     return true;
   }
 

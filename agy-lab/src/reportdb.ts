@@ -1868,6 +1868,90 @@ export async function getTerritoryScanStats(): Promise<TerritoryScanStat[]> {
   return res.rows;
 }
 
+export interface RawCompanyContactRow {
+  id: string;
+  name: string;
+  category: string | null;
+  address: string | null;
+  phone: string | null;
+  website: string | null;
+  maps_url: string | null;
+  rating: number | null;
+  reviews: number | null;
+  lead_status: LeadStatus;
+  assigned_to: string | null;
+  contact_public_id: string | null;
+  contact_status: string | null;
+  contact_result: Record<string, unknown> | null;
+  research_public_id: string | null;
+  research_status: string | null;
+  research_result: Record<string, unknown> | null;
+}
+
+export async function getCompanyContactRows(options: {
+  search?: string | null;
+  assignedTo?: string | null;
+  researchedOnly?: boolean;
+} = {}): Promise<RawCompanyContactRow[]> {
+  await migrate();
+  const whereConditions: string[] = ['c.merged_into is null', 'coalesce(c.is_hidden, false) = false'];
+  const params: unknown[] = [];
+
+  if (options.researchedOnly) {
+    whereConditions.push(`(crep.public_id is not null or rep.public_id is not null)`);
+  } else {
+    whereConditions.push(`(crep.public_id is not null or rep.public_id is not null or (c.phone is not null and c.phone <> ''))`);
+  }
+
+  if (options.assignedTo && options.assignedTo !== 'all') {
+    if (options.assignedTo === 'unassigned') {
+      whereConditions.push(`c.assigned_to is null`);
+    } else {
+      params.push(options.assignedTo.trim());
+      whereConditions.push(`c.assigned_to = $${params.length}`);
+    }
+  }
+
+  if (options.search && options.search.trim()) {
+    params.push(`%${options.search.trim()}%`);
+    const pIdx = params.length;
+    whereConditions.push(`(c.name ilike $${pIdx} or coalesce(c.phone,'') ilike $${pIdx} or coalesce(c.address,'') ilike $${pIdx} or coalesce(c.category,'') ilike $${pIdx})`);
+  }
+
+  const whereClause = whereConditions.join(' and ');
+
+  const res = await sql<RawCompanyContactRow>(`
+    select
+      c.id::text, c.name, c.category, c.address, c.phone, c.website, c.maps_url,
+      c.rating::float, c.reviews,
+      coalesce(c.lead_status, 'unassigned') as lead_status,
+      c.assigned_to,
+      crep.public_id as contact_public_id,
+      crep.status as contact_status,
+      crep.result as contact_result,
+      rep.public_id as research_public_id,
+      rep.status as research_status,
+      rep.result as research_result
+    from company_data c
+    left join lateral (
+      select public_id, status, version, result
+      from published_report
+      where company_id = c.id and report_type = 'contact_research'
+      order by version desc, created_at desc limit 1
+    ) crep on true
+    left join lateral (
+      select public_id, status, version, result
+      from published_report
+      where company_id = c.id and report_type = 'company_research'
+      order by version desc, created_at desc limit 1
+    ) rep on true
+    where ${whereClause}
+    order by lower(c.name) asc, c.id asc
+  `, params);
+
+  return res.rows;
+}
+
 export async function close(): Promise<void> {
   if (pool) await pool.end();
   pool = null;
