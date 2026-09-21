@@ -437,9 +437,11 @@ export function migrate(): Promise<void> {
       alter table company_data add column if not exists assigned_to text;
       alter table company_data add column if not exists assigned_at timestamptz;
       alter table company_data add column if not exists lead_notes text;
+      alter table company_data add column if not exists is_hidden boolean not null default false;
       alter table company_data add column if not exists lead_updated_at timestamptz default now();
       create index if not exists company_data_lead_status_idx on company_data (lead_status);
       create index if not exists company_data_assigned_to_idx on company_data (assigned_to);
+      create index if not exists company_data_is_hidden_idx on company_data (is_hidden);
 
       create table if not exists telemarketer (
         id serial primary key,
@@ -1255,6 +1257,7 @@ export interface LeadItem {
   lead_updated_at: string | null;
   first_seen_at: string;
   last_seen_at: string;
+  is_hidden: boolean;
   research_public_id: string | null;
   research_status: string | null;
   research_version: number | null;
@@ -1276,6 +1279,7 @@ export interface LeadStats {
   not_interested: number;
   do_not_call: number;
   contacts_found: number;
+  hidden: number;
 }
 
 export async function listLeads(options: {
@@ -1294,15 +1298,20 @@ export async function listLeads(options: {
   const whereConditions: string[] = ['c.merged_into is null'];
   const params: unknown[] = [];
 
+  if (options.status === 'hidden') {
+    whereConditions.push('coalesce(c.is_hidden, false) = true');
+  } else {
+    whereConditions.push('coalesce(c.is_hidden, false) = false');
+    if (options.status && options.status !== 'all') {
+      params.push(options.status.trim());
+      whereConditions.push(`c.lead_status = $${params.length}`);
+    }
+  }
+
   if (options.search && options.search.trim()) {
     params.push(`%${options.search.trim()}%`);
     const pIdx = params.length;
     whereConditions.push(`(c.name ilike $${pIdx} or coalesce(c.phone,'') ilike $${pIdx} or coalesce(c.address,'') ilike $${pIdx} or coalesce(c.category,'') ilike $${pIdx})`);
-  }
-
-  if (options.status && options.status !== 'all') {
-    params.push(options.status.trim());
-    whereConditions.push(`c.lead_status = $${params.length}`);
   }
 
   if (options.assignedTo && options.assignedTo !== 'all') {
@@ -1336,6 +1345,7 @@ export async function listLeads(options: {
       `select
          c.id::text, c.name, c.category, c.address, c.phone, c.website, c.maps_url,
          c.rating::float, c.reviews,
+         coalesce(c.is_hidden, false) as is_hidden,
          coalesce(c.lead_status, 'unassigned') as lead_status,
          c.assigned_to, c.assigned_at, c.lead_notes, c.lead_updated_at,
          c.first_seen_at, c.last_seen_at,
@@ -1353,6 +1363,12 @@ export async function listLeads(options: {
              then jsonb_array_length(crep.result->'contacts')
              when crep.result->'preview'->>'phones' is not null
              then (crep.result->'preview'->>'phones')::int
+             when jsonb_typeof(rep.result->'phone_contacts') = 'array'
+             then jsonb_array_length(rep.result->'phone_contacts')
+             when jsonb_typeof(rep.result->'contacts') = 'array'
+             then jsonb_array_length(rep.result->'contacts')
+             when jsonb_typeof(rep.result->'phones') = 'array'
+             then jsonb_array_length(rep.result->'phones')
              else null
            end,
            0
@@ -1365,6 +1381,10 @@ export async function listLeads(options: {
              then jsonb_array_length(crep.result->'people')
              when crep.result->'preview'->>'decision_makers' is not null
              then (crep.result->'preview'->>'decision_makers')::int
+             when jsonb_typeof(rep.result->'decision_makers') = 'array'
+             then jsonb_array_length(rep.result->'decision_makers')
+             when jsonb_typeof(rep.result->'people') = 'array'
+             then jsonb_array_length(rep.result->'people')
              else null
            end,
            0
@@ -1384,7 +1404,7 @@ export async function listLeads(options: {
          coalesce(b.cnt, 0)::int as branch_count
        from company_data c
        left join lateral (
-         select public_id, status, version
+         select public_id, status, version, result
          from published_report
          where company_id = c.id and report_type = 'company_research'
          order by version desc, created_at desc limit 1
@@ -1428,16 +1448,18 @@ export async function listLeads(options: {
       not_interested: string;
       do_not_call: string;
       contacts_found: string;
+      hidden: string;
     }>(
       `select
-         count(*)::text as total,
-         count(*) filter (where coalesce(c.lead_status, 'unassigned') = 'unassigned')::text as unassigned,
-         count(*) filter (where c.lead_status = 'assigned')::text as assigned,
-         count(*) filter (where c.lead_status = 'contacted')::text as contacted,
-         count(*) filter (where c.lead_status = 'interested')::text as interested,
-         count(*) filter (where c.lead_status = 'not_interested')::text as not_interested,
-         count(*) filter (where c.lead_status = 'do_not_call')::text as do_not_call,
-         count(distinct c.id) filter (where crep.public_id is not null and crep.status in ('completed', 'partial'))::text as contacts_found
+         count(*) filter (where coalesce(c.is_hidden, false) = false)::text as total,
+         count(*) filter (where coalesce(c.is_hidden, false) = false and coalesce(c.lead_status, 'unassigned') = 'unassigned')::text as unassigned,
+         count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'assigned')::text as assigned,
+         count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'contacted')::text as contacted,
+         count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'interested')::text as interested,
+         count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'not_interested')::text as not_interested,
+         count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'do_not_call')::text as do_not_call,
+         count(distinct c.id) filter (where coalesce(c.is_hidden, false) = false and crep.public_id is not null and crep.status in ('completed', 'partial'))::text as contacts_found,
+         count(*) filter (where coalesce(c.is_hidden, false) = true)::text as hidden
        from company_data c
        left join lateral (
          select public_id, status from published_report
@@ -1458,6 +1480,7 @@ export async function listLeads(options: {
     not_interested: Number(statsRow?.not_interested ?? 0),
     do_not_call: Number(statsRow?.do_not_call ?? 0),
     contacts_found: Number(statsRow?.contacts_found ?? 0),
+    hidden: Number(statsRow?.hidden ?? 0),
   };
 
   return {
@@ -1521,12 +1544,32 @@ export async function unassignLeads(companyIds: (string | number)[]): Promise<{ 
   return { updated: res.rows.length };
 }
 
+export async function hideLeads(
+  companyIds: (string | number)[],
+  hide: boolean = true,
+): Promise<{ updated: number }> {
+  await migrate();
+  const ids = companyIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0);
+  if (!ids.length) return { updated: 0 };
+
+  const res = await sql(
+    `update company_data set
+       is_hidden = $1,
+       lead_updated_at = now()
+     where id = any($2::bigint[]) and merged_into is null
+     returning id`,
+    [hide, ids],
+  );
+  return { updated: res.rows.length };
+}
+
 export async function updateLead(
   companyId: string | number,
   patch: {
     leadStatus?: LeadStatus;
     assignedTo?: string | null;
     notes?: string | null;
+    isHidden?: boolean;
   },
 ): Promise<Record<string, unknown> | null> {
   await migrate();
@@ -1543,6 +1586,7 @@ export async function updateLead(
   const hasStatus = Object.prototype.hasOwnProperty.call(patch, 'leadStatus');
   const hasAssignedTo = Object.prototype.hasOwnProperty.call(patch, 'assignedTo');
   const hasNotes = Object.prototype.hasOwnProperty.call(patch, 'notes');
+  const hasIsHidden = Object.prototype.hasOwnProperty.call(patch, 'isHidden');
 
   const res = await sql(
     `update company_data set
@@ -1550,6 +1594,7 @@ export async function updateLead(
        assigned_to = case when $4::boolean then $5 else assigned_to end,
        assigned_at = case when $4::boolean then (case when $5 is null then null else coalesce(assigned_at, now()) end) else assigned_at end,
        lead_notes = case when $6::boolean then $7 else lead_notes end,
+       is_hidden = case when $8::boolean then $9::boolean else is_hidden end,
        lead_updated_at = now()
      where id = $1 and merged_into is null
      returning *`,
@@ -1558,6 +1603,7 @@ export async function updateLead(
       hasStatus, patch.leadStatus ?? null,
       hasAssignedTo, patch.assignedTo?.trim() || null,
       hasNotes, patch.notes ?? null,
+      hasIsHidden, Boolean(patch.isHidden),
     ],
   );
   return res.rows[0] ?? null;
