@@ -2616,6 +2616,34 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
   const logMatch = /^\/r\/([A-Za-z0-9_-]{20})\/log$/.exec(p);
   const jsonMatch = /^\/public\/reports\/([A-Za-z0-9_-]{20})$/.exec(p);
   const researchMatch = /^\/public\/reports\/([A-Za-z0-9_-]{20})\/research$/.exec(p);
+  const contactResearchMatch = /^\/public\/reports\/([A-Za-z0-9_-]{20})\/contact-research$/.exec(p);
+
+  // Start contact research from the shared report page.
+  if ((req.method ?? 'GET') === 'POST' && contactResearchMatch) {
+    if (!db.configured()) return sendJson(res, 503, { error: 'reports are not configured' }), true;
+    const parent = await db.getReport(contactResearchMatch[1]!);
+    if (!parent || parent.report_type !== 'business_search') {
+      return sendJson(res, 404, { error: 'report not found' }), true;
+    }
+    const body = await readBody(req);
+    const companyId = str(body.companyId || body.company_id).trim();
+    const listed = parent.source_search_report_id
+      ? await db.searchResult(parent.source_search_report_id)
+      : null;
+    const company = (listed?.companies ?? []).find((c) => String(c.id) === companyId);
+    if (!company) {
+      return sendJson(res, 404, { error: 'that company is not listed in this report', companyId }), true;
+    }
+    const existing = await db.findContactReport(companyId);
+    if (existing) return sendJson(res, 200, { report: envelope(req, existing) }), true;
+    const request = { companyId, name: str(company.name), requesterId: 'report:' + parent.public_id };
+    const report = await db.createReport({
+      type: 'contact_research', title: str(company.name, 'Company') + ' — contact & telemarketing research',
+      userId: request.requesterId, request, companyId,
+    });
+    void runContactResearch(report.public_id, report.id, company, request);
+    return sendJson(res, 202, { report: envelope(req, report) }), true;
+  }
 
   // Start a company dossier from the shared report page.
   //

@@ -176,6 +176,24 @@ function researchScript(publicId: string): string {
 (function(){
   var id=${JSON.stringify(publicId)};
   document.addEventListener('click',function(ev){
+    var cb=ev.target.closest&&ev.target.closest('button[data-contact]');
+    if(cb&&!cb.disabled){
+      var cid=cb.getAttribute('data-contact');
+      if(!cid)return;
+      cb.disabled=true;var cwas=cb.textContent;cb.textContent='Starting\\u2026';
+      fetch('/public/reports/'+id+'/contact-research',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({companyId:cid})})
+        .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j})})
+        .then(function(j){
+          var link=j.report&&j.report.view_url;
+          if(!link){throw new Error('no report link returned')}
+          var a=document.createElement('a');
+          a.className='button';a.style.background='#0a6b47';a.style.color='#fff';a.href=link;a.textContent='Open contacts \\u2197';
+          a.setAttribute('target','_blank');a.setAttribute('rel','noopener');
+          cb.replaceWith(a);
+        })
+        .catch(function(e){cb.disabled=false;cb.textContent=cwas;alert('Could not start contact research: '+e.message)});
+      return;
+    }
     var b=ev.target.closest&&ev.target.closest('button.research');
     if(!b||b.disabled)return;
     var company=b.getAttribute('data-company');
@@ -429,7 +447,7 @@ export function searchPage(report: PublishedReport, detail: { report?: Record<st
     const website = value(company, 'website');
     const maps = value(company, 'maps_url', 'mapsUrl');
     const companyId = value(company, 'id');
-    return `<article class="company"><div class="record-no">${esc(rank(company.rank ?? index + 1))}</div><div><h3>${esc(name)}</h3><div class="record-meta">${esc(value(company, 'category') || 'Business')}${rating ? ` · ★ ${esc(rating)}${reviews ? ` / ${esc(reviews)} reviews` : ''}` : ''}</div></div><div class="record-address">${esc(value(company, 'address') || 'Address not published')}</div><div class="record-contact">${phone ? `<div class="phone">${esc(phone)}</div>` : '<span class="record-meta">Phone not published</span>'}<div class="actions">${phone ? `<a class="button" href="tel:${esc(phone.replace(/[^+\d]/g, ''))}">Call now</a>` : ''}${link(website, 'Website')}${link(maps, 'Maps')}${companyId ? `<button class="button research" type="button" data-company="${esc(companyId)}" data-name="${esc(name)}">Research \u2192</button>` : ''}</div></div></article>`;
+    return `<article class="company"><div class="record-no">${esc(rank(company.rank ?? index + 1))}</div><div><h3>${esc(name)}</h3><div class="record-meta">${esc(value(company, 'category') || 'Business')}${rating ? ` · ★ ${esc(rating)}${reviews ? ` / ${esc(reviews)} reviews` : ''}` : ''}</div></div><div class="record-address">${esc(value(company, 'address') || 'Address not published')}</div><div class="record-contact">${phone ? `<div class="phone">${esc(phone)}</div>` : '<span class="record-meta">Phone not published</span>'}<div class="actions">${phone ? `<a class="button" href="tel:${esc(phone.replace(/[^+\d]/g, ''))}">Call now</a>` : ''}${link(website, 'Website')}${link(maps, 'Maps')}${companyId ? `<button class="button research" type="button" data-company="${esc(companyId)}" data-name="${esc(name)}">Research \u2192</button>` : ''}${companyId ? `<button class="button" style="background:#0a6b47;color:#fff;border-color:#0a6b47" type="button" data-contact="${esc(companyId)}" data-name="${esc(name)}">Contacts ⚡</button>` : ''}</div></div></article>`;
   }).join('');
   const body = report.status === 'failed'
     ? `<section class="section"><div class="message error">${esc(report.error ?? 'The search failed.')}</div></section>`
