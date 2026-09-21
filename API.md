@@ -275,8 +275,10 @@ Three consequences worth planning for:
 | `PATCH /api/leads/:companyId` | bearer/portal | update company lead status, notes, or assignee |
 | `POST /api/leads/dedup` | bearer/portal | run deduplication pass across company master list |
 | `GET /api/leads/export` | bearer/portal | export leads master list as CSV for telemarketer calling sheets |
-| `GET /api/telemarketers` | bearer/portal | list active telemarketers roster |
-| `POST /api/telemarketers` | bearer/portal | add a new telemarketer to roster |
+| `GET /api/telemarketers` | bearer/portal | list telemarketer agents with lead allocation and performance stats |
+| `POST /api/telemarketers` | bearer/portal | create a new telemarketer agent (`name`, `phone`, `email`, `notes`, `active`) |
+| `PATCH /api/telemarketers/:id` | bearer/portal | update telemarketer profile or toggle active status |
+| `DELETE /api/telemarketers/:id` | bearer/portal | delete telemarketer and optionally unassign allocated leads |
 | `GET /api/territories` | bearer/portal | state territory hierarchy (districts, towns, tamans) with live scan coverage |
 
 The Chinese edition is translated by `TRANSLATION_MODEL` (defaults to `agy`)

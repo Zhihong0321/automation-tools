@@ -2890,8 +2890,11 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
   }
 
   if (method === 'GET' && p === '/api/telemarketers') {
-    const telemarketers = await db.listTelemarketers();
-    ctx.json(res, 200, { telemarketers });
+    const [telemarketers, agents] = await Promise.all([
+      db.listTelemarketers().catch(() => []),
+      db.getTelemarketerDetails().catch(() => []),
+    ]);
+    ctx.json(res, 200, { telemarketers, agents });
     return true;
   }
 
@@ -2902,8 +2905,44 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       ctx.json(res, 400, { error: 'name is required' });
       return true;
     }
-    const added = await db.addTelemarketer(name);
-    ctx.json(res, 201, { ok: true, name: added });
+    const agent = await db.addTelemarketer(name, {
+      phone: typeof body.phone === 'string' ? body.phone : null,
+      email: typeof body.email === 'string' ? body.email : null,
+      notes: typeof body.notes === 'string' ? body.notes : null,
+      active: typeof body.active === 'boolean' ? body.active : true,
+    });
+    ctx.json(res, 201, { ok: true, name: agent.name, agent });
+    return true;
+  }
+
+  const teleIdMatch = /^\/api\/telemarketers\/(\d+)$/.exec(p);
+  if (method === 'PATCH' && teleIdMatch) {
+    const id = parseInt(teleIdMatch[1]!, 10);
+    const body = await ctx.readJson(req);
+    const agent = await db.updateTelemarketer(id, {
+      name: typeof body.name === 'string' ? body.name.trim() : undefined,
+      phone: typeof body.phone === 'string' ? body.phone.trim() : undefined,
+      email: typeof body.email === 'string' ? body.email.trim() : undefined,
+      notes: typeof body.notes === 'string' ? body.notes.trim() : undefined,
+      active: typeof body.active === 'boolean' ? body.active : undefined,
+    });
+    if (!agent) {
+      ctx.json(res, 404, { error: 'telemarketer not found' });
+      return true;
+    }
+    ctx.json(res, 200, { ok: true, agent });
+    return true;
+  }
+
+  if (method === 'DELETE' && teleIdMatch) {
+    const id = parseInt(teleIdMatch[1]!, 10);
+    const unassign = url.searchParams.get('unassign') !== 'false';
+    const ok = await db.deleteTelemarketer(id, unassign);
+    if (!ok) {
+      ctx.json(res, 404, { error: 'telemarketer not found' });
+      return true;
+    }
+    ctx.json(res, 200, { ok: true, deleted: true });
     return true;
   }
 

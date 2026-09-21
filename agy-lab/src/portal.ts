@@ -75,10 +75,25 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
   .lead-row{grid-template-columns:26px 1fr;gap:12px 10px;padding:18px 0}
   .lead-row>div:nth-child(3),.lead-row>div:nth-child(4),.lead-row>div:nth-child(5){grid-column:2}
 }
+.agent-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:16px}
+.agent-card{background:#fff;border:1px solid var(--line);border-radius:6px;padding:20px;display:flex;flex-direction:column;gap:14px;box-shadow:0 1px 3px rgba(0,0,0,.04);position:relative}
+.agent-card.inactive{opacity:.65;background:#fdfdfd}
+.agent-card-head{display:flex;align-items:start;justify-content:space-between;gap:10px}
+.agent-avatar{width:38px;height:38px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:700;font-size:14px;flex-shrink:0}
+.agent-meta-block{flex:1;min-width:0}
+.agent-name{margin:0;font-size:17px;font-weight:700;color:var(--ink);letter-spacing:-.015em;display:flex;align-items:center;gap:8px}
+.agent-contact-line{margin-top:4px;font-size:12.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:10px}
+.agent-notes-box{font-size:12px;color:var(--muted);background:#f8f9fa;border:1px solid var(--soft);border-radius:4px;padding:6px 10px;line-height:1.4}
+.agent-metrics-row{display:grid;grid-template-columns:repeat(4,1fr);background:#fafbfc;border:1px solid var(--soft);border-radius:4px;text-align:center;padding:8px 4px}
+.agent-metric-item{padding:2px 4px}
+.agent-metric-item+.agent-metric-item{border-left:1px solid var(--soft)}
+.agent-metric-num{font:700 15px/1 var(--mono);color:var(--ink)}
+.agent-metric-lbl{margin-top:4px;font:700 7.5px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.agent-actions-row{display:flex;align-items:center;gap:8px;margin-top:auto;padding-top:10px;border-top:1px solid var(--soft);flex-wrap:wrap}
 </style></head><body>
 <div id="accessGate" class="gate"><div class="gate-panel"><div class="gate-mark">EE</div><h1>Private intelligence workspace.</h1><p>Enter the access key supplied by the workspace owner. You enter it once: it stays in this browser and is never added to a report link.</p><form class="gate-form" onsubmit="connect(event)"><input id="accessKey" type="password" autocomplete="current-password" placeholder="Workspace access key" aria-label="Workspace access key"><button id="connectButton" class="primary" type="submit">Enter</button></form><p id="gateError" class="gate-error" role="alert"></p><p class="gate-help"><a href="/guide" target="_blank" rel="noopener">New here? Read the guide first ↗ · 新手指南</a></p></div></div>
 <div id="portalApp" class="app" aria-hidden="true" inert>
-  <header class="mast"><div class="mast-inner"><button type="button" class="brand" aria-label="Home" onclick="switchView('discover')"><span class="mark">EE</span><span>Business intelligence</span></button><nav class="desktop-nav" aria-label="Workspace"><button class="nav-button active" data-view="discover" onclick="switchView('discover')">Home</button><button class="nav-button" data-view="telemarketing" onclick="switchView('telemarketing')">Telemarketing</button><button class="nav-button" data-view="leads" onclick="switchView('leads')">Leads Master</button><button class="nav-button" data-view="library" onclick="switchView('library')">Reports</button><a class="nav-button" href="/guide" target="_blank" rel="noopener">Guide</a><span class="access"><span class="access-dot"></span>Connected</span><button class="signout" onclick="disconnect()">Sign out</button></nav><button class="signout" onclick="disconnect()">Exit</button></div></header>
+  <header class="mast"><div class="mast-inner"><button type="button" class="brand" aria-label="Home" onclick="switchView('discover')"><span class="mark">EE</span><span>Business intelligence</span></button><nav class="desktop-nav" aria-label="Workspace"><button class="nav-button active" data-view="discover" onclick="switchView('discover')">Home</button><button class="nav-button" data-view="telemarketing" onclick="switchView('telemarketing')">Telemarketing</button><button class="nav-button" data-view="leads" onclick="switchView('leads')">Leads Master</button><button class="nav-button" data-view="agents" onclick="switchView('agents')">Telemarketers</button><button class="nav-button" data-view="library" onclick="switchView('library')">Reports</button><a class="nav-button" href="/guide" target="_blank" rel="noopener">Guide</a><span class="access"><span class="access-dot"></span>Connected</span><button class="signout" onclick="disconnect()">Sign out</button></nav><button class="signout" onclick="disconnect()">Exit</button></div></header>
   <main class="content">
     <section id="discoverView" class="view active">
       <div class="hero"><div class="eyebrow" id="heroEyebrow">Live market discovery</div><h1 id="heroTitle">Find the companies worth knowing.</h1><p id="heroCopy">Pick one. Nothing is researched until you say so.</p></div>
@@ -165,7 +180,7 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
           </select>
         </div>
         <div style="display:flex;gap:8px;align-items:center;">
-          <button class="filter" type="button" onclick="promptAddTelemarketer()">+ Telemarketer</button>
+          <button class="filter" type="button" onclick="switchView('agents')">Manage Agents →</button>
           <button class="filter" type="button" onclick="runDedupAction()" title="Merge duplicate branches and duplicate phone contacts">Run Dedup</button>
           <button class="filter" type="button" onclick="exportLeadsCsv()">Export CSV</button>
         </div>
@@ -205,9 +220,77 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
         </div>
       </div>
     </section>
+    <section id="agentsView" class="view">
+      <div class="library-hero">
+        <div class="eyebrow">Telemarketer Team & Lead Allocation</div>
+        <h1>Manage Telemarketers.</h1>
+        <p>Register telemarketer agents, track active assignments, monitor calling conversion rates, and manage individual queues.</p>
+      </div>
+      <div class="result-summary" style="margin-top:24px;">
+        <div class="metric"><strong id="agentsTotalCount">0</strong><span>Total Agents</span></div>
+        <div class="metric"><strong id="agentsActiveCount" style="color:var(--ok);">0</strong><span>Active Agents</span></div>
+        <div class="metric"><strong id="agentsTotalLeadsCount">0</strong><span>Leads Assigned</span></div>
+        <div class="metric"><strong id="agentsContactedCount" style="color:var(--warn);">0</strong><span>Contacted Leads</span></div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin:24px 0 20px;padding:16px 20px;background:#f8f9fa;border:1px solid var(--line);border-radius:6px;">
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;flex:1;min-width:280px;">
+          <input class="input" id="agentFilterInput" oninput="filterAgents()" placeholder="Search agents by name, phone, or notes..." style="height:38px;font-size:13.5px;max-width:320px;">
+          <select class="input select" id="agentStatusFilter" onchange="filterAgents()" style="height:38px;font-size:13px;width:130px;">
+            <option value="all" selected>All Status</option>
+            <option value="active">Active Only</option>
+            <option value="inactive">Inactive Only</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="primary" type="button" onclick="toggleCreateAgentForm(true)" style="height:38px;padding:0 14px;">+ New Telemarketer</button>
+          <button class="filter" type="button" onclick="loadAgentsView()" style="height:38px;padding:0 14px;">Refresh</button>
+        </div>
+      </div>
+
+      <form id="agentFormSheet" class="search-sheet hidden" onsubmit="saveAgentForm(event)" style="margin:0 0 24px;border-radius:6px;">
+        <div class="sheet-head" style="margin-bottom:16px;">
+          <span class="sheet-title" id="agentFormTitle">Create New Telemarketer</span>
+          <button type="button" class="back" onclick="toggleCreateAgentForm(false)">Cancel ✕</button>
+        </div>
+        <input type="hidden" id="agentFormId" value="">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:16px;">
+          <div class="field">
+            <label for="agentFormName">Agent Name *</label>
+            <input class="input" id="agentFormName" placeholder="e.g. Sarah Tan, John Lee" required>
+          </div>
+          <div class="field">
+            <label for="agentFormPhone">Phone / WhatsApp</label>
+            <input class="input" id="agentFormPhone" placeholder="e.g. +6012-3456789">
+          </div>
+          <div class="field">
+            <label for="agentFormEmail">Email Address</label>
+            <input class="input" id="agentFormEmail" type="email" placeholder="e.g. sarah@company.com">
+          </div>
+          <div class="field">
+            <label for="agentFormStatus">Account Status</label>
+            <select class="input select" id="agentFormStatus">
+              <option value="true" selected>Active (Can Receive Leads)</option>
+              <option value="false">Inactive</option>
+            </select>
+          </div>
+        </div>
+        <div class="field" style="margin-top:16px;">
+          <label for="agentFormNotes">Focus Notes / Territory Specialization</label>
+          <input class="input" id="agentFormNotes" placeholder="e.g. Specializes in Johor Bahru cafes & F&B leads">
+        </div>
+        <div style="display:flex;gap:10px;margin-top:20px;align-items:center;">
+          <button class="primary" type="submit" id="agentFormSubmitBtn">Save Telemarketer</button>
+          <button class="filter" type="button" onclick="toggleCreateAgentForm(false)">Cancel</button>
+        </div>
+      </form>
+
+      <div id="agentsContainer" class="agent-grid">
+        <div class="empty">Loading telemarketers roster…</div>
+      </div>
+    </section>
     <section id="libraryView" class="view"><div class="library-hero"><div class="eyebrow">Persistent knowledge base</div><h1>Research library.</h1><p>Browse every market scan, company dossier and VIP brief in one place. Completed public reports keep the same permanent link.</p></div><div class="filters" role="group" aria-label="Report type"><button class="filter active" data-filter="all" onclick="setFilter('all')">All reports</button><button class="filter" data-filter="company_research" onclick="setFilter('company_research')">Company research</button><button class="filter" data-filter="contact_research" onclick="setFilter('contact_research')">Contacts</button><button class="filter" data-filter="person_research" onclick="setFilter('person_research')">VIP briefs</button><button class="filter" data-filter="ads_research" onclick="setFilter('ads_research')">Ads</button><button class="filter" data-filter="ads_market" onclick="setFilter('ads_market')">Ads market</button><button class="filter" data-filter="business_search" onclick="setFilter('business_search')">Business lists</button></div><div id="reportList" class="report-list"><div class="empty">Loading research library…</div></div></section>
   </main>
-  <nav class="mobile-nav" aria-label="Workspace"><button class="mobile-tab active" data-view="discover" onclick="switchView('discover')"><span></span>Home</button><button class="mobile-tab" data-view="telemarketing" onclick="switchView('telemarketing')"><span></span>Map</button><button class="mobile-tab" data-view="leads" onclick="switchView('leads')"><span></span>Leads</button><button class="mobile-tab" data-view="library" onclick="switchView('library')"><span></span>Reports</button><a class="mobile-tab" href="/guide" target="_blank" rel="noopener"><span></span>Guide</a></nav>
+  <nav class="mobile-nav" aria-label="Workspace"><button class="mobile-tab active" data-view="discover" onclick="switchView('discover')"><span></span>Home</button><button class="mobile-tab" data-view="telemarketing" onclick="switchView('telemarketing')"><span></span>Map</button><button class="mobile-tab" data-view="leads" onclick="switchView('leads')"><span></span>Leads</button><button class="mobile-tab" data-view="agents" onclick="switchView('agents')"><span></span>Agents</button><button class="mobile-tab" data-view="library" onclick="switchView('library')"><span></span>Reports</button><a class="mobile-tab" href="/guide" target="_blank" rel="noopener"><span></span>Guide</a></nav>
 </div><div id="toast" class="toast" role="status"></div>
 <script>
 'use strict';
@@ -225,7 +308,7 @@ async function api(path,options){options=options||{};var headers=Object.assign({
 async function connect(event){if(event)event.preventDefault();var key=el('accessKey').value.trim();if(!key)return;state.token=key;el('connectButton').disabled=true;el('gateError').textContent='';try{await api('/api/reports?limit=1');eeKey.save(key);el('accessGate').classList.add('hidden');el('portalApp').removeAttribute('inert');el('portalApp').setAttribute('aria-hidden','false');await loadLibrary();showToast('Workspace connected')}catch(error){state.token='';el('gateError').textContent=error.status===401?'Access key not accepted.':error.message}finally{el('connectButton').disabled=false}}
 function disconnect(){eeKey.clear();state.token='';location.reload()}
 function authLost(error){if(error&&error.status===401){eeKey.clear();state.token='';el('accessGate').classList.remove('hidden');el('gateError').textContent='Your access expired. Enter the workspace key again.';return true}return false}
-function switchView(name){document.querySelectorAll('.view').forEach(function(node){node.classList.toggle('active',node.id===name+'View')});document.querySelectorAll('[data-view]').forEach(function(node){node.classList.toggle('active',node.getAttribute('data-view')===name)});if(name==='library')loadLibrary();else if(name==='leads')loadLeadsView();else if(name==='telemarketing')loadTelemarketingView();else goHome();window.scrollTo({top:0,behavior:'smooth'})}
+function switchView(name){document.querySelectorAll('.view').forEach(function(node){node.classList.toggle('active',node.id===name+'View')});document.querySelectorAll('[data-view]').forEach(function(node){node.classList.toggle('active',node.getAttribute('data-view')===name)});if(name==='library')loadLibrary();else if(name==='leads')loadLeadsView();else if(name==='telemarketing')loadTelemarketingView();else if(name==='agents')loadAgentsView();else goHome();window.scrollTo({top:0,behavior:'smooth'})}
 function upsertJob(report,kind){state.jobs[report.id]=Object.assign({},state.jobs[report.id]||{},{report:report,kind:kind});renderJobs()}
 function renderJobs(){var values=Object.keys(state.jobs).map(function(key){return state.jobs[key]});el('activeSection').classList.toggle('hidden',values.length===0);el('jobs').innerHTML=values.map(function(job){var r=job.report;var done=terminal.indexOf(r.status)>=0;var pulse=r.status==='failed'?'bad':done?'done':'';var label=job.kind==='search'?'Market scan':job.kind==='lookup'?'Company lookup':job.kind==='vip'?'VIP brief':job.kind==='ads'?'Ads':job.kind==='contact'?'Contact research':'Company research';var open=safeUrl(r.view_url);return '<article class="job"><div class="job-type">'+label+'</div><div><div class="job-title">'+esc(r.title)+'</div><div class="job-meta">'+esc(r.status)+' · '+esc(r.id)+'</div></div><div class="job-action"><span class="pulse '+pulse+'"></span>'+(open?'<a class="text-action" target="_blank" rel="noopener" href="'+attr(open)+'">View <span>↗</span></a>':'')+'</div></article>'}).join('')}
 function poll(report,kind){upsertJob(report,kind);if(terminal.indexOf(report.status)>=0)return;setTimeout(async function(){try{var body=await api(report.api_url);upsertJob(body.report,kind);if(terminal.indexOf(body.report.status)<0){poll(body.report,kind);return}await loadLibrary();if((kind==='search'||kind==='lookup')&&body.report.status!=='failed'){renderSearch(body,kind)}if(kind==='deep'){showToast(body.report.status==='failed'?'Company research failed':'Company dossier is ready')}if(kind==='vip'){showToast(body.report.status==='failed'?'VIP brief failed':'VIP brief is ready')}if(kind==='adsmarket'){showToast(body.report.status==='failed'?'Ads market research failed':'Ads market report is ready')}if(kind==='contact'){showToast(body.report.status==='failed'?'Contact research failed':'Contact details are ready')}if(body.report.status==='failed')showToast(body.report.error||'Research failed')}catch(error){if(!authLost(error)){showToast(error.message);if(error.status===404){forgetReport(report.id)}else{poll(report,kind)}}}},5000)}
@@ -275,7 +358,202 @@ async function updateLeadStatus(companyId,selectEl){var status=selectEl.value;se
 async function updateLeadAssignee(companyId,selectEl){var assignee=selectEl.value.trim();try{await api('/api/leads/'+encodeURIComponent(companyId),{method:'PATCH',body:JSON.stringify({assignedTo:assignee||null,leadStatus:assignee?'assigned':'unassigned'})});showToast(assignee?'Assigned to '+assignee:'Lead unassigned');await loadLeads()}catch(err){if(!authLost(err))showToast('Failed to update assignment: '+err.message)}}
 async function editLeadNotes(companyId,currentNotes){var note=window.prompt('Lead notes / telemarketer feedback:',currentNotes||'');if(note==null)return;try{await api('/api/leads/'+encodeURIComponent(companyId),{method:'PATCH',body:JSON.stringify({notes:note.trim()})});showToast('Notes saved');await loadLeads()}catch(err){if(!authLost(err))showToast('Failed to save notes: '+err.message)}}
 function promptLeadNotes(btn){var id=btn.getAttribute('data-id');var notes=btn.getAttribute('data-notes')||'';return editLeadNotes(id,notes)}
-async function promptAddTelemarketer(){var name=window.prompt('Enter new telemarketer name:');if(!name||!name.trim())return;try{await api('/api/telemarketers',{method:'POST',body:JSON.stringify({name:name.trim()})});showToast('Added '+name.trim()+' to telemarketers');await loadTelemarketers()}catch(err){if(!authLost(err))showToast('Failed to add telemarketer: '+err.message)}}
+function promptAddTelemarketer(){switchView('agents');toggleCreateAgentForm(true)}
+var agentState={agents:[],filter:'',statusFilter:'all'};
+async function loadAgentsView(){
+  if(!state.token)return;
+  var cont=el('agentsContainer');
+  if(cont&&!agentState.agents.length)cont.innerHTML='<div class="empty">Loading telemarketers roster…</div>';
+  try{
+    var res=await api('/api/telemarketers');
+    agentState.agents=res.agents||[];
+    renderAgentsSummary(agentState.agents);
+    renderAgents();
+  }catch(err){
+    if(cont)cont.innerHTML='<div class="empty error">'+esc(err.message)+'</div>';
+    if(!authLost(err))showToast('Failed to load telemarketers: '+err.message);
+  }
+}
+function renderAgentsSummary(agents){
+  var total=agents.length;
+  var active=agents.filter(function(a){return a.active}).length;
+  var totalLeads=agents.reduce(function(acc,a){return acc+(a.total_assigned||0)},0);
+  var contacted=agents.reduce(function(acc,a){return acc+(a.contacted_count||0)},0);
+  var tEl=el('agentsTotalCount');var aEl=el('agentsActiveCount');
+  var lEl=el('agentsTotalLeadsCount');var cEl=el('agentsContactedCount');
+  if(tEl)tEl.textContent=total;
+  if(aEl)aEl.textContent=active;
+  if(lEl)lEl.textContent=totalLeads;
+  if(cEl)cEl.textContent=contacted;
+}
+function filterAgents(){
+  var input=el('agentFilterInput');
+  var sel=el('agentStatusFilter');
+  agentState.filter=input?input.value.trim().toLowerCase():'';
+  agentState.statusFilter=sel?sel.value:'all';
+  renderAgents();
+}
+function renderAgents(){
+  var cont=el('agentsContainer');
+  if(!cont)return;
+  var list=agentState.agents||[];
+  var f=agentState.filter;
+  var sf=agentState.statusFilter;
+  if(sf==='active')list=list.filter(function(a){return a.active});
+  else if(sf==='inactive')list=list.filter(function(a){return !a.active});
+  if(f){
+    list=list.filter(function(a){
+      if(a.name.toLowerCase().indexOf(f)>=0)return true;
+      if(a.phone&&a.phone.toLowerCase().indexOf(f)>=0)return true;
+      if(a.email&&a.email.toLowerCase().indexOf(f)>=0)return true;
+      if(a.notes&&a.notes.toLowerCase().indexOf(f)>=0)return true;
+      return false;
+    });
+  }
+  if(!list.length){
+    cont.innerHTML='<div class="empty">No telemarketers found matching filter.</div>';
+    return;
+  }
+  cont.innerHTML=list.map(function(agent){
+    var initials=agent.name.split(/\s+/).map(function(w){return w[0]}).slice(0,2).join('').toUpperCase()||'TM';
+    var statusBadge=agent.active?'<span class="status completed">Active</span>':'<span class="status" style="color:var(--muted)">Inactive</span>';
+    var phoneLink=agent.phone?('<a class="source-link" href="tel:'+attr(agent.phone.replace(/[^+\d]/g,''))+'">'+esc(agent.phone)+'</a>'):'<span class="meta">No phone</span>';
+    var emailLink=agent.email?('<a class="source-link" href="mailto:'+attr(agent.email)+'">'+esc(agent.email)+'</a>'):'';
+    var waLink='';
+    if(agent.phone){
+      var digits=agent.phone.replace(/\D/g,'');
+      if(digits)waLink='<a class="source-link" target="_blank" rel="noopener" href="https://wa.me/'+attr(digits)+'">WhatsApp</a>';
+    }
+    return '<article class="agent-card '+(agent.active?'':'inactive')+'" id="agentCard-'+attr(agent.id)+'">'
+      +'<div class="agent-card-head">'
+      +'<div style="display:flex;gap:12px;align-items:start;flex:1;min-width:0;">'
+      +'<div class="agent-avatar">'+esc(initials)+'</div>'
+      +'<div class="agent-meta-block">'
+      +'<div class="agent-name"><span>'+esc(agent.name)+'</span> '+statusBadge+'</div>'
+      +'<div class="agent-contact-line">'+phoneLink+(emailLink?' · '+emailLink:'')+(waLink?' · '+waLink:'')+'</div>'
+      +'</div>'
+      +'</div>'
+      +'</div>'
+      +(agent.notes?('<div class="agent-notes-box">'+esc(agent.notes)+'</div>'):'')
+      +'<div class="agent-metrics-row">'
+      +'<div class="agent-metric-item"><div class="agent-metric-num">'+(agent.total_assigned||0)+'</div><div class="agent-metric-lbl">Assigned</div></div>'
+      +'<div class="agent-metric-item"><div class="agent-metric-num" style="color:var(--warn);">'+(agent.contacted_count||0)+'</div><div class="agent-metric-lbl">Contacted</div></div>'
+      +'<div class="agent-metric-item"><div class="agent-metric-num" style="color:var(--ok);">'+(agent.interested_count||0)+'</div><div class="agent-metric-lbl">Interested</div></div>'
+      +'<div class="agent-metric-item"><div class="agent-metric-num" style="color:var(--bad);">'+((agent.not_interested_count||0)+(agent.dnc_count||0))+'</div><div class="agent-metric-lbl">Lost/DNC</div></div>'
+      +'</div>'
+      +'<div class="agent-actions-row">'
+      +'<button class="primary" type="button" style="height:32px;padding:0 10px;font-size:9.5px;" data-name="'+attr(agent.name)+'" onclick="viewAgentLeads(this.getAttribute(\'data-name\'))">View Leads ('+(agent.total_assigned||0)+') →</button>'
+      +'<button class="filter" type="button" style="height:32px;padding:0 8px;font-size:9px;" data-id="'+attr(agent.id)+'" onclick="editAgent(Number(this.getAttribute(\'data-id\')))">Edit</button>'
+      +'<button class="filter" type="button" style="height:32px;padding:0 8px;font-size:9px;" data-id="'+attr(agent.id)+'" data-active="'+(agent.active?'false':'true')+'" onclick="toggleAgentActive(Number(this.getAttribute(\'data-id\')),this.getAttribute(\'data-active\')===\'true\')">'+(agent.active?'Deactivate':'Activate')+'</button>'
+      +'<button class="text-action danger" type="button" style="padding:0;font-size:9px;margin-left:auto;" data-id="'+attr(agent.id)+'" data-name="'+attr(agent.name)+'" data-count="'+(agent.total_assigned||0)+'" onclick="deleteAgentPrompt(this)">Delete ×</button>'
+      +'</div>'
+      +'</article>';
+  }).join('');
+}
+function viewAgentLeads(agentName){
+  leadState.teleFilter=agentName;
+  var sel=el('leadTeleFilter');
+  if(sel)sel.value=agentName;
+  switchView('leads');
+}
+function toggleCreateAgentForm(show){
+  var sheet=el('agentFormSheet');
+  if(!sheet)return;
+  if(show===undefined)show=sheet.classList.contains('hidden');
+  sheet.classList.toggle('hidden',!show);
+  if(show){
+    el('agentFormTitle').textContent='Create New Telemarketer';
+    el('agentFormSubmitBtn').textContent='Save Telemarketer';
+    el('agentFormId').value='';
+    el('agentFormName').value='';
+    el('agentFormPhone').value='';
+    el('agentFormEmail').value='';
+    el('agentFormNotes').value='';
+    el('agentFormStatus').value='true';
+    el('agentFormName').focus();
+    sheet.scrollIntoView({behavior:'smooth',block:'start'});
+  }
+}
+function editAgent(agentId){
+  var agent=(agentState.agents||[]).find(function(a){return a.id===agentId});
+  if(!agent)return;
+  toggleCreateAgentForm(true);
+  el('agentFormTitle').textContent='Edit Telemarketer: '+agent.name;
+  el('agentFormSubmitBtn').textContent='Update Telemarketer';
+  el('agentFormId').value=String(agent.id);
+  el('agentFormName').value=agent.name||'';
+  el('agentFormPhone').value=agent.phone||'';
+  el('agentFormEmail').value=agent.email||'';
+  el('agentFormNotes').value=agent.notes||'';
+  el('agentFormStatus').value=String(agent.active);
+}
+async function saveAgentForm(event){
+  event.preventDefault();
+  var id=el('agentFormId').value;
+  var name=el('agentFormName').value.trim();
+  var phone=el('agentFormPhone').value.trim();
+  var email=el('agentFormEmail').value.trim();
+  var notes=el('agentFormNotes').value.trim();
+  var active=el('agentFormStatus').value==='true';
+  if(!name){showToast('Agent name is required');return}
+  var btn=el('agentFormSubmitBtn');
+  btn.disabled=true;
+  try{
+    if(id){
+      await api('/api/telemarketers/'+encodeURIComponent(id),{
+        method:'PATCH',
+        body:JSON.stringify({name:name,phone:phone||null,email:email||null,notes:notes||null,active:active})
+      });
+      showToast('Updated '+name);
+    }else{
+      await api('/api/telemarketers',{
+        method:'POST',
+        body:JSON.stringify({name:name,phone:phone||null,email:email||null,notes:notes||null,active:active})
+      });
+      showToast('Created telemarketer agent '+name);
+    }
+    toggleCreateAgentForm(false);
+    await loadAgentsView();
+    await loadTelemarketers();
+  }catch(err){
+    if(!authLost(err))showToast('Failed to save agent: '+err.message);
+  }finally{
+    btn.disabled=false;
+  }
+}
+async function toggleAgentActive(id,newActive){
+  try{
+    await api('/api/telemarketers/'+encodeURIComponent(id),{
+      method:'PATCH',
+      body:JSON.stringify({active:newActive})
+    });
+    showToast(newActive?'Agent activated':'Agent deactivated');
+    await loadAgentsView();
+    await loadTelemarketers();
+  }catch(err){
+    if(!authLost(err))showToast('Failed to toggle agent status: '+err.message);
+  }
+}
+async function deleteAgentPrompt(btn){
+  var id=btn.getAttribute('data-id');
+  var name=btn.getAttribute('data-name');
+  var count=Number(btn.getAttribute('data-count'))||0;
+  var msg='Delete telemarketer '+name+'?';
+  if(count>0){
+    msg+='\n\nThis will unassign '+count+' leads currently allocated to this agent back to unassigned leads pool.';
+  }
+  if(!window.confirm(msg))return;
+  try{
+    await api('/api/telemarketers/'+encodeURIComponent(id)+'?unassign=true',{
+      method:'DELETE'
+    });
+    showToast('Deleted agent '+name);
+    await loadAgentsView();
+    await loadTelemarketers();
+  }catch(err){
+    if(!authLost(err))showToast('Failed to delete agent: '+err.message);
+  }
+}
 async function runDedupAction(){if(!window.confirm('Run deduplication pass across company registry?\n\nThis merges duplicate company branches and duplicate phone contacts into their canonical primary record.'))return;try{var res=await api('/api/leads/dedup',{method:'POST'});showToast('Dedup completed: '+(res.merged||0)+' duplicates consolidated');await loadLeads()}catch(err){if(!authLost(err))showToast('Dedup failed: '+err.message)}}
 function exportLeadsCsv(){var q='/api/leads/export?token='+encodeURIComponent(state.token);if(leadState.statusFilter!=='all')q+='&status='+encodeURIComponent(leadState.statusFilter);if(leadState.search)q+='&search='+encodeURIComponent(leadState.search);if(leadState.teleFilter!=='all')q+='&assignedTo='+encodeURIComponent(leadState.teleFilter);if(leadState.researchFilter!=='all')q+='&researchStatus='+encodeURIComponent(leadState.researchFilter);window.open(q,'_blank')}
 function renderLeads(leads){var wrapper=el('leadTableWrapper');if(!wrapper)return;if(!leads.length){wrapper.innerHTML='<div class="empty">No companies found matching the filter.</div>';return}wrapper.innerHTML=leads.map(function(lead){var checked=Boolean(leadState.selected[lead.id]);var phone=lead.phone||'';var website=safeUrl(lead.website);var maps=safeUrl(lead.maps_url);var rating=lead.rating?(' · ★ '+lead.rating+(lead.reviews?' / '+lead.reviews:'')):'';var branchBadge=lead.branch_count>0?(' <span class="branch-tag" title="'+lead.branch_count+' branches consolidated">'+lead.branch_count+' branch'+(lead.branch_count>1?'es':'')+'</span>'):'';var dossierControl='';if(lead.research_public_id){dossierControl='<a class="vip" target="_blank" rel="noopener" href="/r/'+attr(lead.research_public_id)+'">Dossier V'+(lead.research_version||1)+' ↗</a>'}else{dossierControl='<button class="research" data-company="'+attr(lead.id)+'" data-name="'+attr(lead.name)+'" onclick="startResearch(this)">Research →</button>'}var teleOpts='<option value="">(Unassigned)</option>';leadState.telemarketers.forEach(function(t){var sel=(lead.assigned_to===t)?' selected':'';teleOpts+='<option value="'+attr(t)+'"'+sel+'>'+esc(t)+'</option>'});var statuses=['unassigned','assigned','contacted','interested','not_interested','do_not_call'];var statusOpts=statuses.map(function(s){var sel=(lead.lead_status===s)?' selected':'';var lbl=s==='do_not_call'?'DNC':s.replace('_',' ');return '<option value="'+s+'"'+sel+'>'+lbl+'</option>'}).join('');var notesSnippet=lead.lead_notes?(esc(lead.lead_notes.slice(0,60))+(lead.lead_notes.length>60?'…':'')):'Add notes';return '<article class="lead-row">'+'<div><input type="checkbox" id="leadCheck-'+attr(lead.id)+'" class="lead-check" '+(checked?'checked ':'')+'onchange="toggleSelectLead(\''+attr(lead.id)+'\', this.checked)"></div>'+'<div>'+'<h3>'+esc(lead.name)+branchBadge+'</h3>'+'<div class="meta">'+esc(lead.category||'Business')+esc(rating)+'</div>'+'<div class="address" style="margin-top:4px;">'+esc(lead.address||'Address not published')+'</div>'+'</div>'+'<div class="company-contact">'+'<div class="phone">'+(phone?('<a class="source-link" href="tel:'+attr(phone.replace(/[^+\d]/g,''))+'" style="font-size:13px;">'+esc(phone)+'</a>'):'<span class="meta">No phone</span>')+'</div>'+'<div class="actions" style="display:flex;gap:8px;margin-top:4px;">'+(website?('<a class="source-link" target="_blank" rel="noopener" href="'+attr(website)+'">Web</a>'):'')+(maps?('<a class="source-link" target="_blank" rel="noopener" href="'+attr(maps)+'">Maps</a>'):'')+'</div>'+'<div style="margin-top:8px;">'+dossierControl+'</div>'+'</div>'+'<div style="display:grid;gap:8px;">'+'<div>'+'<label style="display:block;font:700 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Assigned to</label>'+'<select class="tele-select" onchange="updateLeadAssignee(\''+attr(lead.id)+'\', this)">'+teleOpts+'</select>'+'</div>'+'<div>'+'<label style="display:block;font:700 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Status</label>'+'<select class="status-select '+attr(lead.lead_status||'unassigned')+'" onchange="updateLeadStatus(\''+attr(lead.id)+'\', this)">'+statusOpts+'</select>'+'</div>'+'</div>'+'<div style="display:grid;gap:6px;align-content:start;">'+'<button class="filter" type="button" style="min-height:30px;padding:0 8px;font-size:9px;white-space:nowrap;" data-id="'+attr(lead.id)+'" data-notes="'+attr(lead.lead_notes||'')+'" onclick="promptLeadNotes(this)">📝 '+(lead.lead_notes?'Notes':'+ Note')+'</button>'+(lead.lead_notes?('<span style="font-size:11px;color:var(--muted);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+attr(lead.lead_notes)+'">'+notesSnippet+'</span>'):'')+'</div>'+'</article>'}).join('')}

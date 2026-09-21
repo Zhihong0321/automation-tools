@@ -447,6 +447,10 @@ export function migrate(): Promise<void> {
         active boolean not null default true,
         created_at timestamptz not null default now()
       );
+      alter table telemarketer add column if not exists phone text;
+      alter table telemarketer add column if not exists email text;
+      alter table telemarketer add column if not exists notes text;
+      alter table telemarketer add column if not exists updated_at timestamptz default now();
     `);
   })().catch((err) => {
     migrated = null;
@@ -1457,6 +1461,21 @@ export async function updateLead(
   return res.rows[0] ?? null;
 }
 
+export interface TelemarketerAgent {
+  id: number;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  notes: string | null;
+  active: boolean;
+  created_at: string;
+  total_assigned: number;
+  contacted_count: number;
+  interested_count: number;
+  not_interested_count: number;
+  dnc_count: number;
+}
+
 export async function listTelemarketers(): Promise<string[]> {
   await migrate();
   const res = await sql<{ name: string }>(`
@@ -1469,15 +1488,141 @@ export async function listTelemarketers(): Promise<string[]> {
   return res.rows.map((r) => r.name);
 }
 
-export async function addTelemarketer(name: string): Promise<string> {
+export async function getTelemarketerDetails(): Promise<TelemarketerAgent[]> {
+  await migrate();
+  await sql(`
+    insert into telemarketer (name)
+    select distinct trim(assigned_to) from company_data
+    where assigned_to is not null and trim(assigned_to) <> ''
+    on conflict (name) do nothing
+  `);
+
+  const res = await sql<TelemarketerAgent>(`
+    select
+      t.id,
+      t.name,
+      t.phone,
+      t.email,
+      t.notes,
+      t.active,
+      t.created_at::text,
+      count(c.id) filter (where c.merged_into is null)::int as total_assigned,
+      count(c.id) filter (where c.merged_into is null and c.lead_status = 'contacted')::int as contacted_count,
+      count(c.id) filter (where c.merged_into is null and c.lead_status = 'interested')::int as interested_count,
+      count(c.id) filter (where c.merged_into is null and c.lead_status = 'not_interested')::int as not_interested_count,
+      count(c.id) filter (where c.merged_into is null and c.lead_status = 'do_not_call')::int as dnc_count
+    from telemarketer t
+    left join company_data c on lower(trim(c.assigned_to)) = lower(trim(t.name))
+    group by t.id, t.name, t.phone, t.email, t.notes, t.active, t.created_at
+    order by t.active desc, t.name asc
+  `);
+  return res.rows;
+}
+
+export async function addTelemarketer(
+  name: string,
+  extra: { phone?: string | null; email?: string | null; notes?: string | null; active?: boolean } = {}
+): Promise<TelemarketerAgent> {
   await migrate();
   const trimmed = name.trim();
   if (!trimmed) throw new Error('telemarketer name is required');
+  const phone = extra.phone?.trim() || null;
+  const email = extra.email?.trim() || null;
+  const notes = extra.notes?.trim() || null;
+  const active = extra.active !== false;
+
   await sql(
-    `insert into telemarketer (name) values ($1) on conflict (name) do update set active = true`,
-    [trimmed],
+    `insert into telemarketer (name, phone, email, notes, active)
+     values ($1, $2, $3, $4, $5)
+     on conflict (name) do update set
+       phone = coalesce(excluded.phone, telemarketer.phone),
+       email = coalesce(excluded.email, telemarketer.email),
+       notes = coalesce(excluded.notes, telemarketer.notes),
+       active = excluded.active,
+       updated_at = now()`,
+    [trimmed, phone, email, notes, active],
   );
-  return trimmed;
+
+  const agents = await getTelemarketerDetails();
+  const found = agents.find((a) => a.name.toLowerCase() === trimmed.toLowerCase());
+  return found ?? {
+    id: 0,
+    name: trimmed,
+    phone,
+    email,
+    notes,
+    active,
+    created_at: new Date().toISOString(),
+    total_assigned: 0,
+    contacted_count: 0,
+    interested_count: 0,
+    not_interested_count: 0,
+    dnc_count: 0,
+  };
+}
+
+export async function updateTelemarketer(
+  id: number,
+  patch: { name?: string; phone?: string | null; email?: string | null; notes?: string | null; active?: boolean }
+): Promise<TelemarketerAgent | null> {
+  await migrate();
+  const current = await sql<{ id: number; name: string }>(`select id, name from telemarketer where id = $1`, [id]);
+  if (!current.rows.length) return null;
+  const oldName = current.rows[0]!.name;
+
+  const hasName = patch.name !== undefined && patch.name.trim() !== '';
+  const newName = hasName ? patch.name!.trim() : oldName;
+  const hasPhone = patch.phone !== undefined;
+  const hasEmail = patch.email !== undefined;
+  const hasNotes = patch.notes !== undefined;
+  const hasActive = patch.active !== undefined;
+
+  await sql(
+    `update telemarketer set
+       name = case when $2 then $3 else name end,
+       phone = case when $4 then $5 else phone end,
+       email = case when $6 then $7 else email end,
+       notes = case when $8 then $9 else notes end,
+       active = case when $10 then $11 else active end,
+       updated_at = now()
+     where id = $1`,
+    [
+      id,
+      hasName, newName,
+      hasPhone, patch.phone?.trim() || null,
+      hasEmail, patch.email?.trim() || null,
+      hasNotes, patch.notes?.trim() || null,
+      hasActive, patch.active ?? true,
+    ]
+  );
+
+  if (hasName && newName.toLowerCase() !== oldName.toLowerCase()) {
+    await sql(
+      `update company_data set assigned_to = $1 where lower(trim(assigned_to)) = lower(trim($2))`,
+      [newName, oldName]
+    );
+  }
+
+  const agents = await getTelemarketerDetails();
+  return agents.find((a) => a.id === id) ?? null;
+}
+
+export async function deleteTelemarketer(id: number, unassignLeads: boolean = true): Promise<boolean> {
+  await migrate();
+  const current = await sql<{ id: number; name: string }>(`select id, name from telemarketer where id = $1`, [id]);
+  if (!current.rows.length) return false;
+  const agentName = current.rows[0]!.name;
+
+  if (unassignLeads) {
+    await sql(
+      `update company_data set assigned_to = null, lead_status = 'unassigned', lead_updated_at = now()
+       where lower(trim(assigned_to)) = lower(trim($1))`,
+      [agentName]
+    );
+  }
+
+  await sql(`delete from telemarketer where id = $1`, [id]);
+  return true;
 }
 
 export async function dedupCompanies(): Promise<{ merged: number }> {
