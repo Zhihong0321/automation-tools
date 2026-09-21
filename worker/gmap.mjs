@@ -20,10 +20,40 @@
 //      its own history — which is the only place a soft block is visible at all.
 import { spawn } from 'node:child_process';
 import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
 import { saveScan, configured as dbConfigured } from './db.mjs';
 
-const CHROME = process.env.CHROME_PATH
-  ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+function findChrome() {
+  if (process.env.CHROME_PATH && fs.existsSync(process.env.CHROME_PATH)) {
+    return process.env.CHROME_PATH;
+  }
+  if (process.platform === 'win32') {
+    const candidates = [
+      path.join(process.env['PROGRAMFILES'] ?? 'C:\\Program Files', 'Google\\Chrome\\Application\\chrome.exe'),
+      path.join(process.env['PROGRAMFILES(X86)'] ?? 'C:\\Program Files (x86)', 'Google\\Chrome\\Application\\chrome.exe'),
+      path.join(process.env['LOCALAPPDATA'] ?? '', 'Google\\Chrome\\Application\\chrome.exe'),
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) return c;
+    }
+    return 'chrome.exe';
+  }
+  if (process.platform === 'darwin') {
+    const mac = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    if (fs.existsSync(mac)) return mac;
+  }
+  if (process.platform === 'linux') {
+    for (const l of ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser']) {
+      if (fs.existsSync(l)) return l;
+    }
+  }
+  return process.env.CHROME_PATH ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+}
+
+const CHROME = findChrome();
 const PORT = Number(process.env.GMAP_CDP_PORT ?? 9422);
 /** The feed lazy-loads on scroll. Stop when the count stops moving, not at a fixed depth. */
 const PLATEAU_ROUNDS = 4;
@@ -390,7 +420,7 @@ export async function scan(payload, job = null) {
   const max = Number(payload?.max) > 0 ? Number(payload.max) : 200;
   const query = [keyword, place].filter(Boolean).join(' ');
 
-  const profile = '/tmp/gmap-worker-profile';
+  const profile = path.join(os.tmpdir(), 'gmap-worker-profile');
   const chrome = launchChrome(profile);
   const startedAt = Date.now();
   let ws = null;

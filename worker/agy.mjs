@@ -13,8 +13,30 @@
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
+import fs from 'node:fs';
 
-const BIN = process.env.AGY_BIN ?? path.join(os.homedir(), '.local/bin/agy');
+function findAgy() {
+  if (process.env.AGY_BIN && fs.existsSync(process.env.AGY_BIN)) {
+    return process.env.AGY_BIN;
+  }
+  if (process.platform === 'win32') {
+    const candidates = [
+      path.join(os.homedir(), '.local', 'bin', 'agy.cmd'),
+      path.join(os.homedir(), '.local', 'bin', 'agy.exe'),
+      path.join(process.env['LOCALAPPDATA'] ?? '', 'Programs', 'antigravity', 'agy.cmd'),
+      path.join(process.env['LOCALAPPDATA'] ?? '', 'Programs', 'antigravity', 'agy.exe'),
+      path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'antigravity', 'agy.cmd'),
+      path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'antigravity', 'agy.exe'),
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) return c;
+    }
+    return process.env.AGY_BIN ?? 'agy.cmd';
+  }
+  return process.env.AGY_BIN ?? path.join(os.homedir(), '.local/bin/agy');
+}
+
+const BIN = findAgy();
 const DEFAULT_TIMEOUT_MS = Number(process.env.AGY_TIMEOUT_MS ?? 300_000);
 
 /** Everything agy prints that means "I am not signed in" rather than "here is your answer". */
@@ -106,8 +128,8 @@ function run(args, timeoutMs) {
   return new Promise((resolve) => {
     // cwd is the home directory rather than wherever the worker was started:
     // agy reads project context from cwd, and a prompt answered against whatever
-    // repo the worker happened to be launched in is a different answer.
-    const child = spawn(BIN, args, { cwd: os.homedir(), stdio: ['ignore', 'pipe', 'pipe'] });
+    const isWin = process.platform === 'win32';
+    const child = spawn(BIN, args, { cwd: os.homedir(), stdio: ['ignore', 'pipe', 'pipe'], shell: isWin });
     let stdout = '';
     let stderr = '';
     let timedOut = false;

@@ -39,9 +39,10 @@ import * as fb from './fb.mjs';
 import * as x from './x.mjs';
 import * as ads from './ads.mjs';
 
-// Config from a file the process owner can chmod 600, so the token is not in a
-// launchd plist that every process on the box can read.
-const ENV_FILE = process.env.WORKER_ENV_FILE ?? path.join(os.homedir(), '.gmap-worker.env');
+// Config from a local .env file or ~/.gmap-worker.env
+const localEnv = path.resolve('.env');
+const defaultEnv = fs.existsSync(localEnv) ? localEnv : path.join(os.homedir(), '.gmap-worker.env');
+const ENV_FILE = process.env.WORKER_ENV_FILE ?? defaultEnv;
 if (fs.existsSync(ENV_FILE)) {
   try {
     process.loadEnvFile(ENV_FILE);
