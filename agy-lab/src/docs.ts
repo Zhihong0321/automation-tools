@@ -738,6 +738,7 @@ data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"..."}}]}
       <tr><td><code>POST /api/jobs/:id/result</code></td><td><code>{ok, result, error}</code> &rarr; the job becomes <code>done</code> or <code>failed</code></td></tr>
       <tr><td><code>GET /api/jobs/:id</code></td><td>status and result</td></tr>
       <tr><td><code>GET /api/jobs</code></td><td>the queue, plus every worker and when it last checked in</td></tr>
+      <tr><td><code>POST /api/jobs/health-check</code></td><td>Probe the hub database and dispatch one targeted <code>worker.health</code> job to every online, updated lane. A Maps lane checks its pg-proxy connection and scan-table write grants. Returns results and pending job IDs; requires <code>LAB_TOKEN</code>.</td></tr>
     </tbody>
   </table></div>
   <pre><code>ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \

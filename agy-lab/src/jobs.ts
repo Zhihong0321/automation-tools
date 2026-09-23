@@ -46,6 +46,8 @@ export interface Job {
   finishedAt: string | null;
   /** Which worker holds (or held) it. */
   worker: string | null;
+  /** Only this lane may claim a targeted diagnostic job. */
+  targetWorker: string | null;
   /** How many times it has been handed out. A retry after a lease expiry counts. */
   attempts: number;
   /** Lease length. A run longer than this is assumed dead — set it above the real worst case. */
@@ -193,9 +195,10 @@ function sweep(): void {
   }
 }
 
-function pending(types: string[] | null): Job | null {
+function pending(worker: string, types: string[] | null): Job | null {
   for (const job of jobs.values()) {
     if (job.status !== 'pending') continue;
+    if (job.targetWorker && job.targetWorker !== worker) continue;
     if (types && !types.includes(job.type)) continue;
     return job;
   }
@@ -214,7 +217,8 @@ function lease(job: Job, worker: string): Job {
 
 /** Hand a freshly created job straight to a waiting worker, if one matches. */
 function wake(job: Job): void {
-  const i = waiters.findIndex((w) => !w.types || w.types.includes(job.type));
+  const i = waiters.findIndex((w) => (!job.targetWorker || job.targetWorker === w.worker)
+    && (!w.types || w.types.includes(job.type)));
   if (i === -1) return;
   const w = waiters.splice(i, 1)[0]!;
   clearTimeout(w.timer);
@@ -223,7 +227,7 @@ function wake(job: Job): void {
 
 // ------------------------------------------------------------------- the API
 
-export function create(type: string, payload: unknown, timeoutMs = DEFAULT_TIMEOUT_MS): Job {
+export function create(type: string, payload: unknown, timeoutMs = DEFAULT_TIMEOUT_MS, targetWorker: string | null = null): Job {
   sweep();
   const job: Job = {
     id: crypto.randomBytes(6).toString('hex'),
@@ -234,6 +238,7 @@ export function create(type: string, payload: unknown, timeoutMs = DEFAULT_TIMEO
     startedAt: null,
     finishedAt: null,
     worker: null,
+    targetWorker,
     attempts: 0,
     timeoutMs: Math.min(Math.max(1_000, timeoutMs), MAX_TIMEOUT_MS),
     result: null,
@@ -265,7 +270,7 @@ export function take(
 ): Promise<Job | null> {
   sweep();
   const types = opts.types && opts.types.length ? opts.types : null;
-  const ready = pending(types);
+  const ready = pending(worker, types);
   if (ready) return Promise.resolve(lease(ready, worker));
 
   const waitMs = Math.min(Math.max(0, opts.waitMs ?? MAX_WAIT_MS), MAX_WAIT_MS);
@@ -441,6 +446,37 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     // nothing", which the gateway treats the same as absent.
     const types = Array.isArray(body.types) ? body.types.map((t) => str(t).trim()).filter(Boolean) : [];
     json(res, 200, { worker: touch(worker, callerIp(req), types) });
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/jobs/health-check') {
+    const body = await readJson(req);
+    const waitMs = Math.min(Math.max(0, num(body.waitMs, 15_000)), 25_000);
+    const checkedAt = now();
+    const databaseCheck = db.sql('select 1 as ok').then(
+      (): { status: 'ok' | 'failed'; error?: string } => ({ status: 'ok' }),
+      (err): { status: 'ok' | 'failed'; error?: string } => {
+        const error = err instanceof Error ? err.message : String(err);
+        console.error('[worker.health] hub database probe failed: ' + error);
+        return { status: 'failed', error };
+      },
+    );
+    const lanes = snapshot().workers;
+    const checks = lanes.map((worker) => {
+      const status = 'status' in worker && typeof worker.status === 'string'
+        ? worker.status : Date.now() - Date.parse(worker.lastSeenAt) <= 90_000 ? 'online' : 'offline';
+      if (status !== 'online') return { worker: worker.name, status, lastSeenAt: worker.lastSeenAt };
+      if (!worker.types?.includes('worker.health')) return { worker: worker.name, status: 'unsupported', lastSeenAt: worker.lastSeenAt };
+      const job = create('worker.health', { database: worker.types.includes('gmap.scan') }, 45_000, worker.name);
+      return { worker: worker.name, status: 'pending', lastSeenAt: worker.lastSeenAt, jobId: job.id };
+    });
+    await Promise.all(checks.map(async (check) => {
+      if (!('jobId' in check) || !check.jobId) return;
+      const job = await wait(check.jobId, waitMs);
+      Object.assign(check, { status: job?.status ?? 'lost', result: job?.result ?? null, error: job?.error ?? null });
+    }));
+    const database = await databaseCheck;
+    json(res, 200, { checkedAt, hub: { database }, workers: checks });
     return true;
   }
 
