@@ -4,6 +4,25 @@ import { extractCompanyContacts, buildMasterContactsResponse, generateContactsCs
 import type { RawCompanyContactRow } from './reportdb.ts';
 import { page } from './portal.ts';
 
+test('Contacts Master combines Parallel people with existing contact phones', () => {
+  const row: RawCompanyContactRow = {
+    id: '42', name: 'Acme Energy', category: null, address: null, phone: null,
+    website: null, maps_url: null, rating: null, reviews: null,
+    lead_status: 'unassigned', assigned_to: null,
+    contact_public_id: 'parallel-run', contact_status: 'completed',
+    contact_result: { decision_makers: [{ name: 'Jane Lee', role: 'Managing Director', profile_url: 'https://example.com/jane' }] },
+    contact_results: [
+      { decision_makers: [{ name: 'Jane Lee', role: 'Managing Director', profile_url: 'https://example.com/jane' }] },
+      { phone_contacts: [{ number_raw: '012-7654321', type: 'mobile_whatsapp' }], email_contacts: [{ email: 'info@acme.example' }] },
+    ],
+    research_public_id: null, research_status: null, research_result: null,
+  };
+  const group = extractCompanyContacts(row);
+  assert.deepEqual(group.people.map(person => person.name), ['Jane Lee']);
+  assert.equal(group.phones.length, 1);
+  assert.equal(group.emails.length, 1);
+});
+
 test('extractCompanyContacts extracts people, phones, cheat sheet and normalizes entries', () => {
   const mockRow: RawCompanyContactRow = {
     id: 'comp-01',
