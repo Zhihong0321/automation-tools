@@ -105,11 +105,12 @@ function authorized(req: http.IncomingMessage, url: URL): boolean {
 // the images live on the mini's disk and there is no blob store between the two.
 // Only the result route gets the larger ceiling, and only workers can reach it.
 const RESULT_ROUTE = /^\/api\/jobs\/[^/]+\/result(\?|$)/;
+const REPAIR_ROUTE = /^\/api\/reports\/[^/]+\/repair(\?|$)/;
 const BODY_LIMIT = 1 << 20;
 const RESULT_LIMIT = Number(process.env.RESULT_BODY_LIMIT ?? 32 << 20);
 
 async function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
-  const cap = RESULT_ROUTE.test(req.url ?? '') ? RESULT_LIMIT : BODY_LIMIT;
+  const cap = RESULT_ROUTE.test(req.url ?? '') || REPAIR_ROUTE.test(req.url ?? '') ? RESULT_LIMIT : BODY_LIMIT;
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const c of req) {
@@ -130,6 +131,7 @@ const num = (v: unknown, fallback: number): number => (typeof v === 'number' && 
 
 const server = http.createServer((req, res) => {
   void handle(req, res).catch((err: unknown) => {
+    console.error(`[http ${req.method ?? 'GET'} ${(req.url ?? '/').split('?')[0]}] ${(err as Error).stack ?? String(err)}`);
     json(res, 500, { error: (err as Error).message ?? String(err) });
   });
 });
@@ -458,6 +460,7 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('  HOME     ' + agy.HOME);
   console.log('  agy      ' + (fs.existsSync(agy.BIN) ? agy.BIN : 'not installed yet - POST /api/install'));
   console.log('  appData  ' + agy.APP_DATA);
+  console.log('  reports  ' + (process.env.DATABASE_URL?.trim() ? 'direct Postgres' : reportdb.configured() ? 'pg-proxy fallback (token can expire)' : 'NOT CONFIGURED'));
   // Age 0 at boot: this process owns no run yet, so anything non-terminal was
   // stranded by the restart that just happened.
   reapAbandonedRuns(0);

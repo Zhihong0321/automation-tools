@@ -3789,7 +3789,13 @@ function pickBestScan(matches: TerritoryScanStatInput[]): TerritoryScanStatInput
   if (active) return active;
   const completed = matches.find((s) => s.status === 'completed');
   if (completed) return completed;
+  const partialWithResults = matches.find((s) => s.status === 'partial' && s.company_count > 0);
+  if (partialWithResults) return partialWithResults;
   return matches[0];
+}
+
+function hasUsableScan(scan: TerritoryScanStatInput): boolean {
+  return scan.status === 'completed' || (scan.status === 'partial' && scan.company_count > 0);
 }
 
 export function buildTerritoryResponse(
@@ -3852,7 +3858,7 @@ export function buildTerritoryResponse(
             createdAt: matchingTamanScan.created_at,
             keyword: matchingTamanScan.keyword,
           };
-          if (matchingTamanScan.status === 'completed') {
+          if (hasUsableScan(matchingTamanScan)) {
             dScanned++;
             scannedTamans++;
             if (!uniqueScanIds.has(matchingTamanScan.public_id)) {

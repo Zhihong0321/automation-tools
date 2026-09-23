@@ -250,6 +250,14 @@ test('the portal script has no undefined identifiers in its job renderer', () =>
   }
 });
 
+test('a partial business list offers saved-data repair and displays its save error', () => {
+  const html = page();
+  assert.match(html, /Repair save/);
+  assert.match(html, /function repairReport\(button\)/);
+  assert.match(html, /\/api\/reports\/.*\/repair/);
+  assert.match(html, /Save issue:/);
+});
+
 test('scan whole town queues only tamans with zero leads and no active scan', async () => {
   const html = page();
   const start = html.indexOf('async function queueWholeTownFromBtn');

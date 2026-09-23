@@ -68,6 +68,23 @@ export const document = {
         },
       },
     },
+    '/api/reports/{reportId}/repair': {
+      post: {
+        operationId: 'repairBusinessSearch',
+        tags: ['Published reports'],
+        summary: 'Save a captured business list without scanning again',
+        description: 'For a partial or failed business-list report, replay its captured companies or recover the worker-saved search by job id, verify the company links, and mark the same report completed. Safe to retry after a database outage; existing companies and links are reused. A worker recovery copy may be uploaded as snapshot only with LAB_TOKEN; this also supports a stranded running report after a restart.',
+        parameters: [{ $ref: '#/components/parameters/ReportId' }],
+        responses: {
+          '200': { description: 'Captured businesses saved and verified' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '409': { description: 'No captured business list is available for repair' },
+          '500': { description: 'Database repair failed; the captured report remains available' },
+          '503': { $ref: '#/components/responses/Unavailable' },
+        },
+      },
+    },
     '/api/business-search': {
       post: {
         operationId: 'createBusinessSearch',

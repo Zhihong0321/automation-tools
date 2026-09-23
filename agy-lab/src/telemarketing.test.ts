@@ -129,3 +129,29 @@ test('buildTerritoryResponse prioritizes active running scan over completed scan
   assert.equal(austin.scan?.publicId, 'report_new_running');
 });
 
+test('partial business lists with companies appear as scanned tamans', () => {
+  const scans = [
+    { public_id: 'sentosa-retry-failed', status: 'failed', place: 'Taman Sentosa, Johor Bahru City Centre, Johor', keyword: 'business', company_count: 0, created_at: '2026-09-24T10:00:00Z' },
+    { public_id: 'sentosa', status: 'partial', place: 'Taman Sentosa, Johor Bahru City Centre, Johor', keyword: 'business', company_count: 76, created_at: '2026-09-23T10:00:00Z' },
+    { public_id: 'mount-austin', status: 'partial', place: 'Taman Mount Austin, Tebrau, Johor', keyword: 'business', company_count: 120, created_at: '2026-09-23T11:00:00Z' },
+  ];
+
+  const result = buildTerritoryResponse('johor', scans);
+  const jb = result.districts.find((d) => d.name === 'Johor Bahru');
+  const sentosa = jb?.towns.find((t) => t.name === 'Johor Bahru City Centre')?.tamans.find((tm) => tm.name === 'Taman Sentosa');
+  const austin = jb?.towns.find((t) => t.name === 'Tebrau')?.tamans.find((tm) => tm.name === 'Taman Mount Austin');
+
+  assert.equal(sentosa?.scan?.publicId, 'sentosa');
+  assert.equal(sentosa?.scan?.count, 76);
+  assert.equal(austin?.scan?.publicId, 'mount-austin');
+  assert.equal(austin?.scan?.count, 120);
+  assert.equal(jb?.scannedTamans, 2);
+  assert.equal(result.stats.scannedTamans, 2);
+  assert.equal(result.stats.totalLeads, 196);
+
+  const html = page();
+  assert.match(html, /tScan\.status==='partial'&&tScan\.count>0/);
+  assert.match(html, /scan\.status==='partial'&&scan\.count>0/);
+  assert.match(html, /businesses · partial/);
+});
+

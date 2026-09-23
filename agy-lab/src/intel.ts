@@ -1681,26 +1681,64 @@ async function runBusinessSearch(publicId: string, reportId: string, request: Re
       originalPlace: locationOnly ? place : undefined,
       max: request.max,
       userId: request.userId,
+      reportPublicId: publicId,
     }, timeoutMs);
     await db.updateReport(publicId, { jobId: job.id });
     const settled = await jobs.wait(job.id, timeoutMs + 5_000);
     if (!settled || settled.status !== 'done') throw new Error(settled?.error ?? 'Google Maps scan did not finish');
     const scan = object(settled.result);
+    if (!Array.isArray(scan.businesses)) throw new Error('Google Maps worker returned no businesses array');
+    const capturedCompanies = rows(scan.businesses);
     const saved = object(scan.saved);
     const savedId = saved.reportId != null ? String(saved.reportId) : null;
-    const durable = savedId ? await db.searchResult(savedId) : null;
-    const companies = durable?.companies ?? rows(scan.businesses);
-    const result = { search: durable?.report ?? scan, companies, scan_metadata: {
+    const workerSaveError = str(scan.saveError, savedId ? '' : 'worker returned no saved report id');
+    const scanDetails = { ...scan };
+    delete scanDetails.businesses;
+    const captured = { search: scanDetails, companies: capturedCompanies, scan_metadata: {
       blocked: scan.blocked, limited_view: scan.limitedView, capped: scan.capped,
-      save_error: scan.saveError ?? null,
+      save_error: workerSaveError || null,
     } };
-    const partial = Boolean(scan.saveError || !savedId);
+    // Keep the harvested rows before attempting any further writes. A later
+    // persistence failure can then be repaired from this report without Maps.
+    try {
+      await db.updateReport(publicId, { result: captured });
+    } catch (captureError) {
+      console.error(`[business_search.snapshot_failed] report=${publicId} job=${job.id}: ${(captureError as Error).message ?? String(captureError)}`);
+    }
+    await db.logEvent({ reportId, publicId, jobId: job.id, stage: 'business_search', event: 'business_search.captured', detail: { companies: capturedCompanies.length, worker_saved: Boolean(savedId), worker_error: workerSaveError || null } });
+
+    let durable: Awaited<ReturnType<typeof db.searchResult>> = null;
+    let searchReportId = savedId;
+    let recovered = false;
+    const expected = new Set(capturedCompanies.filter((c) => str(c.name).trim()).map(db.scanPlaceKey)).size;
+    try {
+      durable = savedId ? await db.searchResult(savedId) : null;
+      if (!durable || durable.companies.length < expected) {
+        const repaired = await db.persistBusinessScan(publicId, scan, capturedCompanies);
+        searchReportId = repaired.reportId;
+        durable = await db.searchResult(searchReportId);
+        if (!durable || durable.companies.length < expected) throw new Error(`verification found ${durable?.companies.length ?? 0} of ${expected} companies`);
+        recovered = true;
+        await db.logEvent({ reportId, publicId, jobId: job.id, stage: 'business_search', event: 'business_search.server_recovered', detail: { companies: capturedCompanies.length, linked: repaired.linked, worker_error: workerSaveError || null } });
+      }
+    } catch (saveError) {
+      const recoveryError = (saveError as Error).message ?? String(saveError);
+      const error = `Scan captured ${capturedCompanies.length} businesses, but database save failed. Worker: ${workerSaveError || 'incomplete saved rows'}. Server: ${recoveryError}`;
+      console.error(`[business_search.save_failed] report=${publicId} job=${job.id}: ${error}`);
+      await db.logEvent({ reportId, publicId, jobId: job.id, stage: 'business_search', event: 'business_search.save_failed', detail: { companies: capturedCompanies.length, worker_error: workerSaveError || null, server_error: recoveryError } });
+      await db.updateReport(publicId, { status: 'partial', result: { ...captured, scan_metadata: { ...captured.scan_metadata, recovery_error: recoveryError } }, error, completed: true });
+      return;
+    }
+    const result = { search: durable!.report, companies: durable!.companies, scan_metadata: {
+      ...captured.scan_metadata, recovered,
+    } };
     await db.updateReport(publicId, {
-      status: partial ? 'partial' : 'completed', searchReportId: savedId,
-      result, error: partial ? str(scan.saveError, 'Scan completed but database persistence was incomplete') : null,
+      status: 'completed', searchReportId,
+      result, error: null,
       completed: true,
     });
   } catch (err) {
+    console.error(`[business_search.failed] report=${publicId}: ${(err as Error).stack ?? String(err)}`);
     await db.updateReport(publicId, { status: 'failed', error: (err as Error).message ?? String(err), completed: true }).catch(() => {});
   } finally {
     active.delete(publicId);
@@ -2975,6 +3013,66 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     return true;
   }
 
+  const repairMatch = /^\/api\/reports\/([A-Za-z0-9_-]{20})\/repair$/.exec(p);
+  if (method === 'POST' && repairMatch) {
+    const publicId = repairMatch[1]!;
+    const report = await db.getReport(publicId);
+    if (!report) { ctx.json(res, 404, { error: 'report not found' }); return true; }
+    const body = await ctx.readJson(req);
+    const uploaded = object(body.snapshot);
+    const hasUpload = Object.keys(uploaded).length > 0;
+    if (hasUpload) {
+      const supplied = str(req.headers.authorization).replace(/^Bearer\s+/i, '');
+      const expected = process.env.LAB_TOKEN ?? '';
+      const digest = (value: string) => crypto.createHash('sha256').update(value).digest();
+      if (!expected || !crypto.timingSafeEqual(digest(supplied), digest(expected))) {
+        ctx.json(res, 403, { error: 'worker snapshot upload requires LAB_TOKEN' });
+        return true;
+      }
+    }
+    let snapshot = hasUpload ? uploaded : object(report.result);
+    if (!hasUpload && !Array.isArray(snapshot.companies) && report.job_id) {
+      try {
+        const workerSaved = await db.searchResultForJob(report.job_id);
+        if (workerSaved) snapshot = { search: workerSaved.report, companies: workerSaved.companies, scan_metadata: { restored_from_worker_database: true } };
+      } catch (err) {
+        const detail = (err as Error).message ?? String(err);
+        console.error(`[business_search.repair_lookup_failed] report=${publicId}: ${detail}`);
+        ctx.json(res, 500, { error: detail });
+        return true;
+      }
+    }
+    if (report.report_type !== 'business_search' || !(report.status === 'partial' || report.status === 'failed' || hasUpload && report.status === 'running') || active.has(publicId) || !Array.isArray(snapshot.companies)) {
+      ctx.json(res, 409, { error: 'report has no captured business list available for repair' });
+      return true;
+    }
+    active.add(publicId);
+    try {
+      if (hasUpload) {
+        await db.updateReport(publicId, { status: 'partial', result: snapshot, error: 'Worker recovery copy loaded; database repair in progress' });
+        await db.logEvent({ reportId: report.id, publicId, jobId: report.job_id, stage: 'business_search', event: 'business_search.snapshot_restored', detail: { companies: rows(snapshot.companies).length } });
+      }
+      const companies = rows(snapshot.companies);
+      const saved = await db.persistBusinessScan(publicId, object(snapshot.search), companies);
+      const durable = await db.searchResult(saved.reportId);
+      const expected = new Set(companies.filter((c) => str(c.name).trim()).map(db.scanPlaceKey)).size;
+      if (!durable || durable.companies.length < expected) throw new Error(`verification found ${durable?.companies.length ?? 0} of ${expected} businesses`);
+      const result = { ...snapshot, search: durable.report, companies: durable.companies, scan_metadata: { ...object(snapshot.scan_metadata), recovered: true, recovery_error: null } };
+      const updated = await db.updateReport(publicId, { status: 'completed', searchReportId: saved.reportId, result, error: null, completed: true });
+      await db.logEvent({ reportId: report.id, publicId, jobId: report.job_id, stage: 'business_search', event: 'business_search.repair_completed', detail: { companies: saved.companies, linked: saved.linked } });
+      ctx.json(res, 200, { report: envelope(req, updated), saved });
+    } catch (err) {
+      const detail = (err as Error).message ?? String(err);
+      console.error(`[business_search.repair_failed] report=${publicId}: ${(err as Error).stack ?? String(err)}`);
+      await db.logEvent({ reportId: report.id, publicId, jobId: report.job_id, stage: 'business_search', event: 'business_search.repair_failed', detail: { error: detail } });
+      await db.updateReport(publicId, { status: 'partial', error: `Database repair failed: ${detail}` }).catch(() => {});
+      ctx.json(res, 500, { error: detail });
+    } finally {
+      active.delete(publicId);
+    }
+    return true;
+  }
+
   const retryMatch = /^\/api\/reports\/([A-Za-z0-9_-]{20})\/retry$/.exec(p);
   if (method === 'POST' && retryMatch) {
     const publicId = retryMatch[1]!;
@@ -3043,6 +3141,7 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       const companies = rows(result.companies);
       return {
         ...envelope(req, report),
+        repairable: report.report_type === 'business_search' && (report.status === 'partial' || report.status === 'failed') && (Array.isArray(result.companies) || Boolean(report.job_id)),
         preview: report.report_type === 'company_research' ? {
           company_id: report.company_id,
           entity: finalEntity,

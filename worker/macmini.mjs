@@ -361,7 +361,8 @@ async function run(name, job, session) {
     // invisible from here: the caller gets its rows and the job says done. The
     // usual cause is the pg-proxy token having expired overnight, so it is
     // named in the log rather than left inside the result JSON nobody reads.
-    if (result?.saveError) say('job ' + job.id + ' ran but did NOT save: ' + result.saveError);
+    if (job.type === 'gmap.scan' && !result?.saved?.reportId)
+      say('job ' + job.id + ' ran but did NOT save: ' + (result?.saveError || 'worker persistence returned no report id'));
     say('job ' + job.id + ' done in ' + (Date.now() - at) + 'ms');
   } catch (err) {
     // The handler failing must not take the loop down with it. Report and carry on.

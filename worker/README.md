@@ -349,3 +349,23 @@ sleeping does.
 | `EGO_BROWSER_BIN` | `ego-browser` on `PATH` | the worker prepends `~/.local/bin`, which launchd does not inherit |
 | `CGPT_SPACE`, `CGPT_PROFILE` | — | override `spaces.json` for one process |
 | `PG_PROXY_URL`, `PG_DB_NAME`, `PG_PROXY_TOKEN` | — | where `gmap.scan` writes its rows; a scan still returns them if this fails |
+| `WORKER_RECOVERY_DIR` | `~/.gmap-worker/unsaved-scans` | local copies of scans whose worker database write failed |
+
+### Recovering an unsaved Maps scan
+
+When a Maps scan cannot write to the worker database, the worker logs the cause
+and writes the captured result to `~/.gmap-worker/unsaved-scans/JOB_ID.json`.
+The lab normally saves those same results through its own database connection.
+If that also fails, the report stays `partial`, shows the error in Reports, and
+offers **Repair save** once the database is working again. This reuses the
+captured companies and does not open Google Maps.
+
+If the lab was unable to retain the captured result at all, restore the worker
+copy after the database returns:
+
+```sh
+node worker/replay-scan.mjs ~/.gmap-worker/unsaved-scans/JOB_ID.json
+```
+
+The command uses `LAB_URL` and `LAB_TOKEN`, verifies the company links, and
+updates the same public report. It keeps the recovery file for inspection.

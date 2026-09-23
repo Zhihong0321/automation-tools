@@ -870,6 +870,97 @@ export async function searchResult(reportId: string): Promise<{ report: Record<s
   return { report, companies };
 }
 
+export async function searchResultForJob(jobId: string): Promise<{ report: Record<string, unknown>; companies: Record<string, unknown>[] } | null> {
+  await migrate();
+  const found = await sql<{ id: string }>('select id from search_report where job_id = $1 order by id desc limit 1', [jobId]);
+  return found.rows[0] ? searchResult(String(found.rows[0].id)) : null;
+}
+
+/** Same identity rule as worker/db.mjs. Replaying a saved scan must not create new leads. */
+export function scanPlaceKey(b: Record<string, unknown>): string {
+  const name = String(b.name ?? '').toLowerCase().replace(/[.,'"`’]/g, '').replace(/\s+/g, ' ').trim();
+  if (/\b(?:sdn\.?\s*bhd|sendirian\s+berhad|berhad|bhd|plt|llp|pte\.?\s*ltd|ltd|limited|inc|incorporated|corp|corporation|gmbh|pty|gida)\.?$/i.test(name)) return 'name:' + name;
+  if (typeof b.place_id === 'string' && b.place_id.trim()) return b.place_id;
+  const mapsUrl = String(b.mapsUrl ?? b.maps_url ?? '');
+  const mapsId = /!19s([A-Za-z0-9_-]+)/.exec(mapsUrl);
+  return mapsId ? mapsId[1]! : 'name:' + name + '|' + String(b.address ?? '').toLowerCase().trim();
+}
+
+/** Replay a captured Maps result through the server's database connection, without rescanning. */
+export async function persistBusinessScan(publicId: string, scan: Record<string, unknown>, businesses: Record<string, unknown>[]): Promise<{ reportId: string; companies: number; linked: number }> {
+  await migrate();
+  const published = await getReport(publicId);
+  if (!published || published.report_type !== 'business_search') throw new Error('business-list report not found');
+
+  const byKey = new Map<string, Record<string, unknown>>();
+  for (const business of businesses) {
+    if (!String(business.name ?? '').trim()) continue;
+    const key = scanPlaceKey(business);
+    if (!byKey.has(key)) byKey.set(key, business);
+  }
+
+  const idByKey = new Map<string, string>();
+  const entries = [...byKey];
+  for (let start = 0; start < entries.length; start += 100) {
+    const batch = entries.slice(start, start + 100);
+    const values = batch.map((_, i) => '(' + Array.from({ length: 9 }, (_v, j) => '$' + (i * 9 + j + 1)).join(',') + ')').join(',');
+    const params = batch.flatMap(([key, b]) => [
+      key, String(b.name).toWellFormed(), b.rating ?? null, b.reviews ?? null,
+      b.category == null ? null : String(b.category).toWellFormed(),
+      b.address == null ? null : String(b.address).toWellFormed(),
+      b.phone == null ? null : String(b.phone).toWellFormed(),
+      b.website == null ? null : String(b.website).toWellFormed(),
+      b.mapsUrl == null && b.maps_url == null ? null : String(b.mapsUrl ?? b.maps_url).toWellFormed(),
+    ]);
+    const inserted = await sql<{ id: string; place_id: string }>(
+      `insert into company_data (place_id,name,rating,reviews,category,address,phone,website,maps_url)
+       values ${values}
+       on conflict (place_id) do update set
+         name = excluded.name,
+         rating = coalesce(excluded.rating, company_data.rating),
+         reviews = coalesce(excluded.reviews, company_data.reviews),
+         category = coalesce(excluded.category, company_data.category),
+         address = case when length(coalesce(excluded.address, '')) > length(coalesce(company_data.address, '')) then excluded.address else company_data.address end,
+         phone = coalesce(excluded.phone, company_data.phone),
+         website = coalesce(excluded.website, company_data.website),
+         maps_url = excluded.maps_url,
+         last_seen_at = now()
+       returning id, place_id`, params,
+    );
+    for (const row of inserted.rows) idByKey.set(row.place_id, String(row.id));
+  }
+  if (idByKey.size !== byKey.size) throw new Error(`saved ${idByKey.size} of ${byKey.size} businesses`);
+
+  let reportId = published.source_search_report_id;
+  if (!reportId && published.job_id) {
+    const existing = await sql<{ id: string }>('select id from search_report where job_id = $1 order by id desc limit 1', [published.job_id]);
+    reportId = existing.rows[0]?.id ?? null;
+  }
+  if (!reportId) {
+    const found = scan.blocked ? null : typeof scan.found === 'number' && Number.isFinite(scan.found) ? scan.found : businesses.length;
+    const inserted = await sql<{ id: string }>(
+      `insert into search_report (user_id, keyword, place, query, found, blocked, blocked_reason, capped, limited_view, job_id, worker, took_ms)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning id`,
+      [published.user_id, scan.keyword ?? null, scan.place ?? published.request.place ?? null,
+       scan.query ?? null, found, Boolean(scan.blocked), scan.blockedReason ?? null,
+       Boolean(scan.capped), scan.limitedView ?? null, published.job_id, 'server-recovery', scan.tookMs ?? null],
+    );
+    reportId = inserted.rows[0]?.id ?? null;
+  }
+  if (!reportId) throw new Error('could not create search report for captured scan');
+
+  const links = businesses.map((business, i) => [reportId, idByKey.get(scanPlaceKey(business)), i + 1]).filter((link) => link[1] != null);
+  for (let start = 0; start < links.length; start += 100) {
+    const batch = links.slice(start, start + 100);
+    const values = batch.map((_, i) => '(' + Array.from({ length: 3 }, (_v, j) => '$' + (i * 3 + j + 1)).join(',') + ')').join(',');
+    await sql(`insert into search_report_company (report_id, company_id, rank) values ${values} on conflict (report_id, company_id) do nothing`, batch.flat());
+  }
+  const verified = await sql<{ count: number }>('select count(*)::int as count from search_report_company where report_id = $1', [reportId]);
+  const linked = Number(verified.rows[0]?.count ?? 0);
+  if (linked < byKey.size) throw new Error(`linked ${linked} of ${byKey.size} businesses to search report ${reportId}`);
+  return { reportId: String(reportId), companies: byKey.size, linked };
+}
+
 export async function initResearchRun(reportId: string): Promise<void> {
   await migrate();
   await sql(
