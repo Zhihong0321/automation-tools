@@ -52,6 +52,22 @@ export const document = {
         },
       },
     },
+    '/api/reports/{reportId}/retry': {
+      post: {
+        operationId: 'retryReport',
+        tags: ['Published reports'],
+        summary: 'Re-run a failed report in place',
+        description: 'Re-queues a failed report on its own row: the same public /r/{reportId} link, the same title, and the original request inputs replayed through the normal pipeline. The claim is an atomic compare-and-swap on status, so a double click or two racing callers still produce exactly one run — the loser gets 409. Completed and partial reports are refused: researching the same company again is a new report, never an overwrite of a finished one. 409 also covers original inputs that are gone (the company row was deleted, the source person no longer has an evidenced role); the report then keeps its failed status and its original error.',
+        parameters: [{ $ref: '#/components/parameters/ReportId' }],
+        responses: {
+          '202': { description: 'Report queued for a fresh run', content: { 'application/json': { schema: { $ref: '#/components/schemas/AcceptedReport' } } } },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '409': { description: 'Report is not failed, was already claimed by another caller, or its original inputs are no longer available', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          '503': { $ref: '#/components/responses/Unavailable' },
+        },
+      },
+    },
     '/api/business-search': {
       post: {
         operationId: 'createBusinessSearch',

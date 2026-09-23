@@ -83,3 +83,23 @@ test('OpenAPI contract exposes each research workflow and resolves local referen
     assert.notEqual(current, undefined, `unresolved OpenAPI reference: ${ref}`);
   }
 });
+
+test('the re-run workflow is documented for API consumers and the guide page', () => {
+  const html = page();
+  // The docs route table has to name the endpoint, not just the OpenAPI path --
+  // a reader scanning the table is how most callers find a route at all.
+  assert.match(html, /POST \/api\/reports\/:reportId\/retry/);
+  assert.match(html, /Re-queue a <code>failed<\/code> report in place/);
+  assert.match(html, /409<\/code> when the report is not failed/);
+
+  const retry = document.paths['/api/reports/{reportId}/retry'].post;
+  assert.equal(retry.operationId, 'retryReport');
+  assert.ok(retry.responses['202'], 'claiming a rerun answers 202');
+  assert.ok(retry.responses['404']);
+  // 409 is the load-bearing status: not failed, already claimed by a racing
+  // caller, or the original inputs are gone. Documenting it is what stops a
+  // client from treating a refusal as a transient error and looping.
+  assert.ok(retry.responses['409'], 'a refused rerun answers 409');
+  assert.match(retry.description ?? '', /compare-and-swap/);
+  assert.match(retry.description ?? '', /never an overwrite/);
+});

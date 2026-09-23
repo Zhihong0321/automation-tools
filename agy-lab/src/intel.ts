@@ -2975,6 +2975,44 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     return true;
   }
 
+  const retryMatch = /^\/api\/reports\/([A-Za-z0-9_-]{20})\/retry$/.exec(p);
+  if (method === 'POST' && retryMatch) {
+    const publicId = retryMatch[1]!;
+    const original = await db.getReport(publicId);
+    if (!original) {
+      ctx.json(res, 404, { error: 'report not found' });
+      return true;
+    }
+    if (original.status !== 'failed' || active.has(publicId)) {
+      ctx.json(res, 409, { error: 'report is not ready to retry' });
+      return true;
+    }
+    const request = object(original.request);
+    const company = original.company_id ? await db.getCompany(original.company_id) : null;
+    const personInput = original.report_type === 'person_research' ? await personResearchInput(original) : null;
+    if ((original.report_type === 'company_research' || original.report_type === 'contact_research') && !company
+      || original.report_type === 'person_research' && !personInput
+      || original.report_type === 'ads_research' && !str(request.name)
+      || original.report_type === 'ads_market' && !Array.isArray(request.keywords)
+      || original.report_type === 'business_search' && !str(request.keyword) && !str(request.place)) {
+      ctx.json(res, 409, { error: 'original report inputs are no longer available' });
+      return true;
+    }
+    const report = await db.retryFailedReport(publicId);
+    if (!report) {
+      ctx.json(res, 409, { error: 'report was already retried' });
+      return true;
+    }
+    if (report.report_type === 'business_search') void runBusinessSearch(publicId, report.id, request);
+    else if (report.report_type === 'company_research') void runCompanyResearch(publicId, report.id, company!, request);
+    else if (report.report_type === 'contact_research') void runContactResearch(publicId, report.id, company!, request);
+    else if (report.report_type === 'person_research') void runPersonResearch(publicId, report.id, personInput!.company, personInput!.person);
+    else if (report.report_type === 'ads_research') void runAdsResearch(publicId, report.id, request);
+    else if (report.report_type === 'ads_market') void runAdsMarket(publicId, report.id, request);
+    ctx.json(res, 202, { report: envelope(req, report) });
+    return true;
+  }
+
   // Permanent removal. One report per call, addressed by its opaque public id:
   // there is deliberately no bulk form of this, so "flush everything" stays a
   // sequence of visible, individually confirmed deletions rather than one query.

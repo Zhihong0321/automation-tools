@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import vm from 'node:vm';
 import { page } from './portal.ts';
 
 test('end-user portal combines discovery, deep research, and report library', () => {
@@ -208,6 +209,30 @@ test('any report can be deleted from the library, behind a confirm', () => {
   assert.match(html, /error\.status===404/);
 });
 
+test('a failed report can be re-run in place, and the bulk button counts before it asks', () => {
+  const html = page();
+  // Per-row: only a failed row is offered a re-run, and it posts to that
+  // report's own retry route -- the row is reused, never duplicated, so the
+  // public /r/:id link a caller already holds stays the valid one.
+  assert.match(html, /onclick="retryReport\(this\)"/);
+  assert.match(html, /async function retryReport/);
+  assert.match(html, /report\.status==='failed'\?'<button class="text-action"/);
+  assert.match(html, /'\+encodeURIComponent\(id\)\+'\/retry',\{method:'POST'\}/);
+
+  // The bulk button walks every failed report first, shows the human the exact
+  // count, and only queues after they confirm -- no silent fleet restart.
+  assert.match(html, /onclick="retryFailedReports\(this\)"/);
+  assert.match(html, /Re-run all failed reports/);
+  assert.match(html, /status=failed&limit=100&offset=/);
+  assert.match(html, /window\.confirm\('Re-run all '\+failed\.length\+' failed reports\?/);
+
+  // Every poll starts through the one type->kind map, so the Active work label
+  // cannot drift from what loadLibrary would have picked for the same row.
+  assert.match(html, /function kindFor\(report\)/);
+  assert.match(html, /poll\(report,kindFor\(report\)\)/);
+  assert.match(html, /poll\(body\.report,kindFor\(body\.report\)\)/);
+});
+
 test('the portal script has no undefined identifiers in its job renderer', () => {
   const html = page();
   // A bare `kind` inside renderJobs (where the variable is `job.kind`) threw
@@ -223,4 +248,40 @@ test('the portal script has no undefined identifiers in its job renderer', () =>
   for (const src of scripts) {
     assert.doesNotThrow(() => new Function(src), 'portal inline script must parse');
   }
+});
+
+test('scan whole town queues only tamans with zero leads and no active scan', async () => {
+  const html = page();
+  const start = html.indexOf('async function queueWholeTownFromBtn');
+  const end = html.indexOf('async function queueTerritoryScan', start);
+  assert.ok(start > 0 && end > start);
+  const places: string[] = [];
+  const jobs: string[] = [];
+  const town = { id: 'town-1', name: 'Example Town', tamans: [
+    { name: 'Has leads', queryPlace: 'Has leads, Example Town', scan: { status: 'completed', count: 5 } },
+    { name: 'Running', queryPlace: 'Running, Example Town', scan: { status: 'running', count: 0 } },
+    { name: 'Zero leads', queryPlace: 'Zero leads, Example Town', scan: { status: 'completed', count: 0 } },
+    { name: 'Failed', queryPlace: 'Failed, Example Town', scan: { status: 'failed', count: 0 } },
+    { name: 'New', queryPlace: 'New, Example Town' },
+  ] };
+  const context = {
+    teleState: { data: { districts: [{ towns: [town] }] }, queueingTown: false },
+    state: { token: 'test' },
+    el: (id: string) => id === 'teleCategory' ? { value: 'business' } : { value: '200' },
+    api: async (_path: string, options: { body: string }) => {
+      const body = JSON.parse(options.body);
+      places.push(body.place);
+      return { report: { id: body.place } };
+    },
+    poll: (report: { id: string }) => jobs.push(report.id),
+    authLost: () => false,
+    showToast: () => {},
+    loadTelemarketingView: async () => {},
+  };
+  const run = vm.runInNewContext(html.slice(start, end) + '; queueWholeTownFromBtn', context);
+  const button = { getAttribute: () => 'town-1', disabled: false, textContent: 'Scan Whole Town' };
+  await run(button);
+  assert.deepEqual(places, ['Zero leads, Example Town', 'Failed, Example Town', 'New, Example Town']);
+  assert.deepEqual(jobs, places);
+  assert.equal(button.disabled, false);
 });

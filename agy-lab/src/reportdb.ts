@@ -567,6 +567,28 @@ export async function updateReport(publicId: string, patch: {
   return out.rows[0];
 }
 
+/** Claim one failed report for a fresh run while preserving its public URL and event trail. */
+export async function retryFailedReport(publicId: string): Promise<PublishedReport | null> {
+  await migrate();
+  const out = await sql<PublishedReport>(
+    `with claimed as (
+       update published_report set status = 'queued', result = null, error = null,
+         job_id = null, source_search_report_id = null, completed_at = null, updated_at = now()
+       where public_id = $1 and status = 'failed' returning *
+     ),
+     company_clear as (delete from company_research_run where report_id in (select id from claimed)),
+     person_clear as (delete from person_research_run where report_id in (select id from claimed)),
+     contact_clear as (delete from contact_research_run where report_id in (select id from claimed)),
+     ads_clear as (delete from ads_research_run where report_id in (select id from claimed)),
+     market_clear as (delete from ads_market_run where report_id in (select id from claimed))
+     select * from claimed`,
+    [publicId],
+  );
+  const report = out.rows[0] ?? null;
+  if (report) await logEvent({ reportId: report.id, publicId, stage: 'report', event: 'report.retried', detail: { status: 'queued' } });
+  return report;
+}
+
 /**
  * Mark abandoned runs failed.
  *

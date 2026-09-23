@@ -404,6 +404,7 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
   <h3>6. Publish or consume the final report</h3>
   <div class="tbl"><table><thead><tr><th>Route</th><th>Auth</th><th>Use</th></tr></thead><tbody>
     <tr><td><code>GET /api/reports</code></td><td>Bearer</td><td>Combined paginated library. Filter with <code>type</code>, <code>status</code>, <code>limit</code>, and <code>offset</code>.</td></tr>
+    <tr><td><code>POST /api/reports/:reportId/retry</code></td><td>Bearer</td><td>Re-queue a <code>failed</code> report in place: same public link, original inputs replayed. Answers <code>202</code> on claim; <code>409</code> when the report is not failed, was already claimed, or its inputs are gone. Finished reports are never re-run this way.</td></tr>
     <tr><td><code>GET /r/:reportId</code></td><td>none</td><td>Premium mobile HTML report for the requester.</td></tr>
     <tr><td><code>GET /public/reports/:reportId</code></td><td>none</td><td>Final public JSON. Search reports return <code>companies</code>; deep reports return English <code>final</code> plus <code>final_cn</code> when Chinese translation is complete. Raw rounds are excluded.</td></tr>
     <tr><td><code>GET /api/company-research/:reportId</code></td><td>Bearer</td><td>Private final output plus raw benchmark rounds.</td></tr>
