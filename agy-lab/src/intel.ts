@@ -1682,6 +1682,7 @@ async function runBusinessSearch(publicId: string, reportId: string, request: Re
       max: request.max,
       userId: request.userId,
       reportPublicId: publicId,
+      storage: 'hub',
     }, timeoutMs);
     await db.updateReport(publicId, { jobId: job.id });
     const settled = await jobs.wait(job.id, timeoutMs + 5_000);
@@ -1691,7 +1692,7 @@ async function runBusinessSearch(publicId: string, reportId: string, request: Re
     const capturedCompanies = rows(scan.businesses);
     const saved = object(scan.saved);
     const savedId = saved.reportId != null ? String(saved.reportId) : null;
-    const workerSaveError = str(scan.saveError, savedId ? '' : 'worker returned no saved report id');
+    const workerSaveError = str(scan.saveError, savedId || scan.storage === 'hub' ? '' : 'worker returned no saved report id');
     const scanDetails = { ...scan };
     delete scanDetails.businesses;
     const captured = { search: scanDetails, companies: capturedCompanies, scan_metadata: {
@@ -1723,7 +1724,8 @@ async function runBusinessSearch(publicId: string, reportId: string, request: Re
       }
     } catch (saveError) {
       const recoveryError = (saveError as Error).message ?? String(saveError);
-      const error = `Scan captured ${capturedCompanies.length} businesses, but database save failed. Worker: ${workerSaveError || 'incomplete saved rows'}. Server: ${recoveryError}`;
+      const error = `Scan captured ${capturedCompanies.length} businesses, but hub database save failed: ${recoveryError}`
+        + (workerSaveError ? `. Legacy worker save also failed: ${workerSaveError}` : '');
       console.error(`[business_search.save_failed] report=${publicId} job=${job.id}: ${error}`);
       await db.logEvent({ reportId, publicId, jobId: job.id, stage: 'business_search', event: 'business_search.save_failed', detail: { companies: capturedCompanies.length, worker_error: workerSaveError || null, server_error: recoveryError } });
       await db.updateReport(publicId, { status: 'partial', result: { ...captured, scan_metadata: { ...captured.scan_metadata, recovery_error: recoveryError } }, error, completed: true });

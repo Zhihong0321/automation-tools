@@ -348,15 +348,14 @@ sleeping does.
 | `CGPT_TRACE` | off | `1` narrates the answer-wait, phase by phase |
 | `EGO_BROWSER_BIN` | `ego-browser` on `PATH` | the worker prepends `~/.local/bin`, which launchd does not inherit |
 | `CGPT_SPACE`, `CGPT_PROFILE` | — | override `spaces.json` for one process |
-| `PG_PROXY_URL`, `PG_DB_NAME`, `PG_PROXY_TOKEN` | — | where `gmap.scan` writes its rows; a scan still returns them if this fails |
-| `WORKER_RECOVERY_DIR` | `~/.gmap-worker/unsaved-scans` | local copies of scans whose worker database write failed |
+| `WORKER_RECOVERY_DIR` | `~/.gmap-worker/unsaved-scans` | local recovery copies of report scans; the hub writes to its own database |
 
 ### Recovering an unsaved Maps scan
 
-When a Maps scan cannot write to the worker database, the worker logs the cause
-and writes the captured result to `~/.gmap-worker/unsaved-scans/JOB_ID.json`.
-The lab normally saves those same results through its own database connection.
-If that also fails, the report stays `partial`, shows the error in Reports, and
+The worker returns scanned businesses to the hub, which saves them through
+`DATABASE_URL`. Before reporting a scan, the worker also keeps a copy at
+`~/.gmap-worker/unsaved-scans/JOB_ID.json`. If hub persistence fails, the report
+stays `partial`, shows the error in Reports, and
 offers **Repair save** once the database is working again. This reuses the
 captured companies and does not open Google Maps.
 
