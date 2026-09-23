@@ -2520,6 +2520,14 @@ async function publicDetail(report: db.PublishedReport): Promise<Record<string, 
   };
 }
 
+async function contactComparisonId(companyId: string, raw: unknown): Promise<string | null> {
+  const publicId = str(raw).trim();
+  if (!/^[A-Za-z0-9_-]{20}$/.test(publicId)) return null;
+  const previous = await db.getReport(publicId);
+  return previous?.report_type === 'contact_research' && previous.company_id === companyId
+    ? previous.public_id : null;
+}
+
 async function personResearchInput(report: db.PublishedReport): Promise<{ company: Record<string, unknown>; person: Record<string, unknown> } | null> {
   const request = object(report.request);
   const sourceId = str(request.sourceReportId);
@@ -2613,7 +2621,8 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
     const provider = parallelContactMatch ? 'parallel' : 'legacy';
     const existing = await db.findContactReport(companyId, provider);
     if (existing) return sendJson(res, 200, { report: envelope(req, existing) }), true;
-    const request = { companyId, name: str(company.name), requesterId: 'report:' + parent.public_id, provider };
+    const compareToReportId = await contactComparisonId(companyId, body.compareToReportId);
+    const request = { companyId, name: str(company.name), requesterId: 'report:' + parent.public_id, provider, compareToReportId };
     const report = await db.createReport({
       type: 'contact_research', title: str(company.name, 'Company') + (provider === 'parallel' ? ' — Parallel contact research' : ' — contact & telemarketing research'),
       userId: request.requesterId, request, companyId,
@@ -3155,12 +3164,14 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       return true;
     }
     const targetRole = str(body.targetRole || body.role || body.persona).trim() || null;
+    const compareToReportId = await contactComparisonId(resolvedCompanyId, body.compareToReportId);
     const request = {
       companyId: resolvedCompanyId,
       name: str(company.name),
       targetRole,
       requesterId: str(body.requesterId || body.userId) || null,
       provider,
+      compareToReportId,
       companySnapshot: {
         id: resolvedCompanyId,
         name: company.name,

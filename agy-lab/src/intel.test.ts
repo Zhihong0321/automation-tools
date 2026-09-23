@@ -525,6 +525,11 @@ test('a report page queues contact research for every listed business in one cli
   });
   // The handler ships either way; only the button itself must be gone.
   assert.doesNotMatch(done, /data-contact-all="/);
+  assert.match(done, /data-rerun-contact="3"/);
+  assert.match(done, /data-previous-report="done0000000000000000"/);
+  assert.match(done, /Rerun original contacts ↻/);
+  assert.match(done, /href="\/r\/done0000000000000000"/);
+  assert.match(done, /data-parallel-contact="3"/);
 });
 
 test('a report page shows a run already underway and does not offer to queue it again', () => {
@@ -936,4 +941,7 @@ test('contactPage renders telemarketer cheat sheet, 1-click actions, and decisio
   assert.match(html, /Decision Makers & Leadership/);
   assert.match(html, /Dialable Phone Numbers/);
   assert.match(html, /Email Channels/);
+  const compared = contactPage({ ...report, request: { compareToReportId: 'done0000000000000000' } });
+  assert.match(compared, /Compare contact research/);
+  assert.match(compared, /href="\/r\/done0000000000000000"/);
 });

@@ -141,6 +141,7 @@ export const document = {
                   companyId: { type: 'string', description: 'Numeric company ID from a business search.' },
                   name: { type: 'string', description: 'Company name if researching without a prior Maps scan.' },
                   targetRole: { type: 'string', description: 'Optional target persona or role filter (e.g. Procurement, CEO, GM).' },
+                  compareToReportId: { type: 'string', description: 'Optional earlier contact report for a comparison link in the new report.' },
                   requesterId: { type: 'string' },
                 },
               },
@@ -177,6 +178,7 @@ export const document = {
         description: 'Uses PARALLEL_API_KEY on the server. Accepts companyId or company name and optional targetRole. Saves to the same contact research report and ledger as the existing provider. Entity Search returns names, profile URLs and descriptions; it does not supply direct phone numbers or emails.',
         requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: {
           companyId: { type: 'string' }, name: { type: 'string' }, targetRole: { type: 'string' }, requesterId: { type: 'string' },
+          compareToReportId: { type: 'string', description: 'Optional earlier contact report for comparison.' },
         } } } } },
         responses: {
           '200': { description: 'Parallel run already in flight', content: { 'application/json': { schema: { $ref: '#/components/schemas/AcceptedReport' } } } },
