@@ -253,3 +253,30 @@ test('leads master UI supports hide/unhide and separate hidden list', () => {
   assert.match(capturedHtml, /toggleHideLead\('202', false\)/);
   assert.match(capturedHtml, />👁️ Unhide<\/button>/);
 });
+
+test('leads master can queue contact research for the whole page in one click', () => {
+  const html = page();
+  const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1];
+  assert.ok(script);
+
+  // The control sits with the other list-level actions.
+  assert.match(html, /id="btnQueueContacts"/);
+  assert.match(html, /queueContactAll\(this\)/);
+
+  // The walk targets only rows still offering contact research — a row that
+  // already links to its dossier must never be re-queued.
+  assert.match(script, /function queueContactAll\(/);
+  assert.match(script, /#leadTableWrapper button\[onclick\*="startContact"\]/);
+
+  // Sequential, not parallel: the per-company dedupe on the endpoint is what
+  // stops two versions of the same report, and parallel POSTs race it.
+  assert.match(script, /for\(;i<pending\.length;i\+\+\)\{if\(!state\.token\)break;/);
+
+  // A dead token aborts the walk instead of firing 30 failing requests.
+  assert.match(script, /var stopped=!state\.token&&i<pending\.length;/);
+
+  // startContact now reports success so the walk can tally it, and stays quiet
+  // while walking so one summary toast replaces thirty.
+  assert.match(script, /async function startContact\(button,quiet\)/);
+  assert.match(script, /if\(!quiet\)showToast\('Contact research started for /);
+});

@@ -494,6 +494,39 @@ test('both public report layouts include mobile viewport and report content', ()
   assert.match(bilingual, /data-report-language-panel="zh-CN" hidden/);
 });
 
+test('a report page queues contact research for every listed business in one click', () => {
+  const html = searchPage(report('business_search'), {
+    report: { found: 3 },
+    companies: [
+      { id: '1', name: 'Needs research' },
+      { id: '2', name: 'Also needs research' },
+      // Completed contact research must not be counted, nor re-queued.
+      { id: '3', name: 'Already researched', contact_public_id: 'done0000000000000000', contact_status: 'completed' },
+    ],
+  });
+
+  // The bulk control counts exactly the rows that still show a Contacts button.
+  assert.match(html, /data-contact-all="2"/);
+  assert.match(html, />Contacts ⚡ — queue all 2<\/button>/);
+
+  const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1];
+  assert.ok(script);
+  assert.match(script, /function startContact\(cb\)/);
+  assert.match(script, /querySelectorAll\('button\[data-contact\]'\)/);
+  // One confirmation up front, then the walk reports a single tally rather
+  // than an alert per row.
+  assert.match(script, /confirm\('Queue contact research for all '\+pending\.length\+' businesses\?/);
+  assert.match(script, /queued\+' queued/);
+
+  // A list where every row already has a dossier earns no bulk button.
+  const done = searchPage(report('business_search'), {
+    report: { found: 1 },
+    companies: [{ id: '3', name: 'Already researched', contact_public_id: 'done0000000000000000', contact_status: 'completed' }],
+  });
+  // The handler ships either way; only the button itself must be gone.
+  assert.doesNotMatch(done, /data-contact-all="/);
+});
+
 test('a report page asks for the access key once, not once per tab', () => {
   // The key used to live in sessionStorage, which is per-tab: every report link
   // opened in a new tab prompted again. It now goes to a first-party cookie

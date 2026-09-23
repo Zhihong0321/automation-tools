@@ -175,23 +175,51 @@ function researchScript(publicId: string): string {
   return `<script>
 (function(){
   var id=${JSON.stringify(publicId)};
+  // One row's queue attempt, shared by the single button and the queue-all
+  // walk below. Resolves true when a report was started or found already
+  // running, false when there was nothing to do; rejects only on failure, with
+  // the row restored so a retry is possible.
+  function startContact(cb){
+    var cid=cb.getAttribute('data-contact');
+    if(!cid||cb.disabled)return Promise.resolve(false);
+    cb.disabled=true;var cwas=cb.textContent;cb.textContent='Starting\\u2026';
+    return fetch('/public/reports/'+id+'/contact-research',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({companyId:cid})})
+      .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j})})
+      .then(function(j){
+        var link=j.report&&j.report.view_url;
+        if(!link){throw new Error('no report link returned')}
+        var a=document.createElement('a');
+        a.className='button';a.style.background='#0a6b47';a.style.color='#fff';a.href=link;a.textContent='Open contacts \\u2197';
+        a.setAttribute('target','_blank');a.setAttribute('rel','noopener');
+        cb.replaceWith(a);
+        return true;
+      })
+      .catch(function(e){cb.disabled=false;cb.textContent=cwas;throw e});
+  }
   document.addEventListener('click',function(ev){
+    var qa=ev.target.closest&&ev.target.closest('button[data-contact-all]');
+    if(qa&&!qa.disabled){
+      var pending=[].slice.call(document.querySelectorAll('button[data-contact]'));
+      if(!pending.length){qa.disabled=true;qa.textContent='Nothing to queue';return}
+      if(!confirm('Queue contact research for all '+pending.length+' businesses? They run through the queue one after another.'))return;
+      qa.disabled=true;
+      var queued=0,failed=0,i=0;
+      (function step(){
+        if(i>=pending.length){
+          qa.textContent=failed?(queued+' queued \\u00b7 '+failed+' failed \\u26a0'):(queued+' queued \\u2713');
+          if(failed)alert(failed+' of '+pending.length+' rows could not be queued. Reload the page and queue again \u2014 rows already running are only linked, never restarted.');
+          return;
+        }
+        qa.textContent='Queueing '+(i+1)+'/'+pending.length+'\\u2026';
+        startContact(pending[i++])
+          .then(function(ok){if(ok)queued++},function(){failed++})
+          .then(step);
+      })();
+      return;
+    }
     var cb=ev.target.closest&&ev.target.closest('button[data-contact]');
     if(cb&&!cb.disabled){
-      var cid=cb.getAttribute('data-contact');
-      if(!cid)return;
-      cb.disabled=true;var cwas=cb.textContent;cb.textContent='Starting\\u2026';
-      fetch('/public/reports/'+id+'/contact-research',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({companyId:cid})})
-        .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j})})
-        .then(function(j){
-          var link=j.report&&j.report.view_url;
-          if(!link){throw new Error('no report link returned')}
-          var a=document.createElement('a');
-          a.className='button';a.style.background='#0a6b47';a.style.color='#fff';a.href=link;a.textContent='Open contacts \\u2197';
-          a.setAttribute('target','_blank');a.setAttribute('rel','noopener');
-          cb.replaceWith(a);
-        })
-        .catch(function(e){cb.disabled=false;cb.textContent=cwas;alert('Could not start contact research: '+e.message)});
+      startContact(cb).catch(function(e){alert('Could not start contact research: '+e.message)});
       return;
     }
     var b=ev.target.closest&&ev.target.closest('button.research');
@@ -463,9 +491,20 @@ export function searchPage(report: PublishedReport, detail: { report?: Record<st
       : (companyId ? `<button class="button" style="background:#0a6b47;color:#fff;border-color:#0a6b47" type="button" data-contact="${esc(companyId)}" data-name="${esc(name)}">Contacts ⚡</button>` : '');
     return `<article class="company${hasContact ? ' has-contact-research' : ''}"><div class="record-no">${esc(rank(company.rank ?? index + 1))}</div><div><h3>${esc(name)}</h3><div class="record-meta">${esc(value(company, 'category') || 'Business')}${rating ? ` · ★ ${esc(rating)}${reviews ? ` / ${esc(reviews)} reviews` : ''}` : ''}</div>${contactPill}</div><div class="record-address">${esc(value(company, 'address') || 'Address not published')}</div><div class="record-contact">${phone ? `<div class="phone">${esc(phone)}</div>` : '<span class="record-meta">Phone not published</span>'}<div class="actions">${phone ? `<a class="button" href="tel:${esc(phone.replace(/[^+\d]/g, ''))}">Call now</a>` : ''}${link(website, 'Website')}${link(maps, 'Maps')}${companyId ? `<button class="button research" type="button" data-company="${esc(companyId)}" data-name="${esc(name)}">Research \u2192</button>` : ''}${contactAction}</div></div></article>`;
   }).join('');
+  // Rows still showing the per-row Contacts button — the ones one click can
+  // queue. A list where every row already links to its dossier earns no bulk
+  // button, because there would be nothing left for it to do.
+  const pendingContacts = companies.filter((company) => {
+    const status = value(company, 'contact_status');
+    const finished = value(company, 'contact_public_id') && (status === 'completed' || status === 'partial');
+    return Boolean(value(company, 'id')) && !finished;
+  }).length;
+  const queueAll = pendingContacts
+    ? `<div class="actions" style="margin-bottom:12px"><button class="button" style="background:#0a6b47;color:#fff;border-color:#0a6b47;font-weight:700" type="button" data-contact-all="${pendingContacts}">Contacts ⚡ — queue all ${pendingContacts}</button></div>`
+    : '';
   const body = report.status === 'failed'
     ? `<section class="section"><div class="message error">${esc(report.error ?? 'The search failed.')}</div></section>`
-    : `${stats}<section class="section"><div class="section-head"><h2>${esc(keyword || 'Business')} directory</h2><span class="section-note">Ranked in the order returned by Google Maps. Each source opens independently.</span></div><div class="records">${rows || '<div class="empty">Waiting for businesses…</div>'}</div></section>`;
+    : `${stats}<section class="section"><div class="section-head"><h2>${esc(keyword || 'Business')} directory</h2><span class="section-note">Ranked in the order returned by Google Maps. Each source opens independently.</span></div>${queueAll}<div class="records">${rows || '<div class="empty">Waiting for businesses…</div>'}</div></section>`;
   return shell(report, body);
 }
 
