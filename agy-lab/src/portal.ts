@@ -127,6 +127,7 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
 .contact-person-table tr:last-child td{border-bottom:0}
 .contact-person-table tr.primary-person td{background:#f0f7ff}
 .contact-person-table .person-name{font-weight:700;color:var(--ink);letter-spacing:-.01em}
+.contact-person-table .person-name.unnamed{font-weight:500;color:var(--muted);font-style:italic}
 .contact-person-table .person-position{color:var(--ink)}
 .contact-person-table .person-contact{display:flex;flex-direction:column;gap:6px}
 .contact-person-table .person-source{font-size:12px;color:var(--muted);word-break:break-word}
@@ -306,8 +307,8 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
           <input class="input" id="contactsSearch" placeholder="Search person name, title, company, phone, email..." style="max-width:320px;height:40px;font-size:14px;" onkeydown="if(event.key==='Enter')applyContactsFilter()">
           <button class="primary" type="button" onclick="applyContactsFilter()" style="height:40px;padding:0 16px;">Search</button>
           <select class="input select" id="contactsTypeFilter" onchange="applyContactsFilter()" style="max-width:200px;height:40px;font-size:13px;">
-            <option value="has_decision_makers" selected>People grouped by company</option>
-            <option value="all">All Companies with Contacts</option>
+            <option value="all" selected>All contacts</option>
+            <option value="has_decision_makers">Named people only</option>
             <option value="has_mobile">💬 Has WhatsApp / Mobile</option>
             <option value="has_email">✉️ Has Direct Email</option>
             <option value="researched_only">⚡ Researched Only</option>
@@ -475,12 +476,12 @@ async function updateLeadAssignee(companyId,selectEl){var assignee=selectEl.valu
 async function editLeadNotes(companyId,currentNotes){var note=window.prompt('Lead notes / telemarketer feedback:',currentNotes||'');if(note==null)return;try{await api('/api/leads/'+encodeURIComponent(companyId),{method:'PATCH',body:JSON.stringify({notes:note.trim()})});showToast('Notes saved');await loadLeads()}catch(err){if(!authLost(err))showToast('Failed to save notes: '+err.message)}}
 function promptLeadNotes(btn){var id=btn.getAttribute('data-id');var notes=btn.getAttribute('data-notes')||'';return editLeadNotes(id,notes)}
 function promptAddTelemarketer(){switchView('agents');toggleCreateAgentForm(true)}
-var contactsState={groups:[],telemarketers:[],search:'',typeFilter:'has_decision_makers',teleFilter:'all',page:0,limit:20,total:0,stats:null};
+var contactsState={groups:[],telemarketers:[],search:'',typeFilter:'all',teleFilter:'all',page:0,limit:20,total:0,stats:null};
 async function loadContactsView(){if(!state.token)return;await loadContactsTelemarketers();await loadContacts()}
 async function loadContactsTelemarketers(){try{var body=await api('/api/telemarketers');contactsState.telemarketers=body.telemarketers||[];var sel=el('contactsTeleFilter');if(sel){var cur=sel.value;var opts='<option value="all">All Telemarketers</option>';contactsState.telemarketers.forEach(function(t){opts+='<option value="'+attr(t)+'">'+esc(t)+'</option>'});sel.innerHTML=opts;sel.value=cur||'all'}}catch(err){}}
 async function loadContacts(){if(!state.token)return;var cont=el('contactsContainer');if(cont&&!contactsState.groups.length)cont.innerHTML='<div class="empty">Loading contacts master list…</div>';var q='/api/contacts?limit='+contactsState.limit+'&offset='+(contactsState.page*contactsState.limit);if(contactsState.typeFilter!=='all')q+='&filter='+encodeURIComponent(contactsState.typeFilter);if(contactsState.search)q+='&search='+encodeURIComponent(contactsState.search);if(contactsState.teleFilter!=='all')q+='&assignedTo='+encodeURIComponent(contactsState.teleFilter);try{var res=await api(q);contactsState.groups=res.groups||[];contactsState.total=res.totalCompanies||res.total||0;contactsState.stats=res.stats||{};renderContactsSummary(res.stats||{});renderContactsCards(contactsState.groups);renderContactsPagination(contactsState.total)}catch(err){if(cont)cont.innerHTML='<div class="empty error">'+esc(err.message)+'</div>';if(!authLost(err))showToast('Failed to load contacts: '+err.message)}}
 function renderContactsSummary(stats){var cEl=el('statContactsTotalCompanies');var dEl=el('statContactsTotalDMs');var pEl=el('statContactsTotalPhones');var mEl=el('statContactsTotalMobile');var eEl=el('statContactsTotalEmails');if(cEl)cEl.textContent=stats.totalCompaniesWithContacts||0;if(dEl)dEl.textContent=stats.totalDecisionMakers||0;if(pEl)pEl.textContent=stats.totalPhones||stats.totalDialablePhones||0;if(mEl)mEl.textContent=stats.totalMobileWhatsapp||stats.totalMobilePhones||0;if(eEl)eEl.textContent=stats.totalEmails||stats.totalDirectEmails||0}
-function applyContactsFilter(){var sInput=el('contactsSearch');var tSel=el('contactsTypeFilter');var teleSel=el('contactsTeleFilter');contactsState.search=sInput?sInput.value.trim():'';contactsState.typeFilter=tSel?tSel.value:'has_decision_makers';contactsState.teleFilter=teleSel?teleSel.value:'all';contactsState.page=0;loadContacts()}
+function applyContactsFilter(){var sInput=el('contactsSearch');var tSel=el('contactsTypeFilter');var teleSel=el('contactsTeleFilter');contactsState.search=sInput?sInput.value.trim():'';contactsState.typeFilter=tSel?tSel.value:'all';contactsState.teleFilter=teleSel?teleSel.value:'all';contactsState.page=0;loadContacts()}
 function prevContactsPage(){if(contactsState.page>0){contactsState.page--;loadContacts()}}
 function nextContactsPage(){if((contactsState.page+1)*contactsState.limit<contactsState.total){contactsState.page++;loadContacts()}}
 function renderContactsPagination(total){var start=contactsState.page*contactsState.limit+(total>0?1:0);var end=Math.min((contactsState.page+1)*contactsState.limit,total);var pInfo=el('contactsPageInfo');var btnPrev=el('btnPrevContacts');var btnNext=el('btnNextContacts');if(pInfo)pInfo.textContent='Showing '+start+'–'+end+' of '+total+' companies';if(btnPrev)btnPrev.disabled=contactsState.page===0;if(btnNext)btnNext.disabled=end>=total}
@@ -531,7 +532,20 @@ cont.innerHTML=groups.map(function(grp){
   var contactPid=grp.contact_public_id||(grp.reports&&grp.reports.contactPublicId)||'';
   var researchPid=grp.research_public_id||(grp.reports&&grp.reports.researchPublicId)||'';
   var people=grp.people||grp.decisionMakers||[];
+  var phones=grp.phones||[];
+  var emails=grp.emails||[];
   var companyPhone=grp.primary_phone||(grp.company&&grp.company.phone)||'';
+  if(!people.length){
+    phones.forEach(function(ph){
+      people.push({name:'',role:ph.label||'Company line',direct_phone:ph.number_e164||ph.number||ph.phone||'',whatsapp_url:ph.whatsapp_url||'',evidence_url:ph.evidence_url||maps,source:ph.label||'Google Maps',unnamed:true,is_primary:false});
+    });
+    emails.forEach(function(em){
+      people.push({name:'',role:em.label||'Company email',direct_email:em.email||'',evidence_url:em.evidence_url||'',source:em.label||'Company email',unnamed:true,is_primary:false});
+    });
+    if(!people.length && companyPhone){
+      people.push({name:'',role:'Company line',direct_phone:companyPhone,evidence_url:maps,source:'Google Maps',unnamed:true,is_primary:false});
+    }
+  }
   var rating=cRating?(' · ★ '+cRating+(cReviews?' / '+cReviews:'')):'';
   var reportLinks='';
   if(contactPid) reportLinks+='<a class="vip contact-vip" target="_blank" rel="noopener" href="/r/'+attr(contactPid)+'">Contacts dossier ↗</a>';
@@ -543,13 +557,17 @@ cont.innerHTML=groups.map(function(grp){
     peopleHtml='<div class="contact-empty-people">No named person for this company yet.</div>';
   } else {
     peopleHtml='<table class="contact-person-table"><thead><tr><th>Name</th><th>Position</th><th>Contact info</th><th>Source</th></tr></thead><tbody>'+people.map(function(p){
-      var isPri=Boolean(p.is_primary||p.isPrimary);
-      var role=p.role||p.position||p.current_role||'Role not stated';
+      var unnamed=Boolean(p.unnamed)||!String(p.name||'').trim();
+      var isPri=!unnamed&&Boolean(p.is_primary||p.isPrimary);
+      var role=p.role||p.position||p.current_role||(unnamed?'Company line':'Role not stated');
       var badge=isPri?' <span class="contact-pill-tag dm">Target</span>':'';
-      return '<tr class="'+(isPri?'primary-person':'')+'"><td data-label="Name"><div class="person-name">'+esc(p.name||'Unnamed')+badge+'</div></td><td data-label="Position" class="person-position">'+esc(role)+'</td><td data-label="Contact info" class="person-contact">'+contactCell(p, companyPhone, cName)+'</td><td data-label="Source">'+sourceCell(p)+'</td></tr>';
+      var nameHtml=unnamed?'<div class="person-name unnamed">Not identified</div>':'<div class="person-name">'+esc(p.name)+badge+'</div>';
+      return '<tr class="'+(isPri?'primary-person':'')+'"><td data-label="Name">'+nameHtml+'</td><td data-label="Position" class="person-position">'+esc(role)+'</td><td data-label="Contact info" class="person-contact">'+contactCell(p, unnamed?'':companyPhone, cName)+'</td><td data-label="Source">'+sourceCell(p)+'</td></tr>';
     }).join('')+'</tbody></table>';
   }
-  return '<article class="contact-group-card" id="contactGroup-'+attr(cId)+'"><div class="contact-group-head"><div style="flex:1;min-width:0;"><h3 class="contact-group-title">'+esc(cName)+'</h3><div class="contact-group-meta"><span>'+esc(cCategory)+rating+'</span><span>·</span><span>'+esc(cAddress||'Address not published')+'</span></div><div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">'+assignedBadge+statusBadge+(people.length?('<span class="contact-pill-tag dm">'+people.length+' '+(people.length===1?'person':'people')+'</span>'):'')+'</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-start;">'+reportLinks+(website?'<a class="source-link" target="_blank" rel="noopener" href="'+attr(website)+'">Web</a>':'')+(maps?'<a class="source-link" target="_blank" rel="noopener" href="'+attr(maps)+'">Maps</a>':'')+'</div></div>'+peopleHtml+'</article>';
+  var namedCount=people.filter(function(p){return String(p.name||'').trim()&&!p.unnamed}).length;
+  var contactBadge=namedCount?('<span class="contact-pill-tag dm">'+namedCount+' '+(namedCount===1?'person':'people')+'</span>'):(people.length?('<span class="contact-pill-tag phone">'+people.length+' company line'+(people.length===1?'':'s')+'</span>'):'');
+  return '<article class="contact-group-card" id="contactGroup-'+attr(cId)+'"><div class="contact-group-head"><div style="flex:1;min-width:0;"><h3 class="contact-group-title">'+esc(cName)+'</h3><div class="contact-group-meta"><span>'+esc(cCategory)+rating+'</span><span>·</span><span>'+esc(cAddress||'Address not published')+'</span></div><div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">'+assignedBadge+statusBadge+contactBadge+'</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-start;">'+reportLinks+(website?'<a class="source-link" target="_blank" rel="noopener" href="'+attr(website)+'">Web</a>':'')+(maps?'<a class="source-link" target="_blank" rel="noopener" href="'+attr(maps)+'">Maps</a>':'')+'</div></div>'+peopleHtml+'</article>';
 }).join('');
 }
 var agentState={agents:[],filter:'',statusFilter:'all'};

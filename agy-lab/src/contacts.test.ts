@@ -135,6 +135,11 @@ test('buildMasterContactsResponse sorts companies alphabetically, applies search
   assert.equal(resAll.totalCompanies, 2);
   assert.equal(resAll.groups[0].company_name, 'Alpha Cold Storage Sdn Bhd');
   assert.equal(resAll.groups[1].company_name, 'Bintang Engineering Sdn Bhd');
+  const alphaLine = resAll.groups[0].people.find((p) => p.unnamed);
+  assert.ok(alphaLine, 'a company phone with no person still becomes a contact row');
+  assert.equal(alphaLine?.name, '');
+  assert.ok(String(alphaLine?.direct_phone || '').includes('07') || String(alphaLine?.direct_phone || '').includes('2223344'));
+  assert.equal(alphaLine?.role, 'Google Maps Main Line');
 
   // Stats verification
   assert.equal(resAll.stats.totalCompaniesWithContacts, 2);
@@ -239,8 +244,10 @@ test('portal page integrates Contacts Master view, navigation, styles and script
 
   // JavaScript functions
   assert.ok(html.includes('function loadContactsView()'));
-  assert.ok(html.includes('option value="has_decision_makers" selected'), 'default filter must be people grouped by company');
-  assert.ok(html.includes('typeFilter:\'has_decision_makers\''), 'contactsState must default to people grouped by company');
+  assert.ok(html.includes('option value="all" selected'), 'default filter must include unnamed company lines');
+  assert.ok(html.includes('typeFilter:\'all\''), 'contactsState must default to all contacts');
+  assert.ok(html.includes('Named people only'), 'named-only filter remains available');
+  assert.ok(html.includes('Not identified'), 'unnamed company lines render as Not identified');
   assert.ok(html.includes('Name</th><th>Position</th><th>Contact info</th><th>Source'), 'people table must list name, position, contact, source');
   assert.ok(html.includes('function exportContactsCsv()'));
   assert.ok(html.includes('function copyText('));

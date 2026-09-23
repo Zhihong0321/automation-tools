@@ -14,6 +14,8 @@ export interface MasterPersonItem {
   /** Human-readable origin of this person row: a named source, a hostname, or the research lane. */
   source: string;
   is_primary: boolean;
+  /** True when this row is a company line with no identified person. */
+  unnamed?: boolean;
 }
 
 export interface MasterPhoneItem {
@@ -103,6 +105,43 @@ function personSource(row: Record<string, any>, fallback: string): { source: str
     }
   }
   return { source, evidence_url };
+}
+
+function unnamedFromPhone(ph: MasterPhoneItem, mapsUrl: string | null): MasterPersonItem {
+  const sourced = personSource(
+    { evidence_url: ph.evidence_url || mapsUrl || undefined },
+    ph.label || 'Google Maps',
+  );
+  return {
+    name: '',
+    role: ph.label || 'Company line',
+    seniority: null,
+    direct_phone: ph.number_e164 || ph.number,
+    direct_email: null,
+    whatsapp_url: ph.whatsapp_url,
+    profile_url: null,
+    evidence_url: sourced.evidence_url,
+    source: sourced.source,
+    is_primary: false,
+    unnamed: true,
+  };
+}
+
+function unnamedFromEmail(em: MasterEmailItem): MasterPersonItem {
+  const sourced = personSource({ evidence_url: em.evidence_url || undefined }, em.label || 'Company email');
+  return {
+    name: '',
+    role: em.label || 'Company email',
+    seniority: null,
+    direct_phone: null,
+    direct_email: em.email,
+    whatsapp_url: null,
+    profile_url: null,
+    evidence_url: sourced.evidence_url,
+    source: sourced.source,
+    is_primary: false,
+    unnamed: true,
+  };
 }
 
 export function extractCompanyContacts(row: RawCompanyContactRow): CompanyContactGroup {
@@ -310,6 +349,12 @@ export function extractCompanyContacts(row: RawCompanyContactRow): CompanyContac
     });
   }
 
+  // A published company line with no identified person is still a contact row.
+  if (people.length === 0) {
+    for (const ph of phones) people.push(unnamedFromPhone(ph, row.maps_url));
+    for (const em of emails) people.push(unnamedFromEmail(em));
+  }
+
   return {
     company_id: row.id,
     company_name: row.name,
@@ -360,7 +405,7 @@ export function buildMasterContactsResponse(
   if (filterType === 'researched' || filterType === 'researched_only') {
     allGroups = allGroups.filter((g) => Boolean(g.contact_public_id || g.research_public_id));
   } else if (filterType === 'with_decision_makers' || filterType === 'has_decision_makers') {
-    allGroups = allGroups.filter((g) => g.total_people > 0);
+    allGroups = allGroups.filter((g) => g.people.some((p) => Boolean(p.name && p.name.trim()) && !p.unnamed));
   } else if (filterType === 'with_mobile' || filterType === 'has_mobile') {
     allGroups = allGroups.filter((g) => g.phones.some((p) => p.is_mobile || p.type === 'mobile_whatsapp'));
   } else if (filterType === 'with_email' || filterType === 'has_email') {
@@ -400,7 +445,7 @@ export function buildMasterContactsResponse(
   let totalEmails = 0;
 
   for (const g of allGroups) {
-    totalDecisionMakers += g.total_people;
+    totalDecisionMakers += g.people.filter((p) => Boolean(p.name && p.name.trim()) && !p.unnamed).length;
     totalPhones += g.total_phones;
     totalEmails += g.total_emails;
     for (const ph of g.phones) {
@@ -472,8 +517,9 @@ export function generateContactsCsv(groups: CompanyContactGroup[]): string {
     const reportLink = group.contact_public_id ? `/r/${group.contact_public_id}` : (group.research_public_id ? `/r/${group.research_public_id}` : '');
     const gatekeeper = group.gatekeeper_phrase || '';
 
-    // 1. Decision Makers / People
+    // 1. Decision Makers / People (skip unnamed company lines — those stay in the phone/email sections)
     for (const p of group.people) {
+      if (p.unnamed || !p.name.trim()) continue;
       lines.push([
         escapeCsv(cName),
         escapeCsv(cCat),
