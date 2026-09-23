@@ -153,6 +153,8 @@ export function extractCompanyContacts(row: RawCompanyContactRow): CompanyContac
   const seenEmails = new Set<string>();
 
   const crepResult = (row.contact_result || {}) as Record<string, any>;
+  const contactResults = Array.isArray(row.contact_results) && row.contact_results.length
+    ? row.contact_results as Record<string, any>[] : [crepResult];
   const repResult = (row.research_result || {}) as Record<string, any>;
   const cheatSheet = (crepResult.cheat_sheet || {}) as Record<string, any>;
 
@@ -160,7 +162,7 @@ export function extractCompanyContacts(row: RawCompanyContactRow): CompanyContac
   const primaryDMName = typeof cheatSheet.primary_decision_maker === 'string' ? cheatSheet.primary_decision_maker.trim() : '';
 
   // 2. Decision Makers from contact_research
-  const dms = Array.isArray(crepResult.decision_makers) ? crepResult.decision_makers : (Array.isArray(crepResult.people) ? crepResult.people : []);
+  const dms = contactResults.flatMap(result => Array.isArray(result.decision_makers) ? result.decision_makers : (Array.isArray(result.people) ? result.people : []));
   for (const dm of dms) {
     const name = String(dm.name || dm.person_name || '').trim();
     if (!name) continue;
@@ -252,7 +254,7 @@ export function extractCompanyContacts(row: RawCompanyContactRow): CompanyContac
   });
 
   // 5. Phone contacts from contact_research
-  const phoneList = Array.isArray(crepResult.phone_contacts) ? crepResult.phone_contacts : (Array.isArray(crepResult.contacts) ? crepResult.contacts : []);
+  const phoneList = contactResults.flatMap(result => Array.isArray(result.phone_contacts) ? result.phone_contacts : (Array.isArray(result.contacts) ? result.contacts : []));
   for (const ph of phoneList) {
     const raw = String(ph.number_raw || ph.value_as_published || ph.value || ph.phone || '').trim();
     if (!raw) continue;
@@ -335,7 +337,7 @@ export function extractCompanyContacts(row: RawCompanyContactRow): CompanyContac
   });
 
   // 8. Email contacts from contact_research
-  const emailList = Array.isArray(crepResult.email_contacts) ? crepResult.email_contacts : [];
+  const emailList = contactResults.flatMap(result => Array.isArray(result.email_contacts) ? result.email_contacts : []);
   for (const em of emailList) {
     const emailStr = String(em.email || '').trim();
     if (!emailStr) continue;

@@ -180,10 +180,13 @@ function researchScript(publicId: string): string {
   // running, false when there was nothing to do; rejects only on failure, with
   // the row restored so a retry is possible.
   function startContact(cb){
-    var cid=cb.getAttribute('data-contact');
+    var parallel=cb.hasAttribute('data-parallel-contact');
+    var rerun=cb.hasAttribute('data-rerun-contact');
+    var cid=cb.getAttribute(parallel?'data-parallel-contact':rerun?'data-rerun-contact':'data-contact');
+    var compareToReportId=rerun?cb.getAttribute('data-previous-report'):null;
     if(!cid||cb.disabled)return Promise.resolve(false);
     cb.disabled=true;var cwas=cb.textContent;cb.textContent='Starting\\u2026';
-    return fetch('/public/reports/'+id+'/contact-research',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({companyId:cid})})
+    return fetch('/public/reports/'+id+'/'+(parallel?'parallel-contact-research':'contact-research'),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({companyId:cid,compareToReportId:compareToReportId})})
       .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j})})
       .then(function(j){
         var link=j.report&&j.report.view_url;
@@ -200,7 +203,7 @@ function researchScript(publicId: string): string {
         a.style.borderColor=go?'#f0d68a':'#0a6b47';
         a.style.fontWeight='700';
         a.href=link;
-        a.textContent=go?'\\u23f3 Researching\\u2026':'Open contacts \\u2197';
+        a.textContent=rerun?'Open new original report ↗':go?'\\u23f3 Researching\\u2026':'Open contacts \\u2197';
         a.setAttribute('target','_blank');a.setAttribute('rel','noopener');
         cb.replaceWith(a);
         return true;
@@ -231,6 +234,16 @@ function researchScript(publicId: string): string {
     var cb=ev.target.closest&&ev.target.closest('button[data-contact]');
     if(cb&&!cb.disabled){
       startContact(cb).catch(function(e){alert('Could not start contact research: '+e.message)});
+      return;
+    }
+    var rb=ev.target.closest&&ev.target.closest('button[data-rerun-contact]');
+    if(rb&&!rb.disabled){
+      startContact(rb).catch(function(e){alert('Could not rerun original contact research: '+e.message)});
+      return;
+    }
+    var pb=ev.target.closest&&ev.target.closest('button[data-parallel-contact]');
+    if(pb&&!pb.disabled){
+      startContact(pb).catch(function(e){alert('Could not start Parallel contact research: '+e.message)});
       return;
     }
     var b=ev.target.closest&&ev.target.closest('button.research');
@@ -378,6 +391,7 @@ function shell(report: PublishedReport, body: string): string {
   const isPerson = report.report_type === 'person_research';
   const isAds = report.report_type === 'ads_research';
   const isContact = report.report_type === 'contact_research';
+  const isParallelContact = isContact && report.request?.provider === 'parallel';
   const statusLabel = report.status === 'completed' ? 'Research complete'
     : report.status === 'partial' ? 'Complete · noted gaps'
     : report.status === 'failed' ? 'Research failed'
@@ -389,7 +403,7 @@ function shell(report: PublishedReport, body: string): string {
     : report.status === 'completed' ? 4
     : report.status === 'partial' ? 3
     : report.status === 'queued' ? 1 : 2;
-  const reportLabel = isSearch ? 'Company list' : isPerson ? 'Person research' : isAds ? 'Ads research' : isContact ? 'Contact research' : 'Company dossier';
+  const reportLabel = isSearch ? 'Company list' : isPerson ? 'Person research' : isAds ? 'Ads research' : isParallelContact ? 'Parallel contact research' : isContact ? 'Contact research' : 'Company dossier';
   // A re-researched company keeps every earlier dossier. Say which pass this is,
   // in the kicker and the masthead folio, so two open tabs are never ambiguous.
   const version = Number(report.version) > 1 ? 'V' + Number(report.version) : '';
@@ -508,7 +522,10 @@ export function searchPage(report: PublishedReport, detail: { report?: Record<st
       : contactUnderway
         ? `<a class="button" style="background:#fff7e6;color:#a15c07;border-color:#f0d68a;font-weight:700" target="_blank" rel="noopener" href="/r/${esc(contactPublicId)}">⏳ Researching…</a>`
         : (companyId ? `<button class="button" style="background:#0a6b47;color:#fff;border-color:#0a6b47" type="button" data-contact="${esc(companyId)}" data-name="${esc(name)}">Contacts ⚡</button>` : '');
-    return `<article class="company${hasContact ? ' has-contact-research' : ''}"><div class="record-no">${esc(rank(company.rank ?? index + 1))}</div><div><h3>${esc(name)}</h3><div class="record-meta">${esc(value(company, 'category') || 'Business')}${rating ? ` · ★ ${esc(rating)}${reviews ? ` / ${esc(reviews)} reviews` : ''}` : ''}</div>${contactPill}</div><div class="record-address">${esc(value(company, 'address') || 'Address not published')}</div><div class="record-contact">${phone ? `<div class="phone">${esc(phone)}</div>` : '<span class="record-meta">Phone not published</span>'}<div class="actions">${phone ? `<a class="button" href="tel:${esc(phone.replace(/[^+\d]/g, ''))}">Call now</a>` : ''}${link(website, 'Website')}${link(maps, 'Maps')}${companyId ? `<button class="button research" type="button" data-company="${esc(companyId)}" data-name="${esc(name)}">Research \u2192</button>` : ''}${contactAction}</div></div></article>`;
+    const rerunAction = hasContact && companyId
+      ? `<button class="button" type="button" data-rerun-contact="${esc(companyId)}" data-previous-report="${esc(contactPublicId)}">Rerun original contacts ↻</button>`
+      : '';
+    return `<article class="company${hasContact ? ' has-contact-research' : ''}"><div class="record-no">${esc(rank(company.rank ?? index + 1))}</div><div><h3>${esc(name)}</h3><div class="record-meta">${esc(value(company, 'category') || 'Business')}${rating ? ` · ★ ${esc(rating)}${reviews ? ` / ${esc(reviews)} reviews` : ''}` : ''}</div>${contactPill}</div><div class="record-address">${esc(value(company, 'address') || 'Address not published')}</div><div class="record-contact">${phone ? `<div class="phone">${esc(phone)}</div>` : '<span class="record-meta">Phone not published</span>'}<div class="actions">${phone ? `<a class="button" href="tel:${esc(phone.replace(/[^+\d]/g, ''))}">Call now</a>` : ''}${link(website, 'Website')}${link(maps, 'Maps')}${companyId ? `<button class="button research" type="button" data-company="${esc(companyId)}" data-name="${esc(name)}">Research \u2192</button>` : ''}${contactAction}${rerunAction}${companyId ? `<button class="button" type="button" data-parallel-contact="${esc(companyId)}">Parallel contacts ↗</button>` : ''}</div></div></article>`;
   }).join('');
   // Rows still showing the per-row Contacts button — the ones one click can
   // queue. A list where every row already links to its dossier earns no bulk
@@ -942,7 +959,11 @@ export function contactPage(report: PublishedReport): string {
     <div class="metric"><strong>${esc(value(cheatSheet, 'primary_channel') || 'Phone')}</strong><span>Best outreach</span></div>
   </div>`;
 
-  let body = stats;
+  const previousReportId = value(obj(report.request), 'compareToReportId');
+  const comparison = /^[A-Za-z0-9_-]{20}$/.test(previousReportId)
+    ? `<section class="section"><div class="section-head"><h2>Compare contact research</h2><span class="section-note">Open the earlier report beside this run.</span></div><a class="button" href="/r/${esc(previousReportId)}" target="_blank" rel="noopener">Previous contact report ↗</a></section>`
+    : '';
+  let body = stats + comparison;
 
   if (report.status === 'failed') {
     body += `<section class="section"><div class="message error">${esc(report.error ?? 'Contact research failed to produce findings.')}</div></section>`;
