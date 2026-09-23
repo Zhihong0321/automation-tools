@@ -2582,7 +2582,10 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
     const listed = parent.source_search_report_id
       ? await db.searchResult(parent.source_search_report_id)
       : null;
-    const company = (listed?.companies ?? []).find((c) => String(c.id) === companyId);
+    // The page falls back to the snapshot the report published with when the
+    // search row is gone (see the GET branch below) — validate against that
+    // same list, or every button it rendered would 404 here.
+    const company = (listed?.companies ?? rows(parent.result?.companies)).find((c) => String(c.id) === companyId);
     if (!company) {
       return sendJson(res, 404, { error: 'that company is not listed in this report', companyId }), true;
     }
@@ -2618,7 +2621,9 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
     const listed = parent.source_search_report_id
       ? await db.searchResult(parent.source_search_report_id)
       : null;
-    const company = (listed?.companies ?? []).find((c) => String(c.id) === companyId);
+    // Same snapshot fallback as the contact route and the GET page above: the
+    // buttons a reader can see are exactly the companies this validates.
+    const company = (listed?.companies ?? rows(parent.result?.companies)).find((c) => String(c.id) === companyId);
     if (!company) {
       return sendJson(res, 404, { error: 'that company is not listed in this report', companyId }), true;
     }

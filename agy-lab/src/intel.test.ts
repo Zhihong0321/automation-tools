@@ -527,6 +527,38 @@ test('a report page queues contact research for every listed business in one cli
   assert.doesNotMatch(done, /data-contact-all="/);
 });
 
+test('a report page shows a run already underway and does not offer to queue it again', () => {
+  const html = searchPage(report('business_search'), {
+    report: { found: 4 },
+    companies: [
+      // Queued and running rows are the queue-all walk's own output: on reload
+      // they must read as underway, not revert to fresh Contacts buttons.
+      { id: '1', name: 'Queued just now', contact_public_id: 'qu000000000000000000', contact_status: 'queued' },
+      { id: '2', name: 'Running now', contact_public_id: 'ru000000000000000000', contact_status: 'running' },
+      { id: '3', name: 'Untouched' },
+      // A failed run is a retry the server allows, not an underway one.
+      { id: '4', name: 'Failed last time', contact_public_id: 'fa000000000000000000', contact_status: 'failed' },
+    ],
+  });
+
+  assert.match(html, /⏳ Contact research in progress…/);
+  assert.match(html, /href="\/r\/qu000000000000000000"/);
+  assert.match(html, />⏳ Researching…<\/a>/);
+  assert.doesNotMatch(html, /data-contact="1"/);
+  assert.doesNotMatch(html, /data-contact="2"/);
+
+  // The bulk count is the number of buttons on the page: untouched + failed.
+  assert.match(html, /data-contact-all="2"/);
+  assert.match(html, /data-contact="3"/);
+  assert.match(html, /data-contact="4"/);
+
+  // The link a live click swaps in says the same thing a reload renders.
+  const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1];
+  assert.ok(script);
+  assert.match(script, /st==='queued'\|\|st==='running'/);
+  assert.match(script, /Researching/);
+});
+
 test('a report page asks for the access key once, not once per tab', () => {
   // The key used to live in sessionStorage, which is per-tab: every report link
   // opened in a new tab prompted again. It now goes to a first-party cookie

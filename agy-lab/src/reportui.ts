@@ -188,8 +188,19 @@ function researchScript(publicId: string): string {
       .then(function(j){
         var link=j.report&&j.report.view_url;
         if(!link){throw new Error('no report link returned')}
+        // A just-queued run opens as research in progress, not as a finished
+        // dossier — the same label the server renders for a reloaded page, so
+        // the button's state survives a reload instead of reverting.
+        var st=j.report.status;
+        var go=st==='queued'||st==='running';
         var a=document.createElement('a');
-        a.className='button';a.style.background='#0a6b47';a.style.color='#fff';a.href=link;a.textContent='Open contacts \\u2197';
+        a.className='button';
+        a.style.background=go?'#fff7e6':'#0a6b47';
+        a.style.color=go?'#a15c07':'#fff';
+        a.style.borderColor=go?'#f0d68a':'#0a6b47';
+        a.style.fontWeight='700';
+        a.href=link;
+        a.textContent=go?'\\u23f3 Researching\\u2026':'Open contacts \\u2197';
         a.setAttribute('target','_blank');a.setAttribute('rel','noopener');
         cb.replaceWith(a);
         return true;
@@ -313,6 +324,7 @@ table.data tr:last-child td{border-bottom:none}
 .records .company.has-contact-research{background:#f3fbf7;border-left:4px solid var(--ok)}
 .contact-pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;background:#e6f7ef;border:1px solid #b7ebd3;border-radius:3px;font:700 11px/1.3 var(--sans);color:var(--ok);margin-top:5px;width:fit-content}
 .contact-pill strong{font-weight:800}
+.contact-pill.running{background:#fff7e6;border-color:#f0d68a;color:var(--warning)}
 .actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:0 13px;border:1px solid var(--ink);border-radius:var(--radius);background:var(--ink);color:#fff;font:var(--micro);font-size:10px;letter-spacing:.1em;text-transform:uppercase;text-decoration:none;cursor:pointer;transition:background .15s,border-color .15s,color .15s}.button:hover{background:var(--accent);border-color:var(--accent)}
 .text-link{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 11px;border:1px solid var(--line);border-radius:var(--radius);background:var(--sheet);color:var(--muted);font:var(--micro);font-size:10px;letter-spacing:.1em;text-transform:uppercase;text-decoration:none;transition:color .15s,border-color .15s,background .15s}.text-link:hover{color:var(--ink);border-color:var(--ink);background:var(--soft)}.text-link span{color:var(--accent-2)}.id-tag{font:500 9px/1 var(--mono);color:var(--faint);text-transform:uppercase}
@@ -483,12 +495,19 @@ export function searchPage(report: PublishedReport, detail: { report?: Record<st
     const contactPhones = Number(company.contact_phones_count) || 0;
     const contactDMs = Number(company.contact_decision_makers_count) || 0;
     const hasContact = Boolean(contactPublicId && (contactStatus === 'completed' || contactStatus === 'partial'));
+    // A queued or running report is not an untouched row: without this, a
+    // reload after queue-all renders every one of them as a fresh Contacts
+    // button — the walk looks like it did nothing, and the bulk count offers
+    // to queue the same companies a second time.
+    const contactUnderway = Boolean(contactPublicId && (contactStatus === 'queued' || contactStatus === 'running'));
     const contactPill = hasContact
       ? `<div class="contact-pill">📞 <strong>${contactPhones} Contact Number${contactPhones === 1 ? '' : 's'} Found</strong>${contactDMs > 0 ? ` · ${contactDMs} Leader${contactDMs === 1 ? '' : 's'}` : ''}</div>`
-      : '';
+      : contactUnderway ? `<div class="contact-pill running">⏳ Contact research in progress…</div>` : '';
     const contactAction = hasContact
       ? `<a class="button" style="background:#0a6b47;color:#fff;border-color:#0a6b47;font-weight:700" target="_blank" rel="noopener" href="/r/${esc(contactPublicId)}">Contacts (${contactPhones} phones) ↗</a>`
-      : (companyId ? `<button class="button" style="background:#0a6b47;color:#fff;border-color:#0a6b47" type="button" data-contact="${esc(companyId)}" data-name="${esc(name)}">Contacts ⚡</button>` : '');
+      : contactUnderway
+        ? `<a class="button" style="background:#fff7e6;color:#a15c07;border-color:#f0d68a;font-weight:700" target="_blank" rel="noopener" href="/r/${esc(contactPublicId)}">⏳ Researching…</a>`
+        : (companyId ? `<button class="button" style="background:#0a6b47;color:#fff;border-color:#0a6b47" type="button" data-contact="${esc(companyId)}" data-name="${esc(name)}">Contacts ⚡</button>` : '');
     return `<article class="company${hasContact ? ' has-contact-research' : ''}"><div class="record-no">${esc(rank(company.rank ?? index + 1))}</div><div><h3>${esc(name)}</h3><div class="record-meta">${esc(value(company, 'category') || 'Business')}${rating ? ` · ★ ${esc(rating)}${reviews ? ` / ${esc(reviews)} reviews` : ''}` : ''}</div>${contactPill}</div><div class="record-address">${esc(value(company, 'address') || 'Address not published')}</div><div class="record-contact">${phone ? `<div class="phone">${esc(phone)}</div>` : '<span class="record-meta">Phone not published</span>'}<div class="actions">${phone ? `<a class="button" href="tel:${esc(phone.replace(/[^+\d]/g, ''))}">Call now</a>` : ''}${link(website, 'Website')}${link(maps, 'Maps')}${companyId ? `<button class="button research" type="button" data-company="${esc(companyId)}" data-name="${esc(name)}">Research \u2192</button>` : ''}${contactAction}</div></div></article>`;
   }).join('');
   // Rows still showing the per-row Contacts button — the ones one click can
@@ -496,8 +515,13 @@ export function searchPage(report: PublishedReport, detail: { report?: Record<st
   // button, because there would be nothing left for it to do.
   const pendingContacts = companies.filter((company) => {
     const status = value(company, 'contact_status');
-    const finished = value(company, 'contact_public_id') && (status === 'completed' || status === 'partial');
-    return Boolean(value(company, 'id')) && !finished;
+    const publicId = value(company, 'contact_public_id');
+    // Settled rows — finished, or already queued/running — render no Contacts
+    // button, so the bulk count must skip them too: the count is the number of
+    // data-contact buttons this page actually shows. A failed run still counts;
+    // re-queueing it is a retry the server allows.
+    const settled = publicId && (status === 'completed' || status === 'partial' || status === 'queued' || status === 'running');
+    return Boolean(value(company, 'id')) && !settled;
   }).length;
   const queueAll = pendingContacts
     ? `<div class="actions" style="margin-bottom:12px"><button class="button" style="background:#0a6b47;color:#fff;border-color:#0a6b47;font-weight:700" type="button" data-contact-all="${pendingContacts}">Contacts ⚡ — queue all ${pendingContacts}</button></div>`
