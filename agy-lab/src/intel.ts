@@ -1715,7 +1715,7 @@ async function runBusinessSearch(publicId: string, reportId: string, request: Re
     try {
       durable = savedId ? await db.searchResult(savedId) : null;
       if (!durable || durable.companies.length < expected) {
-        const repaired = await db.persistBusinessScan(publicId, scan, capturedCompanies);
+        const repaired = await db.persistBusinessScan(publicId, scan, capturedCompanies, job.worker ?? 'unknown-worker');
         searchReportId = repaired.reportId;
         durable = await db.searchResult(searchReportId);
         if (!durable || durable.companies.length < expected) throw new Error(`verification found ${durable?.companies.length ?? 0} of ${expected} companies`);

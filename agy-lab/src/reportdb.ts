@@ -887,7 +887,7 @@ export function scanPlaceKey(b: Record<string, unknown>): string {
 }
 
 /** Replay a captured Maps result through the server's database connection, without rescanning. */
-export async function persistBusinessScan(publicId: string, scan: Record<string, unknown>, businesses: Record<string, unknown>[]): Promise<{ reportId: string; companies: number; linked: number }> {
+export async function persistBusinessScan(publicId: string, scan: Record<string, unknown>, businesses: Record<string, unknown>[], sourceWorker = 'hub-repair'): Promise<{ reportId: string; companies: number; linked: number }> {
   await migrate();
   const published = await getReport(publicId);
   if (!published || published.report_type !== 'business_search') throw new Error('business-list report not found');
@@ -943,7 +943,7 @@ export async function persistBusinessScan(publicId: string, scan: Record<string,
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning id`,
       [published.user_id, scan.keyword ?? null, scan.place ?? published.request.place ?? null,
        scan.query ?? null, found, Boolean(scan.blocked), scan.blockedReason ?? null,
-       Boolean(scan.capped), scan.limitedView ?? null, published.job_id, 'server-recovery', scan.tookMs ?? null],
+       Boolean(scan.capped), scan.limitedView ?? null, published.job_id, sourceWorker, scan.tookMs ?? null],
     );
     reportId = inserted.rows[0]?.id ?? null;
   }
