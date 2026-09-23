@@ -72,6 +72,8 @@ export interface WorkerInfo {
    * being slow rather than absent.
    */
   types: string[] | null;
+  /** Git commit loaded when this worker process started. */
+  version: string | null;
 }
 
 /** Long enough for a Maps search with its scroll plateau, short enough to notice a dead worker. */
@@ -132,15 +134,16 @@ function callerIp(req: http.IncomingMessage): string | null {
   return req.socket.remoteAddress ?? null;
 }
 
-function touch(name: string, ip: string | null, types?: string[] | null): WorkerInfo {
+function touch(name: string, ip: string | null, types?: string[] | null, version?: string | null): WorkerInfo {
   const existing = workers.get(name);
   const info: WorkerInfo =
-    existing ?? { name, lastSeenAt: now(), ip, taken: 0, done: 0, failed: 0, types: null };
+    existing ?? { name, lastSeenAt: now(), ip, taken: 0, done: 0, failed: 0, types: null, version: null };
   info.lastSeenAt = now();
   if (ip) info.ip = ip;
   // Only a claim declares types. A result POST also touches, and must not erase
   // what the claim recorded — an empty list there would read as "serves nothing".
   if (types && types.length) info.types = types;
+  if (version && /^[a-f0-9]{40}$/i.test(version)) info.version = version.toLowerCase();
   workers.set(name, info);
   return info;
 }
@@ -402,7 +405,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       return true;
     }
     const types = (q.get('types') ?? '').split(',').map((t) => t.trim()).filter(Boolean);
-    touch(worker, callerIp(req), types);
+    touch(worker, callerIp(req), types, q.get('version'));
     const waitSec = Number(q.get('wait'));
     const controller = new AbortController();
     // The socket closing IS the cancellation. Without this a worker restarted
@@ -445,7 +448,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     // beat that re-registered the name alone would read as "here, serving
     // nothing", which the gateway treats the same as absent.
     const types = Array.isArray(body.types) ? body.types.map((t) => str(t).trim()).filter(Boolean) : [];
-    json(res, 200, { worker: touch(worker, callerIp(req), types) });
+    json(res, 200, { worker: touch(worker, callerIp(req), types, str(body.version)) });
     return true;
   }
 
@@ -493,11 +496,81 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     return true;
   }
 
+  if (method === 'GET' && p === '/api/jobs/update-workers') {
+    const state = snapshot();
+    json(res, 200, { workers: state.workers.map((worker) => ({
+      name: worker.name,
+      status: 'status' in worker && typeof worker.status === 'string'
+        ? worker.status : Date.now() - Date.parse(worker.lastSeenAt) <= 90_000 ? 'online' : 'offline',
+      version: worker.version,
+      supportsUpdate: Boolean(worker.types?.includes('worker.update')),
+      lastUpdate: state.jobs.find((job) => job.type === 'worker.update' && job.targetWorker === worker.name) ?? null,
+    })) });
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/jobs/update-workers') {
+    const expected = process.env.WORKER_OTA_ADMIN_TOKEN?.trim() ?? '';
+    if (expected.length < 32) {
+      json(res, 503, { error: 'WORKER_OTA_ADMIN_TOKEN must be configured on the hub before OTA updates' });
+      return true;
+    }
+    const raw = req.headers['x-worker-update-token'];
+    const supplied = Array.isArray(raw) ? raw[0] ?? '' : raw ?? '';
+    const a = Buffer.from(supplied);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      json(res, 403, { error: 'worker OTA admin token is required' });
+      return true;
+    }
+    const body = await readJson(req);
+    const waitMs = Math.min(Math.max(0, num(body.waitMs, 0)), 20_000);
+    let commit: string;
+    try {
+      const ref = await fetch('https://api.github.com/repos/Zhihong0321/local-worker/git/ref/heads/main', {
+        headers: { accept: 'application/vnd.github+json', 'user-agent': 'automation-tools-worker-ota' },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!ref.ok) throw new Error('GitHub main reference returned ' + ref.status);
+      const data = await ref.json() as { object?: { sha?: string; type?: string } };
+      commit = String(data.object?.sha ?? '').toLowerCase();
+      if (data.object?.type !== 'commit' || !/^[a-f0-9]{40}$/.test(commit)) throw new Error('GitHub main reference had no commit SHA');
+    } catch (err) {
+      json(res, 502, { error: 'could not pin local-worker main: ' + (err instanceof Error ? err.message : String(err)) });
+      return true;
+    }
+    const existing = snapshot().jobs.filter((job) => job.type === 'worker.update'
+      && (job.status === 'pending' || job.status === 'running'));
+    const checks = snapshot().workers.map((worker) => {
+      const status = 'status' in worker && typeof worker.status === 'string'
+        ? worker.status : Date.now() - Date.parse(worker.lastSeenAt) <= 90_000 ? 'online' : 'offline';
+      if (status !== 'online') return { worker: worker.name, status, version: worker.version };
+      if (!worker.types?.includes('worker.update')) return { worker: worker.name, status: 'unsupported', version: worker.version };
+      if (worker.version === commit) return { worker: worker.name, status: 'current', version: worker.version };
+      const inFlight = existing.find((job) => job.targetWorker === worker.name);
+      if (inFlight) return { worker: worker.name, status: 'busy', version: worker.version, jobId: inFlight.id };
+      const job = create('worker.update', { commit }, 1_800_000, worker.name);
+      return { worker: worker.name, status: 'pending', version: worker.version, jobId: job.id };
+    });
+    if (waitMs) await Promise.all(checks.map(async (check) => {
+      if (!('jobId' in check) || !check.jobId || check.status === 'busy') return;
+      const job = await wait(check.jobId, waitMs);
+      Object.assign(check, { status: job?.status ?? 'lost', result: job?.result ?? null, error: job?.error ?? null });
+    }));
+    console.info('[worker.update] pinned main ' + commit + '; queued ' + checks.filter((c) => c.status === 'pending' || c.status === 'running').length + ' worker processes');
+    json(res, 200, { targetCommit: commit, workers: checks });
+    return true;
+  }
+
   if (method === 'POST' && p === '/api/jobs') {
     const body = await readJson(req);
     const type = str(body.type).trim();
     if (!type) {
       json(res, 400, { error: 'type is required' });
+      return true;
+    }
+    if (type === 'worker.update') {
+      json(res, 403, { error: 'worker.update may only be dispatched by /api/jobs/update-workers' });
       return true;
     }
     const job = create(type, body.payload ?? null, num(body.timeoutMs, DEFAULT_TIMEOUT_MS));

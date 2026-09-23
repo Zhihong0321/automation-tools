@@ -365,6 +365,8 @@ dynamic DNS, nothing on the home router.
 | `GET /api/jobs/:id` | status and result |
 | `GET /api/jobs` | the queue, plus every worker and when it last checked in |
 | `POST /api/jobs/health-check` | `{waitMs?: 15000}` → probes the hub's direct `DATABASE_URL` and scan-table write grants, then sends one targeted `worker.health` job to each online, updated lane. Maps lanes check their local recovery directory. Returns each lane's result, error, or pending job ID. Requires `LAB_TOKEN`. |
+| `POST /api/jobs/update-workers` | Pins the current `local-worker` GitHub `main` commit and dispatches one targeted `worker.update` job per online update-capable worker process. Requires both `LAB_TOKEN` and the hub-only `WORKER_OTA_ADMIN_TOKEN` in `X-Worker-Update-Token`. The worker drains jobs, fast-forwards a clean checkout, reports, then restarts under its supervisor. |
+| `GET /api/jobs/update-workers` | Worker versions, OTA capability, and each process's latest update job/result. Requires `LAB_TOKEN`. |
 
 ```bash
 ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \

@@ -739,6 +739,8 @@ data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"..."}}]}
       <tr><td><code>GET /api/jobs/:id</code></td><td>status and result</td></tr>
       <tr><td><code>GET /api/jobs</code></td><td>the queue, plus every worker and when it last checked in</td></tr>
       <tr><td><code>POST /api/jobs/health-check</code></td><td>Probe the hub's direct <code>DATABASE_URL</code> and scan-table write grants, then dispatch one targeted <code>worker.health</code> job to every online, updated lane. Maps lanes check their local recovery directory. Returns results and pending job IDs; requires <code>LAB_TOKEN</code>.</td></tr>
+      <tr><td><code>POST /api/jobs/update-workers</code></td><td>Pin the approved local-worker GitHub main commit and queue one targeted update per online worker process. Requires <code>LAB_TOKEN</code> plus a hub-only <code>WORKER_OTA_ADMIN_TOKEN</code> in the <code>X-Worker-Update-Token</code> header. Workers drain jobs and refuse dirty or divergent checkouts.</td></tr>
+      <tr><td><code>GET /api/jobs/update-workers</code></td><td>Show worker versions, OTA capability, and each process's latest update job and result.</td></tr>
     </tbody>
   </table></div>
   <pre><code>ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \
