@@ -453,12 +453,25 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     const body = await readJson(req);
     const waitMs = Math.min(Math.max(0, num(body.waitMs, 15_000)), 25_000);
     const checkedAt = now();
-    const databaseCheck = db.sql('select 1 as ok').then(
-      (): { status: 'ok' | 'failed'; error?: string } => ({ status: 'ok' }),
-      (err): { status: 'ok' | 'failed'; error?: string } => {
+    const databaseCheck = (async (): Promise<{ status: 'ok' | 'failed'; mode: 'direct'; error?: string }> => {
+      if (!process.env.DATABASE_URL?.trim()) throw new Error('DATABASE_URL is not configured on the hub');
+      const probe = await db.sql<Record<string, boolean>>(`select
+        has_table_privilege(current_user, 'published_report', 'UPDATE') as published_report_update,
+        has_table_privilege(current_user, 'company_data', 'INSERT') as company_insert,
+        has_table_privilege(current_user, 'company_data', 'UPDATE') as company_update,
+        has_table_privilege(current_user, 'search_report', 'INSERT') as search_report_insert,
+        has_table_privilege(current_user, 'search_report_company', 'INSERT') as search_report_company_insert`);
+      const grants = probe.rows[0];
+      if (!grants || Object.values(grants).some((granted) => granted !== true)) {
+        throw new Error('hub database is reachable, but a required scan-table write privilege is missing');
+      }
+      return { status: 'ok', mode: 'direct' };
+    })().then(
+      (result) => result,
+      (err): { status: 'failed'; mode: 'direct'; error: string } => {
         const error = err instanceof Error ? err.message : String(err);
         console.error('[worker.health] hub database probe failed: ' + error);
-        return { status: 'failed', error };
+        return { status: 'failed', mode: 'direct', error };
       },
     );
     const lanes = snapshot().workers;
@@ -467,7 +480,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
         ? worker.status : Date.now() - Date.parse(worker.lastSeenAt) <= 90_000 ? 'online' : 'offline';
       if (status !== 'online') return { worker: worker.name, status, lastSeenAt: worker.lastSeenAt };
       if (!worker.types?.includes('worker.health')) return { worker: worker.name, status: 'unsupported', lastSeenAt: worker.lastSeenAt };
-      const job = create('worker.health', { database: worker.types.includes('gmap.scan') }, 45_000, worker.name);
+      const job = create('worker.health', { recovery: worker.types.includes('gmap.scan') }, 45_000, worker.name);
       return { worker: worker.name, status: 'pending', lastSeenAt: worker.lastSeenAt, jobId: job.id };
     });
     await Promise.all(checks.map(async (check) => {

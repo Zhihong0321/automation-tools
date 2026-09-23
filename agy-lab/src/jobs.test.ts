@@ -49,10 +49,10 @@ test('a beat without a worker name is refused', async () => {
 });
 
 test('a targeted health job can only be claimed by its named lane', async () => {
-  const job = create('worker.health', { database: true }, 45_000, 'health-target');
+  const job = create('worker.health', { recovery: true }, 45_000, 'health-target');
   assert.equal(await take('another-lane', { types: ['worker.health'], waitMs: 0 }), null);
   assert.equal((await take('health-target', { types: ['worker.health'], waitMs: 0 }))?.id, job.id);
-  finish(job.id, true, { database: 'ok' }, null);
+  finish(job.id, true, { recovery: 'ok' }, null);
 });
 
 test('hub health check dispatches to a lane and reports its result', async () => {
@@ -65,10 +65,10 @@ test('hub health check dispatches to a lane and reports its result', async () =>
   });
   const job = await take('health-route-test', { types: ['worker.health'], waitMs: 1_000 });
   assert.equal(job?.targetWorker, 'health-route-test');
-  assert.deepEqual(job?.payload, { database: true });
-  finish(job!.id, true, { database: 'ok' }, null);
+  assert.deepEqual(job?.payload, { recovery: true });
+  finish(job!.id, true, { recovery: 'ok' }, null);
   await handling;
   const check = (response.workers as Array<Record<string, unknown>>).find((worker) => worker.worker === 'health-route-test');
   assert.equal(check?.status, 'done');
-  assert.deepEqual(check?.result, { database: 'ok' });
+  assert.deepEqual(check?.result, { recovery: 'ok' });
 });

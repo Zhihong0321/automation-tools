@@ -364,7 +364,7 @@ dynamic DNS, nothing on the home router.
 | `POST /api/jobs/:id/result` | `{ok, result, error}` → the job becomes `done` or `failed` |
 | `GET /api/jobs/:id` | status and result |
 | `GET /api/jobs` | the queue, plus every worker and when it last checked in |
-| `POST /api/jobs/health-check` | `{waitMs?: 15000}` → probes the hub database and sends one targeted `worker.health` job to each online, updated lane. Returns each lane's result, error, or pending job ID. Maps lanes also check their pg-proxy connection and scan-table write grants. Requires `LAB_TOKEN`. |
+| `POST /api/jobs/health-check` | `{waitMs?: 15000}` → probes the hub's direct `DATABASE_URL` and scan-table write grants, then sends one targeted `worker.health` job to each online, updated lane. Maps lanes check their local recovery directory. Returns each lane's result, error, or pending job ID. Requires `LAB_TOKEN`. |
 
 ```bash
 ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \
