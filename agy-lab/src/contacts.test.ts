@@ -44,7 +44,7 @@ test('extractCompanyContacts extracts people, phones, cheat sheet and normalizes
     research_result: {
       people: [
         { name: 'Tan Ah Kow', role: 'Founder & MD', seniority: 10 },
-        { name: 'Jessica Lim', role: 'Head of Engineering', seniority: 8 }
+        { name: 'Jessica Lim', role: 'Head of Engineering', seniority: 8, evidence_url: 'https://acmesolar.com.my/team' }
       ],
       contacts: [
         { value_as_published: '07-3331122', type: 'phone', purpose: 'office' },
@@ -64,7 +64,11 @@ test('extractCompanyContacts extracts people, phones, cheat sheet and normalizes
   assert.equal(primaryDM.name, 'Tan Ah Kow');
   assert.equal(primaryDM.is_primary, true);
   assert.equal(primaryDM.direct_phone, '+60127654321');
-  assert.equal(primaryDM.direct_email, 'tan@acmesolar.com.my');
+  assert.equal(primaryDM.source, 'Contact research');
+  const jessica = group.people.find((p) => p.name === 'Jessica Lim');
+  assert.equal(jessica?.role, 'Head of Engineering');
+  assert.equal(jessica?.source, 'acmesolar.com.my');
+  assert.equal(jessica?.evidence_url, 'https://acmesolar.com.my/team');
 
   // Phone routes check: Mobile/WhatsApp should come before landlines
   assert.ok(group.phones.length >= 3);
@@ -127,6 +131,8 @@ test('buildMasterContactsResponse sorts companies alphabetically, applies search
   // 1. Check alphabetical sorting (Alpha before Bintang)
   const resAll = buildMasterContactsResponse(rows, { filter: 'all' });
   assert.equal(resAll.groups.length, 2);
+  assert.equal(resAll.total, 2);
+  assert.equal(resAll.totalCompanies, 2);
   assert.equal(resAll.groups[0].company_name, 'Alpha Cold Storage Sdn Bhd');
   assert.equal(resAll.groups[1].company_name, 'Bintang Engineering Sdn Bhd');
 
@@ -233,7 +239,9 @@ test('portal page integrates Contacts Master view, navigation, styles and script
 
   // JavaScript functions
   assert.ok(html.includes('function loadContactsView()'));
-  assert.ok(html.includes('function renderContactsCards('));
+  assert.ok(html.includes('option value="has_decision_makers" selected'), 'default filter must be people grouped by company');
+  assert.ok(html.includes('typeFilter:\'has_decision_makers\''), 'contactsState must default to people grouped by company');
+  assert.ok(html.includes('Name</th><th>Position</th><th>Contact info</th><th>Source'), 'people table must list name, position, contact, source');
   assert.ok(html.includes('function exportContactsCsv()'));
   assert.ok(html.includes('function copyText('));
 });

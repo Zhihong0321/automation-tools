@@ -11,6 +11,8 @@ export interface MasterPersonItem {
   whatsapp_url: string | null;
   profile_url: string | null;
   evidence_url: string | null;
+  /** Human-readable origin of this person row: a named source, a hostname, or the research lane. */
+  source: string;
   is_primary: boolean;
 }
 
@@ -68,9 +70,39 @@ export interface MasterContactsStats {
 export interface MasterContactsResponse {
   groups: CompanyContactGroup[];
   totalCompanies: number;
-  stats: MasterContactsStats;
+  /** Alias of totalCompanies — the portal historically read `total`. */
+  total: number;
+  stats: MasterContactsStats & {
+    totalDialablePhones: number;
+    totalMobilePhones: number;
+    totalDirectEmails: number;
+  };
   limit: number;
   offset: number;
+}
+
+function firstString(...vals: unknown[]): string {
+  for (const v of vals) {
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return '';
+}
+
+function personSource(row: Record<string, any>, fallback: string): { source: string; evidence_url: string | null } {
+  const evidence_url = firstString(
+    row.role_evidence_url, row.evidence_url, row.role_url, row.source_url,
+    row.profile_url, row.personal_profile_url, row.linkedin_url,
+  ) || null;
+  const named = firstString(row.source_name, row.source, row.evidence_class);
+  let source = named || fallback;
+  if (!named && evidence_url) {
+    try {
+      source = new URL(evidence_url).hostname.replace(/^www\./, '');
+    } catch {
+      /* keep fallback */
+    }
+  }
+  return { source, evidence_url };
 }
 
 export function extractCompanyContacts(row: RawCompanyContactRow): CompanyContactGroup {
@@ -100,18 +132,20 @@ export function extractCompanyContacts(row: RawCompanyContactRow): CompanyContac
     const directPhone = dm.direct_phone || dm.phone || dm.mobile || null;
     const directEmail = dm.direct_email || dm.email || null;
     const normPhone = directPhone ? normalizePhoneNumber(String(directPhone)) : null;
+    const sourced = personSource(dm, 'Contact research');
 
     people.push({
       id: dm.id ? String(dm.id) : undefined,
       name,
-      role: dm.role || dm.position || 'Key Contact',
+      role: dm.role || dm.position || dm.current_role || 'Key Contact',
       seniority: dm.seniority || null,
       direct_phone: normPhone ? (normPhone.e164 || normPhone.raw) : (directPhone ? String(directPhone) : null),
       direct_email: directEmail ? String(directEmail).trim() : null,
       whatsapp_url: normPhone?.whatsappUrl || (directPhone ? `https://wa.me/${String(directPhone).replace(/[^0-9]/g, '')}` : null),
       profile_url: dm.profile_url || dm.personal_profile_url || dm.linkedin_url || null,
-      evidence_url: dm.role_evidence_url || dm.evidence_url || dm.source_url || null,
-      is_primary: Boolean(primaryDMName && name.toLowerCase() === primaryDMName.toLowerCase()),
+      evidence_url: sourced.evidence_url,
+      source: sourced.source,
+      is_primary: Boolean(dm.is_primary) || Boolean(primaryDMName && name.toLowerCase() === primaryDMName.toLowerCase()),
     });
   }
 
@@ -124,16 +158,22 @@ export function extractCompanyContacts(row: RawCompanyContactRow): CompanyContac
     if (seenPeople.has(key)) continue;
     seenPeople.add(key);
 
+    const directPhone = p.direct_phone || p.phone || p.mobile || null;
+    const directEmail = p.direct_email || p.email || null;
+    const normPhone = directPhone ? normalizePhoneNumber(String(directPhone)) : null;
+    const sourced = personSource(p, 'Company research');
+
     people.push({
       id: p.id ? String(p.id) : undefined,
       name,
-      role: p.role || 'Validated Person',
+      role: p.role || p.position || p.current_role || 'Validated Person',
       seniority: p.seniority || null,
-      direct_phone: null,
-      direct_email: null,
-      whatsapp_url: null,
+      direct_phone: normPhone ? (normPhone.e164 || normPhone.raw) : (directPhone ? String(directPhone) : null),
+      direct_email: directEmail ? String(directEmail).trim() : null,
+      whatsapp_url: normPhone?.whatsappUrl || null,
       profile_url: p.personal_profile_url || p.profile_url || null,
-      evidence_url: p.evidence_url || p.source_url || null,
+      evidence_url: sourced.evidence_url,
+      source: sourced.source,
       is_primary: Boolean(primaryDMName && name.toLowerCase() === primaryDMName.toLowerCase()),
     });
   }
@@ -147,15 +187,17 @@ export function extractCompanyContacts(row: RawCompanyContactRow): CompanyContac
     if (seenPeople.has(key)) continue;
     seenPeople.add(key);
 
+    const sourced = personSource(c, 'Named lead');
     people.push({
       name,
-      role: c.role || 'Candidate Contact',
+      role: c.role || c.position || c.current_role || 'Candidate Contact',
       seniority: null,
       direct_phone: null,
       direct_email: null,
       whatsapp_url: null,
       profile_url: null,
-      evidence_url: c.source_url || c.evidence_url || null,
+      evidence_url: sourced.evidence_url,
+      source: sourced.source,
       is_primary: false,
     });
   }
@@ -379,7 +421,13 @@ export function buildMasterContactsResponse(
   return {
     groups: paginatedGroups,
     totalCompanies: allGroups.length,
-    stats,
+    total: allGroups.length,
+    stats: {
+      ...stats,
+      totalDialablePhones: totalPhones,
+      totalMobilePhones: totalMobileWhatsapp,
+      totalDirectEmails: totalEmails,
+    },
     limit,
     offset,
   };
@@ -443,7 +491,7 @@ export function generateContactsCsv(groups: CompanyContactGroup[]): string {
         escapeCsv(p.whatsapp_url || ''),
         escapeCsv(p.direct_email || ''),
         escapeCsv(gatekeeper),
-        escapeCsv(p.evidence_url || p.profile_url || ''),
+        escapeCsv([p.source, p.evidence_url || p.profile_url].filter(Boolean).join(' · ')),
         escapeCsv(reportLink),
       ].join(','));
     }
