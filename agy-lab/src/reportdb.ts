@@ -618,6 +618,7 @@ export async function reapAbandoned(staleMinutes: number, activePublicIds: strin
             completed_at = now(),
             updated_at = now()
       where status in ('queued','running')
+        and not (report_type = 'contact_research' and coalesce(request->>'provider', 'legacy') <> 'parallel')
         and updated_at < now() - make_interval(mins => $1::int)
         and not (public_id = any($2::text[]))
       returning public_id`,
@@ -799,6 +800,51 @@ export async function findContactReport(companyId: string, provider: 'legacy' | 
     [companyId, provider],
   );
   return out.rows[0] ?? null;
+}
+
+/** Saved contact reports waiting for a dedicated research lane. */
+export async function recoverableContactReports(limit: number, activePublicIds: string[]): Promise<PublishedReport[]> {
+  await migrate();
+  const out = await sql<PublishedReport>(
+    `select * from published_report
+     where report_type = 'contact_research'
+       and status in ('queued', 'running')
+       and coalesce(request->>'provider', 'legacy') <> 'parallel'
+       and not (public_id = any($1::text[]))
+     order by created_at asc
+     limit $2`,
+    [activePublicIds, Math.max(0, Math.floor(limit))],
+  );
+  return out.rows;
+}
+
+export async function pendingContactReportCount(): Promise<number> {
+  await migrate();
+  const out = await sql<{ total: string }>(
+    `select count(*)::text as total from published_report
+     where report_type = 'contact_research'
+       and status in ('queued', 'running')
+       and coalesce(request->>'provider', 'legacy') <> 'parallel'`,
+  );
+  return Number(out.rows[0]?.total ?? 0);
+}
+
+/** Explicitly recover reports lost by an earlier hub restart. */
+export async function requeueAbandonedContactReports(since: string): Promise<number> {
+  await migrate();
+  const out = await sql<{ public_id: string }>(
+    `update published_report
+        set status = 'queued', error = null, job_id = null,
+            completed_at = null, updated_at = now()
+      where report_type = 'contact_research'
+        and status = 'failed'
+        and coalesce(request->>'provider', 'legacy') <> 'parallel'
+        and error = 'This run was abandoned before it finished, most likely because the service restarted while it was working. Start it again.'
+        and updated_at >= $1::timestamptz
+      returning public_id`,
+    [since],
+  );
+  return out.rowCount ?? 0;
 }
 
 /** Active, visible, non-DNC companies that have never had a contact report. */

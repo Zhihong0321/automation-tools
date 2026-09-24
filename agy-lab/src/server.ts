@@ -473,6 +473,12 @@ server.listen(PORT, '0.0.0.0', () => {
   reapAbandonedRuns(0);
   autoContact.init({ launch: intel.launchContactResearch });
   autoContact.start();
+  // Broker jobs live only in memory. Refill it from saved contact reports after
+  // a restart, with no more concurrent jobs than the research lanes can run.
+  setInterval(() => {
+    void intel.resumeContactResearch().catch((err: Error) =>
+      console.warn('could not resume contact reports: ' + err.message));
+  }, 5_000).unref();
   // On the interval an age test IS needed, and a generous one -- a company
   // report can legitimately run for hours behind a busy serial worker lane, and
   // rounds heartbeat published_report.updated_at so a working run stays fresh.

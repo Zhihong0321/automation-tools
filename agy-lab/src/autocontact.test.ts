@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import * as autoContact from './autocontact.ts';
 
 const company = (id: string) => ({ id, name: 'Co ' + id });
-const live = () => ['agy.ask', 'chatgpt.ask'];
+const live = () => ['research.contact', 'chatgpt.ask'];
+
+test('default contact reports require a dedicated research worker', () => {
+  assert.equal(autoContact.contactResearchJobType(), 'research.contact');
+});
 
 test('no live worker claiming the job type queues nothing', async () => {
   let launched = 0;

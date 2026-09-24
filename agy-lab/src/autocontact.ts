@@ -7,8 +7,9 @@ const BATCH = 3;
 
 /** Job type the default contact-research model needs a live worker to claim. */
 export function contactResearchJobType(): string {
-  const model = (process.env.CONTACT_RESEARCH_MODEL?.trim() || 'agy').toLowerCase();
+  const model = (process.env.CONTACT_RESEARCH_MODEL?.trim() || 'research.contact').toLowerCase();
   const name = model.split(/[:@/]/)[0] ?? model;
+  if (name === 'research.contact' || name === 'pi') return 'research.contact';
   if (name.startsWith('chatgpt') || name.startsWith('openai') || name.startsWith('gpt') || /^o[134]/.test(name)) {
     return 'chatgpt.ask';
   }
@@ -45,9 +46,13 @@ export async function tick(): Promise<number> {
   if (ticking || !workerLive()) return 0;
   ticking = true;
   try {
+    // Saved reports are the durable queue. Do not mint new reports while older
+    // ones are waiting for the research lanes.
+    const free = deps.backlog ? BATCH : Math.max(0, BATCH - await db.pendingContactReportCount());
+    if (!free) return 0;
     const rows = deps.backlog
-      ? await deps.backlog(BATCH)
-      : await db.contactResearchBacklog(BATCH);
+      ? await deps.backlog(free)
+      : await db.contactResearchBacklog(free);
     for (const company of rows) {
       await deps.launch(company, { autoQueued: true });
     }

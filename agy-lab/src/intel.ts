@@ -22,6 +22,8 @@ export interface Ctx {
 }
 
 const active = new Set<string>();
+const activeContact = new Set<string>();
+let recoveringContact = false;
 
 /** Runs this process is working on right now, so the reaper never kills one. */
 export function activeReports(): string[] {
@@ -1136,8 +1138,9 @@ Return exactly one compact JSON object inside one fenced code block with ${schem
 // number to this company is precisely the poisoning this round exists to prevent.
 const FB_TRUSTED = new Set(['confirmed', 'likely']);
 
-async function runJob(type: string, payload: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> {
+async function runJob(type: string, payload: Record<string, unknown>, timeoutMs: number, onCreated?: (id: string) => Promise<unknown>): Promise<Record<string, unknown>> {
   const job = jobs.create(type, payload, timeoutMs);
+  if (onCreated) await onCreated(job.id);
   const settled = await jobs.wait(job.id, timeoutMs + 5_000);
   if (!settled || settled.status !== 'done') throw new Error(settled?.error ?? type + ' did not finish');
   return object(settled.result);
@@ -2463,6 +2466,7 @@ async function runContactResearch(
 ): Promise<void> {
   if (active.has(publicId)) return;
   active.add(publicId);
+  if (request.provider !== 'parallel') activeContact.add(publicId);
   try {
     await db.updateReport(publicId, { status: 'running', error: null });
     await db.initContactResearchRun(reportId);
@@ -2485,21 +2489,34 @@ async function runContactResearch(
       return;
     }
 
-    const model = process.env.CONTACT_RESEARCH_MODEL?.trim() || 'agy';
+    const model = process.env.CONTACT_RESEARCH_MODEL?.trim() || 'research.contact';
     const targetRole = str(request.targetRole || request.persona) || null;
-    const prompt = contactResearchPrompt(company, targetRole);
 
     let discoveryRaw: Record<string, unknown> | null = null;
-    let discoveryMeta: Record<string, unknown> = { model, engine: 'agy', status: 'failed' };
+    let discoveryMeta: Record<string, unknown> = { model, engine: autoContact.contactResearchJobType(), status: 'failed' };
 
     try {
-      const askResult = await ask(model, prompt, CONTACT_RESEARCH_TIMEOUT_MS);
-      discoveryMeta = { model: askResult.model, engine: askResult.engine, ms: askResult.ms };
-      if (askResult.parsed) {
-        discoveryRaw = askResult.parsed;
-        discoveryMeta.status = 'completed';
+      if (autoContact.contactResearchJobType() === 'research.contact') {
+        const website = str(company.website);
+        const payload = {
+          name: str(company.name),
+          ...(website && !/google\.[^/]+\/(?:search|searchviewer)/i.test(website) ? { website } : {}),
+          location: str(company.address),
+          ...(str(company.maps_url) ? { extraUrls: [str(company.maps_url)] } : {}),
+          timeoutMs: CONTACT_RESEARCH_TIMEOUT_MS,
+        };
+        discoveryRaw = await runJob('research.contact', payload, CONTACT_RESEARCH_TIMEOUT_MS,
+          (jobId) => db.updateReport(publicId, { jobId }));
+        discoveryMeta = { model: 'research.contact', engine: 'pi', status: 'completed' };
       } else {
-        discoveryMeta.status = 'invalid_output';
+        const askResult = await ask(model, contactResearchPrompt(company, targetRole), CONTACT_RESEARCH_TIMEOUT_MS);
+        discoveryMeta = { model: askResult.model, engine: askResult.engine, ms: askResult.ms };
+        if (askResult.parsed) {
+          discoveryRaw = askResult.parsed;
+          discoveryMeta.status = 'completed';
+        } else {
+          discoveryMeta.status = 'invalid_output';
+        }
       }
     } catch (err) {
       discoveryMeta.status = 'failed';
@@ -2541,6 +2558,30 @@ async function runContactResearch(
     await db.updateReport(publicId, { status: 'failed', error: (err as Error).message ?? String(err), completed: true }).catch(() => {});
   } finally {
     active.delete(publicId);
+    activeContact.delete(publicId);
+  }
+}
+
+/** Reattach saved contact reports to the live broker, at worker capacity. */
+export async function resumeContactResearch(maxConcurrent = 2): Promise<number> {
+  if (recoveringContact || !jobs.liveTypes().includes(autoContact.contactResearchJobType())) return 0;
+  const slots = Math.max(0, maxConcurrent - activeContact.size);
+  if (!slots) return 0;
+  recoveringContact = true;
+  try {
+    const pending = await db.recoverableContactReports(slots, [...activeContact]);
+    for (const report of pending) {
+      const company = (report.company_id ? await db.getCompany(report.company_id) : null)
+        ?? object(report.request.companySnapshot);
+      if (!str(company.name)) {
+        await db.updateReport(report.public_id, { status: 'failed', error: 'Company data missing; cannot resume contact research.', completed: true });
+        continue;
+      }
+      void runContactResearch(report.public_id, report.id, company, report.request);
+    }
+    return pending.length;
+  } finally {
+    recoveringContact = false;
   }
 }
 
@@ -2829,7 +2870,8 @@ export async function launchContactResearch(
     request,
     companyId: resolvedCompanyId,
   });
-  void runContactResearch(report.public_id, report.id, company, request);
+  if (provider === 'parallel') void runContactResearch(report.public_id, report.id, company, request);
+  else void resumeContactResearch();
   return { report, alreadyRunning: false };
 }
 
@@ -3296,6 +3338,20 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
 
   if (method === 'GET' && p === '/api/contact-research/auto-queue') {
     ctx.json(res, 200, await autoContact.status());
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/contact-research/recover-abandoned') {
+    const body = await ctx.readJson(req);
+    const since = str(body.since);
+    const parsed = Date.parse(since);
+    if (!since || !Number.isFinite(parsed)) {
+      ctx.json(res, 400, { error: 'since must be an ISO timestamp' });
+      return true;
+    }
+    const requeued = await db.requeueAbandonedContactReports(new Date(parsed).toISOString());
+    void resumeContactResearch();
+    ctx.json(res, 200, { requeued });
     return true;
   }
 
