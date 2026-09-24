@@ -18,7 +18,14 @@
 // at least one access level contains a known sales role prefix, and "blocked"
 // never appears. Leaving blocked users in the deck would hand leads to people
 // the office has already switched off.
-import { addTelemarketer, configured, getTelemarketerDetails, type TelemarketerAgent } from './reportdb.ts';
+import {
+  addTelemarketer,
+  configured,
+  getTelemarketerDetails,
+  reconcileLeadAssignees,
+  resetTelemarketers,
+  type TelemarketerAgent,
+} from './reportdb.ts';
 
 export interface AtapUser {
   id: number;
@@ -48,34 +55,40 @@ export interface ImportOptions {
   baseUrl?: string;
   password?: string;
   fetchImpl?: typeof fetch;
-}
-
-export interface ImportAgent extends TelemarketerAgent {
-  source_bubble_id: string;
+  /** Wipe the roster first, so the list ends up exactly as the API has it. */
+  reset?: boolean;
+  /** With reset, also release every lead that named an agent. */
+  unassignLeads?: boolean;
 }
 
 export interface ImportResult {
   /** Users returned by the roster API. */
   fetched: number;
-  /** Roster names actually written to the telemarketer table. */
+  /** People actually written to the telemarketer table. */
   imported: number;
   /** Roster users filtered out (non-sales or blocked). */
   skipped: number;
-  /** Imported names that already existed in the table (contact fields refreshed). */
+  /** Roster records collapsed onto a person already imported in this run. */
+  duplicates: number;
+  /** Imported people who already existed in the table and were refreshed. */
   updated: number;
-  /** Roster names newly added to the table. */
+  /** Imported people newly added to the table. */
   created: number;
-  agents: ImportAgent[];
+  /** Rows removed by `reset`, if it was requested. */
+  deleted: number;
+  agents: TelemarketerAgent[];
 }
 
 /**
- * Import sales agents into the telemarketer table.
+ * Import sales agents into the telemarketer table, one row per person, keyed by
+ * the source app's uid.
  *
- * The DB upsert keeps the existing addTelemarketer semantics: an existing name
- * gets contact fields refreshed where the source has values, a new name is
- * created active. A user marked "pending" imports as inactive because pending
- * accounts are real people who have not been switched on yet -- deleting the
- * row later would orphan any leads assigned in the meantime.
+ * The uid is what makes a re-import safe: the person is matched by the API's
+ * own user id rather than by a name anybody can edit in the calculator app, so
+ * a rename updates their row instead of leaving an abandoned duplicate behind.
+ * A user marked "pending" imports as inactive because pending accounts are real
+ * people who have not been switched on yet -- deleting the row later would
+ * orphan any leads assigned in the meantime.
  */
 export async function importSalesAgents(input: ImportOptions = {}): Promise<ImportResult> {
   const users = input.users ?? (await fetchAtapUsers(input));
@@ -86,28 +99,88 @@ export async function importSalesAgents(input: ImportOptions = {}): Promise<Impo
     throw new Error('report database is not configured; link DATABASE_URL to the Railway service');
   }
 
-  const existing = new Set(
-    (await getTelemarketerDetails()).map((a) => a.name.toLowerCase()),
-  );
+  const deleted = input.reset ? (await resetTelemarketers(input.unassignLeads === true)).deleted : 0;
 
-  const agents: ImportAgent[] = [];
+  const before = await getTelemarketerDetails();
+  const existingNames = new Set(before.map((a) => a.name.toLowerCase()));
+  const existingUids = new Set(before.map((a) => a.uid).filter((u): u is string => Boolean(u)));
+
+  const plan = planPersonRows(eligible);
+
+  const agents: TelemarketerAgent[] = [];
   let updated = 0;
   let created = 0;
-  for (const user of eligible) {
+  for (const user of plan.rows) {
     const name = (user.name ?? '').trim();
-    if (!name) continue; // no name -> nothing to display or assign against
     const notes = `Imported from calculator.atap.solar · roles: ${(user.access_level ?? []).join(', ')}`;
     const agent = await addTelemarketer(name, {
       phone: user.contact ?? null,
       email: user.email ?? null,
       notes,
+      uid: user.bubble_id,
+      sourceId: user.id,
       active: !(user.access_level ?? []).some((l) => l.toLowerCase().trim() === 'pending'),
     });
-    if (existing.has(name.toLowerCase())) updated++; else created++;
-    agents.push({ ...agent, source_bubble_id: user.bubble_id });
+    // An agent counts as updated if the roster already knew them, whether by
+    // name (a hand-registered row that adopted the uid) or by uid (a rename).
+    if (existingNames.has(name.toLowerCase()) || existingUids.has(user.bubble_id)) updated++; else created++;
+    agents.push(agent);
   }
 
-  return { fetched: users.length, imported: agents.length, skipped, updated, created, agents };
+  // A rename in the source app leaves the old spelling on the lead itself; now
+  // that the roster carries the new one, point the leads back at a live row.
+  await reconcileLeadAssignees();
+
+  return {
+    fetched: users.length,
+    imported: agents.length,
+    skipped,
+    duplicates: plan.duplicates,
+    updated,
+    created,
+    deleted,
+    agents,
+  };
+}
+
+/** Names are compared with runs of whitespace collapsed and case folded. */
+const normalizeName = (name: string): string => name.trim().toLowerCase().replace(/\s+/g, ' ');
+
+/**
+ * One row per person, from a roster that holds several records for some of them.
+ *
+ * The app keeps an older account plus a newer duplicate row for the same human,
+ * and occasionally the same name under two spellings (case, double spaces). The
+ * record that carries the most access tags wins -- it is the one that knows what
+ * this person actually does -- and the older (lower) source id breaks a tie,
+ * because that is the account leads were assigned under.
+ */
+export function planPersonRows(users: AtapUser[]): { rows: AtapUser[]; duplicates: number } {
+  const at = new Map<string, number>(); // normalized name -> index in rows
+  const rows: AtapUser[] = [];
+  let duplicates = 0;
+  for (const user of users) {
+    const name = (user.name ?? '').trim();
+    if (!name) continue; // no name -> nothing to display or assign against
+    const key = normalizeName(name);
+    const seen = at.get(key);
+    if (seen === undefined) {
+      at.set(key, rows.length);
+      rows.push(user);
+      continue;
+    }
+    duplicates++;
+    if (isBetterRecord(user, rows[seen]!)) rows[seen] = user;
+  }
+  return { rows, duplicates };
+}
+
+/** Richer role list wins; older (lower) source id breaks the tie. */
+function isBetterRecord(candidate: AtapUser, held: AtapUser): boolean {
+  const a = (candidate.access_level ?? []).length;
+  const b = (held.access_level ?? []).length;
+  if (a !== b) return a > b;
+  return candidate.id < held.id;
 }
 
 async function fetchAtapUsers(input: ImportOptions = {}): Promise<AtapUser[]> {

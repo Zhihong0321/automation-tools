@@ -453,6 +453,13 @@ export function migrate(): Promise<void> {
       alter table telemarketer add column if not exists email text;
       alter table telemarketer add column if not exists notes text;
       alter table telemarketer add column if not exists updated_at timestamptz default now();
+      -- Identity, not just contact details. uid is the source app's own user id
+      -- (the Atap integration API's stable bubble_id), so a re-import recognises
+      -- the same person even after a rename. source_id is that API's numeric user
+      -- id, kept so a row can be cross-checked against the calculator app by hand.
+      alter table telemarketer add column if not exists uid text;
+      alter table telemarketer add column if not exists source_id integer;
+      create unique index if not exists telemarketer_uid_key on telemarketer (uid);
     `);
   })().catch((err) => {
     migrated = null;
@@ -799,6 +806,110 @@ export async function findContactReport(companyId: string, provider: 'legacy' | 
     [companyId, provider],
   );
   return out.rows[0] ?? null;
+}
+
+/**
+ * The auto contact research queue's backlog: active master-list companies with
+ * no contact_research report at all, most recently seen first.
+ *
+ * This is deliberately the same set the portal's "no contacts" filter shows a
+ * human — a company is a candidate until contact research has run on it once.
+ * A FAILED report is NOT retried here: a run that finished with nothing found
+ * already cost the agy account its budget, and an automatic retry loop over
+ * companies research has already failed on is how a quota quietly disappears.
+ * Rerunning those stays where it is today, on the Rerun button.
+ */
+export async function contactResearchBacklog(limit: number): Promise<Record<string, unknown>[]> {
+  await migrate();
+  const out = await sql<Record<string, unknown>>(
+    `select c.id::text, c.name, c.category, c.address, c.phone, c.website, c.maps_url
+       from company_data c
+      where c.merged_into is null
+        and coalesce(c.is_hidden, false) = false
+        and coalesce(c.lead_status, 'unassigned') <> 'do_not_call'
+        and not exists (
+          select 1 from published_report pr
+           where pr.company_id = c.id and pr.report_type = 'contact_research'
+        )
+      order by c.last_seen_at desc, c.id desc
+      limit $1`,
+    [Math.max(1, Math.round(limit))],
+  );
+  return out.rows;
+}
+
+/** How deep the backlog is — the same query as contactResearchBacklog, counted. */
+export async function contactResearchBacklogTotal(): Promise<number> {
+  await migrate();
+  const out = await sql<{ n: string }>(
+    `select count(*)::text as n
+       from company_data c
+      where c.merged_into is null
+        and coalesce(c.is_hidden, false) = false
+        and coalesce(c.lead_status, 'unassigned') <> 'do_not_call'
+        and not exists (
+          select 1 from published_report pr
+           where pr.company_id = c.id and pr.report_type = 'contact_research'
+        )`,
+  );
+  return Number(out.rows[0]?.n ?? 0);
+}
+
+/**
+ * Contact research runs of any kind — auto or manual — still in flight. The
+ * auto queue counts these before adding more because auto and manual runs share
+ * one engine lane, and the cap that protects a human's clicked run from waiting
+ * behind a wall of automatic ones has to see both.
+ */
+export async function contactResearchInflightCount(): Promise<number> {
+  await migrate();
+  const out = await sql<{ n: string }>(
+    `select count(*)::text as n from published_report
+      where report_type = 'contact_research' and status in ('queued', 'running')`,
+  );
+  return Number(out.rows[0]?.n ?? 0);
+}
+
+/**
+ * Lifetime counters for auto-queued contact research, read off the reports
+ * themselves (request->>'autoQueued' = 'true') so they survive a restart. This
+ * is the durable half of "how many jobs did the auto-queue run"; the per-job
+ * trail is the same rows' run_event entries at stage 'auto_contact_queue'.
+ */
+export async function autoContactQueueTotals(): Promise<{
+  queued: number; running: number; completed: number; failed: number;
+}> {
+  await migrate();
+  const out = await sql<{ queued: string; running: string; completed: string; failed: string }>(
+    `select
+       count(*)::text as queued,
+       count(*) filter (where status = 'running')::text as running,
+       count(*) filter (where status in ('completed', 'partial'))::text as completed,
+       count(*) filter (where status = 'failed')::text as failed
+     from published_report
+     where report_type = 'contact_research' and request->>'autoQueued' = 'true'`,
+  );
+  const row = out.rows[0];
+  return {
+    queued: Number(row?.queued ?? 0),
+    running: Number(row?.running ?? 0),
+    completed: Number(row?.completed ?? 0),
+    failed: Number(row?.failed ?? 0),
+  };
+}
+
+/** The auto-queue's event trail, newest first — the readable log behind the counters. */
+export async function autoContactQueueLog(limit = 25): Promise<Record<string, unknown>[]> {
+  await migrate();
+  const out = await sql<Record<string, unknown>>(
+    `select id, at, report_id, public_id, event, detail
+       from run_event
+      where stage = 'auto_contact_queue'
+      order by id desc
+      limit $1`,
+    [Math.max(1, Math.round(limit))],
+  );
+  return out.rows;
 }
 
 export async function findOrCreateCompany(data: {
@@ -1725,6 +1836,10 @@ export async function updateLead(
 
 export interface TelemarketerAgent {
   id: number;
+  /** The source app's own user id (Atap bubble_id); null for hand-made agents. */
+  uid: string | null;
+  /** The source app's numeric user id, for cross-checking with the app. */
+  source_id: number | null;
   name: string;
   phone: string | null;
   email: string | null;
@@ -1762,6 +1877,8 @@ export async function getTelemarketerDetails(): Promise<TelemarketerAgent[]> {
   const res = await sql<TelemarketerAgent>(`
     select
       t.id,
+      t.uid,
+      t.source_id,
       t.name,
       t.phone,
       t.email,
@@ -1775,15 +1892,30 @@ export async function getTelemarketerDetails(): Promise<TelemarketerAgent[]> {
       count(c.id) filter (where c.merged_into is null and c.lead_status = 'do_not_call')::int as dnc_count
     from telemarketer t
     left join company_data c on lower(trim(c.assigned_to)) = lower(trim(t.name))
-    group by t.id, t.name, t.phone, t.email, t.notes, t.active, t.created_at
+    group by t.id, t.uid, t.source_id, t.name, t.phone, t.email, t.notes, t.active, t.created_at
     order by t.active desc, t.name asc
   `);
   return res.rows;
 }
 
+/**
+ * Add or refresh a telemarketer, identified by its source-app uid when given.
+ *
+ * Identity first, name second, because the name is what the source app lets
+ * people edit: a uid match renames the existing row instead of inserting a
+ * second one beside it, and a name match adopts the uid so an agent somebody
+ * registered by hand joins the API identity rather than duplicating it.
+ */
 export async function addTelemarketer(
   name: string,
-  extra: { phone?: string | null; email?: string | null; notes?: string | null; active?: boolean } = {}
+  extra: {
+    phone?: string | null;
+    email?: string | null;
+    notes?: string | null;
+    active?: boolean;
+    uid?: string | null;
+    sourceId?: number | null;
+  } = {}
 ): Promise<TelemarketerAgent> {
   await migrate();
   const trimmed = name.trim();
@@ -1792,23 +1924,63 @@ export async function addTelemarketer(
   const email = extra.email?.trim() || null;
   const notes = extra.notes?.trim() || null;
   const active = extra.active !== false;
+  const uid = extra.uid?.trim() || null;
+  const sourceId = Number.isFinite(extra.sourceId) ? Math.trunc(extra.sourceId as number) : null;
 
-  await sql(
-    `insert into telemarketer (name, phone, email, notes, active)
-     values ($1, $2, $3, $4, $5)
-     on conflict (name) do update set
-       phone = coalesce(excluded.phone, telemarketer.phone),
-       email = coalesce(excluded.email, telemarketer.email),
-       notes = coalesce(excluded.notes, telemarketer.notes),
-       active = excluded.active,
-       updated_at = now()`,
-    [trimmed, phone, email, notes, active],
-  );
+  if (uid) {
+    // Same uid, new name in the source app: follow the rename rather than
+    // creating a duplicate that splits the agent's lead history.
+    await sql(
+      `update telemarketer set name = $2, source_id = coalesce($3, source_id), updated_at = now()
+       where uid = $1 and lower(name) <> lower($2)`,
+      [uid, trimmed, sourceId],
+    );
+    // A hand-registered row for this same person adopts the uid.
+    await sql(
+      `update telemarketer set uid = $1, source_id = coalesce($2, source_id), updated_at = now()
+       where lower(name) = lower($3) and uid is null`,
+      [uid, sourceId, trimmed],
+    );
+  }
+
+  // Two conflict targets, because they mean different things: with a uid the
+  // conflict has to be resolved on identity, and without one the name is the
+  // only identity a hand-made row has (a null uid never conflicts with itself,
+  // so claiming (uid) there would crash on the name constraint instead).
+  if (uid) {
+    await sql(
+      `insert into telemarketer (uid, source_id, name, phone, email, notes, active)
+       values ($1, $2, $3, $4, $5, $6, $7)
+       on conflict (uid) do update set
+         name = excluded.name,
+         source_id = coalesce(excluded.source_id, telemarketer.source_id),
+         phone = coalesce(excluded.phone, telemarketer.phone),
+         email = coalesce(excluded.email, telemarketer.email),
+         notes = coalesce(excluded.notes, telemarketer.notes),
+         active = excluded.active,
+         updated_at = now()`,
+      [uid, sourceId, trimmed, phone, email, notes, active],
+    );
+  } else {
+    await sql(
+      `insert into telemarketer (name, phone, email, notes, active)
+       values ($1, $2, $3, $4, $5)
+       on conflict (name) do update set
+         phone = coalesce(excluded.phone, telemarketer.phone),
+         email = coalesce(excluded.email, telemarketer.email),
+         notes = coalesce(excluded.notes, telemarketer.notes),
+         active = excluded.active,
+         updated_at = now()`,
+      [trimmed, phone, email, notes, active],
+    );
+  }
 
   const agents = await getTelemarketerDetails();
-  const found = agents.find((a) => a.name.toLowerCase() === trimmed.toLowerCase());
+  const found = agents.find((a) => (uid ? a.uid === uid : a.name.toLowerCase() === trimmed.toLowerCase()));
   return found ?? {
     id: 0,
+    uid,
+    source_id: sourceId,
     name: trimmed,
     phone,
     email,
@@ -1821,6 +1993,41 @@ export async function addTelemarketer(
     not_interested_count: 0,
     dnc_count: 0,
   };
+}
+
+/** Wipe the roster. With unassign, also release every lead that named an agent. */
+export async function resetTelemarketers(unassignLeads: boolean = false): Promise<{ deleted: number }> {
+  await migrate();
+  const before = await sql<{ n: number }>(`select count(*)::int as n from telemarketer`);
+  if (unassignLeads) {
+    await sql(
+      `update company_data set assigned_to = null, assigned_at = null, lead_status = 'unassigned', lead_updated_at = now()
+       where assigned_to is not null and assigned_to <> ''`,
+    );
+  }
+  await sql(`delete from telemarketer`);
+  return { deleted: before.rows[0]?.n ?? 0 };
+}
+
+/**
+ * Re-point lead assignments at the current spelling of an agent's name.
+ *
+ * Assignment is stored as free text on the lead, so a rename in the source app
+ * leaves the old spelling behind: the lead still shows an assignee, but the
+ * picker can no longer match it to a roster row. Case-insensitive, and only
+ * where the letters already agree.
+ */
+export async function reconcileLeadAssignees(): Promise<{ updated: number }> {
+  await migrate();
+  const res = await sql(
+    `update company_data c set assigned_to = t.name, lead_updated_at = now()
+     from telemarketer t
+     where c.assigned_to is not null and c.assigned_to <> ''
+       and lower(trim(c.assigned_to)) = lower(trim(t.name))
+       and c.assigned_to <> t.name
+     returning c.id`,
+  );
+  return { updated: res.rows.length };
 }
 
 export async function updateTelemarketer(

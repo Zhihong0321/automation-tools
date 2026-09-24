@@ -2983,18 +2983,33 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
   }
 
   // Pull the sales roster from calculator.atap.solar and upsert each sales
-  // agent as a telemarketer. Idempotent: existing names keep their phone/email
-  // refreshed, new names are created active.
+  // agent as a telemarketer, keyed by the API's own user id (uid). Idempotent:
+  // an agent who already exists is matched by uid and refreshed in place, a new
+  // one is created active. `reset` wipes the roster first so the list ends up
+  // exactly as the source app has it.
   if (method === 'POST' && p === '/api/telemarketers/import') {
     const body = await ctx.readJson(req);
     try {
       const result = await importSalesAgents({
         users: Array.isArray(body.users) ? body.users as AtapUser[] : undefined,
+        reset: body.reset === true,
+        unassignLeads: body.unassignLeads === true,
       });
       ctx.json(res, 200, { ok: true, ...result });
     } catch (err) {
       ctx.json(res, 502, { error: (err as Error).message });
     }
+    return true;
+  }
+
+  // Empty the roster without touching the source app. Assignments stay on the
+  // leads unless unassign=1, so a reset followed by an import can re-key the
+  // list without silently dropping anybody's queue.
+  if (method === 'POST' && p === '/api/telemarketers/reset') {
+    const body = await ctx.readJson(req).catch(() => ({}) as Record<string, unknown>);
+    const unassign = body.unassign === true || url.searchParams.get('unassign') === '1';
+    const result = await db.resetTelemarketers(unassign);
+    ctx.json(res, 200, { ok: true, ...result, unassigned: unassign });
     return true;
   }
 
@@ -3010,6 +3025,8 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       email: typeof body.email === 'string' ? body.email : null,
       notes: typeof body.notes === 'string' ? body.notes : null,
       active: typeof body.active === 'boolean' ? body.active : true,
+      uid: typeof body.uid === 'string' ? body.uid : null,
+      sourceId: typeof body.sourceId === 'number' ? body.sourceId : null,
     });
     ctx.json(res, 201, { ok: true, name: agent.name, agent });
     return true;

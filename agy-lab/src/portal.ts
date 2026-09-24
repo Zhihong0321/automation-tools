@@ -362,6 +362,7 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
         <div style="display:flex;gap:8px;">
           <button class="primary" type="button" onclick="toggleCreateAgentForm(true)" style="height:38px;padding:0 14px;">+ New Telemarketer</button>
           <button class="filter" type="button" id="importAgentsBtn" onclick="importAgentsFromAtap(this)" style="height:38px;padding:0 14px;" title="Pull sales agents from calculator.atap.solar into the roster">⤓ Import from atap.solar</button>
+          <button class="filter" type="button" id="resetAgentsBtn" onclick="resetAgentRoster(this)" style="height:38px;padding:0 14px;border-color:var(--bad);color:var(--bad);" title="Delete every telemarketer row so the roster can be re-imported fresh">⟲ Reset roster</button>
           <button class="filter" type="button" onclick="loadAgentsView()" style="height:38px;padding:0 14px;">Refresh</button>
         </div>
       </div>
@@ -609,11 +610,12 @@ function agentRoleTags(agent){
   if(!m)return[];
   return m[1].split(',').map(function(t){return t.trim().toLowerCase()}).filter(Boolean);
 }
-// One click syncs the whole sales roster from calculator.atap.solar. Existing
-// telemarketers keep their lead assignments and only get phone/email/notes
-// refreshed, so the button is safe to press after every hiring round.
+// One click syncs the whole sales roster from calculator.atap.solar. Agents are
+// matched by their Atap Solar uid, so a rename in the calculator app refreshes
+// the existing row instead of leaving a stale duplicate behind, and pressing the
+// button again after every hiring round is safe.
 async function importAgentsFromAtap(button){
-  if(!window.confirm('Import sales agents from calculator.atap.solar as telemarketers?\n\nExisting telemarketers are updated, not replaced or deleted.'))return;
+  if(!window.confirm('Import sales agents from calculator.atap.solar as telemarketers?\n\nExisting agents are matched by UID and updated, not replaced or deleted.'))return;
   var was=button.textContent;
   button.disabled=true;button.textContent='Importing…';
   try{
@@ -622,6 +624,23 @@ async function importAgentsFromAtap(button){
     await loadAgentsView();
   }catch(err){
     if(!authLost(err))showToast('Import failed: '+err.message);
+  }finally{
+    button.disabled=false;button.textContent=was;
+  }
+}
+// Empty the roster so the next import builds it purely from the API uids. Leads
+// keep their assignee unless the operator opts to release them.
+async function resetAgentRoster(button){
+  if(!window.confirm('Reset the telemarketer roster?\n\nEvery telemarketer row is deleted. Leads stay assigned to the same person by name. Import again to rebuild the list from calculator.atap.solar.'))return;
+  var release=window.confirm('Also unassign every lead?\n\nOK = release all assigned leads to Unassigned.\nCancel = keep each lead assigned to the same person.');
+  var was=button.textContent;
+  button.disabled=true;button.textContent='Resetting…';
+  try{
+    var res=await api('/api/telemarketers/reset',{method:'POST',body:JSON.stringify({unassign:release})});
+    showToast('Roster reset — '+res.deleted+' telemarketer row'+(res.deleted===1?'':'s')+' deleted'+(release?' and leads released':''));
+    await loadAgentsView();
+  }catch(err){
+    if(!authLost(err))showToast('Reset failed: '+err.message);
   }finally{
     button.disabled=false;button.textContent=was;
   }
@@ -690,6 +709,8 @@ function renderAgents(){
   if(f){
     list=list.filter(function(a){
       if(a.name.toLowerCase().indexOf(f)>=0)return true;
+      if(a.uid&&a.uid.toLowerCase().indexOf(f)>=0)return true;
+      if(a.source_id!=null&&String(a.source_id).indexOf(f)>=0)return true;
       if(a.phone&&a.phone.toLowerCase().indexOf(f)>=0)return true;
       if(a.email&&a.email.toLowerCase().indexOf(f)>=0)return true;
       if(a.notes&&a.notes.toLowerCase().indexOf(f)>=0)return true;
@@ -710,6 +731,9 @@ function renderAgents(){
       var digits=agent.phone.replace(/\D/g,'');
       if(digits)waLink='<a class="source-link" target="_blank" rel="noopener" href="https://wa.me/'+attr(digits)+'">WhatsApp</a>';
     }
+    // The uid is the calculator app's own user id, so an agent here can always
+    // be matched to the same person there even after a rename.
+    var uidBadge=agent.uid?('<span title="Atap Solar user id'+(agent.source_id!=null?(' · numeric id '+agent.source_id):'')+'" style="font:600 9px/1 var(--mono,monospace);color:var(--muted);background:#eef3f7;border:1px solid var(--line);border-radius:5px;padding:3px 6px;">UID '+esc(agent.uid)+'</span>'):'<span class="meta" style="font-size:9.5px;">No UID (manual)</span>';
     return '<article class="agent-card '+(agent.active?'':'inactive')+'" id="agentCard-'+attr(agent.id)+'">'
       +'<div class="agent-card-head">'
       +'<div style="display:flex;gap:12px;align-items:start;flex:1;min-width:0;">'
@@ -717,6 +741,7 @@ function renderAgents(){
       +'<div class="agent-meta-block">'
       +'<div class="agent-name"><span>'+esc(agent.name)+'</span> '+statusBadge+'</div>'
       +'<div class="agent-contact-line">'+phoneLink+(emailLink?' · '+emailLink:'')+(waLink?' · '+waLink:'')+'</div>'
+      +'<div style="margin-top:6px;">'+uidBadge+'</div>'
       +'</div>'
       +'</div>'
       +'</div>'

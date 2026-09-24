@@ -51,6 +51,11 @@ test('telemarketer management UI is integrated in portal navigation, views and s
   assert.match(html, /id="importAgentsBtn"/);
   assert.match(html, /function importAgentsFromAtap\(/);
   assert.match(html, /\/api\/telemarketers\/import/);
+  // Roster reset, and the source-app uid shown on every imported agent
+  assert.match(html, /id="resetAgentsBtn"/);
+  assert.match(html, /function resetAgentRoster\(/);
+  assert.match(html, /\/api\/telemarketers\/reset/);
+  assert.match(html, /UID '\+esc\(agent\.uid\)/);
   // Access-tag filter
   assert.match(html, /id="agentRoleFilter"/);
   assert.match(html, /function agentRoleTags\(/);
