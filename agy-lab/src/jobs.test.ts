@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type http from 'node:http';
-import { coolDown, create, finish, handle, liveTypes, snapshot, take } from './jobs.ts';
+import { coolDown, create, finish, get, handle, liveTypes, snapshot, take } from './jobs.ts';
 
 const ASK_TYPES = ['chatgpt.ask', 'meta.ask', 'agy.ask'];
 
@@ -18,6 +18,29 @@ async function heartbeat(worker: string, types: string[]): Promise<unknown> {
   assert.equal(handled, true);
   return captured;
 }
+
+test('an agy.ask lease follows the payload budget instead of the five-minute default', () => {
+  const job = create('agy.ask', { prompt: 'research', timeoutMs: 1_200_000 }, 300_000);
+  assert.equal(job.timeoutMs, 1_200_000);
+});
+
+test('sweep keeps a running agy job when the stored lease is five minutes and the payload is twenty', () => {
+  const job = create('agy.ask', { prompt: 'research' }, 300_000);
+  job.payload = { prompt: 'research', timeoutMs: 1_200_000 };
+  job.status = 'running';
+  job.startedAt = new Date(Date.now() - 6 * 60_000).toISOString();
+  job.worker = 'pi';
+  job.attempts = 1;
+  const seen = get(job.id);
+  assert.equal(seen?.status, 'running');
+  assert.equal(seen?.timeoutMs, 1_200_000);
+  assert.equal(seen?.attempts, 1);
+});
+
+test('a browser ask keeps its short lease when the payload budget is longer', () => {
+  const job = create('chatgpt.ask', { prompt: 'audit', timeoutMs: 300_000 }, 120_000);
+  assert.equal(job.timeoutMs, 120_000);
+});
 
 test('a beat registers a worker the table has never seen, types and all', async () => {
   // The redeploy case. Railway restarting empties the worker table while the

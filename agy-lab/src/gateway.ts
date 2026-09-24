@@ -320,8 +320,9 @@ async function miniAsk(
   // duration -- every chatgpt.ask measured on this fleet lands in 19-31s, and the
   // lease is 120.
   //
-  // agy keeps lease == timeoutMs. It genuinely runs for two to five minutes, and
-  // a lease under that would re-run real work rather than rescue stalled work.
+  // agy keeps lease == timeoutMs, and that budget is the payload's, not the
+  // five-minute default. Contact research runs up to twenty minutes. A shorter
+  // lease reclaims a live run and starts it again.
   const leaseMs = route.engine === 'agy'
     ? timeoutMs
     : Math.min(timeoutMs, Number(process.env.BROWSER_LEASE_MS ?? 120_000));

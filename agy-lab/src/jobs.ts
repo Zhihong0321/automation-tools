@@ -191,6 +191,11 @@ function sweep(): void {
   const at = Date.now();
   for (const job of jobs.values()) {
     if (job.status !== 'running' || !job.startedAt) continue;
+    // The field is what the hub shows and what this comparison uses. Raise it to
+    // the payload budget before deciding, or a 20-minute agy run stored with the
+    // 5-minute default is taken back while the worker is still heartbeating.
+    const holdMs = leaseMs(job.type, job.payload, job.timeoutMs);
+    if (holdMs > job.timeoutMs) job.timeoutMs = holdMs;
     if (at - Date.parse(job.startedAt) <= job.timeoutMs) continue;
     if (job.attempts >= MAX_ATTEMPTS) {
       job.status = 'failed';
@@ -245,6 +250,26 @@ function wake(job: Job): void {
 
 // ------------------------------------------------------------------- the API
 
+/** A caller's budget stuffed in the payload. Zero when it isn't a real duration. */
+function payloadTimeoutMs(payload: unknown): number {
+  if (!payload || typeof payload !== 'object') return 0;
+  const value = (payload as { timeoutMs?: unknown }).timeoutMs;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
+ * How long the broker will let this job stay with one worker before taking it back.
+ *
+ * Browser asks keep the short lease the caller passed: a stalled ChatGPT lane is
+ * supposed to be handed to another account. agy is the opposite. The worker runs
+ * for as long as `payload.timeoutMs` says — contact research is twenty minutes —
+ * and a five-minute lease reclaims a live run and starts it again.
+ */
+function leaseMs(type: string, payload: unknown, timeoutMs: number): number {
+  const asked = type === 'agy.ask' ? Math.max(timeoutMs, payloadTimeoutMs(payload)) : timeoutMs;
+  return Math.min(Math.max(1_000, asked), MAX_TIMEOUT_MS);
+}
+
 export function create(type: string, payload: unknown, timeoutMs = DEFAULT_TIMEOUT_MS): Job {
   sweep();
   const job: Job = {
@@ -257,7 +282,7 @@ export function create(type: string, payload: unknown, timeoutMs = DEFAULT_TIMEO
     finishedAt: null,
     worker: null,
     attempts: 0,
-    timeoutMs: Math.min(Math.max(1_000, timeoutMs), MAX_TIMEOUT_MS),
+    timeoutMs: leaseMs(type, payload, timeoutMs),
     result: null,
     error: null,
   };
