@@ -788,14 +788,15 @@ export async function findCompanyReport(companyId: string): Promise<PublishedRep
   return out.rows[0] ?? null;
 }
 
-export async function findContactReport(companyId: string): Promise<PublishedReport | null> {
+export async function findContactReport(companyId: string, provider: 'legacy' | 'parallel' = 'legacy'): Promise<PublishedReport | null> {
   await migrate();
   const out = await sql<PublishedReport>(
     `select * from published_report
      where company_id = $1 and report_type = 'contact_research'
+       and (case when request->>'provider' = 'parallel' then 'parallel' else 'legacy' end) = $2
        and status in ('queued', 'running')
      order by id desc limit 1`,
-    [companyId],
+    [companyId, provider],
   );
   return out.rows[0] ?? null;
 }
@@ -1996,6 +1997,7 @@ export interface RawCompanyContactRow {
   contact_public_id: string | null;
   contact_status: string | null;
   contact_result: Record<string, unknown> | null;
+  contact_results?: Record<string, unknown>[] | null;
   research_public_id: string | null;
   research_status: string | null;
   research_result: Record<string, unknown> | null;
@@ -2042,6 +2044,10 @@ export async function getCompanyContactRows(options: {
       crep.public_id as contact_public_id,
       crep.status as contact_status,
       crep.result as contact_result,
+      (select jsonb_agg(pr.result order by pr.created_at desc)
+       from published_report pr
+       where pr.company_id = c.id and pr.report_type = 'contact_research'
+         and pr.status in ('completed', 'partial') and pr.result is not null) as contact_results,
       rep.public_id as research_public_id,
       rep.status as research_status,
       rep.result as research_result

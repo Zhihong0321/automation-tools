@@ -70,6 +70,12 @@ export interface WorkerInfo {
    * being slow rather than absent.
    */
   types: string[] | null;
+  /** Lanes using the same account share one quota cooldown. */
+  cooldownGroup: string | null;
+  cooldownUntil: string | null;
+  cooldownReason: string | null;
+  cooldownRemainingMs?: number;
+  status?: 'online' | 'offline' | 'cooldown';
 }
 
 /** Long enough for a Maps search with its scroll plateau, short enough to notice a dead worker. */
@@ -88,6 +94,7 @@ const MAX_WAIT_MS = 25_000;
 
 const jobs = new Map<string, Job>();
 const workers = new Map<string, WorkerInfo>();
+const cooldowns = new Map<string, { until: number; reason: string }>();
 
 interface Waiter {
   worker: string;
@@ -130,15 +137,29 @@ function callerIp(req: http.IncomingMessage): string | null {
   return req.socket.remoteAddress ?? null;
 }
 
-function touch(name: string, ip: string | null, types?: string[] | null): WorkerInfo {
+function cooldownFor(group: string | null): { until: number; reason: string } | null {
+  if (!group) return null;
+  const cooldown = cooldowns.get(group);
+  if (!cooldown) return null;
+  if (cooldown.until > Date.now()) return cooldown;
+  cooldowns.delete(group);
+  return null;
+}
+
+function touch(name: string, ip: string | null, types?: string[] | null, group?: string | null): WorkerInfo {
   const existing = workers.get(name);
   const info: WorkerInfo =
-    existing ?? { name, lastSeenAt: now(), ip, taken: 0, done: 0, failed: 0, types: null };
+    existing ?? { name, lastSeenAt: now(), ip, taken: 0, done: 0, failed: 0, types: null,
+      cooldownGroup: null, cooldownUntil: null, cooldownReason: null };
   info.lastSeenAt = now();
   if (ip) info.ip = ip;
   // Only a claim declares types. A result POST also touches, and must not erase
   // what the claim recorded — an empty list there would read as "serves nothing".
   if (types && types.length) info.types = types;
+  if (group) info.cooldownGroup = group;
+  const cooldown = cooldownFor(info.cooldownGroup);
+  info.cooldownUntil = cooldown ? new Date(cooldown.until).toISOString() : null;
+  info.cooldownReason = cooldown?.reason ?? null;
   workers.set(name, info);
   return info;
 }
@@ -150,7 +171,7 @@ function touch(name: string, ip: string | null, types?: string[] | null): Worker
  */
 export function liveWorkers(withinMs = 90_000): WorkerInfo[] {
   const at = Date.now();
-  return [...workers.values()].filter((w) => at - Date.parse(w.lastSeenAt) <= withinMs);
+  return [...workers.values()].filter((w) => at - Date.parse(w.lastSeenAt) <= withinMs && !cooldownFor(w.cooldownGroup));
 }
 
 /** Every job type at least one live worker is currently claiming. */
@@ -214,7 +235,8 @@ function lease(job: Job, worker: string): Job {
 
 /** Hand a freshly created job straight to a waiting worker, if one matches. */
 function wake(job: Job): void {
-  const i = waiters.findIndex((w) => !w.types || w.types.includes(job.type));
+  const i = waiters.findIndex((w) => !cooldownFor(workers.get(w.worker)?.cooldownGroup ?? null)
+    && (!w.types || w.types.includes(job.type)));
   if (i === -1) return;
   const w = waiters.splice(i, 1)[0]!;
   clearTimeout(w.timer);
@@ -264,6 +286,7 @@ export function take(
   opts: { waitMs?: number; types?: string[] | null; signal?: AbortSignal } = {},
 ): Promise<Job | null> {
   sweep();
+  if (cooldownFor(workers.get(worker)?.cooldownGroup ?? null)) return Promise.resolve(null);
   const types = opts.types && opts.types.length ? opts.types : null;
   const ready = pending(types);
   if (ready) return Promise.resolve(lease(ready, worker));
@@ -298,6 +321,28 @@ export function take(
     opts.signal?.addEventListener('abort', onAbort, { once: true });
     waiters.push(w);
   });
+}
+
+/** Put the account behind this lane on cooldown and release its active long polls. */
+export function coolDown(worker: string, retryAfterMs: number, reason: string): string | null {
+  const info = workers.get(worker);
+  if (!info || !Number.isFinite(retryAfterMs) || retryAfterMs <= 0) return null;
+  const group = info.cooldownGroup ?? worker;
+  info.cooldownGroup = group;
+  const until = Math.max(cooldowns.get(group)?.until ?? 0, Date.now() + Math.min(retryAfterMs, 7 * 86_400_000));
+  cooldowns.set(group, { until, reason: reason.slice(0, 500) });
+  for (const lane of workers.values()) {
+    if ((lane.cooldownGroup ?? lane.name) !== group) continue;
+    lane.cooldownUntil = new Date(until).toISOString();
+    lane.cooldownReason = reason.slice(0, 500);
+  }
+  for (let i = waiters.length - 1; i >= 0; i--) {
+    if ((workers.get(waiters[i]!.worker)?.cooldownGroup ?? waiters[i]!.worker) !== group) continue;
+    const w = waiters.splice(i, 1)[0]!;
+    clearTimeout(w.timer);
+    w.settle(null);
+  }
+  return new Date(until).toISOString();
 }
 
 export function finish(id: string, ok: boolean, result: unknown, error: string | null): Job | null {
@@ -375,7 +420,15 @@ export function snapshot(): {
     counts,
     waiting: waiters.length,
     jobs: [...jobs.values()].reverse(),
-    workers: [...workers.values()].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt)),
+    workers: [...workers.values()].map((w) => {
+      const cooldown = cooldownFor(w.cooldownGroup);
+      return { ...w,
+        cooldownUntil: cooldown ? new Date(cooldown.until).toISOString() : null,
+        cooldownReason: cooldown?.reason ?? null,
+        cooldownRemainingMs: cooldown ? Math.max(0, cooldown.until - Date.now()) : 0,
+        status: cooldown ? 'cooldown' : Date.now() - Date.parse(w.lastSeenAt) <= 90_000 ? 'online' : 'offline',
+      };
+    }).sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt)),
   };
 }
 
@@ -397,7 +450,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       return true;
     }
     const types = (q.get('types') ?? '').split(',').map((t) => t.trim()).filter(Boolean);
-    touch(worker, callerIp(req), types);
+    touch(worker, callerIp(req), types, (q.get('cooldownGroup') ?? '').trim());
     const waitSec = Number(q.get('wait'));
     const controller = new AbortController();
     // The socket closing IS the cancellation. Without this a worker restarted
@@ -412,7 +465,9 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     // 204, not 200 with a null: "nothing right now" is the ordinary answer here,
     // and a worker loop should be able to branch on the status alone.
     if (!job) {
-      res.writeHead(204, { 'cache-control': 'no-store' });
+      const cooldown = cooldownFor(workers.get(worker)?.cooldownGroup ?? null);
+      res.writeHead(204, { 'cache-control': 'no-store',
+        ...(cooldown ? { 'x-worker-cooldown-until': new Date(cooldown.until).toISOString() } : {}) });
       res.end();
       return true;
     }
@@ -440,7 +495,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     // beat that re-registered the name alone would read as "here, serving
     // nothing", which the gateway treats the same as absent.
     const types = Array.isArray(body.types) ? body.types.map((t) => str(t).trim()).filter(Boolean) : [];
-    json(res, 200, { worker: touch(worker, callerIp(req), types) });
+    json(res, 200, { worker: touch(worker, callerIp(req), types, str(body.cooldownGroup).trim()) });
     return true;
   }
 
@@ -467,6 +522,8 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     const worker = str(body.worker).trim();
     if (worker) touch(worker, callerIp(req));
     const job = finish(result[1]!, body.ok !== false, body.result ?? null, str(body.error) || null);
+    const cooldownUntil = body.errorCode === 'quota_reached' && job && worker
+      ? coolDown(worker, num(body.retryAfterMs, 0), str(body.error) || 'individual quota reached') : null;
     if (!job) {
       // Almost always the ring having evicted it, or a redeploy having dropped it.
       // Say which, because "unknown job" reads like a bug in the worker.
@@ -485,7 +542,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       json(res, 404, { error: 'no such job — it was evicted, or the service restarted while it ran', id: result[1] });
       return true;
     }
-    json(res, 200, { job });
+    json(res, 200, { job, cooldownUntil });
     return true;
   }
 

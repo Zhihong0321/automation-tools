@@ -733,11 +733,11 @@ data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"..."}}]}
     <thead><tr><th>Route</th><th>Does</th></tr></thead>
     <tbody>
       <tr><td><code>POST /api/jobs</code></td><td><code>{type, payload, timeoutMs}</code> &rarr; 201 with the job, status <code>pending</code></td></tr>
-      <tr><td><code>GET /api/jobs/next?worker=&amp;wait=&amp;types=</code></td><td>the worker's claim. Held open up to 25s; <code>204</code> when there is nothing, <code>200</code> with the job when there is. Answers instantly if a job is already queued.</td></tr>
-      <tr><td><code>POST /api/jobs/heartbeat</code></td><td><code>{worker, types}</code>. The worker's check-in while a job is in its hands. A claim is silent for as long as the handler runs, so without this a lane on a multi-minute research round ages out of the live table and the gateway refuses engines that machine is serving.</td></tr>
-      <tr><td><code>POST /api/jobs/:id/result</code></td><td><code>{ok, result, error}</code> &rarr; the job becomes <code>done</code> or <code>failed</code></td></tr>
+      <tr><td><code>GET /api/jobs/next?worker=&amp;wait=&amp;types=&amp;cooldownGroup=</code></td><td>the worker's claim. Held open up to 25s; <code>204</code> when idle or cooling down, <code>200</code> with a job. A cooldown response includes <code>X-Worker-Cooldown-Until</code>.</td></tr>
+      <tr><td><code>POST /api/jobs/heartbeat</code></td><td><code>{worker, types, cooldownGroup}</code>. The worker's check-in while a job is in its hands. A claim is silent for as long as the handler runs, so without this a lane on a multi-minute research round ages out of the live table and the gateway refuses engines that machine is serving.</td></tr>
+      <tr><td><code>POST /api/jobs/:id/result</code></td><td><code>{worker, ok, result, error}</code> &rarr; the job becomes <code>done</code> or <code>failed</code>. A quota failure includes <code>errorCode: "quota_reached"</code> and <code>retryAfterMs</code>; the broker returns <code>cooldownUntil</code>.</td></tr>
       <tr><td><code>GET /api/jobs/:id</code></td><td>status and result</td></tr>
-      <tr><td><code>GET /api/jobs</code></td><td>the queue, plus every worker and when it last checked in</td></tr>
+      <tr><td><code>GET /api/jobs</code></td><td>the queue and each worker's status, last check-in, quota cooldown deadline, and remaining milliseconds</td></tr>
     </tbody>
   </table></div>
   <pre><code>ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \

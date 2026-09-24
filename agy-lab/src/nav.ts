@@ -22,12 +22,13 @@ export interface NavLink {
 }
 
 const CONSOLE: NavLink = { href: '/', label: 'Console', zh: '控制台' };
+const WORKERS: NavLink = { href: '/workers', label: 'Workers', zh: '工作节点' };
 const DOCS: NavLink = { href: '/docs', label: 'API docs', zh: 'API 文档' };
 const WORKSPACE: NavLink = { href: '/research', label: 'Workspace', zh: '工作台' };
 const GUIDE: NavLink = { href: '/guide', label: 'Guide', zh: '指南' };
 
 /** Every surface, for the pages only someone holding LAB_TOKEN reaches. */
-export const OPERATOR_NAV: NavLink[] = [CONSOLE, DOCS, WORKSPACE, GUIDE];
+export const OPERATOR_NAV: NavLink[] = [CONSOLE, WORKERS, DOCS, WORKSPACE, GUIDE];
 
 /** What a report recipient can use. */
 export const CLIENT_NAV: NavLink[] = [WORKSPACE, GUIDE];

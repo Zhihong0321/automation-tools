@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { quotaCooldownMs } from './quota.mjs';
 
 function findAgy() {
   if (process.env.AGY_BIN && fs.existsSync(process.env.AGY_BIN)) {
@@ -65,6 +66,13 @@ export async function ask(payload = {}) {
   const { code, stdout, stderr, timedOut } = await run(args, timeoutMs);
   const ms = Date.now() - startedAt;
   const answer = stdout.trim();
+
+  const quotaMs = quotaCooldownMs(`${stderr}\n${answer}`);
+  if (quotaMs !== null) {
+    throw Object.assign(new Error(firstLine(`${stderr}\n${answer}`, 500)), {
+      code: 'quota_reached', retryAfterMs: quotaMs,
+    });
+  }
 
   if (timedOut) {
     throw Object.assign(new Error(`agy did not finish within ${Math.round(timeoutMs / 1000)}s`), { code: 'timeout' });
@@ -119,6 +127,7 @@ export async function probe(payload = {}) {
     const out = await ask({ prompt: 'Reply with exactly one word: ok', timeoutMs: Number(payload.timeoutMs) || 90_000 });
     return { status: 'ready', detail: `answered in ${out.ms}ms`, sample: out.answer.slice(0, 80), ms: Date.now() - startedAt };
   } catch (err) {
+    if (err.code === 'quota_reached') throw err;
     const status = err.code === 'logged_out' ? 'logged_out' : err.code === 'timeout' ? 'unknown' : 'unknown';
     return { status, detail: err.message, ms: Date.now() - startedAt };
   }

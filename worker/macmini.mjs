@@ -282,9 +282,10 @@ const handlers = {
 
 // ---------------------------------------------------------------- the client
 
-async function claim(name, types) {
+async function claim(name, types, cooldownGroup) {
   const q = new URLSearchParams({ worker: name, wait: String(WAIT_SEC) });
   if (types.length) q.set('types', types.join(','));
+  if (cooldownGroup) q.set('cooldownGroup', cooldownGroup);
   // Above the server's own 25s ceiling: the server is expected to answer 204
   // first, so a timeout here means the network ate it, not that it was idle.
   const r = await fetch(LAB + '/api/jobs/next?' + q, {
@@ -294,19 +295,27 @@ async function claim(name, types) {
   // A bad token will never fix itself by retrying, and a loop that retries it
   // forever looks exactly like a worker that is running fine.
   if (r.status === 401) throw Object.assign(new Error('401 — LAB_TOKEN is wrong or was rotated'), { fatal: true });
-  if (r.status === 204) return null;
+  if (r.status === 204) {
+    const until = Date.parse(r.headers.get('x-worker-cooldown-until') ?? '');
+    if (cooldownGroup && Number.isFinite(until) && until > Date.now()) {
+      cooldowns.set(cooldownGroup, Math.max(cooldowns.get(cooldownGroup) ?? 0, until));
+    }
+    return null;
+  }
   if (!r.ok) throw new Error('/api/jobs/next answered ' + r.status + ': ' + (await r.text()).slice(0, 200));
   return (await r.json()).job ?? null;
 }
 
-async function report(name, id, ok, result, error) {
+async function report(name, id, ok, result, error, quota = null) {
   const r = await fetch(LAB + '/api/jobs/' + id + '/result', {
     method: 'POST',
     headers: jsonHeaders,
-    body: JSON.stringify({ worker: name, ok, result, error }),
+    body: JSON.stringify({ worker: name, ok, result, error,
+      ...(quota ? { errorCode: 'quota_reached', retryAfterMs: quota.retryAfterMs } : {}) }),
     signal: AbortSignal.timeout(30_000),
   });
   if (!r.ok) throw new Error('posting the result answered ' + r.status + ': ' + (await r.text()).slice(0, 200));
+  return await r.json();
 }
 
 /**
@@ -325,12 +334,12 @@ async function report(name, id, ok, result, error) {
  * 30s away and the window is 90s. A lab too old to know the route answers 404,
  * which is also nothing to say about — this file and the lab deploy separately.
  */
-function beat(name, types) {
+function beat(name, types, cooldownGroup) {
   const timer = setInterval(() => {
     fetch(LAB + '/api/jobs/heartbeat', {
       method: 'POST',
       headers: jsonHeaders,
-      body: JSON.stringify({ worker: name, types }),
+      body: JSON.stringify({ worker: name, types, cooldownGroup }),
       signal: AbortSignal.timeout(15_000),
     }).catch(() => {});
   }, BEAT_MS);
@@ -338,7 +347,9 @@ function beat(name, types) {
   return () => clearInterval(timer);
 }
 
-async function run(name, job, session) {
+const cooldowns = new Map();
+
+async function run(name, job, session, cooldownGroup) {
   const handler = handlers[job.type];
   const at = Date.now();
   if (!handler) {
@@ -368,7 +379,7 @@ async function run(name, job, session) {
     // A wrapper that is merely signed out must say so in a form the gateway can
     // read, not as a stack trace: it is the difference between "fix this login"
     // and "this machine is broken".
-    const detail = err.code === 'logged_out' || err.code === 'timeout' || err.code === 'print_mode_timeout'
+    const detail = err.code === 'logged_out' || err.code === 'timeout' || err.code === 'print_mode_timeout' || err.code === 'quota_reached'
       ? err.code + ': ' + err.message
       : (err.stack?.slice(0, 2000) ?? String(err));
     // `error` is a plain string all the way to the gateway -- there is no
@@ -376,9 +387,19 @@ async function run(name, job, session) {
     // exist downstream. err.meta carries the run directory the engine wrote its
     // transcript to; append it rather than lose it at the last hop.
     const evidence = err.meta ? ' | evidence: ' + JSON.stringify(err.meta).slice(0, 600) : '';
-    await report(name, job.id, false, null, detail + evidence).catch((e) =>
+    const quota = err.code === 'quota_reached' && Number.isFinite(err.retryAfterMs)
+      ? { retryAfterMs: err.retryAfterMs } : null;
+    if (quota && cooldownGroup) {
+      const until = Math.max(cooldowns.get(cooldownGroup) ?? 0, Date.now() + quota.retryAfterMs);
+      cooldowns.set(cooldownGroup, until);
+      say('[' + name + '] quota reached — cooling down until ' + new Date(until).toISOString());
+    }
+    const response = await report(name, job.id, false, null, detail + evidence, quota).catch((e) =>
       say('could not even report the failure: ' + e.message),
     );
+    if (response?.cooldownUntil && cooldownGroup) {
+      cooldowns.set(cooldownGroup, Math.max(cooldowns.get(cooldownGroup) ?? 0, Date.parse(response.cooldownUntil)));
+    }
   }
 }
 
@@ -422,17 +443,22 @@ function calculateCooldown(type) {
  * The backoff is per lane. A lane whose engine is sick should not slow the one
  * beside it that is fine.
  */
-async function lane(name, types, session) {
+async function lane(name, types, session, cooldownGroup) {
   say('lane "' + name + '" -> ' + LAB + ' (' + types.join(', ') + ')' + (session ? ' as ' + session : ''));
   let backoff = 0;
   while (!stopping) {
     try {
-      const job = await claim(name, types);
+      const remaining = (cooldowns.get(cooldownGroup) ?? 0) - Date.now();
+      if (remaining > 0) {
+        await new Promise((r) => setTimeout(r, Math.min(remaining, 60_000)));
+        continue;
+      }
+      const job = await claim(name, types, cooldownGroup);
       backoff = 0;
       if (job) {
-        const stop = beat(name, types);
+        const stop = beat(name, types, cooldownGroup);
         try {
-          await run(name, job, session);
+          await run(name, job, session, cooldownGroup);
         } finally {
           stop();
         }
@@ -458,4 +484,7 @@ async function lane(name, types, session) {
 say('worker "' + NAME + '" -> ' + LAB);
 // Promise.all rather than await in sequence: the lanes are the concurrency. If
 // one ever settles the process should end, which is what a rejection here does.
-await Promise.all(LANES.map((l) => lane(NAME + l.suffix, l.types, l.session)));
+await Promise.all(LANES.map((l) => lane(
+  NAME + l.suffix, l.types, l.session,
+  l.types.some((t) => t.startsWith('agy.')) ? NAME + ':agy' : NAME + l.suffix,
+)));

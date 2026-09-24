@@ -262,6 +262,9 @@ Three consequences worth planning for:
 | `GET /api/reports` | bearer | combined report library; filter by `type`, `status`, `limit`, `offset` |
 | `GET /api/business-search/:reportId` | bearer | status and `data.companies` |
 | `POST /api/company-research` | bearer | `202` and report envelope |
+| `POST /api/contact-research` | bearer | existing telemarketing contact research |
+| `POST /api/parallel-contact-research` | bearer | Parallel FindAll Entity Search for company decision makers; accepts `companyId` or `name` and optional `targetRole` |
+| `GET /api/parallel-contact-research/:reportId` | bearer | Parallel report status and the shared contact ledger |
 | `POST /api/ads-research` | bearer | `202` and report envelope |
 | `POST /api/ads-market` | bearer | `202` and report envelope |
 | `GET /api/company-research/:reportId` | bearer | status, `data.final`, and raw benchmark rounds |
@@ -269,6 +272,8 @@ Three consequences worth planning for:
 | `GET /api/ads-market/:reportId` | bearer | status, `data.final`, the digest, and the written report |
 | `GET /r/:reportId` | opaque id | mobile human report |
 | `GET /public/reports/:reportId` | opaque id | public final JSON, never raw rounds |
+| `POST /public/reports/:reportId/parallel-contact-research` | opaque id | start Parallel research for a company listed in that business report |
+
 | `GET /api/leads` | bearer/portal | company master list, filtered and paginated with distribution metrics |
 | `POST /api/leads/assign` | bearer/portal | assign single or batch companies to a telemarketer |
 | `POST /api/leads/unassign` | bearer/portal | unassign single or batch companies |
@@ -280,6 +285,8 @@ Three consequences worth planning for:
 | `PATCH /api/telemarketers/:id` | bearer/portal | update telemarketer profile or toggle active status |
 | `DELETE /api/telemarketers/:id` | bearer/portal | delete telemarketer and optionally unassign allocated leads |
 | `GET /api/territories` | bearer/portal | state territory hierarchy (districts, towns, tamans) with live scan coverage |
+
+Parallel contact research requires `PARALLEL_API_KEY` in the server environment. The key stays server-side and is sent as the `x-api-key` header to `POST https://api.parallel.ai/v1beta/findall/entity-search`. Parallel and the existing contact flow write the same `contact_research` report type, `contact_research_run` table, and final contact ledger shape; `request.provider` distinguishes them. Parallel Entity Search provides people names, profile URLs, and descriptions, but no verified direct phones or emails. The ledger can still include the company's previously recorded phone.
 
 The Chinese edition is translated by `TRANSLATION_MODEL` (defaults to `agy`)
 through this service's own gateway, so it needs no endpoint and no key of its
@@ -359,11 +366,11 @@ dynamic DNS, nothing on the home router.
 | Route | Does |
 |---|---|
 | `POST /api/jobs` | `{type, payload, timeoutMs}` → 201 with the job, status `pending` |
-| `GET /api/jobs/next?worker=&wait=&types=` | the worker's claim. Held open up to 25s; `204` when idle, `200` with the job otherwise. Answers instantly if one is already queued. |
-| `POST /api/jobs/heartbeat` | `{worker, types}`. The worker's check-in while a job is in its hands. The claim above is silent for as long as the handler runs, and a research round runs minutes — past that, the lane ages out of the live table and the gateway starts refusing engines this machine is serving. Types are re-sent every beat so a restarted lab learns the lane again. Not logged. |
-| `POST /api/jobs/:id/result` | `{ok, result, error}` → the job becomes `done` or `failed` |
+| `GET /api/jobs/next?worker=&wait=&types=&cooldownGroup=` | the worker's claim. Held open up to 25s; `204` when idle or cooling down, `200` with the job otherwise. A cooldown `204` carries `X-Worker-Cooldown-Until`. |
+| `POST /api/jobs/heartbeat` | `{worker, types, cooldownGroup}`. The worker's check-in while a job is in its hands. The claim above is silent for as long as the handler runs, and a research round runs minutes — past that, the lane ages out of the live table and the gateway starts refusing engines this machine is serving. Types and account group are re-sent every beat so a restarted lab learns the lane again. Not logged. |
+| `POST /api/jobs/:id/result` | `{worker, ok, result, error}` → the job becomes `done` or `failed`. A quota failure also sends `errorCode: "quota_reached"` and `retryAfterMs`; the broker returns `cooldownUntil`. |
 | `GET /api/jobs/:id` | status and result |
-| `GET /api/jobs` | the queue, plus every worker and when it last checked in |
+| `GET /api/jobs` | the queue, plus every worker, its status (`online`, `offline`, or `cooldown`), last check-in, and quota cooldown deadline/reason |
 
 ```bash
 ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \

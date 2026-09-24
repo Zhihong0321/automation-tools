@@ -11,6 +11,8 @@ import * as ui from './reportui.ts';
 import * as territories from './territories.ts';
 import * as contacts from './contacts.ts';
 import { normalizePhoneNumber } from './phone.ts';
+import { importSalesAgents, type AtapUser } from './atap-import.ts';
+import { searchParallelPeople } from './parallel-contact.ts';
 export { normalizePhoneNumber };
 
 export interface Ctx {
@@ -115,7 +117,7 @@ function envelope(req: http.IncomingMessage, report: db.PublishedReport): Record
     : report.report_type === 'person_research' ? 'person-research'
     : report.report_type === 'ads_research' ? 'ads-research'
     : report.report_type === 'ads_market' ? 'ads-market'
-    : report.report_type === 'contact_research' ? 'contact-research' : 'company-research';
+    : report.report_type === 'contact_research' ? (object(report.request).provider === 'parallel' ? 'parallel-contact-research' : 'contact-research') : 'company-research';
   return {
     id: report.public_id,
     type: report.report_type,
@@ -2462,6 +2464,24 @@ async function runContactResearch(
     await db.updateReport(publicId, { status: 'running', error: null });
     await db.initContactResearchRun(reportId);
 
+    if (request.provider === 'parallel') {
+      try {
+        const found = await searchParallelPeople(company, str(request.targetRole) || null);
+        const discovery = { decision_makers: found.people, phone_contacts: [], email_contacts: [], entity_set_id: found.response.entity_set_id };
+        const ledger = buildContactLedger(company, discovery);
+        await db.saveContactResearchRun(reportId, {
+          discovery, ledger, finalReport: ledger,
+          status: { discovery: 'completed' },
+          metadata: { discovery: { engine: 'parallel', endpoint: 'entity-search', entity_set_id: found.response.entity_set_id, returned: Array.isArray(found.response.entities) ? found.response.entities.length : 0, accepted: found.people.length } },
+          completed: true,
+        });
+        await db.updateReport(publicId, { status: 'completed', result: ledger, error: null, completed: true });
+      } catch (err) {
+        await db.updateReport(publicId, { status: 'failed', error: (err as Error).message ?? String(err), completed: true });
+      }
+      return;
+    }
+
     const model = process.env.CONTACT_RESEARCH_MODEL?.trim() || 'agy';
     const targetRole = str(request.targetRole || request.persona) || null;
     const prompt = contactResearchPrompt(company, targetRole);
@@ -2541,6 +2561,14 @@ async function publicDetail(report: db.PublishedReport): Promise<Record<string, 
   };
 }
 
+async function contactComparisonId(companyId: string, raw: unknown): Promise<string | null> {
+  const publicId = str(raw).trim();
+  if (!/^[A-Za-z0-9_-]{20}$/.test(publicId)) return null;
+  const previous = await db.getReport(publicId);
+  return previous?.report_type === 'contact_research' && previous.company_id === companyId
+    ? previous.public_id : null;
+}
+
 async function personResearchInput(report: db.PublishedReport): Promise<{ company: Record<string, unknown>; person: Record<string, unknown> } | null> {
   const request = object(report.request);
   const sourceId = str(request.sourceReportId);
@@ -2609,11 +2637,13 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
   const jsonMatch = /^\/public\/reports\/([A-Za-z0-9_-]{20})$/.exec(p);
   const researchMatch = /^\/public\/reports\/([A-Za-z0-9_-]{20})\/research$/.exec(p);
   const contactResearchMatch = /^\/public\/reports\/([A-Za-z0-9_-]{20})\/contact-research$/.exec(p);
+  const parallelContactMatch = /^\/public\/reports\/([A-Za-z0-9_-]{20})\/parallel-contact-research$/.exec(p);
 
   // Start contact research from the shared report page.
-  if ((req.method ?? 'GET') === 'POST' && contactResearchMatch) {
+  if ((req.method ?? 'GET') === 'POST' && (contactResearchMatch || parallelContactMatch)) {
     if (!db.configured()) return sendJson(res, 503, { error: 'reports are not configured' }), true;
-    const parent = await db.getReport(contactResearchMatch[1]!);
+    if (parallelContactMatch && !process.env.PARALLEL_API_KEY?.trim()) return sendJson(res, 503, { error: 'PARALLEL_API_KEY is not configured' }), true;
+    const parent = await db.getReport((contactResearchMatch || parallelContactMatch)![1]!);
     if (!parent || parent.report_type !== 'business_search') {
       return sendJson(res, 404, { error: 'report not found' }), true;
     }
@@ -2629,11 +2659,13 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
     if (!company) {
       return sendJson(res, 404, { error: 'that company is not listed in this report', companyId }), true;
     }
-    const existing = await db.findContactReport(companyId);
+    const provider = parallelContactMatch ? 'parallel' : 'legacy';
+    const existing = await db.findContactReport(companyId, provider);
     if (existing) return sendJson(res, 200, { report: envelope(req, existing) }), true;
-    const request = { companyId, name: str(company.name), requesterId: 'report:' + parent.public_id };
+    const compareToReportId = await contactComparisonId(companyId, body.compareToReportId);
+    const request = { companyId, name: str(company.name), requesterId: 'report:' + parent.public_id, provider, compareToReportId };
     const report = await db.createReport({
-      type: 'contact_research', title: str(company.name, 'Company') + ' — contact & telemarketing research',
+      type: 'contact_research', title: str(company.name, 'Company') + (provider === 'parallel' ? ' — Parallel contact research' : ' — contact & telemarketing research'),
       userId: request.requesterId, request, companyId,
     });
     void runContactResearch(report.public_id, report.id, company, request);
@@ -2753,7 +2785,7 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
 export async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL, ctx: Ctx): Promise<boolean> {
   const p = url.pathname;
   const method = req.method ?? 'GET';
-  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/contact-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/ads-market') && !p.startsWith('/api/reports') && !p.startsWith('/api/leads') && !p.startsWith('/api/telemarketers') && !p.startsWith('/api/territories') && !p.startsWith('/api/contacts')) return false;
+  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/contact-research') && !p.startsWith('/api/parallel-contact-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/ads-market') && !p.startsWith('/api/reports') && !p.startsWith('/api/leads') && !p.startsWith('/api/telemarketers') && !p.startsWith('/api/territories') && !p.startsWith('/api/contacts')) return false;
   if (!db.configured()) {
     ctx.json(res, 503, { error: 'report database is not configured; link DATABASE_URL to the Railway service' });
     return true;
@@ -2947,6 +2979,22 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       db.getTelemarketerDetails().catch(() => []),
     ]);
     ctx.json(res, 200, { telemarketers, agents });
+    return true;
+  }
+
+  // Pull the sales roster from calculator.atap.solar and upsert each sales
+  // agent as a telemarketer. Idempotent: existing names keep their phone/email
+  // refreshed, new names are created active.
+  if (method === 'POST' && p === '/api/telemarketers/import') {
+    const body = await ctx.readJson(req);
+    try {
+      const result = await importSalesAgents({
+        users: Array.isArray(body.users) ? body.users as AtapUser[] : undefined,
+      });
+      ctx.json(res, 200, { ok: true, ...result });
+    } catch (err) {
+      ctx.json(res, 502, { error: (err as Error).message });
+    }
     return true;
   }
 
@@ -3194,7 +3242,11 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     return true;
   }
 
-  if (method === 'POST' && p === '/api/contact-research') {
+  if (method === 'POST' && (p === '/api/contact-research' || p === '/api/parallel-contact-research')) {
+    if (p === '/api/parallel-contact-research' && !process.env.PARALLEL_API_KEY?.trim()) {
+      ctx.json(res, 503, { error: 'PARALLEL_API_KEY is not configured' });
+      return true;
+    }
     const body = await ctx.readJson(req);
     const companyId = str(body.companyId || body.company_id).trim();
     const name = str(body.name || body.companyName || body.company).trim();
@@ -3223,17 +3275,21 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       });
     }
     const resolvedCompanyId = String(company.id ?? '');
-    const running = await db.findContactReport(resolvedCompanyId);
+    const provider = p === '/api/parallel-contact-research' ? 'parallel' : 'legacy';
+    const running = await db.findContactReport(resolvedCompanyId, provider);
     if (running) {
       ctx.json(res, 200, { report: envelope(req, running) });
       return true;
     }
     const targetRole = str(body.targetRole || body.role || body.persona).trim() || null;
+    const compareToReportId = await contactComparisonId(resolvedCompanyId, body.compareToReportId);
     const request = {
       companyId: resolvedCompanyId,
       name: str(company.name),
       targetRole,
       requesterId: str(body.requesterId || body.userId) || null,
+      provider,
+      compareToReportId,
       companySnapshot: {
         id: resolvedCompanyId,
         name: company.name,
@@ -3244,7 +3300,7 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     };
     const report = await db.createReport({
       type: 'contact_research',
-      title: str(company.name, 'Company') + ' — contact & telemarketing research',
+      title: str(company.name, 'Company') + (provider === 'parallel' ? ' — Parallel contact research' : ' — contact & telemarketing research'),
       userId: request.requesterId,
       request,
       companyId: resolvedCompanyId,
@@ -3401,14 +3457,14 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     return true;
   }
 
-  const one = /^\/api\/(business-search|company-research|contact-research|person-research|ads-research|ads-market)\/([A-Za-z0-9_-]{20})$/.exec(p);
+  const one = /^\/api\/(business-search|company-research|contact-research|parallel-contact-research|person-research|ads-research|ads-market)\/([A-Za-z0-9_-]{20})$/.exec(p);
   if (method === 'GET' && one) {
     const report = await db.getReport(one[2]!);
     const expected = one[1] === 'business-search' ? 'business_search'
       : one[1] === 'person-research' ? 'person_research'
       : one[1] === 'ads-research' ? 'ads_research'
       : one[1] === 'ads-market' ? 'ads_market'
-      : one[1] === 'contact-research' ? 'contact_research' : 'company_research';
+      : one[1] === 'contact-research' || one[1] === 'parallel-contact-research' ? 'contact_research' : 'company_research';
     if (!report || report.report_type !== expected) {
       ctx.json(res, 404, { error: 'report not found' });
       return true;

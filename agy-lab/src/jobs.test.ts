@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type http from 'node:http';
-import { handle, liveTypes } from './jobs.ts';
+import { coolDown, create, finish, handle, liveTypes, snapshot, take } from './jobs.ts';
 
 const ASK_TYPES = ['chatgpt.ask', 'meta.ask', 'agy.ask'];
 
@@ -46,4 +46,77 @@ test('a beat without a worker name is refused', async () => {
     readJson: async () => ({ types: ASK_TYPES }),
   });
   assert.equal(status, 400);
+});
+
+test('a quota result cools down every lane sharing the account and stops claims', async () => {
+  const type = 'quota-test.ask';
+  const group = 'quota-test:account';
+  for (const worker of ['quota-test-1', 'quota-test-2']) {
+    const req = { method: 'POST', headers: {}, socket: {} } as unknown as http.IncomingMessage;
+    await handle(req, {} as http.ServerResponse, new URL('http://lab/api/jobs/heartbeat'), {
+      json: () => {},
+      readJson: async () => ({ worker, types: [type], cooldownGroup: group }),
+    });
+  }
+
+  const first = create(type, {});
+  assert.equal((await take('quota-test-1', { types: [type], waitMs: 0 }))?.id, first.id);
+  const second = create(type, {});
+  const waiting = take('quota-test-2', { types: ['quota-test.other'], waitMs: 5_000 });
+  const req = { method: 'POST', headers: {}, socket: {} } as unknown as http.IncomingMessage;
+  let result: Record<string, unknown> = {};
+  await handle(req, {} as http.ServerResponse, new URL(`http://lab/api/jobs/${first.id}/result`), {
+    json: (_res, _status, body) => { result = body as Record<string, unknown>; },
+    readJson: async () => ({ worker: 'quota-test-1', ok: false,
+      error: 'quota_reached: Individual quota reached. Resets in 1h37m47s.',
+      errorCode: 'quota_reached', retryAfterMs: 5_825_000 }),
+  });
+  assert.equal((await waiting), null, 'an existing long poll must be released');
+  assert.equal(typeof result.cooldownUntil, 'string');
+  assert.equal(liveTypes().includes(type), false);
+  assert.equal((await take('quota-test-2', { types: [type], waitMs: 0 })), null);
+  assert.equal(second.status, 'pending');
+  const lanes = snapshot().workers.filter((w) => w.name.startsWith('quota-test-'));
+  assert.equal(lanes.length, 2);
+  assert.ok(lanes.every((w) => w.cooldownUntil === result.cooldownUntil));
+  finish(second.id, false, null, 'test cleanup');
+});
+
+test('a worker can claim pending work when its cooldown expires', async () => {
+  const worker = 'quota-expiry';
+  const type = 'quota-expiry.ask';
+  await heartbeat(worker, [type]);
+  const job = create(type, {});
+  assert.ok(coolDown(worker, 20, 'test quota'));
+  assert.equal((await take(worker, { types: [type], waitMs: 0 })), null);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal((await take(worker, { types: [type], waitMs: 0 }))?.id, job.id);
+  finish(job.id, true, {}, null);
+});
+
+test('the snapshot joins a running job to the worker that claimed it', async () => {
+  const worker = 'dashboard-join-worker';
+  const type = 'dashboard-join.ask';
+  await heartbeat(worker, [type]);
+  const job = create(type, { keyword: 'solar', place: 'Johor' });
+  assert.equal((await take(worker, { types: [type], waitMs: 0 }))?.id, job.id);
+
+  const running = snapshot();
+  const lane = running.workers.find((item) => item.name === worker);
+  assert.ok(lane);
+  assert.equal(lane.status, 'online');
+  assert.equal(running.counts.running >= 1, true);
+
+  // This is the exact join performed by workers.ts in the browser.
+  const claimed = running.jobs.find((item) => item.status === 'running' && item.worker === worker);
+  assert.equal(claimed?.id, job.id);
+  assert.equal(claimed?.type, type);
+  assert.equal(typeof claimed?.startedAt, 'string');
+  assert.deepEqual(claimed?.payload, { keyword: 'solar', place: 'Johor' });
+
+  finish(job.id, true, { found: 3 }, null);
+  const finished = snapshot();
+  assert.equal(finished.jobs.some((item) => item.status === 'running' && item.worker === worker), false);
+  assert.equal(finished.jobs.find((item) => item.id === job.id)?.status, 'done');
+  assert.equal(finished.workers.find((item) => item.name === worker)?.done, 1);
 });

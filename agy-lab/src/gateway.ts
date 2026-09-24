@@ -233,15 +233,21 @@ function models(): Record<string, unknown> {
   // thing this endpoint exists to make visible, so liveness is read per call and
   // the entry is emitted either way rather than being hidden when it is down.
   const miniWorkers = jobs.liveWorkers();
+  const coolingWorkers = jobs.snapshot().workers.filter((w) => w.status === 'cooldown');
   const miniEntry = (engine: queue.Engine) => {
     const live = miniLive(engine);
     const id = engine + '@mini';
+    const cooling = coolingWorkers.filter((w) => (w.types ?? []).includes(jobTypeFor(engine)));
+    const cooldownUntil = cooling.reduce<string | null>((latest, w) =>
+      !latest || (w.cooldownUntil && w.cooldownUntil > latest) ? w.cooldownUntil : latest, null);
     return entry(id, {
       engine,
       location: 'mini',
       ready: live,
       workers: miniWorkers.filter((w) => (w.types ?? []).includes(jobTypeFor(engine))).map((w) => w.name),
-      ...(live ? {} : { detail: 'no worker is claiming ' + jobTypeFor(engine) }),
+      ...(live ? {} : cooldownUntil
+        ? { detail: 'worker quota cooldown until ' + cooldownUntil, cooldownUntil }
+        : { detail: 'no worker is claiming ' + jobTypeFor(engine) }),
     });
   };
 
