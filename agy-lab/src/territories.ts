@@ -2,6 +2,7 @@ export interface ScanBadgeInfo {
   publicId: string;
   status: string;
   count: number;
+  contacts: number;
   createdAt: string;
   keyword: string | null;
 }
@@ -3780,6 +3781,7 @@ export interface TerritoryScanStatInput {
   place: string;
   keyword: string | null;
   company_count: number;
+  contact_count?: number | null;
   created_at: string;
 }
 
@@ -3808,6 +3810,7 @@ export function buildTerritoryResponse(
   let totalTamans = 0;
   let scannedTamans = 0;
   let totalLeads = 0;
+  let totalContacts = 0;
   let totalTowns = 0;
   const uniqueScanIds = new Set<string>();
 
@@ -3831,6 +3834,7 @@ export function buildTerritoryResponse(
           publicId: matchingTownScan.public_id,
           status: matchingTownScan.status,
           count: matchingTownScan.company_count,
+          contacts: Number(matchingTownScan.contact_count) || 0,
           createdAt: matchingTownScan.created_at,
           keyword: matchingTownScan.keyword,
         };
@@ -3855,6 +3859,7 @@ export function buildTerritoryResponse(
             publicId: matchingTamanScan.public_id,
             status: matchingTamanScan.status,
             count: matchingTamanScan.company_count,
+            contacts: Number(matchingTamanScan.contact_count) || 0,
             createdAt: matchingTamanScan.created_at,
             keyword: matchingTamanScan.keyword,
           };
@@ -3864,6 +3869,7 @@ export function buildTerritoryResponse(
             if (!uniqueScanIds.has(matchingTamanScan.public_id)) {
               uniqueScanIds.add(matchingTamanScan.public_id);
               totalLeads += matchingTamanScan.company_count || 0;
+              totalContacts += Number(matchingTamanScan.contact_count) || 0;
             }
           }
         }
@@ -3881,6 +3887,7 @@ export function buildTerritoryResponse(
       totalTamans,
       scannedTamans,
       totalLeads,
+      totalContacts,
     },
     districts,
   };

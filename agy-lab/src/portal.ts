@@ -864,7 +864,7 @@ function renderTeleSummary(stats){
   if(d)d.textContent=stats.totalDistricts||10;
   if(tw)tw.textContent=stats.totalTowns||70;
   if(tm)tm.textContent=stats.totalTamans||771;
-  if(sc)sc.textContent=(stats.scannedTamans||0)+' ('+(stats.totalLeads||0)+' businesses found)';
+  if(sc)sc.textContent=(stats.scannedTamans||0)+' ('+(stats.totalLeads||0)+' businesses found · '+(stats.totalContacts||0)+' with phone)';
 }
 function expandAllDistricts(expand){
   if(!teleState.data||!teleState.data.districts)return;
@@ -927,7 +927,7 @@ function renderTerritoryCards(){
       var tScanning=tScan&&terminal.indexOf(tScan.status)<0;
       html+='<div class="town-block"><div class="town-head">';
       html+='<div style="display:flex;align-items:center;gap:10px;"><div class="town-title">'+esc(t.name)+'</div>';
-      if(tScanned){html+='<a class="taman-link" target="_blank" rel="noopener" href="/r/'+attr(tScan.publicId)+'">&#9679; '+esc(tScan.count)+(tScan.status==='partial'?' businesses · partial':' leads')+' &#8599;</a>'}
+      if(tScanned){html+='<a class="taman-link" target="_blank" rel="noopener" href="/r/'+attr(tScan.publicId)+'">&#9679; '+esc(tScan.count)+(tScan.status==='partial'?' businesses · partial':' leads')+'<span title="Leads where a phone number was found"> · '+esc(tScan.contacts)+' contacts</span> &#8599;</a>'}
       else if(tScanning){html+='<span style="font-size:11px;color:var(--warn);">&#9679; Scanning...</span>'}
       html+='</div>';
       html+='<button class="town-scan-btn" type="button" data-town="'+attr(t.id)+'" onclick="queueWholeTownFromBtn(this)">&#9889; Scan Whole Town</button>';
@@ -943,7 +943,7 @@ function renderTerritoryCards(){
         html+='<span class="taman-pip '+pipClass+'"></span>';
         html+='<span class="taman-name">'+esc(tm.name)+'</span>';
         if(isScanned){
-          html+='<a class="taman-link" target="_blank" rel="noopener" href="/r/'+attr(scan.publicId)+'" title="Open search report">'+esc(scan.count)+(scan.status==='partial'?' businesses · partial':' leads')+' &#8599;</a>';
+          html+='<a class="taman-link" target="_blank" rel="noopener" href="/r/'+attr(scan.publicId)+'" title="Open search report">'+esc(scan.count)+(scan.status==='partial'?' businesses · partial':' leads')+'<span title="Leads where a phone number was found"> · '+esc(scan.contacts)+' contacts</span> &#8599;</a>';
           html+='<button class="taman-scan-action" style="background:transparent;color:var(--muted);border:1px solid var(--line);" type="button" data-place="'+attr(tm.queryPlace)+'" data-name="'+attr(tm.name)+'" onclick="queueTerritoryFromBtn(this)" title="Re-scan market">&#8635;</button>';
         }else if(isScanning){
           html+='<span style="font-size:11px;color:var(--warn);">Scanning...</span>';

@@ -38,6 +38,7 @@ test('buildTerritoryResponse aggregates stats and attaches scan metadata', () =>
       place: 'ros merah, johor jaya, johor',
       keyword: 'business',
       company_count: 142,
+      contact_count: 87,
       created_at: new Date().toISOString(),
     },
     {
@@ -46,6 +47,7 @@ test('buildTerritoryResponse aggregates stats and attaches scan metadata', () =>
       place: 'taman mount austin, tebrau, johor',
       keyword: 'cafe',
       company_count: 0,
+      contact_count: 0,
       created_at: new Date().toISOString(),
     },
   ];
@@ -57,6 +59,7 @@ test('buildTerritoryResponse aggregates stats and attaches scan metadata', () =>
   assert.equal(res.stats.totalTamans, 771);
   assert.equal(res.stats.scannedTamans, 1);
   assert.equal(res.stats.totalLeads, 142);
+  assert.equal(res.stats.totalContacts, 87);
 
   const jb = res.districts.find((d) => d.name === 'Johor Bahru');
   assert.ok(jb);
@@ -67,6 +70,7 @@ test('buildTerritoryResponse aggregates stats and attaches scan metadata', () =>
   assert.ok(rosMerah.scan);
   assert.equal(rosMerah.scan?.status, 'completed');
   assert.equal(rosMerah.scan?.count, 142);
+  assert.equal(rosMerah.scan?.contacts, 87);
   assert.equal(rosMerah.scan?.publicId, 'report_ros_merah_123');
 });
 
@@ -131,9 +135,9 @@ test('buildTerritoryResponse prioritizes active running scan over completed scan
 
 test('partial business lists with companies appear as scanned tamans', () => {
   const scans = [
-    { public_id: 'sentosa-retry-failed', status: 'failed', place: 'Taman Sentosa, Johor Bahru City Centre, Johor', keyword: 'business', company_count: 0, created_at: '2026-09-24T10:00:00Z' },
-    { public_id: 'sentosa', status: 'partial', place: 'Taman Sentosa, Johor Bahru City Centre, Johor', keyword: 'business', company_count: 76, created_at: '2026-09-23T10:00:00Z' },
-    { public_id: 'mount-austin', status: 'partial', place: 'Taman Mount Austin, Tebrau, Johor', keyword: 'business', company_count: 120, created_at: '2026-09-23T11:00:00Z' },
+    { public_id: 'sentosa-retry-failed', status: 'failed', place: 'Taman Sentosa, Johor Bahru City Centre, Johor', keyword: 'business', company_count: 0, contact_count: 0, created_at: '2026-09-24T10:00:00Z' },
+    { public_id: 'sentosa', status: 'partial', place: 'Taman Sentosa, Johor Bahru City Centre, Johor', keyword: 'business', company_count: 76, contact_count: 41, created_at: '2026-09-23T10:00:00Z' },
+    { public_id: 'mount-austin', status: 'partial', place: 'Taman Mount Austin, Tebrau, Johor', keyword: 'business', company_count: 120, contact_count: 64, created_at: '2026-09-23T11:00:00Z' },
   ];
 
   const result = buildTerritoryResponse('johor', scans);
@@ -143,15 +147,22 @@ test('partial business lists with companies appear as scanned tamans', () => {
 
   assert.equal(sentosa?.scan?.publicId, 'sentosa');
   assert.equal(sentosa?.scan?.count, 76);
+  assert.equal(sentosa?.scan?.contacts, 41);
   assert.equal(austin?.scan?.publicId, 'mount-austin');
   assert.equal(austin?.scan?.count, 120);
+  assert.equal(austin?.scan?.contacts, 64);
   assert.equal(jb?.scannedTamans, 2);
   assert.equal(result.stats.scannedTamans, 2);
   assert.equal(result.stats.totalLeads, 196);
+  assert.equal(result.stats.totalContacts, 105);
 
   const html = page();
   assert.match(html, /tScan\.status==='partial'&&tScan\.count>0/);
   assert.match(html, /scan\.status==='partial'&&scan\.count>0/);
   assert.match(html, /businesses · partial/);
+  // Taman and town chips expose how many leads have a phone number found.
+  assert.match(html, /esc\(scan\.contacts\)\+' contacts/);
+  assert.match(html, /esc\(tScan\.contacts\)\+' contacts/);
+  assert.match(html, /stats\.totalContacts\|\|0/);
 });
 

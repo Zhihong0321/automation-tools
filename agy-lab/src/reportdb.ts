@@ -1955,6 +1955,7 @@ export interface TerritoryScanStat {
   place: string;
   keyword: string | null;
   company_count: number;
+  contact_count: number;
   created_at: string;
 }
 
@@ -1972,6 +1973,17 @@ export async function getTerritoryScanStats(): Promise<TerritoryScanStat[]> {
         (select count(*)::int from search_report_company sc where sc.report_id = r.source_search_report_id),
         0
       )::int as company_count,
+      coalesce(
+        case when jsonb_typeof(r.result->'companies') = 'array'
+          then (select count(*)::int from jsonb_array_elements(r.result->'companies') ce
+                where nullif(btrim(coalesce(ce->>'phone', '')), '') is not null)
+          else null end,
+        (select count(*)::int from search_report_company sc
+           join company_data c on c.id = sc.company_id
+          where sc.report_id = r.source_search_report_id
+            and nullif(btrim(coalesce(c.phone, '')), '') is not null),
+        0
+      )::int as contact_count,
       r.created_at::text
     from published_report r
     where r.report_type = 'business_search'
