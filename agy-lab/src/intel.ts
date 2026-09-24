@@ -831,26 +831,28 @@ const FETCH_POLICY = 'Fetch every page with your built-in URL reading tool (read
   + 'an interactive approval that nobody can give, so the attempt is denied and this entire round fails.';
 
 /**
- * agy's five-minute cliff, told to the model instead of discovered by us.
- *
- * `agy -p` polls its own language server and gives up at roughly 1490 polls --
- * about 305 seconds -- WHILE THE MODEL IS STILL STREAMING. Its log shows fresh
- * streamGenerateContent calls a second before it quits. There is no timeout we
- * can pass to move that: the ceiling is inside the CLI, and a round that runs
- * into it returns NOTHING after burning the full five minutes. Five of 96 runs
- * on the mini, three of them on 24 Aug alone, including every VIP discovery
- * pass measured that day.
+ * Company and person rounds still land inside four minutes. Contact research does
+ * not: a large company can take up to twenty, and that path passes
+ * `--print-timeout` so the CLI does not quit at five. This budget is only for
+ * the shorter rounds.
  *
  * A model that knows the deadline can land before it. This does not lower any
- * cap -- a round that finishes early still returns everything it found -- it
- * only converts "researched for five minutes and returned nothing" into
- * "researched for four and returned what it had".
+ * cap -- a round that finishes early still returns everything it found.
  */
 const TIME_BUDGET = 'HARD TIME BUDGET: you have about four minutes of wall clock. The tool you are '
   + 'running in stops printing at five and everything you have done is then lost, so treat four minutes '
   + 'as a deadline, not a target. Track it. When you reach it, stop researching immediately and emit the '
   + 'JSON with what you already have, even if sections are thin or empty -- a short answer is a result '
   + 'and a missed deadline is not. Do not narrate the deadline; just meet it.';
+
+/** Contact research on a large company routinely needs far more than five minutes. */
+const CONTACT_RESEARCH_TIMEOUT_MS = 20 * 60_000;
+const CONTACT_TIME_BUDGET = 'HARD TIME BUDGET: you have about eighteen minutes of wall clock. The run is '
+  + 'killed at twenty minutes and anything not yet printed is lost, so treat eighteen minutes as a deadline, '
+  + 'not a target. Keep researching until you have the decision-makers, dialable numbers, and emails the '
+  + 'sources actually show, or until you are close to that deadline. Then stop and emit the JSON with what '
+  + 'you have, even if some sections are thin. A finished JSON object is a result; a killed run is not. '
+  + 'Do not narrate the deadline; just meet it.';
 
 export function contactResearchPrompt(company: Record<string, unknown>, targetRole?: string | null): string {
   const roleHint = targetRole
@@ -860,7 +862,7 @@ export function contactResearchPrompt(company: Record<string, unknown>, targetRo
 TARGET COMPANY: ${companyBaseline(company)}
 ${roleHint}
 ${FETCH_POLICY}
-${TIME_BUDGET}
+${CONTACT_TIME_BUDGET}
 
 OBJECTIVE:
 Find actionable telemarketing contact details and key decision-makers to call.
@@ -2491,7 +2493,7 @@ async function runContactResearch(
     let discoveryMeta: Record<string, unknown> = { model, engine: 'agy', status: 'failed' };
 
     try {
-      const askResult = await ask(model, prompt, 420_000);
+      const askResult = await ask(model, prompt, CONTACT_RESEARCH_TIMEOUT_MS);
       discoveryMeta = { model: askResult.model, engine: askResult.engine, ms: askResult.ms };
       if (askResult.parsed) {
         discoveryRaw = askResult.parsed;

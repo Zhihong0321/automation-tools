@@ -824,6 +824,8 @@ test('contactResearchPrompt focuses strictly on decision makers, phones, and gat
   assert.match(prompt, /decision_makers/);
   assert.match(prompt, /phone_contacts/);
   assert.match(prompt, /email_contacts/);
+  assert.match(prompt, /eighteen minutes/);
+  assert.doesNotMatch(prompt, /four minutes of wall clock/);
 });
 
 test('buildContactLedger normalizes contacts, ranks decision makers, and creates telemarketer cheat sheet', () => {
