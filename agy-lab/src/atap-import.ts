@@ -18,7 +18,8 @@
 // at least one access level contains a known sales role prefix, and "blocked"
 // never appears. Leaving blocked users in the deck would hand leads to people
 // the office has already switched off.
-import { addTelemarketer, configured, getTelemarketerDetails, type TelemarketerAgent } from './reportdb.ts';
+import { configured, getTelemarketerDetails, linkLegacyTelemarketerAssignments,
+  replaceTelemarketersFromAtap, upsertAtapTelemarketer, type TelemarketerAgent } from './reportdb.ts';
 
 export interface AtapUser {
   id: number;
@@ -48,6 +49,8 @@ export interface ImportOptions {
   baseUrl?: string;
   password?: string;
   fetchImpl?: typeof fetch;
+  /** One-time transactional rebuild, removing every previous telemarketer. */
+  replace?: boolean;
 }
 
 export interface ImportAgent extends TelemarketerAgent {
@@ -61,9 +64,9 @@ export interface ImportResult {
   imported: number;
   /** Roster users filtered out (non-sales or blocked). */
   skipped: number;
-  /** Imported names that already existed in the table (contact fields refreshed). */
+  /** Source UIDs that already existed in the table. */
   updated: number;
-  /** Roster names newly added to the table. */
+  /** Source UIDs newly added to the table. */
   created: number;
   agents: ImportAgent[];
 }
@@ -71,11 +74,8 @@ export interface ImportResult {
 /**
  * Import sales agents into the telemarketer table.
  *
- * The DB upsert keeps the existing addTelemarketer semantics: an existing name
- * gets contact fields refreshed where the source has values, a new name is
- * created active. A user marked "pending" imports as inactive because pending
- * accounts are real people who have not been switched on yet -- deleting the
- * row later would orphan any leads assigned in the meantime.
+ * The Bubble user UID is the key. Names can change or repeat; neither may
+ * create a second identity for an existing Atap user.
  */
 export async function importSalesAgents(input: ImportOptions = {}): Promise<ImportResult> {
   const users = input.users ?? (await fetchAtapUsers(input));
@@ -86,26 +86,37 @@ export async function importSalesAgents(input: ImportOptions = {}): Promise<Impo
     throw new Error('report database is not configured; link DATABASE_URL to the Railway service');
   }
 
-  const existing = new Set(
-    (await getTelemarketerDetails()).map((a) => a.name.toLowerCase()),
-  );
+  const prepared = eligible.filter((u) => (u.name ?? '').trim()).map((user) => ({
+    uid: String(user.bubble_id ?? '').trim(),
+    name: user.name!.trim(),
+    phone: user.contact ?? null,
+    email: user.email ?? null,
+    notes: `Imported from calculator.atap.solar · roles: ${(user.access_level ?? []).join(', ')}`,
+    active: !(user.access_level ?? []).some((l) => l.toLowerCase().trim() === 'pending'),
+  }));
+  if (prepared.some((a) => !a.uid) || new Set(prepared.map((a) => a.uid)).size !== prepared.length) {
+    throw new Error('Atap roster contains a missing or duplicate user UID; import stopped');
+  }
+  if (input.replace) {
+    await replaceTelemarketersFromAtap(prepared);
+    const agents = (await getTelemarketerDetails())
+      .filter((a) => a.uid !== null)
+      .map((a) => ({ ...a, source_bubble_id: a.uid! }));
+    return { fetched: users.length, imported: agents.length, skipped, updated: 0,
+      created: agents.length, agents };
+  }
+
+  const existing = new Set((await getTelemarketerDetails()).map((a) => a.uid));
 
   const agents: ImportAgent[] = [];
   let updated = 0;
   let created = 0;
-  for (const user of eligible) {
-    const name = (user.name ?? '').trim();
-    if (!name) continue; // no name -> nothing to display or assign against
-    const notes = `Imported from calculator.atap.solar · roles: ${(user.access_level ?? []).join(', ')}`;
-    const agent = await addTelemarketer(name, {
-      phone: user.contact ?? null,
-      email: user.email ?? null,
-      notes,
-      active: !(user.access_level ?? []).some((l) => l.toLowerCase().trim() === 'pending'),
-    });
-    if (existing.has(name.toLowerCase())) updated++; else created++;
-    agents.push({ ...agent, source_bubble_id: user.bubble_id });
+  for (const item of prepared) {
+    const agent = await upsertAtapTelemarketer(item.uid, item.name, item);
+    if (existing.has(item.uid)) updated++; else created++;
+    agents.push({ ...agent, source_bubble_id: item.uid });
   }
+  await linkLegacyTelemarketerAssignments();
 
   return { fetched: users.length, imported: agents.length, skipped, updated, created, agents };
 }

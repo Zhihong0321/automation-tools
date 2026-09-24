@@ -453,6 +453,17 @@ export function migrate(): Promise<void> {
       alter table telemarketer add column if not exists email text;
       alter table telemarketer add column if not exists notes text;
       alter table telemarketer add column if not exists updated_at timestamptz default now();
+      alter table telemarketer add column if not exists uid text;
+      alter table telemarketer drop constraint if exists telemarketer_name_key;
+      create unique index if not exists telemarketer_uid_key on telemarketer (uid);
+      alter table company_data add column if not exists telemarketer_uid text;
+      create index if not exists company_data_telemarketer_uid_idx on company_data (telemarketer_uid);
+      do $$ begin
+        if not exists (select 1 from pg_constraint where conname = 'company_data_telemarketer_uid_fkey') then
+          alter table company_data add constraint company_data_telemarketer_uid_fkey
+            foreign key (telemarketer_uid) references telemarketer(uid) on delete set null;
+        end if;
+      end $$;
     `);
   })().catch((err) => {
     migrated = null;
@@ -1454,6 +1465,7 @@ export interface LeadItem {
   reviews: number | null;
   lead_status: LeadStatus;
   assigned_to: string | null;
+  telemarketer_uid: string | null;
   assigned_at: string | null;
   lead_notes: string | null;
   lead_updated_at: string | null;
@@ -1520,8 +1532,11 @@ export async function listLeads(options: {
     if (options.assignedTo === 'unassigned') {
       whereConditions.push(`c.assigned_to is null`);
     } else {
-      params.push(options.assignedTo.trim());
-      whereConditions.push(`c.assigned_to = $${params.length}`);
+      const assigned = options.assignedTo.trim();
+      params.push(assigned.startsWith('uid:') ? assigned.slice(4) : assigned);
+      whereConditions.push(assigned.startsWith('uid:')
+        ? `c.telemarketer_uid = $${params.length}`
+        : `c.assigned_to = $${params.length}`);
     }
   }
 
@@ -1549,7 +1564,7 @@ export async function listLeads(options: {
          c.rating::float, c.reviews,
          coalesce(c.is_hidden, false) as is_hidden,
          coalesce(c.lead_status, 'unassigned') as lead_status,
-         c.assigned_to, c.assigned_at, c.lead_notes, c.lead_updated_at,
+          c.assigned_to, c.telemarketer_uid, c.assigned_at, c.lead_notes, c.lead_updated_at,
          c.first_seen_at, c.last_seen_at,
          rep.public_id as research_public_id,
          rep.status as research_status,
@@ -1694,6 +1709,19 @@ export async function listLeads(options: {
   };
 }
 
+async function resolveTelemarketer(value: string): Promise<{ uid: string | null; name: string }> {
+  const byUid = value.startsWith('uid:');
+  const key = byUid ? value.slice(4) : value;
+  const result = await sql<{ uid: string | null; name: string }>(
+    byUid
+      ? `select uid, name from telemarketer where uid = $1 and active = true`
+      : `select uid, name from telemarketer where name = $1 and active = true`,
+    [key]);
+  if (result.rows.length === 0) throw new Error('active telemarketer not found');
+  if (result.rows.length > 1) throw new Error('telemarketer name is ambiguous; select the UID');
+  return result.rows[0]!;
+}
+
 export async function assignLeads(
   companyIds: (string | number)[],
   assignedTo: string,
@@ -1705,14 +1733,13 @@ export async function assignLeads(
   const ids = companyIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0);
   if (!ids.length) return { updated: 0 };
 
-  await sql(
-    `insert into telemarketer (name) values ($1) on conflict (name) do update set active = true`,
-    [trimmed],
-  );
+  const target = await resolveTelemarketer(trimmed);
+  const agentUid = target.uid;
 
   const res = await sql(
     `update company_data set
        assigned_to = $1,
+       telemarketer_uid = $4,
        assigned_at = now(),
        lead_status = case when coalesce(lead_status, 'unassigned') = 'unassigned' then 'assigned' else lead_status end,
        lead_notes = case when $2::text is not null and $2 <> ''
@@ -1723,7 +1750,7 @@ export async function assignLeads(
        lead_updated_at = now()
      where id = any($3::bigint[]) and merged_into is null
      returning id`,
-    [trimmed, notes?.trim() || null, ids],
+    [target.name, notes?.trim() || null, ids, agentUid],
   );
   return { updated: res.rows.length };
 }
@@ -1735,7 +1762,8 @@ export async function unassignLeads(companyIds: (string | number)[]): Promise<{ 
 
   const res = await sql(
     `update company_data set
-       assigned_to = null,
+        assigned_to = null,
+        telemarketer_uid = null,
        assigned_at = null,
        lead_status = 'unassigned',
        lead_updated_at = now()
@@ -1778,11 +1806,12 @@ export async function updateLead(
   const id = Number(companyId);
   if (!Number.isFinite(id) || id <= 0) throw new Error('invalid company id');
 
+  let agentUid: string | null = null;
+  let assignedName: string | null = null;
   if (patch.assignedTo && patch.assignedTo.trim()) {
-    await sql(
-      `insert into telemarketer (name) values ($1) on conflict (name) do update set active = true`,
-      [patch.assignedTo.trim()],
-    );
+    const target = await resolveTelemarketer(patch.assignedTo.trim());
+    agentUid = target.uid;
+    assignedName = target.name;
   }
 
   const hasStatus = Object.prototype.hasOwnProperty.call(patch, 'leadStatus');
@@ -1793,7 +1822,8 @@ export async function updateLead(
   const res = await sql(
     `update company_data set
        lead_status = case when $2::boolean then $3 else lead_status end,
-       assigned_to = case when $4::boolean then $5 else assigned_to end,
+        assigned_to = case when $4::boolean then $5 else assigned_to end,
+        telemarketer_uid = case when $4::boolean then $10 else telemarketer_uid end,
        assigned_at = case when $4::boolean then (case when $5 is null then null else coalesce(assigned_at, now()) end) else assigned_at end,
        lead_notes = case when $6::boolean then $7 else lead_notes end,
        is_hidden = case when $8::boolean then $9::boolean else is_hidden end,
@@ -1803,9 +1833,10 @@ export async function updateLead(
     [
       id,
       hasStatus, patch.leadStatus ?? null,
-      hasAssignedTo, patch.assignedTo?.trim() || null,
+      hasAssignedTo, assignedName,
       hasNotes, patch.notes ?? null,
       hasIsHidden, Boolean(patch.isHidden),
+      agentUid,
     ],
   );
   return res.rows[0] ?? null;
@@ -1813,6 +1844,7 @@ export async function updateLead(
 
 export interface TelemarketerAgent {
   id: number;
+  uid: string | null;
   name: string;
   phone: string | null;
   email: string | null;
@@ -1829,27 +1861,17 @@ export interface TelemarketerAgent {
 export async function listTelemarketers(): Promise<string[]> {
   await migrate();
   const res = await sql<{ name: string }>(`
-    select distinct name from (
-      select name from telemarketer where active = true
-      union
-      select distinct assigned_to as name from company_data where assigned_to is not null and assigned_to <> ''
-    ) t where name is not null and name <> '' order by name asc
+    select distinct name from telemarketer where active = true order by name asc
   `);
   return res.rows.map((r) => r.name);
 }
 
 export async function getTelemarketerDetails(): Promise<TelemarketerAgent[]> {
   await migrate();
-  await sql(`
-    insert into telemarketer (name)
-    select distinct trim(assigned_to) from company_data
-    where assigned_to is not null and trim(assigned_to) <> ''
-    on conflict (name) do nothing
-  `);
-
   const res = await sql<TelemarketerAgent>(`
     select
       t.id,
+      t.uid,
       t.name,
       t.phone,
       t.email,
@@ -1862,8 +1884,10 @@ export async function getTelemarketerDetails(): Promise<TelemarketerAgent[]> {
       count(c.id) filter (where c.merged_into is null and c.lead_status = 'not_interested')::int as not_interested_count,
       count(c.id) filter (where c.merged_into is null and c.lead_status = 'do_not_call')::int as dnc_count
     from telemarketer t
-    left join company_data c on lower(trim(c.assigned_to)) = lower(trim(t.name))
-    group by t.id, t.name, t.phone, t.email, t.notes, t.active, t.created_at
+    left join company_data c on c.telemarketer_uid = t.uid
+      or (t.uid is null and c.telemarketer_uid is null
+          and lower(trim(c.assigned_to)) = lower(trim(t.name)))
+    group by t.id, t.uid, t.name, t.phone, t.email, t.notes, t.active, t.created_at
     order by t.active desc, t.name asc
   `);
   return res.rows;
@@ -1881,22 +1905,22 @@ export async function addTelemarketer(
   const notes = extra.notes?.trim() || null;
   const active = extra.active !== false;
 
-  await sql(
-    `insert into telemarketer (name, phone, email, notes, active)
-     values ($1, $2, $3, $4, $5)
-     on conflict (name) do update set
-       phone = coalesce(excluded.phone, telemarketer.phone),
-       email = coalesce(excluded.email, telemarketer.email),
-       notes = coalesce(excluded.notes, telemarketer.notes),
-       active = excluded.active,
-       updated_at = now()`,
-    [trimmed, phone, email, notes, active],
-  );
+  const existing = await sql<{ id: number }>(
+    `select id from telemarketer where uid is null and name = $1 order by id limit 1`, [trimmed]);
+  if (existing.rows.length) {
+    await sql(`update telemarketer set phone = coalesce($2, phone), email = coalesce($3, email),
+      notes = coalesce($4, notes), active = $5, updated_at = now() where id = $1`,
+      [existing.rows[0]!.id, phone, email, notes, active]);
+  } else {
+    await sql(`insert into telemarketer (name, phone, email, notes, active) values ($1, $2, $3, $4, $5)`,
+      [trimmed, phone, email, notes, active]);
+  }
 
   const agents = await getTelemarketerDetails();
-  const found = agents.find((a) => a.name.toLowerCase() === trimmed.toLowerCase());
+  const found = agents.find((a) => a.uid === null && a.name.toLowerCase() === trimmed.toLowerCase());
   return found ?? {
     id: 0,
+    uid: null,
     name: trimmed,
     phone,
     email,
@@ -1909,6 +1933,70 @@ export async function addTelemarketer(
     not_interested_count: 0,
     dnc_count: 0,
   };
+}
+
+/** The calculator's Bubble user UID is the imported agent's stable identity. */
+export async function upsertAtapTelemarketer(
+  uid: string,
+  name: string,
+  extra: { phone?: string | null; email?: string | null; notes?: string | null; active: boolean },
+): Promise<TelemarketerAgent> {
+  await migrate();
+  const sourceUid = uid.trim();
+  if (!sourceUid || !name.trim()) throw new Error('Atap user UID and name are required');
+  await sql(`insert into telemarketer (uid, name, phone, email, notes, active)
+    values ($1, $2, $3, $4, $5, $6)
+    on conflict (uid) do update set name = excluded.name,
+      phone = excluded.phone, email = excluded.email, notes = excluded.notes,
+      active = excluded.active, updated_at = now()`,
+    [sourceUid, name.trim(), extra.phone?.trim() || null, extra.email?.trim() || null,
+      extra.notes?.trim() || null, extra.active]);
+  const agents = await getTelemarketerDetails();
+  return agents.find((a) => a.uid === sourceUid)!;
+}
+
+/** Link old name-only leads only where a name identifies exactly one imported user. */
+export async function linkLegacyTelemarketerAssignments(): Promise<void> {
+  await migrate();
+  await sql(`update company_data c set telemarketer_uid = t.uid
+    from telemarketer t
+    where c.telemarketer_uid is null and c.assigned_to is not null
+      and t.uid is not null and lower(trim(c.assigned_to)) = lower(trim(t.name))
+      and (select count(*) from telemarketer other
+           where other.uid is not null and lower(trim(other.name)) = lower(trim(t.name))) = 1`);
+}
+
+/** One-time full roster rebuild; delete and insert commit together or roll back together. */
+export async function replaceTelemarketersFromAtap(
+  agents: { uid: string; name: string; phone: string | null; email: string | null; notes: string; active: boolean }[],
+): Promise<void> {
+  await migrate();
+  if (!directConfigured()) throw new Error('full roster rebuild requires a direct DATABASE_URL');
+  if (!agents.length || agents.some((a) => !a.uid.trim() || !a.name.trim()) ||
+      new Set(agents.map((a) => a.uid)).size !== agents.length) {
+    throw new Error('refusing to replace telemarketers with an empty or invalid Atap roster');
+  }
+  const client = await directPool().connect();
+  try {
+    await client.query('begin');
+    await client.query('delete from telemarketer');
+    await client.query(`insert into telemarketer (uid, name, phone, email, notes, active)
+      select uid, name, phone, email, notes, active
+      from jsonb_to_recordset($1::jsonb) as x(uid text, name text, phone text, email text, notes text, active boolean)`,
+      [JSON.stringify(agents)]);
+    await client.query(`update company_data c set telemarketer_uid = t.uid
+      from telemarketer t
+      where c.telemarketer_uid is null and c.assigned_to is not null
+        and lower(trim(c.assigned_to)) = lower(trim(t.name))
+        and (select count(*) from telemarketer other
+             where lower(trim(other.name)) = lower(trim(t.name))) = 1`);
+    await client.query('commit');
+  } catch (err) {
+    await client.query('rollback');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function updateTelemarketer(
@@ -1965,9 +2053,11 @@ export async function deleteTelemarketer(id: number, unassignLeads: boolean = tr
 
   if (unassignLeads) {
     await sql(
-      `update company_data set assigned_to = null, lead_status = 'unassigned', lead_updated_at = now()
-       where lower(trim(assigned_to)) = lower(trim($1))`,
-      [agentName]
+      `update company_data set assigned_to = null, telemarketer_uid = null,
+         lead_status = 'unassigned', lead_updated_at = now()
+       where telemarketer_uid = (select uid from telemarketer where id = $1)
+          or (telemarketer_uid is null and lower(trim(assigned_to)) = lower(trim($2)))`,
+      [id, agentName]
     );
   }
 

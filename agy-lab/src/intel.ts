@@ -11,7 +11,7 @@ import * as ui from './reportui.ts';
 import * as territories from './territories.ts';
 import * as contacts from './contacts.ts';
 import { normalizePhoneNumber } from './phone.ts';
-import { importSalesAgents, type AtapUser } from './atap-import.ts';
+import { importSalesAgents } from './atap-import.ts';
 import { searchParallelPeople } from './parallel-contact.ts';
 import * as autoContact from './autocontact.ts';
 export { normalizePhoneNumber };
@@ -3076,15 +3076,11 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     return true;
   }
 
-  // Pull the sales roster from calculator.atap.solar and upsert each sales
-  // agent as a telemarketer. Idempotent: existing names keep their phone/email
-  // refreshed, new names are created active.
+  // Pull the sales roster from calculator.atap.solar and match agents by
+  // the source user's Bubble UID. The request cannot supply replacement UIDs.
   if (method === 'POST' && p === '/api/telemarketers/import') {
-    const body = await ctx.readJson(req);
     try {
-      const result = await importSalesAgents({
-        users: Array.isArray(body.users) ? body.users as AtapUser[] : undefined,
-      });
+      const result = await importSalesAgents();
       ctx.json(res, 200, { ok: true, ...result });
     } catch (err) {
       ctx.json(res, 502, { error: (err as Error).message });
