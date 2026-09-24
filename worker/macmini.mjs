@@ -334,14 +334,24 @@ async function report(name, id, ok, result, error, quota = null) {
  * 30s away and the window is 90s. A lab too old to know the route answers 404,
  * which is also nothing to say about — this file and the lab deploy separately.
  */
+async function checkIn(name, types, cooldownGroup) {
+  const until = cooldowns.get(cooldownGroup) ?? 0;
+  const r = await fetch(LAB + '/api/jobs/heartbeat', {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify({ worker: name, types, cooldownGroup,
+      ...(until > Date.now() ? {
+        cooldownUntil: new Date(until).toISOString(),
+        cooldownReason: 'Individual quota reached',
+      } : {}) }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!r.ok) throw new Error('heartbeat answered ' + r.status);
+}
+
 function beat(name, types, cooldownGroup) {
   const timer = setInterval(() => {
-    fetch(LAB + '/api/jobs/heartbeat', {
-      method: 'POST',
-      headers: jsonHeaders,
-      body: JSON.stringify({ worker: name, types, cooldownGroup }),
-      signal: AbortSignal.timeout(15_000),
-    }).catch(() => {});
+    checkIn(name, types, cooldownGroup).catch(() => {});
   }, BEAT_MS);
   timer.unref();
   return () => clearInterval(timer);
@@ -450,7 +460,11 @@ async function lane(name, types, session, cooldownGroup) {
     try {
       const remaining = (cooldowns.get(cooldownGroup) ?? 0) - Date.now();
       if (remaining > 0) {
-        await new Promise((r) => setTimeout(r, Math.min(remaining, 60_000)));
+        // Stay visible as "cooldown" in the control room, including after the
+        // broker's in-memory worker table is cleared by a deploy.
+        await checkIn(name, types, cooldownGroup).catch((err) =>
+          say('[' + name + '] cooldown check-in failed: ' + err.message));
+        await new Promise((r) => setTimeout(r, Math.min(remaining, BEAT_MS)));
         continue;
       }
       const job = await claim(name, types, cooldownGroup);

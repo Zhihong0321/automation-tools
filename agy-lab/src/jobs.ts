@@ -157,6 +157,8 @@ function touch(name: string, ip: string | null, types?: string[] | null, group?:
   // what the claim recorded — an empty list there would read as "serves nothing".
   if (types && types.length) info.types = types;
   if (group) info.cooldownGroup = group;
+  else if (!info.cooldownGroup && /-agy\d+$/.test(name) && (types ?? info.types ?? []).some((type) => type.startsWith('agy.')))
+    info.cooldownGroup = name.replace(/-agy\d+$/, '') + ':agy';
   const cooldown = cooldownFor(info.cooldownGroup);
   info.cooldownUntil = cooldown ? new Date(cooldown.until).toISOString() : null;
   info.cooldownReason = cooldown?.reason ?? null;
@@ -370,6 +372,17 @@ export function coolDown(worker: string, retryAfterMs: number, reason: string): 
   return new Date(until).toISOString();
 }
 
+/** Accept quota errors from older workers that still post only a stack string. */
+export function quotaRetryAfterMs(error: string): number | null {
+  if (!/individual quota reached/i.test(error)) return null;
+  const reset = /resets?\s+in\s+([^\r\n.]+)/i.exec(error)?.[1] ?? '';
+  let ms = 0;
+  for (const part of reset.matchAll(/(\d+)\s*([dhms])/gi)) {
+    ms += Number(part[1]) * { d: 86_400_000, h: 3_600_000, m: 60_000, s: 1_000 }[part[2]!.toLowerCase() as 'd' | 'h' | 'm' | 's'];
+  }
+  return Math.min(Math.max(ms || 3_600_000, 60_000) + 5_000, 7 * 86_400_000);
+}
+
 export function finish(id: string, ok: boolean, result: unknown, error: string | null): Job | null {
   const job = jobs.get(id);
   if (!job) return null;
@@ -451,7 +464,7 @@ export function snapshot(): {
         cooldownUntil: cooldown ? new Date(cooldown.until).toISOString() : null,
         cooldownReason: cooldown?.reason ?? null,
         cooldownRemainingMs: cooldown ? Math.max(0, cooldown.until - Date.now()) : 0,
-        status: cooldown ? 'cooldown' : Date.now() - Date.parse(w.lastSeenAt) <= 90_000 ? 'online' : 'offline',
+        status: Date.now() - Date.parse(w.lastSeenAt) > 90_000 ? 'offline' : cooldown ? 'cooldown' : 'online',
       };
     }).sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt)),
   };
@@ -491,6 +504,17 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     // and a worker loop should be able to branch on the status alone.
     if (!job) {
       const cooldown = cooldownFor(workers.get(worker)?.cooldownGroup ?? null);
+      // Older workers ignore the cooldown header and repoll immediately. Hold
+      // their 204 for the normal long-poll window instead of spinning on it.
+      if (cooldown) {
+        const pause = Math.min(MAX_WAIT_MS, Math.max(0, Number.isFinite(waitSec) ? waitSec * 1000 : MAX_WAIT_MS), cooldown.until - Date.now());
+        if (pause > 0 && !controller.signal.aborted) await new Promise<void>((resolve) => {
+          const timer = setTimeout(done, pause);
+          function done(): void { clearTimeout(timer); controller.signal.removeEventListener('abort', done); resolve(); }
+          controller.signal.addEventListener('abort', done, { once: true });
+        });
+      }
+      if (res.writableEnded) return true;
       res.writeHead(204, { 'cache-control': 'no-store',
         ...(cooldown ? { 'x-worker-cooldown-until': new Date(cooldown.until).toISOString() } : {}) });
       res.end();
@@ -520,7 +544,15 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     // beat that re-registered the name alone would read as "here, serving
     // nothing", which the gateway treats the same as absent.
     const types = Array.isArray(body.types) ? body.types.map((t) => str(t).trim()).filter(Boolean) : [];
-    json(res, 200, { worker: touch(worker, callerIp(req), types, str(body.cooldownGroup).trim()) });
+    const group = str(body.cooldownGroup).trim();
+    touch(worker, callerIp(req), types, group);
+    // A cooling worker keeps beating. Restore its deadline after a broker
+    // restart without extending it by another full retry interval on each beat.
+    const until = Date.parse(str(body.cooldownUntil));
+    if (Number.isFinite(until) && until > Date.now()) {
+      coolDown(worker, until - Date.now(), str(body.cooldownReason) || 'Individual quota reached');
+    }
+    json(res, 200, { worker: touch(worker, callerIp(req), types, group) });
     return true;
   }
 
@@ -547,8 +579,10 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     const worker = str(body.worker).trim();
     if (worker) touch(worker, callerIp(req));
     const job = finish(result[1]!, body.ok !== false, body.result ?? null, str(body.error) || null);
-    const cooldownUntil = body.errorCode === 'quota_reached' && job && worker
-      ? coolDown(worker, num(body.retryAfterMs, 0), str(body.error) || 'individual quota reached') : null;
+    const quotaMs = job?.type.startsWith('agy.')
+      ? num(body.retryAfterMs, 0) || quotaRetryAfterMs(str(body.error)) : null;
+    const cooldownUntil = quotaMs && worker
+      ? coolDown(worker, quotaMs, str(body.error).split(/\r?\n/)[0] || 'Individual quota reached') : null;
     if (!job) {
       // Almost always the ring having evicted it, or a redeploy having dropped it.
       // Say which, because "unknown job" reads like a bug in the worker.

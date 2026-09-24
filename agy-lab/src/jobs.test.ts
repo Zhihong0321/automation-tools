@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type http from 'node:http';
-import { coolDown, create, finish, get, handle, liveTypes, snapshot, take } from './jobs.ts';
+import { coolDown, create, finish, get, handle, liveTypes, quotaRetryAfterMs, snapshot, take } from './jobs.ts';
 
 const ASK_TYPES = ['chatgpt.ask', 'meta.ask', 'agy.ask'];
 
@@ -72,7 +72,7 @@ test('a beat without a worker name is refused', async () => {
 });
 
 test('a quota result cools down every lane sharing the account and stops claims', async () => {
-  const type = 'quota-test.ask';
+  const type = 'agy.quota-test';
   const group = 'quota-test:account';
   for (const worker of ['quota-test-1', 'quota-test-2']) {
     const req = { method: 'POST', headers: {}, socket: {} } as unknown as http.IncomingMessage;
@@ -92,7 +92,7 @@ test('a quota result cools down every lane sharing the account and stops claims'
     json: (_res, _status, body) => { result = body as Record<string, unknown>; },
     readJson: async () => ({ worker: 'quota-test-1', ok: false,
       error: 'quota_reached: Individual quota reached. Resets in 1h37m47s.',
-      errorCode: 'quota_reached', retryAfterMs: 5_825_000 }),
+      errorCode: 'quota_reached', retryAfterMs: 5_872_000 }),
   });
   assert.equal((await waiting), null, 'an existing long poll must be released');
   assert.equal(typeof result.cooldownUntil, 'string');
@@ -115,6 +115,46 @@ test('a worker can claim pending work when its cooldown expires', async () => {
   await new Promise((r) => setTimeout(r, 30));
   assert.equal((await take(worker, { types: [type], waitMs: 0 }))?.id, job.id);
   finish(job.id, true, {}, null);
+});
+
+test('a cooling worker heartbeat restores the visible deadline and blocks claims', async () => {
+  const worker = 'quota-heartbeat-worker';
+  const type = 'quota-heartbeat.ask';
+  const until = new Date(Date.now() + 5_825_000).toISOString();
+  let response: { worker?: { status?: string; cooldownUntil?: string } } = {};
+  const req = { method: 'POST', headers: {}, socket: {} } as unknown as http.IncomingMessage;
+  await handle(req, {} as http.ServerResponse, new URL('http://lab/api/jobs/heartbeat'), {
+    json: (_res, _status, body) => { response = body as typeof response; },
+    readJson: async () => ({ worker, types: [type], cooldownGroup: 'quota-heartbeat:agy',
+      cooldownUntil: until, cooldownReason: 'Individual quota reached' }),
+  });
+  assert.ok(Math.abs(Date.parse(response.worker?.cooldownUntil ?? '') - Date.parse(until)) < 50);
+  const visible = snapshot().workers.find((w) => w.name === worker);
+  assert.equal(visible?.status, 'cooldown');
+  assert.equal(visible?.cooldownReason, 'Individual quota reached');
+  assert.ok((visible?.cooldownRemainingMs ?? 0) > 5_800_000);
+  assert.equal(liveTypes().includes(type), false);
+  assert.equal(await take(worker, { types: [type], waitMs: 0 }), null);
+});
+
+test('the broker recognizes the actual older Windows worker quota stack and cools both lanes', async () => {
+  const error = 'Error: error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 4h22m51s.\n    at ask (file:///E:/000/local-worker/agy.mjs:115:25)';
+  assert.equal(quotaRetryAfterMs(error), 15_776_000);
+  const type = 'agy.legacy-quota-test';
+  await heartbeat('legacy-windows-agy1', [type]);
+  await heartbeat('legacy-windows-agy2', [type]);
+  const job = create(type, {});
+  assert.equal((await take('legacy-windows-agy1', { types: [type], waitMs: 0 }))?.id, job.id);
+  const req = { method: 'POST', headers: {}, socket: {} } as unknown as http.IncomingMessage;
+  await handle(req, {} as http.ServerResponse, new URL(`http://lab/api/jobs/${job.id}/result`), {
+    json: () => {},
+    readJson: async () => ({ worker: 'legacy-windows-agy1', ok: false, error }),
+  });
+  const lanes = snapshot().workers.filter((w) => w.name.startsWith('legacy-windows-agy'));
+  assert.equal(lanes.length, 2);
+  assert.ok(lanes.every((w) => w.status === 'cooldown'));
+  assert.ok(lanes.every((w) => (w.cooldownRemainingMs ?? 0) > 15_700_000));
+  assert.equal(liveTypes().includes(type), false);
 });
 
 test('the snapshot joins a running job to the worker that claimed it', async () => {
