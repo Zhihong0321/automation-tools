@@ -355,9 +355,13 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
             <option value="active">Active Only</option>
             <option value="inactive">Inactive Only</option>
           </select>
+          <select class="input select" id="agentRoleFilter" onchange="filterAgents()" style="height:38px;font-size:13px;width:190px;" title="Filter by access tag imported from atap.solar">
+            <option value="all" selected>All Access Tags</option>
+          </select>
         </div>
         <div style="display:flex;gap:8px;">
           <button class="primary" type="button" onclick="toggleCreateAgentForm(true)" style="height:38px;padding:0 14px;">+ New Telemarketer</button>
+          <button class="filter" type="button" id="importAgentsBtn" onclick="importAgentsFromAtap(this)" style="height:38px;padding:0 14px;" title="Pull sales agents from calculator.atap.solar into the roster">⤓ Import from atap.solar</button>
           <button class="filter" type="button" onclick="loadAgentsView()" style="height:38px;padding:0 14px;">Refresh</button>
         </div>
       </div>
@@ -595,7 +599,33 @@ cont.innerHTML=groups.map(function(grp){
   return '<article class="contact-group-card" id="contactGroup-'+attr(cId)+'"><div class="contact-group-head"><div style="flex:1;min-width:0;"><h3 class="contact-group-title">'+esc(cName)+'</h3><div class="contact-group-meta"><span>'+esc(cCategory)+rating+'</span><span>·</span><span>'+esc(cAddress||'Address not published')+'</span></div><div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">'+assignedBadge+statusBadge+contactBadge+'</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-start;">'+reportLinks+(website?'<a class="source-link" target="_blank" rel="noopener" href="'+attr(website)+'">Web</a>':'')+(maps?'<a class="source-link" target="_blank" rel="noopener" href="'+attr(maps)+'">Maps</a>':'')+'</div></div>'+peopleHtml+'</article>';
 }).join('');
 }
-var agentState={agents:[],filter:'',statusFilter:'all'};
+var agentState={agents:[],filter:'',statusFilter:'all',roleFilter:'all'};
+// Imported agents carry their atap.solar access tags in the notes line
+// "Imported from calculator.atap.solar · roles: sales, team-jb". Parsing the
+// tags back out of the notes keeps this a pure client-side filter -- no schema
+// change, and manually created agents without the marker simply never match.
+function agentRoleTags(agent){
+  var m=/roles:\s*(.+)$/i.exec(String(agent.notes||''));
+  if(!m)return[];
+  return m[1].split(',').map(function(t){return t.trim().toLowerCase()}).filter(Boolean);
+}
+// One click syncs the whole sales roster from calculator.atap.solar. Existing
+// telemarketers keep their lead assignments and only get phone/email/notes
+// refreshed, so the button is safe to press after every hiring round.
+async function importAgentsFromAtap(button){
+  if(!window.confirm('Import sales agents from calculator.atap.solar as telemarketers?\n\nExisting telemarketers are updated, not replaced or deleted.'))return;
+  var was=button.textContent;
+  button.disabled=true;button.textContent='Importing…';
+  try{
+    var res=await api('/api/telemarketers/import',{method:'POST',body:JSON.stringify({})});
+    showToast('Imported '+res.imported+' sales agent'+(res.imported===1?'':'s')+' ('+res.created+' new · '+res.updated+' updated · '+res.skipped+' non-sales skipped)');
+    await loadAgentsView();
+  }catch(err){
+    if(!authLost(err))showToast('Import failed: '+err.message);
+  }finally{
+    button.disabled=false;button.textContent=was;
+  }
+}
 async function loadAgentsView(){
   if(!state.token)return;
   var cont=el('agentsContainer');
@@ -603,6 +633,7 @@ async function loadAgentsView(){
   try{
     var res=await api('/api/telemarketers');
     agentState.agents=res.agents||[];
+    renderAgentRoleFilter();
     renderAgentsSummary(agentState.agents);
     renderAgents();
   }catch(err){
@@ -622,11 +653,28 @@ function renderAgentsSummary(agents){
   if(lEl)lEl.textContent=totalLeads;
   if(cEl)cEl.textContent=contacted;
 }
+// Rebuild the tag dropdown from the live roster on every load, preserving the
+// current selection when the chosen tag still exists.
+function renderAgentRoleFilter(){
+  var sel=el('agentRoleFilter');
+  if(!sel)return;
+  var tags={};
+  agentState.agents.forEach(function(a){agentRoleTags(a).forEach(function(t){tags[t]=true})});
+  var curated=Object.keys(tags).sort();
+  var cur=sel.value||'all';
+  var html='<option value="all">All Access Tags</option>'+curated.map(function(t){
+    return '<option value="'+attr(t)+'">'+esc(t)+'</option>';
+  }).join('');
+  sel.innerHTML=html;
+  sel.value=curated.indexOf(cur)>=0?cur:'all';
+}
 function filterAgents(){
   var input=el('agentFilterInput');
   var sel=el('agentStatusFilter');
+  var roleSel=el('agentRoleFilter');
   agentState.filter=input?input.value.trim().toLowerCase():'';
   agentState.statusFilter=sel?sel.value:'all';
+  agentState.roleFilter=roleSel?roleSel.value:'all';
   renderAgents();
 }
 function renderAgents(){
@@ -635,8 +683,10 @@ function renderAgents(){
   var list=agentState.agents||[];
   var f=agentState.filter;
   var sf=agentState.statusFilter;
+  var rf=agentState.roleFilter;
   if(sf==='active')list=list.filter(function(a){return a.active});
   else if(sf==='inactive')list=list.filter(function(a){return !a.active});
+  if(rf&&rf!=='all')list=list.filter(function(a){return agentRoleTags(a).indexOf(rf)>=0});
   if(f){
     list=list.filter(function(a){
       if(a.name.toLowerCase().indexOf(f)>=0)return true;

@@ -47,6 +47,14 @@ test('telemarketer management UI is integrated in portal navigation, views and s
   assert.match(html, /function saveAgentForm\(/);
   assert.match(html, /function toggleAgentActive\(/);
   assert.match(html, /function deleteAgentPrompt\(/);
+  // Atap Solar roster import
+  assert.match(html, /id="importAgentsBtn"/);
+  assert.match(html, /function importAgentsFromAtap\(/);
+  assert.match(html, /\/api\/telemarketers\/import/);
+  // Access-tag filter
+  assert.match(html, /id="agentRoleFilter"/);
+  assert.match(html, /function agentRoleTags\(/);
+  assert.match(html, /function renderAgentRoleFilter\(/);
 
   // Script compiles with zero syntax errors
   const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1];
