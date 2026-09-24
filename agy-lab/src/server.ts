@@ -21,6 +21,7 @@ import * as queue from './queue.ts';
 import * as log from './logstore.ts';
 import * as intel from './intel.ts';
 import * as reportdb from './reportdb.ts';
+import * as autoContact from './autocontact.ts';
 import { page } from './ui.ts';
 import { page as docsPage } from './docs.ts';
 import { document as openApiDocument } from './openapi.ts';
@@ -470,6 +471,8 @@ server.listen(PORT, '0.0.0.0', () => {
   // Age 0 at boot: this process owns no run yet, so anything non-terminal was
   // stranded by the restart that just happened.
   reapAbandonedRuns(0);
+  autoContact.init({ launch: intel.launchContactResearch });
+  autoContact.start();
   // On the interval an age test IS needed, and a generous one -- a company
   // report can legitimately run for hours behind a busy serial worker lane, and
   // rounds heartbeat published_report.updated_at so a working run stays fresh.

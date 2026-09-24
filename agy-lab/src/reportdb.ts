@@ -801,6 +801,48 @@ export async function findContactReport(companyId: string, provider: 'legacy' | 
   return out.rows[0] ?? null;
 }
 
+/** Active, visible, non-DNC companies that have never had a contact report. */
+export async function contactResearchBacklog(limit: number): Promise<Record<string, unknown>[]> {
+  await migrate();
+  const out = await sql(
+    `select c.*
+     from company_data c
+     where c.merged_into is null
+       and coalesce(c.is_hidden, false) = false
+       and coalesce(c.lead_status, 'unassigned') <> 'do_not_call'
+       and not exists (
+         select 1 from published_report p
+         where p.company_id = c.id and p.report_type = 'contact_research'
+       )
+     order by c.id asc
+     limit $1`,
+    [limit],
+  );
+  return out.rows;
+}
+
+/** Lifetime counts of contact-research reports the auto-queue started. */
+export async function autoContactQueueTotals(): Promise<{ queued: number; running: number; completed: number; failed: number }> {
+  await migrate();
+  const out = await sql<{ queued: string; running: string; completed: string; failed: string }>(
+    `select
+       count(*) filter (where status = 'queued')::text as queued,
+       count(*) filter (where status = 'running')::text as running,
+       count(*) filter (where status = 'completed')::text as completed,
+       count(*) filter (where status = 'failed')::text as failed
+     from published_report
+     where report_type = 'contact_research'
+       and request->>'autoQueued' = 'true'`,
+  );
+  const row = out.rows[0];
+  return {
+    queued: Number(row?.queued ?? 0),
+    running: Number(row?.running ?? 0),
+    completed: Number(row?.completed ?? 0),
+    failed: Number(row?.failed ?? 0),
+  };
+}
+
 export async function findOrCreateCompany(data: {
   name: string;
   address?: string | null;

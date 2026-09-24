@@ -13,6 +13,7 @@ import * as contacts from './contacts.ts';
 import { normalizePhoneNumber } from './phone.ts';
 import { importSalesAgents, type AtapUser } from './atap-import.ts';
 import { searchParallelPeople } from './parallel-contact.ts';
+import * as autoContact from './autocontact.ts';
 export { normalizePhoneNumber };
 
 export interface Ctx {
@@ -3288,6 +3289,11 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     const report = await db.createReport({ type: 'business_search', title, userId: str(request.userId) || null, request });
     void runBusinessSearch(report.public_id, report.id, request);
     ctx.json(res, 202, { report: envelope(req, report) });
+    return true;
+  }
+
+  if (method === 'GET' && p === '/api/contact-research/auto-queue') {
+    ctx.json(res, 200, await autoContact.status());
     return true;
   }
 
