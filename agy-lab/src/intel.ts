@@ -2781,6 +2781,55 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
   return true;
 }
 
+/**
+ * Create — or find the run already in flight for — one company's contact
+ * research report, and start the run in the background. Shared by the portal's
+ * POST route and the auto contact research queue so both get the same per-company
+ * dedupe, the same title and the same event trail. `autoQueued` marks reports
+ * the queue started; the lifetime counters read exactly that flag.
+ */
+export async function launchContactResearch(
+  company: Record<string, unknown>,
+  opts: {
+    provider?: 'legacy' | 'parallel';
+    targetRole?: string | null;
+    requesterId?: string | null;
+    compareToReportId?: unknown;
+    autoQueued?: boolean;
+  } = {},
+): Promise<{ report: db.PublishedReport; alreadyRunning: boolean }> {
+  const provider = opts.provider === 'parallel' ? 'parallel' : 'legacy';
+  const resolvedCompanyId = String(company.id ?? '');
+  const running = await db.findContactReport(resolvedCompanyId, provider);
+  if (running) return { report: running, alreadyRunning: true };
+  const compareToReportId = await contactComparisonId(resolvedCompanyId, opts.compareToReportId);
+  const request = {
+    companyId: resolvedCompanyId,
+    name: str(company.name),
+    targetRole: str(opts.targetRole).trim() || null,
+    requesterId: opts.requesterId ?? null,
+    provider,
+    compareToReportId,
+    ...(opts.autoQueued === true ? { autoQueued: 'true' } : {}),
+    companySnapshot: {
+      id: resolvedCompanyId,
+      name: company.name,
+      phone: company.phone,
+      website: company.website,
+      address: company.address,
+    },
+  };
+  const report = await db.createReport({
+    type: 'contact_research',
+    title: str(company.name, 'Company') + (provider === 'parallel' ? ' — Parallel contact research' : ' — contact & telemarketing research'),
+    userId: request.requesterId,
+    request,
+    companyId: resolvedCompanyId,
+  });
+  void runContactResearch(report.public_id, report.id, company, request);
+  return { report, alreadyRunning: false };
+}
+
 /** Authenticated product API routes. */
 export async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL, ctx: Ctx): Promise<boolean> {
   const p = url.pathname;
@@ -3274,39 +3323,15 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
         category: str(body.category) || null,
       });
     }
-    const resolvedCompanyId = String(company.id ?? '');
-    const provider = p === '/api/parallel-contact-research' ? 'parallel' : 'legacy';
-    const running = await db.findContactReport(resolvedCompanyId, provider);
-    if (running) {
-      ctx.json(res, 200, { report: envelope(req, running) });
-      return true;
-    }
-    const targetRole = str(body.targetRole || body.role || body.persona).trim() || null;
-    const compareToReportId = await contactComparisonId(resolvedCompanyId, body.compareToReportId);
-    const request = {
-      companyId: resolvedCompanyId,
-      name: str(company.name),
-      targetRole,
+    const { report, alreadyRunning } = await launchContactResearch(company, {
+      provider: p === '/api/parallel-contact-research' ? 'parallel' : 'legacy',
+      targetRole: str(body.targetRole || body.role || body.persona).trim() || null,
       requesterId: str(body.requesterId || body.userId) || null,
-      provider,
-      compareToReportId,
-      companySnapshot: {
-        id: resolvedCompanyId,
-        name: company.name,
-        phone: company.phone,
-        website: company.website,
-        address: company.address,
-      },
-    };
-    const report = await db.createReport({
-      type: 'contact_research',
-      title: str(company.name, 'Company') + (provider === 'parallel' ? ' — Parallel contact research' : ' — contact & telemarketing research'),
-      userId: request.requesterId,
-      request,
-      companyId: resolvedCompanyId,
+      compareToReportId: body.compareToReportId,
     });
-    void runContactResearch(report.public_id, report.id, company, request);
-    ctx.json(res, 202, { report: envelope(req, report) });
+    // 200 not 202 when one was already in flight: nothing new was queued, this
+    // is a pointer to the run that exists.
+    ctx.json(res, alreadyRunning ? 200 : 202, { report: envelope(req, report) });
     return true;
   }
 
