@@ -3185,175 +3185,224 @@ export async function getTopTelemarketersLeaderboard(options?: {
     endIso = now.toISOString();
   }
 
-  // Aggregate telemarketer outreach actions strictly within the chosen date range
-  const teleRes = await sql<{
-    name: string;
-    uid: string | null;
-    total_assigned: string;
-    contacted_count: string;
-    interested_count: string;
-    not_interested_count: string;
-    dnc_count: string;
-    processed_count: string;
-    total_activities: string;
-    last_active: string | null;
-  }>(`
-    with log_period as (
-      select
-        coalesce(telemarketer_name, telemarketer_uid, 'Unassigned') as agent_name,
-        telemarketer_uid as agent_uid,
-        count(*) filter (where new_status = 'contacted')::int as contacted_count,
-        count(*) filter (where new_status = 'interested')::int as interested_count,
-        count(*) filter (where new_status = 'not_interested')::int as not_interested_count,
-        count(*) filter (where new_status = 'do_not_call')::int as dnc_count,
-        count(*) filter (where new_status in ('contacted', 'interested', 'not_interested', 'do_not_call'))::int as processed_count,
-        count(*)::int as total_activities,
-        max(created_at) as last_active
-      from lead_activity_log
-      where created_at >= $1::timestamptz and created_at <= $2::timestamptz
-        and coalesce(telemarketer_name, telemarketer_uid) is not null
-      group by coalesce(telemarketer_name, telemarketer_uid, 'Unassigned'), telemarketer_uid
-    ),
-    active_roster as (
-      select
-        t.name as agent_name,
-        t.uid as agent_uid,
-        count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false)::int as total_assigned
-      from telemarketer t
-      left join company_data c on (
-        (t.uid is not null and (c.telemarketer_uid = t.uid or c.telemarketer_uid = ('uid:' || t.uid) or lower(trim(c.assigned_to)) = lower(trim(t.uid)) or lower(trim(c.assigned_to)) = lower(trim('uid:' || t.uid))))
-        or lower(trim(c.assigned_to)) = lower(trim(t.name))
+  try {
+    // Aggregate telemarketer outreach actions strictly within the chosen date range
+    const teleRes = await sql<{
+      name: string;
+      uid: string | null;
+      total_assigned: string;
+      contacted_count: string;
+      interested_count: string;
+      not_interested_count: string;
+      dnc_count: string;
+      processed_count: string;
+      total_activities: string;
+      last_active: string | null;
+    }>(`
+      with roster as (
+        select
+          t.id,
+          t.name,
+          t.uid,
+          count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false)::int as total_assigned
+        from telemarketer t
+        left join company_data c on (
+          (t.uid is not null and (c.telemarketer_uid = t.uid or c.telemarketer_uid = ('uid:' || t.uid) or lower(trim(c.assigned_to)) = lower(trim(t.uid)) or lower(trim(c.assigned_to)) = lower(trim('uid:' || t.uid))))
+          or lower(trim(c.assigned_to)) = lower(trim(t.name))
+        )
+        where t.active = true
+        group by t.id, t.name, t.uid
+      ),
+      period_stats as (
+        select
+          t.id as telemarketer_id,
+          count(*) filter (where l.new_status = 'contacted')::int as contacted_count,
+          count(*) filter (where l.new_status = 'interested')::int as interested_count,
+          count(*) filter (where l.new_status = 'not_interested')::int as not_interested_count,
+          count(*) filter (where l.new_status = 'do_not_call')::int as dnc_count,
+          count(*) filter (where l.new_status in ('contacted', 'interested', 'not_interested', 'do_not_call'))::int as processed_count,
+          count(l.id)::int as total_activities,
+          max(l.created_at) as last_active
+        from telemarketer t
+        left join lead_activity_log l on (
+          (lower(trim(l.telemarketer_name)) = lower(trim(t.name)) or (t.uid is not null and l.telemarketer_uid = t.uid))
+          and l.created_at >= $1::timestamptz and l.created_at <= $2::timestamptz
+        )
+        where t.active = true
+        group by t.id
       )
-      where t.active = true
-      group by t.id, t.name, t.uid
-    )
-    select
-      coalesce(r.agent_name, l.agent_name) as name,
-      coalesce(r.agent_uid, l.agent_uid) as uid,
-      coalesce(r.total_assigned, 0)::text as total_assigned,
-      coalesce(l.contacted_count, 0)::text as contacted_count,
-      coalesce(l.interested_count, 0)::text as interested_count,
-      coalesce(l.not_interested_count, 0)::text as not_interested_count,
-      coalesce(l.dnc_count, 0)::text as dnc_count,
-      coalesce(l.processed_count, 0)::text as processed_count,
-      coalesce(l.total_activities, 0)::text as total_activities,
-      l.last_active::text as last_active
-    from active_roster r
-    full outer join log_period l on (
-      lower(trim(r.agent_name)) = lower(trim(l.agent_name))
-      or (r.agent_uid is not null and r.agent_uid = l.agent_uid)
-    )
-    where coalesce(r.agent_name, l.agent_name) is not null
-  `, [startIso, endIso]);
+      select
+        r.name,
+        r.uid,
+        coalesce(r.total_assigned, 0)::text as total_assigned,
+        coalesce(p.contacted_count, 0)::text as contacted_count,
+        coalesce(p.interested_count, 0)::text as interested_count,
+        coalesce(p.not_interested_count, 0)::text as not_interested_count,
+        coalesce(p.dnc_count, 0)::text as dnc_count,
+        coalesce(p.processed_count, 0)::text as processed_count,
+        coalesce(p.total_activities, 0)::text as total_activities,
+        p.last_active::text as last_active
+      from roster r
+      join period_stats p on r.id = p.telemarketer_id
+      union all
+      select
+        coalesce(l.telemarketer_name, l.telemarketer_uid) as name,
+        l.telemarketer_uid as uid,
+        '0' as total_assigned,
+        count(*) filter (where l.new_status = 'contacted')::int as contacted_count,
+        count(*) filter (where l.new_status = 'interested')::int as interested_count,
+        count(*) filter (where l.new_status = 'not_interested')::int as not_interested_count,
+        count(*) filter (where l.new_status = 'do_not_call')::int as dnc_count,
+        count(*) filter (where l.new_status in ('contacted', 'interested', 'not_interested', 'do_not_call'))::int as processed_count,
+        count(l.id)::int as total_activities,
+        max(l.created_at)::text as last_active
+      from lead_activity_log l
+      where l.created_at >= $1::timestamptz and l.created_at <= $2::timestamptz
+        and coalesce(l.telemarketer_name, l.telemarketer_uid) is not null
+        and not exists (
+          select 1 from telemarketer t
+          where t.active = true
+            and (lower(trim(t.name)) = lower(trim(l.telemarketer_name)) or (t.uid is not null and t.uid = l.telemarketer_uid))
+        )
+      group by coalesce(l.telemarketer_name, l.telemarketer_uid), l.telemarketer_uid
+    `, [startIso, endIso]);
 
-  const rawItems = teleRes.rows.map((row) => {
-    const assigned = Number(row.total_assigned || 0);
-    const contacted = Number(row.contacted_count || 0);
-    const interested = Number(row.interested_count || 0);
-    const notInterested = Number(row.not_interested_count || 0);
-    const dnc = Number(row.dnc_count || 0);
-    const processed = Number(row.processed_count || (contacted + interested + notInterested + dnc));
-    const conv = processed > 0 ? Math.round((interested / processed) * 1000) / 10 : 0;
-    const dailyAvg = Math.round((processed / Math.max(numDays, 1)) * 10) / 10;
+    const rawItems = teleRes.rows.map((row) => {
+      const assigned = Number(row.total_assigned || 0);
+      const contacted = Number(row.contacted_count || 0);
+      const interested = Number(row.interested_count || 0);
+      const notInterested = Number(row.not_interested_count || 0);
+      const dnc = Number(row.dnc_count || 0);
+      const processed = Number(row.processed_count || (contacted + interested + notInterested + dnc));
+      const conv = processed > 0 ? Math.round((interested / processed) * 1000) / 10 : 0;
+      const dailyAvg = Math.round((processed / Math.max(numDays, 1)) * 10) / 10;
+      return {
+        rank: 0,
+        name: row.name,
+        uid: row.uid,
+        interested,
+        contacted,
+        not_interested: notInterested,
+        do_not_call: dnc,
+        total_processed: processed,
+        total_assigned: assigned,
+        conversion_rate: conv,
+        daily_avg: dailyAvg,
+        score: interested * 10 + contacted * 2 + processed,
+        tier: 'performer' as const,
+        tier_label: 'Outreach Agent',
+        last_active: row.last_active,
+      };
+    });
+
+    const sortBy = options?.sortBy || 'interested';
+    rawItems.sort((a, b) => {
+      if (sortBy === 'processed') {
+        return b.total_processed - a.total_processed || b.interested - a.interested || b.conversion_rate - a.conversion_rate;
+      }
+      if (sortBy === 'conversion') {
+        return b.conversion_rate - a.conversion_rate || b.interested - a.interested || b.total_processed - a.total_processed;
+      }
+      if (sortBy === 'contacted') {
+        return b.contacted - a.contacted || b.interested - a.interested;
+      }
+      // default: by interested (conversions / sales leads won)
+      return b.interested - a.interested || b.conversion_rate - a.conversion_rate || b.total_processed - a.total_processed || a.name.localeCompare(b.name);
+    });
+
+    const limit = Math.min(Math.max(Number(options?.limit ?? 10), 1), 50);
+    const leaders: TelemarketerLeaderItem[] = rawItems.slice(0, limit).map((item, index) => {
+      const rank = index + 1;
+      let tier: TelemarketerLeaderItem['tier'] = 'performer';
+      let tier_label = 'Outreach Agent';
+      if (rank === 1 && item.interested > 0) {
+        tier = 'champion';
+        tier_label = '🥇 Champion';
+      } else if (rank <= 3 && item.interested > 0) {
+        tier = 'top_performer';
+        tier_label = rank === 2 ? '🥈 2nd Place' : '🥉 3rd Place';
+      } else if (rank <= 7 && (item.interested > 0 || item.total_processed > 0)) {
+        tier = 'high_achiever';
+        tier_label = '⭐ Top Achiever';
+      }
+      return {
+        ...item,
+        rank,
+        tier,
+        tier_label,
+      };
+    });
+
     return {
-      rank: 0,
-      name: row.name,
-      uid: row.uid,
-      interested,
-      contacted,
-      not_interested: notInterested,
-      do_not_call: dnc,
-      total_processed: processed,
-      total_assigned: assigned,
-      conversion_rate: conv,
-      daily_avg: dailyAvg,
-      score: interested * 10 + contacted * 2 + processed,
-      tier: 'performer' as const,
-      tier_label: 'Outreach Agent',
-      last_active: row.last_active,
+      ok: true,
+      dateRange: {
+        startDate: startIso.slice(0, 10),
+        endDate: endIso.slice(0, 10),
+        days: numDays,
+      },
+      sortBy,
+      total: rawItems.length,
+      leaders,
     };
-  });
-
-  const sortBy = options?.sortBy || 'interested';
-  rawItems.sort((a, b) => {
-    if (sortBy === 'processed') {
-      return b.total_processed - a.total_processed || b.interested - a.interested || b.conversion_rate - a.conversion_rate;
-    }
-    if (sortBy === 'conversion') {
-      return b.conversion_rate - a.conversion_rate || b.interested - a.interested || b.total_processed - a.total_processed;
-    }
-    if (sortBy === 'contacted') {
-      return b.contacted - a.contacted || b.interested - a.interested;
-    }
-    // default: by interested (conversions / sales leads won)
-    return b.interested - a.interested || b.conversion_rate - a.conversion_rate || b.total_processed - a.total_processed || a.name.localeCompare(b.name);
-  });
-
-  const limit = Math.min(Math.max(Number(options?.limit ?? 10), 1), 50);
-  const leaders: TelemarketerLeaderItem[] = rawItems.slice(0, limit).map((item, index) => {
-    const rank = index + 1;
-    let tier: TelemarketerLeaderItem['tier'] = 'performer';
-    let tier_label = 'Outreach Agent';
-    if (rank === 1 && item.interested > 0) {
-      tier = 'champion';
-      tier_label = '🥇 Champion';
-    } else if (rank <= 3 && item.interested > 0) {
-      tier = 'top_performer';
-      tier_label = rank === 2 ? '🥈 2nd Place' : '🥉 3rd Place';
-    } else if (rank <= 7 && (item.interested > 0 || item.total_processed > 0)) {
-      tier = 'high_achiever';
-      tier_label = '⭐ Top Achiever';
-    }
+  } catch (err) {
+    console.error('[lead-activity] getTopTelemarketersLeaderboard failed:', err);
     return {
-      ...item,
-      rank,
-      tier,
-      tier_label,
+      ok: false,
+      dateRange: {
+        startDate: startIso ? startIso.slice(0, 10) : '',
+        endDate: endIso ? endIso.slice(0, 10) : '',
+        days: numDays || 7,
+      },
+      sortBy: options?.sortBy || 'interested',
+      total: 0,
+      leaders: [],
     };
-  });
-
-  return {
-    ok: true,
-    dateRange: {
-      startDate: startIso.slice(0, 10),
-      endDate: endIso.slice(0, 10),
-      days: numDays,
-    },
-    sortBy,
-    total: rawItems.length,
-    leaders,
-  };
+  }
 }
 
 export async function getLeadActivityStats(options?: LeadActivityStatsOptions): Promise<LeadActivityStats> {
-  if (!configured()) {
-    return {
-      kpis: { totalActivities: 0, processedToday: 0, processedYesterday: 0, totalContacted: 0, totalInterested: 0, conversionRate: 0, activeTelemarketers: 0, totalLeadsInPool: 0 },
-      dailyLeadProcessed: [],
-      progressByStatus: [],
-      perTelemarketerSummary: [],
-      topLeaders: [],
-      dateRange: { startDate: '', endDate: '', days: 0 },
-    };
-  }
-  await migrate();
+  const fallbackDateRange = {
+    startDate: options?.startDate || '',
+    endDate: options?.endDate || '',
+    days: Number(options?.days) || 7,
+  };
+  const emptyStats: LeadActivityStats = {
+    kpis: { totalActivities: 0, processedToday: 0, processedYesterday: 0, totalContacted: 0, totalInterested: 0, conversionRate: 0, activeTelemarketers: 0, totalLeadsInPool: 0 },
+    dailyLeadProcessed: [],
+    progressByStatus: [],
+    perTelemarketerSummary: [],
+    topLeaders: [],
+    dateRange: fallbackDateRange,
+  };
 
-  let startIso: string;
-  let endIso: string;
-  let numDays: number;
-  const now = new Date();
+  if (!configured()) return emptyStats;
 
-  if (options?.startDate && options?.endDate) {
-    const sRaw = options.startDate.trim();
-    const eRaw = options.endDate.trim();
-    const sStr = sRaw.includes('T') ? sRaw : sRaw + 'T00:00:00.000Z';
-    const eStr = eRaw.includes('T') ? eRaw : eRaw + 'T23:59:59.999Z';
-    const s = new Date(sStr);
-    const e = new Date(eStr);
-    if (!isNaN(s.getTime()) && !isNaN(e.getTime()) && s <= e) {
-      startIso = s.toISOString();
-      endIso = e.toISOString();
-      numDays = Math.max(1, Math.min(Math.ceil((e.getTime() - s.getTime()) / 86400000), 180));
+  try {
+    await migrate();
+
+    let startIso: string;
+    let endIso: string;
+    let numDays: number;
+    const now = new Date();
+
+    if (options?.startDate && options?.endDate) {
+      const sRaw = options.startDate.trim();
+      const eRaw = options.endDate.trim();
+      const sStr = sRaw.includes('T') ? sRaw : sRaw + 'T00:00:00.000Z';
+      const eStr = eRaw.includes('T') ? eRaw : eRaw + 'T23:59:59.999Z';
+      const s = new Date(sStr);
+      const e = new Date(eStr);
+      if (!isNaN(s.getTime()) && !isNaN(e.getTime()) && s <= e) {
+        startIso = s.toISOString();
+        endIso = e.toISOString();
+        numDays = Math.max(1, Math.min(Math.ceil((e.getTime() - s.getTime()) / 86400000), 180));
+      } else {
+        numDays = Math.min(Math.max(Number(options?.days ?? 7), 1), 90);
+        const sFallback = new Date(now.getTime() - (numDays - 1) * 86400000);
+        sFallback.setHours(0, 0, 0, 0);
+        startIso = sFallback.toISOString();
+        endIso = now.toISOString();
+      }
     } else {
       numDays = Math.min(Math.max(Number(options?.days ?? 7), 1), 90);
       const sFallback = new Date(now.getTime() - (numDays - 1) * 86400000);
@@ -3361,222 +3410,242 @@ export async function getLeadActivityStats(options?: LeadActivityStatsOptions): 
       startIso = sFallback.toISOString();
       endIso = now.toISOString();
     }
-  } else {
-    numDays = Math.min(Math.max(Number(options?.days ?? 7), 1), 90);
-    const sFallback = new Date(now.getTime() - (numDays - 1) * 86400000);
-    sFallback.setHours(0, 0, 0, 0);
-    startIso = sFallback.toISOString();
-    endIso = now.toISOString();
-  }
 
-  const teleFilter = options?.telemarketer && options.telemarketer !== 'all' ? options.telemarketer.trim() : null;
+    const teleFilter = options?.telemarketer && options.telemarketer !== 'all' ? options.telemarketer.trim() : null;
 
-  // 1. KPIs & Status Counts
-  const statusRes = await sql<{
-    total_leads: string;
-    unassigned: string;
-    assigned: string;
-    contacted: string;
-    interested: string;
-    not_interested: string;
-    do_not_call: string;
-  }>(`
-    select
-      count(*)::text as total_leads,
-      count(*) filter (where coalesce(c.lead_status, 'unassigned') = 'unassigned')::text as unassigned,
-      count(*) filter (where c.lead_status = 'assigned')::text as assigned,
-      count(*) filter (where c.lead_status = 'contacted')::text as contacted,
-      count(*) filter (where c.lead_status = 'interested')::text as interested,
-      count(*) filter (where c.lead_status = 'not_interested')::text as not_interested,
-      count(*) filter (where c.lead_status = 'do_not_call')::text as do_not_call
-    from company_data c
-    where c.merged_into is null and coalesce(c.is_hidden, false) = false
-  `);
-  const sRow = statusRes.rows[0];
-  const totalLeads = Number(sRow?.total_leads ?? 0);
-  const totalContacted = Number(sRow?.contacted ?? 0);
-  const totalInterested = Number(sRow?.interested ?? 0);
-  const totalNotInterested = Number(sRow?.not_interested ?? 0);
-  const totalDnc = Number(sRow?.do_not_call ?? 0);
-  const totalAssigned = Number(sRow?.assigned ?? 0);
-  const totalUnassigned = Number(sRow?.unassigned ?? 0);
+    // 1. KPIs & Status Counts
+    const statusRes = await sql<{
+      total_leads: string;
+      unassigned: string;
+      assigned: string;
+      contacted: string;
+      interested: string;
+      not_interested: string;
+      do_not_call: string;
+    }>(`
+      select
+        count(*)::text as total_leads,
+        count(*) filter (where coalesce(c.lead_status, 'unassigned') = 'unassigned')::text as unassigned,
+        count(*) filter (where c.lead_status = 'assigned')::text as assigned,
+        count(*) filter (where c.lead_status = 'contacted')::text as contacted,
+        count(*) filter (where c.lead_status = 'interested')::text as interested,
+        count(*) filter (where c.lead_status = 'not_interested')::text as not_interested,
+        count(*) filter (where c.lead_status = 'do_not_call')::text as do_not_call
+      from company_data c
+      where c.merged_into is null and coalesce(c.is_hidden, false) = false
+    `);
+    const sRow = statusRes.rows[0];
+    const totalLeads = Number(sRow?.total_leads ?? 0);
+    const totalContacted = Number(sRow?.contacted ?? 0);
+    const totalInterested = Number(sRow?.interested ?? 0);
+    const totalNotInterested = Number(sRow?.not_interested ?? 0);
+    const totalDnc = Number(sRow?.do_not_call ?? 0);
+    const totalAssigned = Number(sRow?.assigned ?? 0);
+    const totalUnassigned = Number(sRow?.unassigned ?? 0);
 
-  const processedTotal = totalContacted + totalInterested + totalNotInterested + totalDnc;
-  const conversionRate = processedTotal > 0 ? Math.round((totalInterested / processedTotal) * 1000) / 10 : 0;
+    const processedTotal = totalContacted + totalInterested + totalNotInterested + totalDnc;
+    const conversionRate = processedTotal > 0 ? Math.round((totalInterested / processedTotal) * 1000) / 10 : 0;
 
-  // Activity counts
-  const actRes = await sql<{
-    total_act: string;
-    today_act: string;
-    yesterday_act: string;
-    distinct_agents: string;
-  }>(`
-    select
-      count(*)::text as total_act,
-      count(*) filter (where created_at >= date_trunc('day', now()))::text as today_act,
-      count(*) filter (where created_at >= date_trunc('day', now() - interval '1 day') and created_at < date_trunc('day', now()))::text as yesterday_act,
-      count(distinct coalesce(telemarketer_name, telemarketer_uid)) filter (where telemarketer_name is not null)::text as distinct_agents
-    from lead_activity_log
-    where ($1::text is null or lower(trim(telemarketer_name)) = lower(trim($1)) or telemarketer_uid = $1)
-  `, [teleFilter]);
-  const aRow = actRes.rows[0];
+    // Activity counts
+    const actRes = await sql<{
+      total_act: string;
+      today_act: string;
+      yesterday_act: string;
+      distinct_agents: string;
+    }>(`
+      select
+        count(*)::text as total_act,
+        count(*) filter (where created_at >= date_trunc('day', now()))::text as today_act,
+        count(*) filter (where created_at >= date_trunc('day', now() - interval '1 day') and created_at < date_trunc('day', now()))::text as yesterday_act,
+        count(distinct coalesce(telemarketer_name, telemarketer_uid)) filter (where telemarketer_name is not null)::text as distinct_agents
+      from lead_activity_log
+      where ($1::text is null or lower(trim(telemarketer_name)) = lower(trim($1::text)) or telemarketer_uid = $1::text)
+    `, [teleFilter]);
+    const aRow = actRes.rows[0];
 
-  // 2. Daily Lead Processed (aggregated by date in the selected period)
-  const dailyRes = await sql<{
-    day: string;
-    total: string;
-    contacted: string;
-    interested: string;
-    not_interested: string;
-    do_not_call: string;
-    assigned: string;
-  }>(`
-    select
-      to_char(created_at, 'YYYY-MM-DD') as day,
-      count(*)::text as total,
-      count(*) filter (where new_status = 'contacted')::text as contacted,
-      count(*) filter (where new_status = 'interested')::text as interested,
-      count(*) filter (where new_status = 'not_interested')::text as not_interested,
-      count(*) filter (where new_status = 'do_not_call')::text as do_not_call,
-      count(*) filter (where new_status = 'assigned')::text as assigned
-    from lead_activity_log
-    where created_at >= $1::timestamptz and created_at <= $2::timestamptz
-      and ($3::text is null or lower(trim(telemarketer_name)) = lower(trim($3)) or telemarketer_uid = $3)
-    group by to_char(created_at, 'YYYY-MM-DD')
-    order by day desc
-  `, [startIso, endIso, teleFilter]);
+    // 2. Daily Lead Processed (aggregated by date in the selected period)
+    const dailyRes = await sql<{
+      day: string;
+      total: string;
+      contacted: string;
+      interested: string;
+      not_interested: string;
+      do_not_call: string;
+      assigned: string;
+    }>(`
+      select
+        to_char(created_at, 'YYYY-MM-DD') as day,
+        count(*)::text as total,
+        count(*) filter (where new_status = 'contacted')::text as contacted,
+        count(*) filter (where new_status = 'interested')::text as interested,
+        count(*) filter (where new_status = 'not_interested')::text as not_interested,
+        count(*) filter (where new_status = 'do_not_call')::text as do_not_call,
+        count(*) filter (where new_status = 'assigned')::text as assigned
+      from lead_activity_log
+      where created_at >= $1::timestamptz and created_at <= $2::timestamptz
+        and ($3::text is null or lower(trim(telemarketer_name)) = lower(trim($3::text)) or telemarketer_uid = $3::text)
+      group by to_char(created_at, 'YYYY-MM-DD')
+      order by day desc
+    `, [startIso, endIso, teleFilter]);
 
-  const dailyMap = new Map<string, typeof dailyRes.rows[0]>();
-  for (const r of dailyRes.rows) dailyMap.set(r.day, r);
+    const dailyMap = new Map<string, typeof dailyRes.rows[0]>();
+    for (const r of dailyRes.rows) dailyMap.set(r.day, r);
 
-  const dailyLeadProcessed: LeadActivityDailyStat[] = [];
-  const endDateObj = new Date(endIso);
-  for (let i = 0; i < numDays; i++) {
-    const d = new Date(endDateObj.getTime() - i * 86400000);
-    const dayStr = d.toISOString().slice(0, 10);
-    const matched = dailyMap.get(dayStr);
-    let displayDate = d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
-    const todayStr = now.toISOString().slice(0, 10);
-    const yesterdayStr = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
-    if (dayStr === todayStr) displayDate = 'Today (' + displayDate + ')';
-    else if (dayStr === yesterdayStr) displayDate = 'Yesterday (' + displayDate + ')';
+    const dailyLeadProcessed: LeadActivityDailyStat[] = [];
+    const endDateObj = new Date(endIso);
+    for (let i = 0; i < numDays; i++) {
+      const d = new Date(endDateObj.getTime() - i * 86400000);
+      const dayStr = d.toISOString().slice(0, 10);
+      const matched = dailyMap.get(dayStr);
+      let displayDate = d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+      const todayStr = now.toISOString().slice(0, 10);
+      const yesterdayStr = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+      if (dayStr === todayStr) displayDate = 'Today (' + displayDate + ')';
+      else if (dayStr === yesterdayStr) displayDate = 'Yesterday (' + displayDate + ')';
 
-    dailyLeadProcessed.push({
-      date: dayStr,
-      displayDate,
-      total: Number(matched?.total ?? 0),
-      contacted: Number(matched?.contacted ?? 0),
-      interested: Number(matched?.interested ?? 0),
-      not_interested: Number(matched?.not_interested ?? 0),
-      do_not_call: Number(matched?.do_not_call ?? 0),
-      assigned: Number(matched?.assigned ?? 0),
+      dailyLeadProcessed.push({
+        date: dayStr,
+        displayDate,
+        total: Number(matched?.total ?? 0),
+        contacted: Number(matched?.contacted ?? 0),
+        interested: Number(matched?.interested ?? 0),
+        not_interested: Number(matched?.not_interested ?? 0),
+        do_not_call: Number(matched?.do_not_call ?? 0),
+        assigned: Number(matched?.assigned ?? 0),
+      });
+    }
+
+    // 3. Progress by Status Type
+    const statusItems: Array<{ status: LeadStatus; label: string; count: number; color: string }> = [
+      { status: 'interested', label: '⭐ Interested / Won', count: totalInterested, color: '#15785a' },
+      { status: 'contacted', label: '📞 Contacted / In Progress', count: totalContacted, color: '#d97706' },
+      { status: 'assigned', label: '⏳ Assigned / Queue', count: totalAssigned, color: '#2563eb' },
+      { status: 'not_interested', label: '❌ Not Interested', count: totalNotInterested, color: '#dc2626' },
+      { status: 'do_not_call', label: '⛔ Do Not Call (DNC)', count: totalDnc, color: '#4b5563' },
+      { status: 'unassigned', label: '📋 Unassigned Pool', count: totalUnassigned, color: '#9b988f' },
+    ];
+    const denom = Math.max(totalLeads, 1);
+    const progressByStatus = statusItems.map((item) => ({
+      ...item,
+      percentage: Math.round((item.count / denom) * 1000) / 10,
+    }));
+
+    // 4. Per Telemarketer Activity Summary
+    const teleRes = await sql<{
+      name: string;
+      uid: string | null;
+      total_assigned: string;
+      contacted_count: string;
+      interested_count: string;
+      not_interested_count: string;
+      dnc_count: string;
+      pending_count: string;
+      total_activities: string;
+      last_active: string | null;
+    }>(`
+      with roster as (
+        select
+          t.id,
+          t.name,
+          t.uid,
+          count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false)::int as total_assigned,
+          count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'contacted')::int as contacted_count,
+          count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'interested')::int as interested_count,
+          count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'not_interested')::int as not_interested_count,
+          count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'do_not_call')::int as dnc_count,
+          count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and coalesce(c.lead_status, 'assigned') in ('assigned', 'unassigned'))::int as pending_count
+        from telemarketer t
+        left join company_data c on (
+          (t.uid is not null and (c.telemarketer_uid = t.uid or c.telemarketer_uid = ('uid:' || t.uid) or lower(trim(c.assigned_to)) = lower(trim(t.uid)) or lower(trim(c.assigned_to)) = lower(trim('uid:' || t.uid))))
+          or lower(trim(c.assigned_to)) = lower(trim(t.name))
+        )
+        where t.active = true
+        group by t.id, t.name, t.uid
+      ),
+      act_summary as (
+        select
+          t.id as telemarketer_id,
+          count(l.id)::int as total_activities,
+          max(l.created_at) as last_active
+        from telemarketer t
+        left join lead_activity_log l on (
+          lower(trim(l.telemarketer_name)) = lower(trim(t.name)) or (t.uid is not null and l.telemarketer_uid = t.uid)
+        )
+        where t.active = true
+        group by t.id
+      )
+      select
+        r.name,
+        r.uid,
+        coalesce(r.total_assigned, 0)::text as total_assigned,
+        coalesce(r.contacted_count, 0)::text as contacted_count,
+        coalesce(r.interested_count, 0)::text as interested_count,
+        coalesce(r.not_interested_count, 0)::text as not_interested_count,
+        coalesce(r.dnc_count, 0)::text as dnc_count,
+        coalesce(r.pending_count, 0)::text as pending_count,
+        coalesce(a.total_activities, 0)::text as total_activities,
+        a.last_active::text as last_active
+      from roster r
+      left join act_summary a on r.id = a.telemarketer_id
+      order by r.total_assigned desc, r.name asc
+    `);
+
+    const perTelemarketerSummary: LeadActivityTelemarketerSummary[] = teleRes.rows.map((row) => {
+      const assigned = Number(row.total_assigned || 0);
+      const contacted = Number(row.contacted_count || 0);
+      const interested = Number(row.interested_count || 0);
+      const notInterested = Number(row.not_interested_count || 0);
+      const dnc = Number(row.dnc_count || 0);
+      const pending = Number(row.pending_count || 0);
+      const processed = contacted + interested + notInterested + dnc;
+      const conv = processed > 0 ? Math.round((interested / processed) * 1000) / 10 : 0;
+      const dailyAvg = Math.round((processed / Math.max(numDays, 1)) * 10) / 10;
+      return {
+        name: row.name,
+        uid: row.uid,
+        total_assigned: assigned,
+        total_processed: processed,
+        contacted,
+        interested,
+        not_interested: notInterested,
+        do_not_call: dnc,
+        pending,
+        conversion_rate: conv,
+        daily_avg: dailyAvg,
+        last_active: row.last_active,
+      };
     });
-  }
 
-  // 3. Progress by Status Type
-  const statusItems: Array<{ status: LeadStatus; label: string; count: number; color: string }> = [
-    { status: 'interested', label: '⭐ Interested / Won', count: totalInterested, color: '#15785a' },
-    { status: 'contacted', label: '📞 Contacted / In Progress', count: totalContacted, color: '#d97706' },
-    { status: 'assigned', label: '⏳ Assigned / Queue', count: totalAssigned, color: '#2563eb' },
-    { status: 'not_interested', label: '❌ Not Interested', count: totalNotInterested, color: '#dc2626' },
-    { status: 'do_not_call', label: '⛔ Do Not Call (DNC)', count: totalDnc, color: '#4b5563' },
-    { status: 'unassigned', label: '📋 Unassigned Pool', count: totalUnassigned, color: '#9b988f' },
-  ];
-  const denom = Math.max(totalLeads, 1);
-  const progressByStatus = statusItems.map((item) => ({
-    ...item,
-    percentage: Math.round((item.count / denom) * 1000) / 10,
-  }));
+    // 5. Top 10 Telemarketer Leaderboard (for the selected period)
+    const leaderboardResult = await getTopTelemarketersLeaderboard({
+      startDate: options?.startDate,
+      endDate: options?.endDate,
+      days: numDays,
+      sortBy: options?.sortBy,
+      limit: options?.limit ?? 10,
+    });
 
-  // 4. Per Telemarketer Activity Summary
-  const teleRes = await sql<{
-    name: string;
-    uid: string | null;
-    total_assigned: string;
-    contacted_count: string;
-    interested_count: string;
-    not_interested_count: string;
-    dnc_count: string;
-    pending_count: string;
-    total_activities: string;
-    last_active: string | null;
-  }>(`
-    select
-      t.name,
-      t.uid,
-      count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false)::text as total_assigned,
-      count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'contacted')::text as contacted_count,
-      count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'interested')::text as interested_count,
-      count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'not_interested')::text as not_interested_count,
-      count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'do_not_call')::text as dnc_count,
-      count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and coalesce(c.lead_status, 'assigned') in ('assigned', 'unassigned'))::text as pending_count,
-      count(distinct l.id)::text as total_activities,
-      max(l.created_at)::text as last_active
-    from telemarketer t
-    left join company_data c on (
-      (t.uid is not null and (c.telemarketer_uid = t.uid or c.telemarketer_uid = ('uid:' || t.uid) or lower(trim(c.assigned_to)) = lower(trim(t.uid)) or lower(trim(c.assigned_to)) = lower(trim('uid:' || t.uid))))
-      or lower(trim(c.assigned_to)) = lower(trim(t.name))
-    )
-    left join lead_activity_log l on (
-      lower(trim(l.telemarketer_name)) = lower(trim(t.name)) or (t.uid is not null and l.telemarketer_uid = t.uid)
-    )
-    where t.active = true
-    group by t.id, t.name, t.uid
-    order by count(distinct c.id) desc, t.name asc
-  `);
-
-  const perTelemarketerSummary: LeadActivityTelemarketerSummary[] = teleRes.rows.map((row) => {
-    const assigned = Number(row.total_assigned || 0);
-    const contacted = Number(row.contacted_count || 0);
-    const interested = Number(row.interested_count || 0);
-    const notInterested = Number(row.not_interested_count || 0);
-    const dnc = Number(row.dnc_count || 0);
-    const pending = Number(row.pending_count || 0);
-    const processed = contacted + interested + notInterested + dnc;
-    const conv = processed > 0 ? Math.round((interested / processed) * 1000) / 10 : 0;
-    const dailyAvg = Math.round((processed / Math.max(numDays, 1)) * 10) / 10;
     return {
-      name: row.name,
-      uid: row.uid,
-      total_assigned: assigned,
-      total_processed: processed,
-      contacted,
-      interested,
-      not_interested: notInterested,
-      do_not_call: dnc,
-      pending,
-      conversion_rate: conv,
-      daily_avg: dailyAvg,
-      last_active: row.last_active,
+      kpis: {
+        totalActivities: Number(aRow?.total_act ?? 0),
+        processedToday: Number(aRow?.today_act ?? 0),
+        processedYesterday: Number(aRow?.yesterday_act ?? 0),
+        totalContacted,
+        totalInterested,
+        conversionRate,
+        activeTelemarketers: Number(aRow?.distinct_agents || perTelemarketerSummary.length || 0),
+        totalLeadsInPool: totalLeads,
+      },
+      dailyLeadProcessed,
+      progressByStatus,
+      perTelemarketerSummary,
+      topLeaders: leaderboardResult.leaders,
+      dateRange: leaderboardResult.dateRange,
     };
-  });
-
-  // 5. Top 10 Telemarketer Leaderboard (for the selected period)
-  const leaderboardResult = await getTopTelemarketersLeaderboard({
-    startDate: options?.startDate,
-    endDate: options?.endDate,
-    days: numDays,
-    sortBy: options?.sortBy,
-    limit: options?.limit ?? 10,
-  });
-
-  return {
-    kpis: {
-      totalActivities: Number(aRow?.total_act ?? 0),
-      processedToday: Number(aRow?.today_act ?? 0),
-      processedYesterday: Number(aRow?.yesterday_act ?? 0),
-      totalContacted,
-      totalInterested,
-      conversionRate,
-      activeTelemarketers: Number(aRow?.distinct_agents || perTelemarketerSummary.length || 0),
-      totalLeadsInPool: totalLeads,
-    },
-    dailyLeadProcessed,
-    progressByStatus,
-    perTelemarketerSummary,
-    topLeaders: leaderboardResult.leaders,
-    dateRange: leaderboardResult.dateRange,
-  };
+  } catch (err) {
+    console.error('[lead-activity] getLeadActivityStats failed:', err);
+    return emptyStats;
+  }
 }
 
 export async function listLeadActivities(options?: {

@@ -317,12 +317,12 @@ test('Lead Activity API endpoints in intel.ts handle stats, logs, mock generatio
       });
     }
 
-    if (sql.includes('from lead_activity_log') && sql.includes('date_trunc')) {
+    if (sql.includes('from lead_activity_log') && (sql.includes('date_trunc') || sql.includes('to_char'))) {
       return Response.json({
         rows: [
           {
-            act_date: '2026-09-24',
-            total_count: '25',
+            day: '2026-09-24',
+            total: '25',
             contacted: '10',
             interested: '5',
             not_interested: '6',
@@ -334,7 +334,7 @@ test('Lead Activity API endpoints in intel.ts handle stats, logs, mock generatio
       });
     }
 
-    if (sql.includes('log_period') || (sql.includes('active_roster') && sql.includes('contacted_count'))) {
+    if (sql.includes('period_stats') || sql.includes('log_period') || (sql.includes('roster') && sql.includes('processed_count'))) {
       return Response.json({
         rows: [
           {
@@ -624,7 +624,7 @@ test('getTopTelemarketersLeaderboard calculates date-bounded metrics, win rates,
       return Response.json({ rows: [], rowCount: 0 });
     }
 
-    if (sql.includes('log_period') || (sql.includes('active_roster') && sql.includes('contacted_count'))) {
+    if (sql.includes('period_stats') || sql.includes('log_period') || (sql.includes('roster') && sql.includes('contacted_count'))) {
       return Response.json({
         rows: [
           {

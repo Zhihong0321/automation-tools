@@ -7,8 +7,34 @@
 // The same page also accepts LAB_TOKEN for owner testing.
 import { TOKEN_STORE_JS } from './tokenstore.ts';
 
-export function page(): string {
-  return String.raw`<!doctype html>
+export type PageKind = 'research' | 'telemarketing';
+
+// The calling floor gets the same workspace, minus the surfaces that are not
+// part of calling: Home's discovery chooser, the report library and the guide.
+// They are hidden rather than deleted, so the two pages cannot drift apart, and
+// a report link opened from the floor still resolves to the same viewer.
+const TELEMARKETING_CSS =
+  '.telemarketing .nav-button[data-view="discover"],' +
+  '.telemarketing .nav-button[data-view="library"],' +
+  '.telemarketing .nav-button[href="/guide"],' +
+  '.telemarketing .mobile-tab[data-view="discover"],' +
+  '.telemarketing .mobile-tab[data-view="library"],' +
+  '.telemarketing .mobile-tab[href="/guide"],' +
+  '.telemarketing .gate-help{display:none}';
+
+function telemarketing(html: string): string {
+  return html
+    .replace('<body>', '<body data-portal="telemarketing">')
+    .replace('<title>EE Business Intelligence</title>', '<title>Telemarketing · EE Business Intelligence</title>')
+    .replace('<div id="portalApp" class="app"', '<div id="portalApp" class="app telemarketing"')
+    .replace('</style>', TELEMARKETING_CSS + '</style>')
+    // The wordmark is the one nav affordance that is not a link, so it is the
+    // one that has to be re-pointed: on the floor it opens the map, not the
+    // discovery chooser it would otherwise reveal.
+    .replace("switchView('discover')", "switchView('telemarketing')");
+}
+export function page(kind: PageKind = 'research'): string {
+  const html = String.raw`<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#151515"><title>EE Business Intelligence</title>
@@ -917,7 +943,7 @@ function showToast(message){var node=el('toast');node.textContent=message;node.c
 function copyText(text,label){if(!text)return;if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(function(){showToast('Copied: '+(label||text))}).catch(function(){fallbackCopy(text,label)})}else{fallbackCopy(text,label)}}
 function fallbackCopy(text,label){var ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();try{document.execCommand('copy');showToast('Copied: '+(label||text))}catch(e){showToast('Failed to copy')}finally{document.body.removeChild(ta)}}
 async function api(path,options){options=options||{};var headers=Object.assign({'Authorization':'Bearer '+state.token},options.headers||{});if(options.body)headers['Content-Type']='application/json';var response=await fetch(path,Object.assign({},options,{headers:headers}));var text=await response.text();var body={};try{body=text?JSON.parse(text):{}}catch(e){body={error:text||'Invalid server response'}}if(!response.ok){var message=typeof body.error==='string'?body.error:(body.error&&body.error.message)||('Request failed: '+response.status);var error=new Error(message);error.status=response.status;throw error}return body}
-async function connect(event){if(event)event.preventDefault();var key=el('accessKey').value.trim();if(!key)return;state.token=key;el('connectButton').disabled=true;el('gateError').textContent='';try{await api('/api/reports?limit=1');eeKey.save(key);el('accessGate').classList.add('hidden');el('portalApp').removeAttribute('inert');el('portalApp').setAttribute('aria-hidden','false');await loadLibrary();showToast('Workspace connected')}catch(error){state.token='';el('gateError').textContent=error.status===401?'Access key not accepted.':error.message}finally{el('connectButton').disabled=false}}
+async function connect(event){if(event)event.preventDefault();var key=el('accessKey').value.trim();if(!key)return;state.token=key;el('connectButton').disabled=true;el('gateError').textContent='';try{await api('/api/reports?limit=1');eeKey.save(key);el('accessGate').classList.add('hidden');el('portalApp').removeAttribute('inert');el('portalApp').setAttribute('aria-hidden','false');await loadLibrary();if(document.body.getAttribute('data-portal')==='telemarketing')switchView('telemarketing');showToast('Workspace connected')}catch(error){state.token='';el('gateError').textContent=error.status===401?'Access key not accepted.':error.message}finally{el('connectButton').disabled=false}}
 function disconnect(){eeKey.clear();state.token='';location.reload()}
 function authLost(error){if(error&&error.status===401){eeKey.clear();state.token='';el('accessGate').classList.remove('hidden');el('gateError').textContent='Your access expired. Enter the workspace key again.';return true}return false}
 function switchView(name){document.querySelectorAll('.view').forEach(function(node){node.classList.toggle('active',node.id===name+'View')});document.querySelectorAll('[data-view]').forEach(function(node){node.classList.toggle('active',node.getAttribute('data-view')===name)});if(name==='library')loadLibrary();else if(name==='activity')loadActivityView();else if(name==='assignment')loadAssignmentView();else if(name==='leads')loadLeadsView();else if(name==='contacts')loadContactsView();else if(name==='telemarketing')loadTelemarketingView();else if(name==='agents')loadAgentsView();else goHome();window.scrollTo({top:0,behavior:'smooth'})}
@@ -2888,4 +2914,5 @@ async function submitManualActivity(event){
 }
 (function boot(){var saved=eeKey.read();if(saved){el('accessKey').value=saved;connect()}else{setTimeout(function(){el('accessKey').focus()},80)}})();
 </script></body></html>`;
+  return kind === 'telemarketing' ? telemarketing(html) : html;
 }

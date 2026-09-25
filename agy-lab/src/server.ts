@@ -184,7 +184,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 
   if (method === 'GET' && (p === '/research' || p === '/research/' || p === '/portal')) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
-    return void res.end(portalPage());
+    return void res.end(portalPage('research'));
+  }
+
+  if (method === 'GET' && p === '/telemarketing') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
+    return void res.end(portalPage('telemarketing'));
   }
 
   if (method === 'GET' && (p === '/workers' || p === '/workers.html')) {

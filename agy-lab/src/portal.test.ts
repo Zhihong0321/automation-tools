@@ -34,6 +34,26 @@ test('end-user portal combines discovery, deep research, and report library', ()
   assert.doesNotThrow(() => new Function(script));
 });
 
+test('the telemarketing page is the workspace with the calling floor only', () => {
+  const html = page('telemarketing');
+  assert.match(html, /<body data-portal="telemarketing">/);
+  assert.match(html, /id="portalApp" class="app telemarketing"/);
+  assert.match(html, /Telemarketing Lead Map/);
+  assert.match(html, /class="brand" aria-label="Home" onclick="switchView\('telemarketing'\)"/);
+  assert.match(html, /switchView\('telemarketing'\);showToast\('Workspace connected'\)/);
+  assert.match(html, /\.telemarketing \.nav-button\[data-view="discover"\]/);
+  assert.match(html, /\.telemarketing \.nav-button\[data-view="library"\]/);
+  assert.match(html, /\.telemarketing \.nav-button\[href="\/guide"\]/);
+  assert.match(html, /\.telemarketing \.mobile-tab\[data-view="discover"\]/);
+  assert.match(html, /\.telemarketing \.mobile-tab\[data-view="library"\]/);
+  assert.match(html, /\.telemarketing \.mobile-tab\[href="\/guide"\]/);
+  // The full markup stays shared so /telemarketing cannot drift from /research.
+  // What differs is only that the non-calling affordances are hidden.
+  assert.match(html, /id="discoverView"/);
+  assert.match(html, /id="libraryView"/);
+  assert.match(html, /href="\/guide"/);
+});
+
 test('portal uses a mobile bottom navigation and scoped access gate', () => {
   const html = page();
   assert.match(html, /class="mobile-nav"/);

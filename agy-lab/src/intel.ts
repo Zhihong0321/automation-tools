@@ -3670,55 +3670,88 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
 
   // ---- Lead Activity & Presentation Operations -----------------------------
   if (method === 'GET' && p === '/api/lead-activity/stats') {
-    const days = parseInt(url.searchParams.get('days') || '7', 10);
-    const startDate = url.searchParams.get('startDate') || url.searchParams.get('from') || undefined;
-    const endDate = url.searchParams.get('endDate') || url.searchParams.get('to') || undefined;
-    const telemarketer = url.searchParams.get('telemarketer') || undefined;
-    const sortBy = (url.searchParams.get('sortBy') || undefined) as any;
-    const limit = parseInt(url.searchParams.get('limit') || '10', 10);
-    const stats = await db.getLeadActivityStats({
-      days: isNaN(days) ? 7 : days,
-      startDate,
-      endDate,
-      telemarketer,
-      sortBy,
-      limit: isNaN(limit) ? 10 : limit,
-    });
-    ctx.json(res, 200, { ok: true, stats });
+    try {
+      const days = parseInt(url.searchParams.get('days') || '7', 10);
+      const startDate = url.searchParams.get('startDate') || url.searchParams.get('from') || undefined;
+      const endDate = url.searchParams.get('endDate') || url.searchParams.get('to') || undefined;
+      const telemarketer = url.searchParams.get('telemarketer') || undefined;
+      const sortBy = (url.searchParams.get('sortBy') || undefined) as any;
+      const limit = parseInt(url.searchParams.get('limit') || '10', 10);
+      const stats = await db.getLeadActivityStats({
+        days: isNaN(days) ? 7 : days,
+        startDate,
+        endDate,
+        telemarketer,
+        sortBy,
+        limit: isNaN(limit) ? 10 : limit,
+      });
+      ctx.json(res, 200, { ok: true, stats });
+    } catch (err: any) {
+      console.error('[lead-activity/stats] endpoint error:', err);
+      ctx.json(res, 200, {
+        ok: true,
+        stats: {
+          kpis: { totalActivities: 0, processedToday: 0, processedYesterday: 0, totalContacted: 0, totalInterested: 0, conversionRate: 0, activeTelemarketers: 0, totalLeadsInPool: 0 },
+          dailyLeadProcessed: [],
+          progressByStatus: [],
+          perTelemarketerSummary: [],
+          topLeaders: [],
+          dateRange: { startDate: '', endDate: '', days: 7 },
+        },
+        error: String(err?.message || err),
+      });
+    }
     return true;
   }
 
   if (method === 'GET' && p === '/api/lead-activity/leaderboard') {
-    const days = parseInt(url.searchParams.get('days') || '7', 10);
-    const startDate = url.searchParams.get('startDate') || url.searchParams.get('from') || undefined;
-    const endDate = url.searchParams.get('endDate') || url.searchParams.get('to') || undefined;
-    const sortBy = (url.searchParams.get('sortBy') || 'interested') as any;
-    const limit = parseInt(url.searchParams.get('limit') || '10', 10);
-    const result = await db.getTopTelemarketersLeaderboard({
-      days: isNaN(days) ? 7 : days,
-      startDate,
-      endDate,
-      sortBy,
-      limit: isNaN(limit) ? 10 : limit,
-    });
-    ctx.json(res, 200, result);
+    try {
+      const days = parseInt(url.searchParams.get('days') || '7', 10);
+      const startDate = url.searchParams.get('startDate') || url.searchParams.get('from') || undefined;
+      const endDate = url.searchParams.get('endDate') || url.searchParams.get('to') || undefined;
+      const sortBy = (url.searchParams.get('sortBy') || 'interested') as any;
+      const limit = parseInt(url.searchParams.get('limit') || '10', 10);
+      const result = await db.getTopTelemarketersLeaderboard({
+        days: isNaN(days) ? 7 : days,
+        startDate,
+        endDate,
+        sortBy,
+        limit: isNaN(limit) ? 10 : limit,
+      });
+      ctx.json(res, 200, result);
+    } catch (err: any) {
+      console.error('[lead-activity/leaderboard] endpoint error:', err);
+      ctx.json(res, 200, {
+        ok: false,
+        dateRange: { startDate: '', endDate: '', days: 7 },
+        sortBy: 'interested',
+        total: 0,
+        leaders: [],
+        error: String(err?.message || err),
+      });
+    }
     return true;
   }
 
   if (method === 'GET' && p === '/api/lead-activity/log') {
-    const limit = parseInt(url.searchParams.get('limit') || '50', 10);
-    const offset = parseInt(url.searchParams.get('offset') || '0', 10);
-    const telemarketer = url.searchParams.get('telemarketer') || undefined;
-    const status = url.searchParams.get('status') || undefined;
-    const search = url.searchParams.get('search') || undefined;
-    const result = await db.listLeadActivities({
-      limit: isNaN(limit) ? 50 : limit,
-      offset: isNaN(offset) ? 0 : offset,
-      telemarketer,
-      status,
-      search,
-    });
-    ctx.json(res, 200, { ok: true, ...result });
+    try {
+      const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+      const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+      const telemarketer = url.searchParams.get('telemarketer') || undefined;
+      const status = url.searchParams.get('status') || undefined;
+      const search = url.searchParams.get('search') || undefined;
+      const result = await db.listLeadActivities({
+        limit: isNaN(limit) ? 50 : limit,
+        offset: isNaN(offset) ? 0 : offset,
+        telemarketer,
+        status,
+        search,
+      });
+      ctx.json(res, 200, { ok: true, ...result });
+    } catch (err: any) {
+      console.error('[lead-activity/log] endpoint error:', err);
+      ctx.json(res, 200, { ok: true, activities: [], total: 0, error: String(err?.message || err) });
+    }
     return true;
   }
 
