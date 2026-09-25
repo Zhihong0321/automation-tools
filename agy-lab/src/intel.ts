@@ -3013,7 +3013,8 @@ export async function handleTelemarketerApi(
   const p = url.pathname;
   const method = req.method ?? 'GET';
 
-  if (!p.startsWith('/api/telemarketer') && !p.startsWith('/api/tm/')) return false;
+  if (p.startsWith('/api/telemarketers')) return false;
+  if (!p.startsWith('/api/telemarketer/') && p !== '/api/telemarketer' && !p.startsWith('/api/tm/') && p !== '/api/tm') return false;
 
   const dbi = { ...db, ...(ctx.db || {}) };
 

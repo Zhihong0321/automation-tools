@@ -821,6 +821,23 @@ test('Telemarketer API endpoints handle auth by Telemarketer UID, lead reading, 
     assert.equal(getBody().telemarketer.name, 'Sarah Tan');
     assert.equal(getBody().stats.total, 45);
   }
+
+  // 4i. Operator telemarketers routes (/api/telemarketers) must NEVER be hijacked by handleTelemarketerApi
+  {
+    const reqGet: any = { method: 'GET', headers: { 'authorization': 'Bearer eternalgy2026eternalgy2026' } };
+    const resGet: any = {};
+    const urlGet = new URL('http://localhost/api/telemarketers');
+    const { ctx: ctxGet } = makeCtx();
+    const handledGet = await intel.handleTelemarketerApi(reqGet, resGet, urlGet, ctxGet as any);
+    assert.equal(handledGet, false, 'handleTelemarketerApi must ignore /api/telemarketers (operator route)');
+
+    const reqPost: any = { method: 'POST', headers: { 'authorization': 'Bearer eternalgy2026eternalgy2026' } };
+    const resPost: any = {};
+    const urlPost = new URL('http://localhost/api/telemarketers/import');
+    const { ctx: ctxPost } = makeCtx();
+    const handledPost = await intel.handleTelemarketerApi(reqPost, resPost, urlPost, ctxPost as any);
+    assert.equal(handledPost, false, 'handleTelemarketerApi must ignore /api/telemarketers/import (operator route)');
+  }
 });
 
 

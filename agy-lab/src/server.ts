@@ -226,7 +226,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   }
 
   // Telemarketer API: authenticated by Telemarketer UID directly (no operator key needed)
-  if (p.startsWith('/api/telemarketer') || p.startsWith('/api/tm/')) {
+  if (!p.startsWith('/api/telemarketers') && (p.startsWith('/api/telemarketer/') || p === '/api/telemarketer' || p.startsWith('/api/tm/') || p === '/api/tm')) {
     if (await intel.handleTelemarketerApi(req, res, url, { json, readJson })) return;
   }
 
