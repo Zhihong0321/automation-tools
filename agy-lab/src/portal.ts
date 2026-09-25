@@ -186,10 +186,28 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
 .assign-bar-pending{background:#93c5fd}
 .assign-active-badge{display:none;position:absolute;top:10px;right:10px;font:750 8.5px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--accent);background:#dbeafe;padding:3px 7px;border-radius:3px}
 .assign-agent-card.active .assign-active-badge{display:inline-block}
+.act-chart-wrap{display:flex;align-items:flex-end;gap:14px;min-height:220px;padding:24px 12px 10px;overflow-x:auto}
+.act-bar-col{flex:1;min-width:64px;display:flex;flex-direction:column;align-items:center;gap:8px}
+.act-bar-val{font:700 12px/1 var(--mono);color:var(--ink)}
+.act-bar-stack{width:100%;max-width:44px;min-height:4px;border-radius:4px 4px 0 0;overflow:hidden;display:flex;flex-direction:column-reverse;background:#f3f4f6}
+.act-bar-seg{width:100%;transition:height .2s}
+.act-bar-lbl{font:650 9px/1.2 var(--sans);color:var(--muted);text-transform:uppercase;letter-spacing:.05em;text-align:center;word-break:keep-all}
+.act-legend{display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding-top:16px;border-top:1px solid var(--soft);margin-top:14px}
+.act-legend-item{display:inline-flex;align-items:center;gap:6px;font:650 11px/1 var(--sans);color:var(--muted)}
+.act-legend-pip{width:9px;height:9px;border-radius:2px}
+.act-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:12px}
+.act-table th{text-align:left;font:750 9px/1.2 var(--sans);letter-spacing:.11em;text-transform:uppercase;color:var(--muted);padding:8px 12px;border-bottom:1px solid var(--ink)}
+.act-table td{padding:12px;border-bottom:1px solid var(--soft);vertical-align:middle}
+.act-table tr:hover td{background:#fafafa}
+.act-progress-row{margin-bottom:14px}
+.act-progress-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;font-size:12.5px}
+.act-progress-bar{height:10px;border-radius:5px;background:#e5e7eb;overflow:hidden;display:flex}
+.act-trans-pill{display:inline-flex;align-items:center;gap:6px;font:700 9px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;padding:4px 8px;border-radius:3px}
+.act-note-bubble{background:#f8f9fa;border:1px solid var(--soft);border-radius:4px;padding:8px 12px;font-size:12.5px;color:var(--ink);line-height:1.45;margin-top:6px}
 </style></head><body>
 <div id="accessGate" class="gate"><div class="gate-panel"><div class="gate-mark">EE</div><h1>Private intelligence workspace.</h1><p>Enter the access key supplied by the workspace owner. You enter it once: it stays in this browser and is never added to a report link.</p><form class="gate-form" onsubmit="connect(event)"><input id="accessKey" type="password" autocomplete="current-password" placeholder="Workspace access key" aria-label="Workspace access key"><button id="connectButton" class="primary" type="submit">Enter</button></form><p id="gateError" class="gate-error" role="alert"></p><p class="gate-help"><a href="/guide" target="_blank" rel="noopener">New here? Read the guide first ↗ · 新手指南</a></p></div></div>
 <div id="portalApp" class="app" aria-hidden="true" inert>
-  <header class="mast"><div class="mast-inner"><button type="button" class="brand" aria-label="Home" onclick="switchView('discover')"><span class="mark">EE</span><span>Business intelligence</span></button><nav class="desktop-nav" aria-label="Workspace"><button class="nav-button active" data-view="discover" onclick="switchView('discover')">Home</button><button class="nav-button" data-view="telemarketing" onclick="switchView('telemarketing')">Telemarketing</button><button class="nav-button" data-view="assignment" onclick="switchView('assignment')">Lead Assignment</button><button class="nav-button" data-view="leads" onclick="switchView('leads')">Leads Master</button><button class="nav-button" data-view="contacts" onclick="switchView('contacts')">Contacts Master</button><button class="nav-button" data-view="agents" onclick="switchView('agents')">Telemarketers</button><button class="nav-button" data-view="library" onclick="switchView('library')">Reports</button><a class="nav-button" href="/guide" target="_blank" rel="noopener">Guide</a><span class="access"><span class="access-dot"></span>Connected</span><button class="signout" onclick="disconnect()">Sign out</button></nav><button class="signout" onclick="disconnect()">Exit</button></div></header>
+  <header class="mast"><div class="mast-inner"><button type="button" class="brand" aria-label="Home" onclick="switchView('discover')"><span class="mark">EE</span><span>Business intelligence</span></button><nav class="desktop-nav" aria-label="Workspace"><button class="nav-button active" data-view="discover" onclick="switchView('discover')">Home</button><button class="nav-button" data-view="telemarketing" onclick="switchView('telemarketing')">Telemarketing</button><button class="nav-button" data-view="assignment" onclick="switchView('assignment')">Lead Assignment</button><button class="nav-button" data-view="activity" onclick="switchView('activity')">Lead Activity</button><button class="nav-button" data-view="leads" onclick="switchView('leads')">Leads Master</button><button class="nav-button" data-view="contacts" onclick="switchView('contacts')">Contacts Master</button><button class="nav-button" data-view="agents" onclick="switchView('agents')">Telemarketers</button><button class="nav-button" data-view="library" onclick="switchView('library')">Reports</button><a class="nav-button" href="/guide" target="_blank" rel="noopener">Guide</a><span class="access"><span class="access-dot"></span>Connected</span><button class="signout" onclick="disconnect()">Sign out</button></nav><button class="signout" onclick="disconnect()">Exit</button></div></header>
   <main class="content">
     <section id="discoverView" class="view active">
       <div class="hero"><div class="eyebrow" id="heroEyebrow">Live market discovery</div><h1 id="heroTitle">Find the companies worth knowing.</h1><p id="heroCopy">Pick one. Nothing is researched until you say so.</p></div>
@@ -383,6 +401,248 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
         <div style="display:flex;gap:8px;">
           <button id="btnPrevAssign" class="filter" type="button" onclick="prevAssignPage()" disabled>&larr; Previous</button>
           <button id="btnNextAssign" class="filter" type="button" onclick="nextAssignPage()" disabled>Next &rarr;</button>
+        </div>
+      </div>
+    </section>
+    <section id="activityView" class="view">
+      <div class="library-hero">
+        <div class="eyebrow">Real-Time Operations & Presentation Intelligence</div>
+        <h1>Lead activity & daily progress.</h1>
+        <p>Interactive presentation dashboard tracking daily outreach processing, pipeline progress by status type, per-telemarketer performance summaries, and live call logs.</p>
+      </div>
+
+      <!-- Action bar with presentation tools -->
+      <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin:24px 0 20px;padding:16px 20px;background:#f8f9fa;border:1px solid var(--line);border-radius:6px;">
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
+          <div style="display:flex;flex-direction:column;gap:3px;">
+            <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">Timeframe</span>
+            <select class="input select" id="activityDaysSelect" onchange="loadActivityView()" style="height:38px;font-size:13px;font-weight:600;min-width:140px;">
+              <option value="7" selected>Last 7 Days</option>
+              <option value="14">Last 14 Days</option>
+              <option value="3">Last 3 Days</option>
+              <option value="1">Today Only</option>
+              <option value="30">Last 30 Days</option>
+            </select>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:3px;">
+            <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">Telemarketer</span>
+            <select class="input select" id="activityTeleFilter" onchange="loadActivityView()" style="height:38px;font-size:13px;font-weight:600;min-width:180px;">
+              <option value="all">👥 All Telemarketers</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+          <button class="primary" type="button" onclick="openMockDataModal()" style="height:38px;padding:0 16px;background:#2759ff;" title="Generate realistic mock presentation data (contact info is 100% safe)">⚡ Generate Mock Data</button>
+          <button class="filter" type="button" onclick="openManualActivityModal()" style="height:38px;padding:0 12px;" title="Manually record a call note or update lead status">➕ Log Activity</button>
+          <button class="filter" type="button" onclick="openResetProgressModal()" style="height:38px;padding:0 12px;color:var(--bad);border-color:#fca5a5;background:#fff5f5;" title="Reset all mock lead assignments, statuses and notes back to default">🧹 Clear / Reset Progress</button>
+          <button class="filter" type="button" onclick="loadActivityView()" style="height:38px;">Refresh</button>
+        </div>
+      </div>
+
+      <!-- Top KPI Metric Cards -->
+      <div class="result-summary lead-summary-grid" style="margin-top:10px;">
+        <div class="metric"><strong id="actKpiProcessed">0</strong><span>Total Activities</span></div>
+        <div class="metric"><strong id="actKpiToday" style="color:var(--accent);">0</strong><span>Processed Today</span></div>
+        <div class="metric"><strong id="actKpiContacted" style="color:var(--warn);">0</strong><span>Leads Contacted</span></div>
+        <div class="metric"><strong id="actKpiInterested" style="color:var(--ok);">0</strong><span>Interested ⭐</span></div>
+        <div class="metric"><strong id="actKpiConversion" style="color:var(--ok);">0%</strong><span>Interest Rate</span></div>
+        <div class="metric"><strong id="actKpiAgents">0</strong><span>Active Telemarketers</span></div>
+      </div>
+
+      <!-- Presentation Item 1: Daily Lead Processed (with status changed) -->
+      <div style="margin:36px 0 16px;">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Presentation View 01</div>
+            <h2 style="margin:4px 0 0;">Daily Leads Processed (With Status Changed)</h2>
+          </div>
+          <span class="section-note">Daily volume of processed leads with status changes. Demonstrates team velocity and pipeline activity.</span>
+        </div>
+        <div id="activityDailyChartContainer" style="background:#fff;border:1px solid var(--line);border-radius:6px;padding:24px;margin-bottom:24px;">
+          <div class="empty">Loading daily processed volume…</div>
+        </div>
+      </div>
+
+      <!-- Presentation Item 2: Lead Progress Per Day Per Status Type -->
+      <div style="margin:36px 0 16px;">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Presentation View 02</div>
+            <h2 style="margin:4px 0 0;">Lead Progress Per Day Per Status Type</h2>
+          </div>
+          <span class="section-note">Daily breakdown across Contacted, Interested, Not Interested, Do Not Call, and Assigned.</span>
+        </div>
+        <div id="activityProgressContainer" style="background:#fff;border:1px solid var(--line);border-radius:6px;padding:24px;margin-bottom:24px;">
+          <div class="empty">Loading progress breakdown…</div>
+        </div>
+      </div>
+
+      <!-- Presentation Item 3: Per Telemarketer Activity Summary -->
+      <div style="margin:36px 0 16px;">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Presentation View 03</div>
+            <h2 style="margin:4px 0 0;">Per-Telemarketer Activity Summary</h2>
+          </div>
+          <span class="section-note">Individual caller quotas, throughput, win rate conversions, and daily outreach velocity.</span>
+        </div>
+        <div id="activityTeleSummaryContainer" class="agent-grid" style="margin-bottom:24px;">
+          <div class="empty">Loading telemarketer summaries…</div>
+        </div>
+      </div>
+
+      <!-- Real-Time Activity Feed -->
+      <div style="margin:36px 0 16px;">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Audit Stream</div>
+            <h2 style="margin:4px 0 0;">Live Call & Activity Feed</h2>
+          </div>
+          <span class="section-note">Searchable audit trail of status updates, assignment events, and call feedback.</span>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin:0 0 16px;padding:14px 18px;background:#f8f9fa;border:1px solid var(--line);border-radius:6px;">
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;flex:1;min-width:280px;">
+            <input class="input" id="activitySearchInput" placeholder="Search company, phone, notes…" style="max-width:280px;height:38px;font-size:13.5px;" onkeydown="if(event.key==='Enter')loadActivityLog()">
+            <select class="input select" id="activityLogStatusFilter" onchange="loadActivityLog()" style="max-width:180px;height:38px;font-size:13px;">
+              <option value="all">All Outcomes</option>
+              <option value="interested">⭐ Interested</option>
+              <option value="contacted">📞 Contacted</option>
+              <option value="assigned">⏳ Assigned</option>
+              <option value="not_interested">❌ Not Interested</option>
+              <option value="do_not_call">⛔ Do Not Call</option>
+            </select>
+            <button class="primary" type="button" onclick="loadActivityLog()" style="height:38px;padding:0 14px;">Filter</button>
+          </div>
+        </div>
+        <div id="activityLogFeedWrapper" class="company-list">
+          <div class="empty">Loading activities…</div>
+        </div>
+        <div id="activityLogPagination" style="display:flex;align-items:center;justify-content:space-between;padding:20px 0;border-top:1px solid var(--line);margin-top:16px;">
+          <span id="actPageInfo" style="font:500 12px/1 var(--mono);color:var(--muted);">Showing 0 of 0 activities</span>
+          <div style="display:flex;gap:8px;">
+            <button id="btnPrevAct" class="filter" type="button" onclick="prevActPage()" disabled>&larr; Previous</button>
+            <button id="btnNextAct" class="filter" type="button" onclick="nextActPage()" disabled>Next &rarr;</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal 1: Generate Mock Presentation Data -->
+      <div id="mockDataModal" class="modal-backdrop hidden" onclick="if(event.target===this)closeMockDataModal()">
+        <div class="modal-dialog" role="dialog" aria-labelledby="mockModalTitle" style="max-width:500px;">
+          <div class="modal-head">
+            <div>
+              <span class="sheet-title" id="mockModalTitle" style="font-size:15px;">⚡ Generate Mock Presentation Data</span>
+              <p style="margin:4px 0 0;font-size:12px;color:var(--muted);">Simulate realistic outreach for client presentations.</p>
+            </div>
+            <button type="button" class="back" onclick="closeMockDataModal()">✕</button>
+          </div>
+          <form onsubmit="submitMockData(event)">
+            <div style="margin:16px 0;padding:12px 14px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:6px;font-size:12px;color:#065f46;line-height:1.45;">
+              <strong>🛡️ Real Data Safety Guarantee:</strong>
+              <div style="margin-top:4px;">All real company names, phone numbers, addresses, ratings, and research dossiers are <strong>100% safe and untouched</strong>. Only lead assignment, status transitions, and call notes will be simulated.</div>
+            </div>
+            <div class="field" style="margin-bottom:14px;">
+              <label for="mockLeadCount" style="font-weight:600;font-size:12px;margin-bottom:6px;display:block;">Number of Leads to Process</label>
+              <select class="input select" id="mockLeadCount" style="width:100%;height:38px;font-size:13.5px;">
+                <option value="50">50 Leads (Quick Demo)</option>
+                <option value="80" selected>80 Leads (Balanced Portfolio)</option>
+                <option value="150">150 Leads (Deep Campaign)</option>
+                <option value="300">300 Leads (High Volume Enterprise)</option>
+              </select>
+            </div>
+            <div class="field" style="margin-bottom:14px;">
+              <label for="mockDaysSpan" style="font-weight:600;font-size:12px;margin-bottom:6px;display:block;">Spread Over Historical Days</label>
+              <select class="input select" id="mockDaysSpan" style="width:100%;height:38px;font-size:13.5px;">
+                <option value="7" selected>Last 7 Days (Recommended)</option>
+                <option value="14">Last 14 Days</option>
+                <option value="3">Last 3 Days</option>
+              </select>
+            </div>
+            <div style="margin-bottom:18px;">
+              <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;cursor:pointer;">
+                <input type="checkbox" id="mockClearFirst" checked>
+                <span>Reset previous mock progress before generating fresh run</span>
+              </label>
+            </div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button class="filter" type="button" onclick="closeMockDataModal()" style="height:38px;padding:0 14px;">Cancel</button>
+              <button class="primary" type="submit" id="btnSubmitMock" style="height:38px;padding:0 18px;background:#2759ff;">Generate Presentation Data</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Modal 2: Reset / Clear Mock Progress -->
+      <div id="resetProgressModal" class="modal-backdrop hidden" onclick="if(event.target===this)closeResetProgressModal()">
+        <div class="modal-dialog" role="dialog" aria-labelledby="resetModalTitle" style="max-width:480px;">
+          <div class="modal-head">
+            <div>
+              <span class="sheet-title" id="resetModalTitle" style="font-size:15px;color:var(--bad);">🧹 Reset / Clear Lead Progress</span>
+              <p style="margin:4px 0 0;font-size:12px;color:var(--muted);">Post-presentation teardown & cleanup.</p>
+            </div>
+            <button type="button" class="back" onclick="closeResetProgressModal()">✕</button>
+          </div>
+          <div style="margin:16px 0;padding:14px;background:#fff5f5;border:1px solid #fecaca;border-radius:6px;font-size:12.5px;color:#991b1b;line-height:1.5;">
+            <strong>⚠️ What will be reset:</strong>
+            <ul style="margin:6px 0 0;padding-left:18px;">
+              <li>All lead statuses will reset to <code>unassigned</code></li>
+              <li>All telemarketer assignments will be removed</li>
+              <li>All call notes and remarks will be cleared</li>
+              <li>All activity logs and audit records will be wiped</li>
+            </ul>
+            <div style="margin-top:10px;font-weight:700;color:var(--ok);">
+              ✓ Real company data, contacts, phones, and research dossiers remain 100% untouched.
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;justify-content:flex-end;">
+            <button class="filter" type="button" onclick="closeResetProgressModal()" style="height:38px;padding:0 14px;">Cancel</button>
+            <button class="primary" type="button" id="btnConfirmReset" onclick="submitResetProgress()" style="height:38px;padding:0 18px;background:var(--bad);border-color:var(--bad);">Confirm Reset (Clean Slate)</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal 3: Manual Activity / Call Log -->
+      <div id="manualActivityModal" class="modal-backdrop hidden" onclick="if(event.target===this)closeManualActivityModal()">
+        <div class="modal-dialog" role="dialog" aria-labelledby="manualModalTitle" style="max-width:480px;">
+          <div class="modal-head">
+            <div>
+              <span class="sheet-title" id="manualModalTitle" style="font-size:15px;">➕ Log Lead Activity</span>
+              <p style="margin:4px 0 0;font-size:12px;color:var(--muted);">Update lead status and record call outcome.</p>
+            </div>
+            <button type="button" class="back" onclick="closeManualActivityModal()">✕</button>
+          </div>
+          <form onsubmit="submitManualActivity(event)">
+            <div class="field" style="margin-bottom:12px;">
+              <label for="manualActCompanyId" style="font-weight:600;font-size:12px;margin-bottom:6px;display:block;">Select Company *</label>
+              <select class="input select" id="manualActCompanyId" required style="width:100%;height:38px;font-size:13px;">
+                <option value="">Choose company...</option>
+              </select>
+            </div>
+            <div class="field" style="margin-bottom:12px;">
+              <label for="manualActTele" style="font-weight:600;font-size:12px;margin-bottom:6px;display:block;">Telemarketer / Agent</label>
+              <select class="input select" id="manualActTele" style="width:100%;height:38px;font-size:13px;">
+                <option value="">Choose telemarketer...</option>
+              </select>
+            </div>
+            <div class="field" style="margin-bottom:12px;">
+              <label for="manualActStatus" style="font-weight:600;font-size:12px;margin-bottom:6px;display:block;">New Status / Outcome *</label>
+              <select class="input select" id="manualActStatus" required style="width:100%;height:38px;font-size:13px;">
+                <option value="contacted">📞 Contacted (Spoke with PIC / In Progress)</option>
+                <option value="interested">⭐ Interested (Won / High Potential Lead)</option>
+                <option value="not_interested">❌ Not Interested (Declined)</option>
+                <option value="do_not_call">⛔ Do Not Call (DNC / Invalid line)</option>
+                <option value="assigned">⏳ Assigned (Queue for calling)</option>
+              </select>
+            </div>
+            <div class="field" style="margin-bottom:14px;">
+              <label for="manualActNotes" style="font-weight:600;font-size:12px;margin-bottom:6px;display:block;">Call Notes & Remarks</label>
+              <textarea class="input" id="manualActNotes" placeholder="Enter conversation details, requested WhatsApp proposal, objections, etc..." style="width:100%;height:75px;padding:8px 10px;font-size:13px;border:1px solid var(--line);border-radius:4px;resize:vertical;"></textarea>
+            </div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button class="filter" type="button" onclick="closeManualActivityModal()" style="height:38px;padding:0 14px;">Cancel</button>
+              <button class="primary" type="submit" id="btnSubmitManualAct" style="height:38px;padding:0 18px;">Save Activity</button>
+            </div>
+          </form>
         </div>
       </div>
     </section>
@@ -580,7 +840,7 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
     </section>
     <section id="libraryView" class="view"><div class="library-hero"><div class="eyebrow">Persistent knowledge base</div><h1>Research library.</h1><p>Browse every market scan, company dossier and VIP brief in one place. Completed public reports keep the same permanent link.</p><div class="library-tools"><button id="retryFailedButton" class="primary" type="button" onclick="retryFailedReports(this)">Re-run all failed reports</button><span id="retryFailedNote" class="retry-note" role="status" aria-live="polite"></span></div></div><div class="filters" role="group" aria-label="Report type"><button class="filter active" data-filter="all" onclick="setFilter('all')">All reports</button><button class="filter" data-filter="company_research" onclick="setFilter('company_research')">Company research</button><button class="filter" data-filter="contact_research" onclick="setFilter('contact_research')">Contacts</button><button class="filter" data-filter="person_research" onclick="setFilter('person_research')">VIP briefs</button><button class="filter" data-filter="ads_research" onclick="setFilter('ads_research')">Ads</button><button class="filter" data-filter="ads_market" onclick="setFilter('ads_market')">Ads market</button><button class="filter" data-filter="business_search" onclick="setFilter('business_search')">Business lists</button></div><div id="reportList" class="report-list"><div class="empty">Loading research library…</div></div></section>
   </main>
-  <nav class="mobile-nav" aria-label="Workspace"><button class="mobile-tab active" data-view="discover" onclick="switchView('discover')"><span></span>Home</button><button class="mobile-tab" data-view="telemarketing" onclick="switchView('telemarketing')"><span></span>Map</button><button class="mobile-tab" data-view="assignment" onclick="switchView('assignment')"><span></span>Assign</button><button class="mobile-tab" data-view="leads" onclick="switchView('leads')"><span></span>Leads</button><button class="mobile-tab" data-view="contacts" onclick="switchView('contacts')"><span></span>Contacts</button><button class="mobile-tab" data-view="agents" onclick="switchView('agents')"><span></span>Agents</button><button class="mobile-tab" data-view="library" onclick="switchView('library')"><span></span>Reports</button><a class="mobile-tab" href="/guide" target="_blank" rel="noopener"><span></span>Guide</a></nav>
+  <nav class="mobile-nav" aria-label="Workspace"><button class="mobile-tab active" data-view="discover" onclick="switchView('discover')"><span></span>Home</button><button class="mobile-tab" data-view="telemarketing" onclick="switchView('telemarketing')"><span></span>Map</button><button class="mobile-tab" data-view="assignment" onclick="switchView('assignment')"><span></span>Assign</button><button class="mobile-tab" data-view="activity" onclick="switchView('activity')"><span></span>Activity</button><button class="mobile-tab" data-view="leads" onclick="switchView('leads')"><span></span>Leads</button><button class="mobile-tab" data-view="contacts" onclick="switchView('contacts')"><span></span>Contacts</button><button class="mobile-tab" data-view="agents" onclick="switchView('agents')"><span></span>Agents</button><button class="mobile-tab" data-view="library" onclick="switchView('library')"><span></span>Reports</button><a class="mobile-tab" href="/guide" target="_blank" rel="noopener"><span></span>Guide</a></nav>
 </div><div id="toast" class="toast" role="status"></div>
 <script>
 'use strict';
@@ -600,7 +860,7 @@ async function api(path,options){options=options||{};var headers=Object.assign({
 async function connect(event){if(event)event.preventDefault();var key=el('accessKey').value.trim();if(!key)return;state.token=key;el('connectButton').disabled=true;el('gateError').textContent='';try{await api('/api/reports?limit=1');eeKey.save(key);el('accessGate').classList.add('hidden');el('portalApp').removeAttribute('inert');el('portalApp').setAttribute('aria-hidden','false');await loadLibrary();showToast('Workspace connected')}catch(error){state.token='';el('gateError').textContent=error.status===401?'Access key not accepted.':error.message}finally{el('connectButton').disabled=false}}
 function disconnect(){eeKey.clear();state.token='';location.reload()}
 function authLost(error){if(error&&error.status===401){eeKey.clear();state.token='';el('accessGate').classList.remove('hidden');el('gateError').textContent='Your access expired. Enter the workspace key again.';return true}return false}
-function switchView(name){document.querySelectorAll('.view').forEach(function(node){node.classList.toggle('active',node.id===name+'View')});document.querySelectorAll('[data-view]').forEach(function(node){node.classList.toggle('active',node.getAttribute('data-view')===name)});if(name==='library')loadLibrary();else if(name==='assignment')loadAssignmentView();else if(name==='leads')loadLeadsView();else if(name==='contacts')loadContactsView();else if(name==='telemarketing')loadTelemarketingView();else if(name==='agents')loadAgentsView();else goHome();window.scrollTo({top:0,behavior:'smooth'})}
+function switchView(name){document.querySelectorAll('.view').forEach(function(node){node.classList.toggle('active',node.id===name+'View')});document.querySelectorAll('[data-view]').forEach(function(node){node.classList.toggle('active',node.getAttribute('data-view')===name)});if(name==='library')loadLibrary();else if(name==='activity')loadActivityView();else if(name==='assignment')loadAssignmentView();else if(name==='leads')loadLeadsView();else if(name==='contacts')loadContactsView();else if(name==='telemarketing')loadTelemarketingView();else if(name==='agents')loadAgentsView();else goHome();window.scrollTo({top:0,behavior:'smooth'})}
 function upsertJob(report,kind){state.jobs[report.id]=Object.assign({},state.jobs[report.id]||{},{report:report,kind:kind});renderJobs()}
 function renderJobs(){var values=Object.keys(state.jobs).map(function(key){return state.jobs[key]});el('activeSection').classList.toggle('hidden',values.length===0);el('jobs').innerHTML=values.map(function(job){var r=job.report;var done=terminal.indexOf(r.status)>=0;var pulse=r.status==='failed'?'bad':done?'done':'';var label=job.kind==='search'?'Market scan':job.kind==='lookup'?'Company lookup':job.kind==='vip'?'VIP brief':job.kind==='ads'?'Ads':job.kind==='contact'?'Contact research':'Company research';var open=safeUrl(r.view_url);return '<article class="job"><div class="job-type">'+label+'</div><div><div class="job-title">'+esc(r.title)+'</div><div class="job-meta">'+esc(r.status)+' · '+esc(r.id)+'</div></div><div class="job-action"><span class="pulse '+pulse+'"></span>'+(open?'<a class="text-action" target="_blank" rel="noopener" href="'+attr(open)+'">View <span>↗</span></a>':'')+'</div></article>'}).join('')}
 function poll(report,kind){upsertJob(report,kind);if(terminal.indexOf(report.status)>=0)return;setTimeout(async function(){try{var body=await api(report.api_url);upsertJob(body.report,kind);if(terminal.indexOf(body.report.status)<0){poll(body.report,kind);return}await loadLibrary();if((kind==='search'||kind==='lookup')&&body.report.status!=='failed'){renderSearch(body,kind)}if(kind==='deep'){showToast(body.report.status==='failed'?'Company research failed':'Company dossier is ready')}if(kind==='vip'){showToast(body.report.status==='failed'?'VIP brief failed':'VIP brief is ready')}if(kind==='adsmarket'){showToast(body.report.status==='failed'?'Ads market research failed':'Ads market report is ready')}if(kind==='contact'){showToast(body.report.status==='failed'?'Contact research failed':'Contact details are ready')}if(body.report.status==='failed')showToast(body.report.error||'Research failed')}catch(error){if(!authLost(error)){showToast(error.message);if(error.status===404){forgetReport(report.id)}else{poll(report,kind)}}}},5000)}
@@ -1858,6 +2118,499 @@ async function submitTamanUnassign(){
     if(!authLost(err))showToast('Failed to unassign: '+err.message);
   }finally{
     if(btn){btn.disabled=false;btn.textContent='Unassign'}
+  }
+}
+var activityState = {
+  days: 7,
+  teleFilter: 'all',
+  logLimit: 25,
+  logOffset: 0,
+  logTotal: 0,
+  search: '',
+  statusFilter: 'all',
+  agents: [],
+  stats: null,
+  log: []
+};
+
+async function loadActivityView(){
+  if(!state.token) return;
+  var dSel = el('activityDaysSelect');
+  if(dSel) activityState.days = Number(dSel.value) || 7;
+  var tSel = el('activityTeleFilter');
+  if(tSel) activityState.teleFilter = tSel.value || 'all';
+
+  await Promise.all([
+    loadActivityStats(),
+    loadActivityLog()
+  ]);
+}
+
+async function loadActivityStats(){
+  try{
+    var q = '/api/lead-activity/stats?days=' + activityState.days;
+    if(activityState.teleFilter && activityState.teleFilter !== 'all'){
+      q += '&telemarketer=' + encodeURIComponent(activityState.teleFilter);
+    }
+    var body = await api(q);
+    if(body && body.stats){
+      activityState.stats = body.stats;
+      renderActivityKPIs(body.stats.kpis || {});
+      renderDailyProcessedChart(body.stats.dailyLeadProcessed || []);
+      renderProgressByStatus(body.stats.dailyLeadProcessed || [], body.stats.progressByStatus || []);
+      renderTelemarketerActivitySummary(body.stats.perTelemarketerSummary || []);
+      populateActivityTeleSelectors(body.stats.perTelemarketerSummary || []);
+    }
+  }catch(err){
+    if(!authLost(err)) showToast('Failed to load activity stats: ' + err.message);
+  }
+}
+
+function renderActivityKPIs(kpis){
+  var eProc = el('actKpiProcessed');
+  var eToday = el('actKpiToday');
+  var eCont = el('actKpiContacted');
+  var eInt = el('actKpiInterested');
+  var eConv = el('actKpiConversion');
+  var eAgents = el('actKpiAgents');
+
+  if(eProc) eProc.textContent = kpis.totalActivities || 0;
+  if(eToday) eToday.textContent = kpis.processedToday || 0;
+  if(eCont) eCont.textContent = kpis.totalContacted || 0;
+  if(eInt) eInt.textContent = kpis.totalInterested || 0;
+  if(eConv) eConv.textContent = (kpis.conversionRate || 0) + '%';
+  if(eAgents) eAgents.textContent = kpis.activeTelemarketers || 0;
+}
+
+function renderDailyProcessedChart(daily){
+  var cont = el('activityDailyChartContainer');
+  if(!cont) return;
+  if(!daily || !daily.length){
+    cont.innerHTML = '<div class="empty">No activity records found in this timeframe. Click "⚡ Generate Mock Data" to populate realistic presentation statistics.</div>';
+    return;
+  }
+
+  var maxTotal = 1;
+  var sumTotal = 0;
+  daily.forEach(function(d){
+    if(d.total > maxTotal) maxTotal = d.total;
+    sumTotal += d.total;
+  });
+
+  var avgDaily = Math.round((sumTotal / Math.max(daily.length, 1)) * 10) / 10;
+
+  var html = '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:18px;">'
+    + '<div style="font:600 13px/1 var(--sans);color:var(--ink);">'
+    + 'Campaign Outreach Volume: <strong style="font-size:16px;color:var(--accent);">' + sumTotal + ' leads processed</strong>'
+    + ' <span style="color:var(--muted);font-size:12px;">(Avg ' + avgDaily + ' leads / day)</span>'
+    + '</div>'
+    + '<div class="act-legend">'
+    + '<span class="act-legend-item"><span class="act-legend-pip" style="background:#15785a;"></span> Interested</span>'
+    + '<span class="act-legend-item"><span class="act-legend-pip" style="background:#d97706;"></span> Contacted</span>'
+    + '<span class="act-legend-item"><span class="act-legend-pip" style="background:#dc2626;"></span> Not Interested</span>'
+    + '<span class="act-legend-item"><span class="act-legend-pip" style="background:#4b5563;"></span> DNC</span>'
+    + '<span class="act-legend-item"><span class="act-legend-pip" style="background:#2563eb;"></span> Assigned</span>'
+    + '</div>'
+    + '</div>';
+
+  html += '<div class="act-chart-wrap">';
+  var chronDaily = daily.slice().reverse();
+  chronDaily.forEach(function(d){
+    var pctHeight = Math.max(Math.round((d.total / maxTotal) * 160), 6);
+    var pInt = d.total > 0 ? (d.interested / d.total) * pctHeight : 0;
+    var pCont = d.total > 0 ? (d.contacted / d.total) * pctHeight : 0;
+    var pNotInt = d.total > 0 ? (d.not_interested / d.total) * pctHeight : 0;
+    var pDnc = d.total > 0 ? (d.do_not_call / d.total) * pctHeight : 0;
+    var pAss = d.total > 0 ? (d.assigned / d.total) * pctHeight : 0;
+
+    html += '<div class="act-bar-col">'
+      + '<span class="act-bar-val">' + d.total + '</span>'
+      + '<div class="act-bar-stack" style="height:' + pctHeight + 'px;" title="' + attr(d.displayDate) + ': ' + d.total + ' leads processed (' + d.interested + ' interested, ' + d.contacted + ' contacted)">'
+      + (pAss > 0 ? '<div class="act-bar-seg" style="height:' + pAss + 'px;background:#2563eb;"></div>' : '')
+      + (pDnc > 0 ? '<div class="act-bar-seg" style="height:' + pDnc + 'px;background:#4b5563;"></div>' : '')
+      + (pNotInt > 0 ? '<div class="act-bar-seg" style="height:' + pNotInt + 'px;background:#dc2626;"></div>' : '')
+      + (pCont > 0 ? '<div class="act-bar-seg" style="height:' + pCont + 'px;background:#d97706;"></div>' : '')
+      + (pInt > 0 ? '<div class="act-bar-seg" style="height:' + pInt + 'px;background:#15785a;"></div>' : '')
+      + '</div>'
+      + '<span class="act-bar-lbl">' + esc(d.displayDate.split(' ')[0]) + '</span>'
+      + '</div>';
+  });
+  html += '</div>';
+
+  cont.innerHTML = html;
+}
+
+function renderProgressByStatus(daily, statusOverview){
+  var cont = el('activityProgressContainer');
+  if(!cont) return;
+  if(!daily || !daily.length){
+    cont.innerHTML = '<div class="empty">No progress data to display.</div>';
+    return;
+  }
+
+  var html = '<div style="margin-bottom:20px;">'
+    + '<div style="font:700 11px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:12px;">Overall Lead Pipeline Status Breakdown</div>'
+    + '<div class="act-progress-bar" style="height:14px;border-radius:7px;margin-bottom:14px;">';
+
+  statusOverview.forEach(function(s){
+    if(s.percentage > 0){
+      html += '<div style="width:' + s.percentage + '%;background:' + s.color + ';" title="' + attr(s.label) + ': ' + s.count + ' (' + s.percentage + '%)"></div>';
+    }
+  });
+  html += '</div>';
+
+  html += '<div style="display:flex;flex-wrap:wrap;gap:12px 20px;">';
+  statusOverview.forEach(function(s){
+    html += '<div style="display:flex;align-items:center;gap:8px;font-size:12.5px;">'
+      + '<span style="width:10px;height:10px;border-radius:2px;background:' + s.color + ';"></span>'
+      + '<span style="color:var(--muted);">' + esc(s.label) + ':</span>'
+      + '<strong>' + s.count + '</strong>'
+      + '<span style="color:var(--faint);font-size:11px;">(' + s.percentage + '%)</span>'
+      + '</div>';
+  });
+  html += '</div></div>';
+
+  html += '<div style="margin-top:24px;overflow-x:auto;">'
+    + '<div style="font:700 11px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:10px;">Daily Progress Per Day Per Status Type</div>'
+    + '<table class="act-table">'
+    + '<thead><tr>'
+    + '<th>Date</th>'
+    + '<th style="text-align:center;">Total</th>'
+    + '<th style="text-align:center;color:#d97706;">📞 Contacted</th>'
+    + '<th style="text-align:center;color:#15785a;">⭐ Interested</th>'
+    + '<th style="text-align:center;color:#dc2626;">❌ Not Interested</th>'
+    + '<th style="text-align:center;color:#4b5563;">⛔ DNC</th>'
+    + '<th style="text-align:center;color:#2563eb;">⏳ Assigned</th>'
+    + '<th style="text-align:right;">Win Rate</th>'
+    + '</tr></thead><tbody>';
+
+  var totAll = 0, totCont = 0, totInt = 0, totNot = 0, totDnc = 0, totAss = 0;
+  daily.forEach(function(row){
+    totAll += row.total;
+    totCont += row.contacted;
+    totInt += row.interested;
+    totNot += row.not_interested;
+    totDnc += row.do_not_call;
+    totAss += row.assigned;
+
+    var proc = row.contacted + row.interested + row.not_interested + row.do_not_call;
+    var wr = proc > 0 ? (Math.round((row.interested / proc) * 1000) / 10) + '%' : '0%';
+
+    html += '<tr>'
+      + '<td><strong>' + esc(row.displayDate) + '</strong> <span style="font-size:11px;color:var(--muted);">(' + esc(row.date) + ')</span></td>'
+      + '<td style="text-align:center;font-weight:700;">' + row.total + '</td>'
+      + '<td style="text-align:center;color:#d97706;font-weight:600;">' + row.contacted + '</td>'
+      + '<td style="text-align:center;color:#15785a;font-weight:700;">' + row.interested + '</td>'
+      + '<td style="text-align:center;color:#dc2626;">' + row.not_interested + '</td>'
+      + '<td style="text-align:center;color:#4b5563;">' + row.do_not_call + '</td>'
+      + '<td style="text-align:center;color:#2563eb;">' + row.assigned + '</td>'
+      + '<td style="text-align:right;font-weight:700;color:' + (row.interested > 0 ? 'var(--ok)' : 'var(--muted)') + ';">' + wr + '</td>'
+      + '</tr>';
+  });
+
+  var grandProc = totCont + totInt + totNot + totDnc;
+  var grandWr = grandProc > 0 ? (Math.round((totInt / grandProc) * 1000) / 10) + '%' : '0%';
+  html += '<tr style="background:#f8f9fa;font-weight:700;border-top:2px solid var(--ink);">'
+    + '<td>Campaign Total</td>'
+    + '<td style="text-align:center;">' + totAll + '</td>'
+    + '<td style="text-align:center;color:#d97706;">' + totCont + '</td>'
+    + '<td style="text-align:center;color:#15785a;">' + totInt + '</td>'
+    + '<td style="text-align:center;color:#dc2626;">' + totNot + '</td>'
+    + '<td style="text-align:center;color:#4b5563;">' + totDnc + '</td>'
+    + '<td style="text-align:center;color:#2563eb;">' + totAss + '</td>'
+    + '<td style="text-align:right;color:var(--ok);">' + grandWr + '</td>'
+    + '</tr>';
+
+  html += '</tbody></table></div>';
+  cont.innerHTML = html;
+}
+
+function renderTelemarketerActivitySummary(summary){
+  var cont = el('activityTeleSummaryContainer');
+  if(!cont) return;
+  if(!summary || !summary.length){
+    cont.innerHTML = '<div class="empty">No telemarketer performance records available.</div>';
+    return;
+  }
+
+  var html = '';
+  summary.forEach(function(ag){
+    var initials = (ag.name || 'TM').split(' ').map(function(s){return s[0]}).join('').slice(0, 2).toUpperCase();
+    var convColor = ag.conversion_rate >= 15 ? 'var(--ok)' : ag.conversion_rate > 5 ? 'var(--accent)' : 'var(--muted)';
+    var pInt = ag.total_processed > 0 ? (ag.interested / ag.total_processed) * 100 : 0;
+    var pCont = ag.total_processed > 0 ? (ag.contacted / ag.total_processed) * 100 : 0;
+    var pNotInt = ag.total_processed > 0 ? (ag.not_interested / ag.total_processed) * 100 : 0;
+    var pDnc = ag.total_processed > 0 ? (ag.do_not_call / ag.total_processed) * 100 : 0;
+
+    html += '<article class="agent-card" style="padding:18px;">'
+      + '<div class="agent-card-head">'
+      + '<div class="agent-avatar" style="background:var(--ink);">' + esc(initials) + '</div>'
+      + '<div class="agent-meta-block">'
+      + '<div class="agent-name">' + esc(ag.name)
+      + (ag.uid ? '<span style="font:600 9px/1 var(--mono);background:#e0e7ff;color:var(--accent);padding:2px 6px;border-radius:3px;">' + esc(ag.uid) + '</span>' : '')
+      + '</div>'
+      + '<div style="font-size:12px;color:var(--muted);margin-top:3px;">'
+      + 'Assigned: <strong>' + ag.total_assigned + ' leads</strong> · Velocity: <strong>' + ag.daily_avg + ' calls/day</strong>'
+      + '</div>'
+      + '</div>'
+      + '<div style="text-align:right;">'
+      + '<div style="font:750 14px/1 var(--mono);color:' + convColor + ';">' + ag.conversion_rate + '%</div>'
+      + '<div style="font:700 7.5px/1 var(--sans);text-transform:uppercase;color:var(--muted);margin-top:3px;">Win Rate</div>'
+      + '</div>'
+      + '</div>'
+      + '<div style="margin:10px 0 6px;">'
+      + '<div class="act-progress-bar" style="height:8px;border-radius:4px;">'
+      + '<div style="width:' + pInt + '%;background:#15785a;" title="Interested: ' + ag.interested + '"></div>'
+      + '<div style="width:' + pCont + '%;background:#d97706;" title="Contacted: ' + ag.contacted + '"></div>'
+      + '<div style="width:' + pNotInt + '%;background:#dc2626;" title="Not Interested: ' + ag.not_interested + '"></div>'
+      + '<div style="width:' + pDnc + '%;background:#4b5563;" title="DNC: ' + ag.do_not_call + '"></div>'
+      + '</div>'
+      + '</div>'
+      + '<div class="agent-metrics-row">'
+      + '<div class="agent-metric-item"><div class="agent-metric-num" style="color:var(--ok);">' + ag.interested + '</div><div class="agent-metric-lbl">⭐ Won</div></div>'
+      + '<div class="agent-metric-item"><div class="agent-metric-num" style="color:var(--warn);">' + ag.contacted + '</div><div class="agent-metric-lbl">📞 In Prog</div></div>'
+      + '<div class="agent-metric-item"><div class="agent-metric-num">' + ag.pending + '</div><div class="agent-metric-lbl">⏳ Queue</div></div>'
+      + '<div class="agent-metric-item"><div class="agent-metric-num" style="color:var(--bad);">' + ag.not_interested + '</div><div class="agent-metric-lbl">❌ Lost</div></div>'
+      + '</div>'
+      + (ag.last_active ? '<div style="font-size:11px;color:var(--faint);margin-top:4px;">Last active: ' + date(ag.last_active) + '</div>' : '')
+      + '</article>';
+  });
+
+  cont.innerHTML = html;
+}
+
+function populateActivityTeleSelectors(summary){
+  var tSel = el('activityTeleFilter');
+  var mSel = el('manualActTele');
+  if(!tSel) return;
+  var curVal = tSel.value || 'all';
+
+  var opts = '<option value="all">👥 All Telemarketers</option>';
+  var mOpts = '<option value="">Choose telemarketer...</option>';
+  summary.forEach(function(ag){
+    var sel = (ag.name === curVal) ? ' selected' : '';
+    opts += '<option value="' + attr(ag.name) + '"' + sel + '>' + esc(ag.name) + ' (' + ag.total_processed + ' calls)</option>';
+    mOpts += '<option value="' + attr(ag.name) + '">' + esc(ag.name) + '</option>';
+  });
+
+  tSel.innerHTML = opts;
+  if(mSel) mSel.innerHTML = mOpts;
+}
+
+async function loadActivityLog(){
+  try{
+    var sInput = el('activitySearchInput');
+    var sFilter = el('activityLogStatusFilter');
+    var search = sInput ? sInput.value.trim() : '';
+    var status = sFilter ? sFilter.value : 'all';
+
+    var q = '/api/lead-activity/log?limit=' + activityState.logLimit + '&offset=' + activityState.logOffset;
+    if(activityState.teleFilter && activityState.teleFilter !== 'all') q += '&telemarketer=' + encodeURIComponent(activityState.teleFilter);
+    if(status && status !== 'all') q += '&status=' + encodeURIComponent(status);
+    if(search) q += '&search=' + encodeURIComponent(search);
+
+    var body = await api(q);
+    activityState.log = body.activities || [];
+    activityState.logTotal = body.total || 0;
+    renderActivityLog(activityState.log);
+
+    var pInfo = el('actPageInfo');
+    if(pInfo){
+      var from = activityState.logTotal ? activityState.logOffset + 1 : 0;
+      var to = Math.min(activityState.logOffset + activityState.logLimit, activityState.logTotal);
+      pInfo.textContent = 'Showing ' + from + ' - ' + to + ' of ' + activityState.logTotal + ' activities';
+    }
+    var bPrev = el('btnPrevAct');
+    var bNext = el('btnNextAct');
+    if(bPrev) bPrev.disabled = (activityState.logOffset <= 0);
+    if(bNext) bNext.disabled = (activityState.logOffset + activityState.logLimit >= activityState.logTotal);
+  }catch(err){
+    if(!authLost(err)) showToast('Failed to load activity feed: ' + err.message);
+  }
+}
+
+function prevActPage(){
+  if(activityState.logOffset > 0){
+    activityState.logOffset = Math.max(0, activityState.logOffset - activityState.logLimit);
+    loadActivityLog();
+  }
+}
+
+function nextActPage(){
+  if(activityState.logOffset + activityState.logLimit < activityState.logTotal){
+    activityState.logOffset += activityState.logLimit;
+    loadActivityLog();
+  }
+}
+
+function renderActivityLog(activities){
+  var cont = el('activityLogFeedWrapper');
+  if(!cont) return;
+  if(!activities || !activities.length){
+    cont.innerHTML = '<div class="empty">No call or status activities found. Click "⚡ Generate Mock Data" or "➕ Log Activity".</div>';
+    return;
+  }
+
+  var html = '';
+  activities.forEach(function(act){
+    var pillColor = act.new_status === 'interested' ? 'background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;'
+      : act.new_status === 'contacted' ? 'background:#fffbeb;color:#92400e;border:1px solid #fde68a;'
+      : act.new_status === 'not_interested' ? 'background:#fef2f2;color:#991b1b;border:1px solid #fecaca;'
+      : act.new_status === 'do_not_call' ? 'background:#f3f4f6;color:#374151;border:1px solid #d1d5db;'
+      : 'background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;';
+
+    var prevLabel = act.previous_status || 'unassigned';
+    var newLabel = act.new_status || 'assigned';
+
+    html += '<article class="lead-row" style="grid-template-columns:36px minmax(200px,1.2fr) minmax(180px,1fr) minmax(200px,1.2fr) auto;padding:16px 0;">'
+      + '<div style="font:600 12px/1 var(--mono);color:var(--muted);padding-top:2px;">#' + act.id + '</div>'
+      + '<div>'
+      + '<h3 style="margin:0;font-size:15.5px;font-weight:700;">' + esc(act.company_name || 'Company #' + act.company_id) + '</h3>'
+      + '<div class="meta">' + esc(act.company_category || 'Commercial Lead') + (act.company_phone ? ' · 📞 ' + esc(act.company_phone) : '') + '</div>'
+      + (act.notes ? '<div class="act-note-bubble">' + esc(act.notes) + '</div>' : '')
+      + '</div>'
+      + '<div>'
+      + '<div style="font-weight:700;font-size:13.5px;color:var(--ink);">' + esc(act.telemarketer_name || 'System / Auto') + '</div>'
+      + '<div style="font:500 11px/1.4 var(--mono);color:var(--muted);margin-top:3px;">' + date(act.created_at) + '</div>'
+      + '</div>'
+      + '<div>'
+      + '<span class="act-trans-pill" style="' + pillColor + '">'
+      + esc(prevLabel) + ' → ' + esc(newLabel)
+      + '</span>'
+      + (act.is_mock ? '<span style="display:inline-block;margin-left:6px;font:650 8.5px/1 var(--sans);color:var(--accent);background:#eff6ff;padding:2px 5px;border-radius:3px;text-transform:uppercase;">Mock</span>' : '')
+      + '</div>'
+      + '<div class="company-actions">'
+      + '<button class="filter" type="button" onclick="selectCompanyForManualAct(\'' + attr(act.company_id) + '\',\'' + attr(act.company_name || '') + '\')" style="height:32px;padding:0 10px;font-size:10px;">Update →</button>'
+      + '</div>'
+      + '</article>';
+  });
+
+  cont.innerHTML = html;
+}
+
+function openMockDataModal(){
+  var m = el('mockDataModal');
+  if(m) m.classList.remove('hidden');
+}
+
+function closeMockDataModal(){
+  var m = el('mockDataModal');
+  if(m) m.classList.add('hidden');
+}
+
+async function submitMockData(event){
+  if(event) event.preventDefault();
+  var count = Number(el('mockLeadCount').value) || 80;
+  var days = Number(el('mockDaysSpan').value) || 7;
+  var clearFirst = Boolean(el('mockClearFirst').checked);
+
+  var btn = el('btnSubmitMock');
+  if(btn){ btn.disabled = true; btn.textContent = 'Generating Simulation…'; }
+  try{
+    var res = await api('/api/lead-activity/mock-generate', {
+      method: 'POST',
+      body: JSON.stringify({ leadCount: count, daysSpan: days, clearFirst: clearFirst })
+    });
+    closeMockDataModal();
+    showToast(res.message || 'Mock presentation data generated successfully!');
+    await loadActivityView();
+  }catch(err){
+    if(!authLost(err)) showToast('Error generating mock data: ' + err.message);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = 'Generate Presentation Data'; }
+  }
+}
+
+function openResetProgressModal(){
+  var m = el('resetProgressModal');
+  if(m) m.classList.remove('hidden');
+}
+
+function closeResetProgressModal(){
+  var m = el('resetProgressModal');
+  if(m) m.classList.add('hidden');
+}
+
+async function submitResetProgress(){
+  var btn = el('btnConfirmReset');
+  if(btn){ btn.disabled = true; btn.textContent = 'Wiping Progress…'; }
+  try{
+    var res = await api('/api/lead-activity/reset-progress', { method: 'POST' });
+    closeResetProgressModal();
+    showToast(res.message || 'All lead assignments and progress have been cleared. Contact details remain safe.');
+    await loadActivityView();
+  }catch(err){
+    if(!authLost(err)) showToast('Error resetting progress: ' + err.message);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = 'Confirm Reset (Clean Slate)'; }
+  }
+}
+
+async function openManualActivityModal(){
+  var m = el('manualActivityModal');
+  if(!m) return;
+  m.classList.remove('hidden');
+
+  var cSel = el('manualActCompanyId');
+  if(cSel && cSel.options.length <= 1){
+    try{
+      var body = await api('/api/leads?limit=100');
+      var list = body.leads || [];
+      var html = '<option value="">Choose company...</option>';
+      list.forEach(function(l){
+        html += '<option value="' + attr(l.id) + '">' + esc(l.name) + (l.phone ? ' (' + esc(l.phone) + ')' : '') + '</option>';
+      });
+      cSel.innerHTML = html;
+    }catch(e){}
+  }
+}
+
+function selectCompanyForManualAct(companyId, companyName){
+  openManualActivityModal();
+  setTimeout(function(){
+    var cSel = el('manualActCompanyId');
+    if(cSel){
+      var opt = document.createElement('option');
+      opt.value = companyId;
+      opt.textContent = companyName || ('Company #' + companyId);
+      opt.selected = true;
+      cSel.appendChild(opt);
+      cSel.value = companyId;
+    }
+  }, 50);
+}
+
+function closeManualActivityModal(){
+  var m = el('manualActivityModal');
+  if(m) m.classList.add('hidden');
+}
+
+async function submitManualActivity(event){
+  if(event) event.preventDefault();
+  var cId = el('manualActCompanyId').value;
+  var status = el('manualActStatus').value;
+  var tele = el('manualActTele').value;
+  var notes = el('manualActNotes').value;
+
+  if(!cId){
+    showToast('Please select a company.');
+    return;
+  }
+  var btn = el('btnSubmitManualAct');
+  if(btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
+  try{
+    await api('/api/lead-activity/record', {
+      method: 'POST',
+      body: JSON.stringify({ companyId: cId, status: status, telemarketer: tele, notes: notes })
+    });
+    closeManualActivityModal();
+    showToast('Lead activity recorded successfully!');
+    if(el('manualActNotes')) el('manualActNotes').value = '';
+    await loadActivityView();
+  }catch(err){
+    if(!authLost(err)) showToast('Error saving activity: ' + err.message);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = 'Save Activity'; }
   }
 }
 (function boot(){var saved=eeKey.read();if(saved){el('accessKey').value=saved;connect()}else{setTimeout(function(){el('accessKey').focus()},80)}})();

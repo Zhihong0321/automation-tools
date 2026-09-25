@@ -490,6 +490,23 @@ export function migrate(): Promise<void> {
       from telemarketer t
       where a.telemarketer_uid is null and a.assigned_to is not null
         and t.uid is not null and lower(trim(a.assigned_to)) = lower(trim(t.name));
+
+      create table if not exists lead_activity_log (
+        id bigserial primary key,
+        company_id bigint references company_data(id) on delete cascade,
+        telemarketer_name text,
+        telemarketer_uid text,
+        action text not null default 'status_change',
+        previous_status text,
+        new_status text,
+        notes text,
+        is_mock boolean not null default false,
+        created_at timestamptz not null default now()
+      );
+      create index if not exists lead_activity_log_company_idx on lead_activity_log (company_id);
+      create index if not exists lead_activity_log_created_at_idx on lead_activity_log (created_at desc);
+      create index if not exists lead_activity_log_tele_idx on lead_activity_log (telemarketer_name);
+      create index if not exists lead_activity_log_new_status_idx on lead_activity_log (new_status);
     `);
   })().catch((err) => {
     migrated = null;
@@ -2141,6 +2158,15 @@ export async function assignLeads(
      returning id`,
     [target.name, notes?.trim() || null, ids, agentUid],
   );
+
+  for (const cid of ids) {
+    await sql(
+      `insert into lead_activity_log (company_id, telemarketer_name, telemarketer_uid, action, previous_status, new_status, notes, is_mock, created_at)
+       values ($1, $2, $3, 'assignment', 'unassigned', 'assigned', $4, false, now())`,
+      [cid, target.name, agentUid, notes?.trim() || null],
+    ).catch(() => {});
+  }
+
   return { updated: res.rows.length };
 }
 
@@ -2160,6 +2186,15 @@ export async function unassignLeads(companyIds: (string | number)[]): Promise<{ 
      returning id`,
     [ids],
   );
+
+  for (const cid of ids) {
+    await sql(
+      `insert into lead_activity_log (company_id, telemarketer_name, telemarketer_uid, action, previous_status, new_status, notes, is_mock, created_at)
+       values ($1, null, null, 'unassign', 'assigned', 'unassigned', null, false, now())`,
+      [cid],
+    ).catch(() => {});
+  }
+
   return { updated: res.rows.length };
 }
 
@@ -2203,6 +2238,12 @@ export async function updateLead(
     assignedName = target.name;
   }
 
+  const beforeRes = await sql<{ lead_status: string; assigned_to: string | null; telemarketer_uid: string | null }>(
+    `select lead_status, assigned_to, telemarketer_uid from company_data where id = $1 limit 1`,
+    [id],
+  ).catch(() => ({ rows: [] as { lead_status: string; assigned_to: string | null; telemarketer_uid: string | null }[], rowCount: 0 }));
+  const before = beforeRes.rows[0];
+
   const hasStatus = Object.prototype.hasOwnProperty.call(patch, 'leadStatus');
   const hasAssignedTo = Object.prototype.hasOwnProperty.call(patch, 'assignedTo');
   const hasNotes = Object.prototype.hasOwnProperty.call(patch, 'notes');
@@ -2228,6 +2269,28 @@ export async function updateLead(
       agentUid,
     ],
   );
+
+  const updatedRow = res.rows[0] as Record<string, unknown> | undefined;
+  if (updatedRow) {
+    const prevStatus = (before?.lead_status as LeadStatus) || 'unassigned';
+    const newStatus = (updatedRow.lead_status as LeadStatus) || prevStatus;
+    const teleName = (updatedRow.assigned_to as string | null) ?? before?.assigned_to ?? null;
+    const teleUid = (updatedRow.telemarketer_uid as string | null) ?? before?.telemarketer_uid ?? null;
+    if (hasStatus && patch.leadStatus && patch.leadStatus !== prevStatus) {
+      await sql(
+        `insert into lead_activity_log (company_id, telemarketer_name, telemarketer_uid, action, previous_status, new_status, notes, is_mock, created_at)
+         values ($1, $2, $3, 'status_change', $4, $5, $6, false, now())`,
+        [id, teleName, teleUid, prevStatus, newStatus, patch.notes ?? null],
+      ).catch(() => {});
+    } else if (hasNotes && patch.notes) {
+      await sql(
+        `insert into lead_activity_log (company_id, telemarketer_name, telemarketer_uid, action, previous_status, new_status, notes, is_mock, created_at)
+         values ($1, $2, $3, 'note_added', $4, $4, $5, false, now())`,
+        [id, teleName, teleUid, newStatus, patch.notes],
+      ).catch(() => {});
+    }
+  }
+
   return res.rows[0] ?? null;
 }
 
@@ -2834,4 +2897,649 @@ export async function getCompanyContactRows(options: {
 export async function close(): Promise<void> {
   if (pool) await pool.end();
   pool = null;
+}
+
+export interface LeadActivityLogItem {
+  id: number;
+  company_id: number;
+  telemarketer_name: string | null;
+  telemarketer_uid: string | null;
+  action: string;
+  previous_status: string | null;
+  new_status: string | null;
+  notes: string | null;
+  is_mock: boolean;
+  created_at: string;
+  company_name?: string;
+  company_phone?: string;
+  company_category?: string;
+  company_address?: string;
+}
+
+export interface LeadActivityDailyStat {
+  date: string;
+  displayDate: string;
+  total: number;
+  contacted: number;
+  interested: number;
+  not_interested: number;
+  do_not_call: number;
+  assigned: number;
+}
+
+export interface LeadActivityTelemarketerSummary {
+  name: string;
+  uid: string | null;
+  total_assigned: number;
+  total_processed: number;
+  contacted: number;
+  interested: number;
+  not_interested: number;
+  do_not_call: number;
+  pending: number;
+  conversion_rate: number;
+  daily_avg: number;
+  last_active: string | null;
+}
+
+export interface LeadActivityStats {
+  kpis: {
+    totalActivities: number;
+    processedToday: number;
+    processedYesterday: number;
+    totalContacted: number;
+    totalInterested: number;
+    conversionRate: number;
+    activeTelemarketers: number;
+    totalLeadsInPool: number;
+  };
+  dailyLeadProcessed: LeadActivityDailyStat[];
+  progressByStatus: Array<{
+    status: LeadStatus;
+    label: string;
+    count: number;
+    percentage: number;
+    color: string;
+  }>;
+  perTelemarketerSummary: LeadActivityTelemarketerSummary[];
+}
+
+export async function getLeadActivityStats(options?: { days?: number; telemarketer?: string }): Promise<LeadActivityStats> {
+  if (!configured()) {
+    return {
+      kpis: { totalActivities: 0, processedToday: 0, processedYesterday: 0, totalContacted: 0, totalInterested: 0, conversionRate: 0, activeTelemarketers: 0, totalLeadsInPool: 0 },
+      dailyLeadProcessed: [],
+      progressByStatus: [],
+      perTelemarketerSummary: [],
+    };
+  }
+  await migrate();
+  const days = Math.min(Math.max(Number(options?.days ?? 7), 1), 60);
+  const teleFilter = options?.telemarketer && options.telemarketer !== 'all' ? options.telemarketer.trim() : null;
+
+  // 1. KPIs & Status Counts
+  const statusRes = await sql<{
+    total_leads: string;
+    unassigned: string;
+    assigned: string;
+    contacted: string;
+    interested: string;
+    not_interested: string;
+    do_not_call: string;
+  }>(`
+    select
+      count(*)::text as total_leads,
+      count(*) filter (where coalesce(c.lead_status, 'unassigned') = 'unassigned')::text as unassigned,
+      count(*) filter (where c.lead_status = 'assigned')::text as assigned,
+      count(*) filter (where c.lead_status = 'contacted')::text as contacted,
+      count(*) filter (where c.lead_status = 'interested')::text as interested,
+      count(*) filter (where c.lead_status = 'not_interested')::text as not_interested,
+      count(*) filter (where c.lead_status = 'do_not_call')::text as do_not_call
+    from company_data c
+    where c.merged_into is null and coalesce(c.is_hidden, false) = false
+  `);
+  const sRow = statusRes.rows[0];
+  const totalLeads = Number(sRow?.total_leads ?? 0);
+  const totalContacted = Number(sRow?.contacted ?? 0);
+  const totalInterested = Number(sRow?.interested ?? 0);
+  const totalNotInterested = Number(sRow?.not_interested ?? 0);
+  const totalDnc = Number(sRow?.do_not_call ?? 0);
+  const totalAssigned = Number(sRow?.assigned ?? 0);
+  const totalUnassigned = Number(sRow?.unassigned ?? 0);
+
+  const processedTotal = totalContacted + totalInterested + totalNotInterested + totalDnc;
+  const conversionRate = processedTotal > 0 ? Math.round((totalInterested / processedTotal) * 1000) / 10 : 0;
+
+  // Activity counts
+  const actRes = await sql<{
+    total_act: string;
+    today_act: string;
+    yesterday_act: string;
+    distinct_agents: string;
+  }>(`
+    select
+      count(*)::text as total_act,
+      count(*) filter (where created_at >= date_trunc('day', now()))::text as today_act,
+      count(*) filter (where created_at >= date_trunc('day', now() - interval '1 day') and created_at < date_trunc('day', now()))::text as yesterday_act,
+      count(distinct coalesce(telemarketer_name, telemarketer_uid)) filter (where telemarketer_name is not null)::text as distinct_agents
+    from lead_activity_log
+    where ($1::text is null or lower(trim(telemarketer_name)) = lower(trim($1)) or telemarketer_uid = $1)
+  `, [teleFilter]);
+  const aRow = actRes.rows[0];
+
+  // 2. Daily Lead Processed (aggregated by date)
+  const dailyRes = await sql<{
+    day: string;
+    total: string;
+    contacted: string;
+    interested: string;
+    not_interested: string;
+    do_not_call: string;
+    assigned: string;
+  }>(`
+    select
+      to_char(created_at, 'YYYY-MM-DD') as day,
+      count(*)::text as total,
+      count(*) filter (where new_status = 'contacted')::text as contacted,
+      count(*) filter (where new_status = 'interested')::text as interested,
+      count(*) filter (where new_status = 'not_interested')::text as not_interested,
+      count(*) filter (where new_status = 'do_not_call')::text as do_not_call,
+      count(*) filter (where new_status = 'assigned')::text as assigned
+    from lead_activity_log
+    where created_at >= (now() - ($1 || ' days')::interval)
+      and ($2::text is null or lower(trim(telemarketer_name)) = lower(trim($2)) or telemarketer_uid = $2)
+    group by to_char(created_at, 'YYYY-MM-DD')
+    order by day desc
+  `, [String(days), teleFilter]);
+
+  const dailyMap = new Map<string, typeof dailyRes.rows[0]>();
+  for (const r of dailyRes.rows) dailyMap.set(r.day, r);
+
+  const dailyLeadProcessed: LeadActivityDailyStat[] = [];
+  const now = new Date();
+  for (let i = 0; i < days; i++) {
+    const d = new Date(now.getTime() - i * 86400000);
+    const dayStr = d.toISOString().slice(0, 10);
+    const matched = dailyMap.get(dayStr);
+    let displayDate = d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+    if (i === 0) displayDate = 'Today (' + displayDate + ')';
+    else if (i === 1) displayDate = 'Yesterday (' + displayDate + ')';
+
+    dailyLeadProcessed.push({
+      date: dayStr,
+      displayDate,
+      total: Number(matched?.total ?? 0),
+      contacted: Number(matched?.contacted ?? 0),
+      interested: Number(matched?.interested ?? 0),
+      not_interested: Number(matched?.not_interested ?? 0),
+      do_not_call: Number(matched?.do_not_call ?? 0),
+      assigned: Number(matched?.assigned ?? 0),
+    });
+  }
+
+  // 3. Progress by Status Type
+  const statusItems: Array<{ status: LeadStatus; label: string; count: number; color: string }> = [
+    { status: 'interested', label: '⭐ Interested / Won', count: totalInterested, color: '#15785a' },
+    { status: 'contacted', label: '📞 Contacted / In Progress', count: totalContacted, color: '#d97706' },
+    { status: 'assigned', label: '⏳ Assigned / Queue', count: totalAssigned, color: '#2563eb' },
+    { status: 'not_interested', label: '❌ Not Interested', count: totalNotInterested, color: '#dc2626' },
+    { status: 'do_not_call', label: '⛔ Do Not Call (DNC)', count: totalDnc, color: '#4b5563' },
+    { status: 'unassigned', label: '📋 Unassigned Pool', count: totalUnassigned, color: '#9b988f' },
+  ];
+  const denom = Math.max(totalLeads, 1);
+  const progressByStatus = statusItems.map((item) => ({
+    ...item,
+    percentage: Math.round((item.count / denom) * 1000) / 10,
+  }));
+
+  // 4. Per Telemarketer Activity Summary
+  const teleRes = await sql<{
+    name: string;
+    uid: string | null;
+    total_assigned: string;
+    contacted_count: string;
+    interested_count: string;
+    not_interested_count: string;
+    dnc_count: string;
+    pending_count: string;
+    total_activities: string;
+    last_active: string | null;
+  }>(`
+    select
+      t.name,
+      t.uid,
+      count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false)::text as total_assigned,
+      count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'contacted')::text as contacted_count,
+      count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'interested')::text as interested_count,
+      count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'not_interested')::text as not_interested_count,
+      count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'do_not_call')::text as dnc_count,
+      count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and coalesce(c.lead_status, 'assigned') in ('assigned', 'unassigned'))::text as pending_count,
+      count(distinct l.id)::text as total_activities,
+      max(l.created_at)::text as last_active
+    from telemarketer t
+    left join company_data c on (
+      (t.uid is not null and (c.telemarketer_uid = t.uid or c.telemarketer_uid = ('uid:' || t.uid) or lower(trim(c.assigned_to)) = lower(trim(t.uid)) or lower(trim(c.assigned_to)) = lower(trim('uid:' || t.uid))))
+      or lower(trim(c.assigned_to)) = lower(trim(t.name))
+    )
+    left join lead_activity_log l on (
+      lower(trim(l.telemarketer_name)) = lower(trim(t.name)) or (t.uid is not null and l.telemarketer_uid = t.uid)
+    )
+    where t.active = true
+    group by t.id, t.name, t.uid
+    order by count(distinct c.id) desc, t.name asc
+  `);
+
+  const perTelemarketerSummary: LeadActivityTelemarketerSummary[] = teleRes.rows.map((row) => {
+    const assigned = Number(row.total_assigned || 0);
+    const contacted = Number(row.contacted_count || 0);
+    const interested = Number(row.interested_count || 0);
+    const notInterested = Number(row.not_interested_count || 0);
+    const dnc = Number(row.dnc_count || 0);
+    const pending = Number(row.pending_count || 0);
+    const processed = contacted + interested + notInterested + dnc;
+    const conv = processed > 0 ? Math.round((interested / processed) * 1000) / 10 : 0;
+    const dailyAvg = Math.round((processed / Math.max(days, 1)) * 10) / 10;
+    return {
+      name: row.name,
+      uid: row.uid,
+      total_assigned: assigned,
+      total_processed: processed,
+      contacted,
+      interested,
+      not_interested: notInterested,
+      do_not_call: dnc,
+      pending,
+      conversion_rate: conv,
+      daily_avg: dailyAvg,
+      last_active: row.last_active,
+    };
+  });
+
+  return {
+    kpis: {
+      totalActivities: Number(aRow?.total_act ?? 0),
+      processedToday: Number(aRow?.today_act ?? 0),
+      processedYesterday: Number(aRow?.yesterday_act ?? 0),
+      totalContacted,
+      totalInterested,
+      conversionRate,
+      activeTelemarketers: Number(aRow?.distinct_agents || perTelemarketerSummary.length || 0),
+      totalLeadsInPool: totalLeads,
+    },
+    dailyLeadProcessed,
+    progressByStatus,
+    perTelemarketerSummary,
+  };
+}
+
+export async function listLeadActivities(options?: {
+  limit?: number;
+  offset?: number;
+  telemarketer?: string;
+  status?: string;
+  search?: string;
+}): Promise<{ activities: LeadActivityLogItem[]; total: number }> {
+  if (!configured()) return { activities: [], total: 0 };
+  await migrate();
+  const limit = Math.min(Math.max(Number(options?.limit ?? 50), 1), 200);
+  const offset = Math.max(Number(options?.offset ?? 0), 0);
+  const params: unknown[] = [];
+  const where: string[] = ['1=1'];
+
+  if (options?.telemarketer && options.telemarketer !== 'all') {
+    params.push(options.telemarketer.trim());
+    where.push(`(lower(trim(l.telemarketer_name)) = lower(trim($${params.length})) or l.telemarketer_uid = $${params.length})`);
+  }
+  if (options?.status && options.status !== 'all') {
+    params.push(options.status.trim());
+    where.push(`l.new_status = $${params.length}`);
+  }
+  if (options?.search && options.search.trim()) {
+    params.push(`%${options.search.trim().toLowerCase()}%`);
+    where.push(`(lower(c.name) like $${params.length} or lower(coalesce(c.phone,'')) like $${params.length} or lower(coalesce(l.notes,'')) like $${params.length})`);
+  }
+
+  const whereClause = where.join(' and ');
+  const countRes = await sql<{ cnt: string }>(
+    `select count(*)::text as cnt
+     from lead_activity_log l
+     left join company_data c on c.id = l.company_id
+     where ${whereClause}`,
+    params,
+  );
+  const total = Number(countRes.rows[0]?.cnt ?? 0);
+
+  params.push(limit);
+  const limitParam = params.length;
+  params.push(offset);
+  const offsetParam = params.length;
+
+  const res = await sql<LeadActivityLogItem>(
+    `select
+       l.id,
+       l.company_id,
+       l.telemarketer_name,
+       l.telemarketer_uid,
+       l.action,
+       l.previous_status,
+       l.new_status,
+       l.notes,
+       l.is_mock,
+       l.created_at::text,
+       c.name as company_name,
+       c.phone as company_phone,
+       c.category as company_category,
+       c.address as company_address
+     from lead_activity_log l
+     left join company_data c on c.id = l.company_id
+     where ${whereClause}
+     order by l.created_at desc, l.id desc
+     limit $${limitParam} offset $${offsetParam}`,
+    params,
+  );
+
+  return { activities: res.rows, total };
+}
+
+export async function generateMockLeadData(options?: {
+  leadCount?: number;
+  daysSpan?: number;
+  clearFirst?: boolean;
+}): Promise<{
+  ok: boolean;
+  message: string;
+  assignedCount: number;
+  activitiesCount: number;
+  telemarketersUsed: string[];
+  daysSpan: number;
+}> {
+  if (!configured()) throw new Error('database not configured');
+  await migrate();
+
+  const count = Math.min(Math.max(Number(options?.leadCount ?? 80), 5), 500);
+  const days = Math.min(Math.max(Number(options?.daysSpan ?? 7), 1), 30);
+
+  if (options?.clearFirst) {
+    await clearMockLeadProgress();
+  }
+
+  // Ensure active telemarketers exist
+  let teleList = await sql<{ name: string; uid: string }>(`select name, uid from telemarketer where active = true order by id asc`);
+  if (teleList.rows.length < 2) {
+    const defaults = [
+      { name: 'Sarah Wong', uid: 'tm_sarah' },
+      { name: 'Ahmad Faris', uid: 'tm_ahmad' },
+      { name: 'Jason Tan', uid: 'tm_jason' },
+      { name: 'Nurul Huda', uid: 'tm_nurul' },
+    ];
+    for (const d of defaults) {
+      await sql(
+        `insert into telemarketer (name, uid, active, created_at)
+         values ($1, $2, true, now())
+         on conflict (name) do update set active = true, uid = coalesce(telemarketer.uid, excluded.uid)`,
+        [d.name, d.uid],
+      ).catch(() => {});
+    }
+    teleList = await sql<{ name: string; uid: string }>(`select name, uid from telemarketer where active = true order by id asc`);
+  }
+
+  const agents = teleList.rows;
+  if (!agents.length) throw new Error('No active telemarketers available');
+
+  // Fetch real leads from company_data
+  let companies = await sql<{ id: number; name: string; category: string | null; phone: string | null; address: string | null }>(
+    `select id, name, category, phone, address
+     from company_data
+     where merged_into is null and coalesce(is_hidden, false) = false
+     order by id asc
+     limit $1`,
+    [count],
+  );
+
+  // If no companies exist in database, seed realistic demo businesses
+  if (!companies.rows.length) {
+    const demoBusinesses = [
+      { name: 'Southern Solar Engineering Sdn Bhd', cat: 'Solar Energy Equipment', phone: '+60 7-351 2288', addr: 'Jalan Molek 1/29, Taman Molek, 81100 Johor Bahru' },
+      { name: 'Austin Heights Medical Centre', cat: 'Medical Clinic', phone: '+60 7-360 8888', addr: 'Jalan Austin Heights 8/3, Taman Mount Austin, 81100 Johor Bahru' },
+      { name: 'Tebrau Logistics Hub Sdn Bhd', cat: 'Freight Forwarding Service', phone: '+60 7-333 4455', addr: 'Kawasan Perindustrian Tebrau 4, 81100 Johor Bahru' },
+      { name: 'Johor Cold Storage & Food Supply', cat: 'Wholesale Food Store', phone: '+60 7-388 9900', addr: 'Jalan Permas 9/3, Bandar Baru Permas Jaya, 81750 Masai' },
+      { name: 'Mega Precision Machining Sdn Bhd', cat: 'Machining Manufacturer', phone: '+60 7-599 1234', addr: 'Kawasan Perindustrian Senai 2, 81400 Senai' },
+      { name: 'Greenfield Eco Packaging Solution', cat: 'Packaging Supply Store', phone: '+60 7-555 6789', addr: 'Taman Universiti Industrial Park, 81300 Skudai' },
+      { name: 'Pulai Spring Contractor & Engineering', cat: 'General Contractor', phone: '+60 7-521 3456', addr: 'Bandar Baru Kangkar Pulai, 81300 Johor Bahru' },
+      { name: 'Setia Tropika Corporate Services', cat: 'Corporate Office', phone: '+60 7-238 7890', addr: 'Jalan Setia Tropika 1/14, 81200 Johor Bahru' },
+      { name: 'Iskandar Clean Energy Technologies', cat: 'Renewable Energy', phone: '+60 7-560 2211', addr: 'Medini 7, Iskandar Puteri, 79250 Johor' },
+      { name: 'Daiman Commercial Printing & Paper', cat: 'Commercial Printer', phone: '+60 7-355 4321', addr: 'Taman Johor Jaya, 81100 Johor Bahru' },
+      { name: 'Kempas Hardware & Building Materials', cat: 'Building Materials', phone: '+60 7-236 1122', addr: 'Kawasan Perusahaan Kempas, 81200 Johor Bahru' },
+      { name: 'Pasir Gudang Marine Services Sdn Bhd', cat: 'Marine Engineering', phone: '+60 7-251 7766', addr: 'Kawasan Perindustrian Pasir Gudang, 81700 Pasir Gudang' },
+      { name: 'Bukit Indah Auto Parts & Tyre Centre', cat: 'Auto Repair Shop', phone: '+60 7-234 5566', addr: 'Jalan Indah 15/2, Taman Bukit Indah, 79100 Iskandar Puteri' },
+      { name: 'Kulai Central Cold Storage & Warehouse', cat: 'Warehouse', phone: '+60 7-663 8899', addr: 'Kawasan Perindustrian Kelapa Sawit, 81000 Kulai' },
+      { name: 'JB Metal Works & Fabrication', cat: 'Metal Fabricator', phone: '+60 7-386 2345', addr: 'Taman Perindustrian Kota Puteri, 81750 Masai' },
+    ];
+    for (const b of demoBusinesses) {
+      await sql(
+        `insert into company_data (name, category, phone, address, place_id, rating, reviews)
+         values ($1, $2, $3, $4, $5, 4.5, 12)`,
+        [b.name, b.cat, b.phone, b.addr, 'place_' + Math.random().toString(36).slice(2, 10)],
+      ).catch(() => {});
+    }
+    companies = await sql<{ id: number; name: string; category: string | null; phone: string | null; address: string | null }>(
+      `select id, name, category, phone, address
+       from company_data
+       where merged_into is null and coalesce(is_hidden, false) = false
+       order by id asc
+       limit $1`,
+      [count],
+    );
+  }
+
+  const leads = companies.rows;
+  let activityCount = 0;
+  const now = Date.now();
+
+  const noteTemplates = {
+    interested: [
+      'Spoke with Managing Director Mr. Tan. Very interested in our proposal. Sent formal quotation on WhatsApp, scheduled follow-up call.',
+      'Decision maker Dato\' Rahim requested formal quotation sent to his email. High interest in commercial cost savings package.',
+      'Call answered by Owner Miss Lee. Positive feedback on commercial proposal, booked site visit / consultation next Tuesday.',
+      'Reached General Manager. Requested corporate deck & pricing comparison. Expressed interest to present to Board of Directors.',
+      'Key decision maker confirmed current power bill >RM15k/mo. Highly keen on energy audit proposal.',
+      'Spoke with Finance Director. Budget allocated for Q4 facility upgrade. Requested callback tomorrow 2pm.',
+    ],
+    contacted: [
+      'Spoke with receptionist. PIC currently in meeting, requested callback this Friday afternoon.',
+      'Reached purchasing executive. Introduced company services. Sent PDF brochure via WhatsApp, follow-up scheduled.',
+      'Followed up via phone. PIC acknowledged receipt of WhatsApp profile. Will discuss internally with management.',
+      'Gatekeeper asked to send intro email to official mailbox. Scheduled follow-up next Monday.',
+      'Call connected to Admin. Decision maker out of office until next week, left message.',
+      'Left WhatsApp voice note and proposal catalog. Read receipts confirmed, pending response.',
+    ],
+    not_interested: [
+      'Owner stated they recently signed a 3-year service contract with another vendor. Not looking to change.',
+      'PIC stated company capex budget is frozen for 2026. Keep in touch next year.',
+      'Premise is rented/short lease; management not authorized to install rooftop solar or structural upgrades.',
+      'Spoke to manager. Stated company operations currently downsizing, no requirement at this stage.',
+      'Management declined polite pitch; stated they already have in-house technical provider.',
+    ],
+    do_not_call: [
+      'Number is disconnected or line busy permanently. Marked as invalid line.',
+      'PIC strictly requested removal from telemarketing list (DNC). Respected and flagged.',
+      'Wrong number, individual answered that business moved out 2 years ago.',
+    ],
+    assigned: [
+      'Allocated to daily call queue. Priority target.',
+      'Assigned for outreach batch. Contact card prepared.',
+    ],
+  };
+
+  for (let i = 0; i < leads.length; i++) {
+    const lead = leads[i]!;
+    const agent = agents[i % agents.length]!;
+
+    // Distribute outcomes
+    // 20% interested, 48% contacted, 18% not_interested, 8% do_not_call, 6% assigned
+    const rand = (i * 17 + 23) % 100;
+    let targetStatus: LeadStatus = 'contacted';
+    if (rand < 20) targetStatus = 'interested';
+    else if (rand < 68) targetStatus = 'contacted';
+    else if (rand < 86) targetStatus = 'not_interested';
+    else if (rand < 94) targetStatus = 'do_not_call';
+    else targetStatus = 'assigned';
+
+    // Distribute across daysSpan
+    const dayOffset = (i * 3 + 1) % days;
+    const hour = 9 + ((i * 5) % 8); // 9am - 5pm
+    const minute = (i * 11) % 60;
+    const activityDate = new Date(now - dayOffset * 86400000);
+    activityDate.setHours(hour, minute, Math.floor(Math.random() * 59), 0);
+
+    const dateStr = activityDate.toISOString().slice(0, 10);
+    const tmplList = noteTemplates[targetStatus] || noteTemplates.contacted;
+    const noteBody = tmplList[i % tmplList.length]!;
+    const finalNote = `[${dateStr}] ${noteBody}`;
+
+    // UPDATE ONLY LEAD STATUS, ASSIGNMENT, AND NOTES.
+    // CONTACT DETAILS & RESEARCH ARE 100% PRESERVED.
+    await sql(
+      `update company_data set
+         assigned_to = $1,
+         telemarketer_uid = $2,
+         assigned_at = $3,
+         lead_status = $4,
+         lead_notes = $5,
+         lead_updated_at = $3
+       where id = $6`,
+      [agent.name, agent.uid, activityDate.toISOString(), targetStatus, finalNote, lead.id],
+    );
+
+    // Initial assignment log
+    await sql(
+      `insert into lead_activity_log (company_id, telemarketer_name, telemarketer_uid, action, previous_status, new_status, notes, is_mock, created_at)
+       values ($1, $2, $3, 'assignment', 'unassigned', 'assigned', null, true, $4)`,
+      [lead.id, agent.name, agent.uid, new Date(activityDate.getTime() - 3600000).toISOString()],
+    );
+    activityCount++;
+
+    // Status change log (if not just assigned)
+    if (targetStatus !== 'assigned') {
+      await sql(
+        `insert into lead_activity_log (company_id, telemarketer_name, telemarketer_uid, action, previous_status, new_status, notes, is_mock, created_at)
+         values ($1, $2, $3, 'status_change', 'assigned', $4, $5, true, $6)`,
+        [lead.id, agent.name, agent.uid, targetStatus, finalNote, activityDate.toISOString()],
+      );
+      activityCount++;
+    }
+  }
+
+  return {
+    ok: true,
+    message: `Generated mock presentation data for ${leads.length} leads across ${days} days assigned to ${agents.length} telemarketers. Real contact & company details remained completely safe.`,
+    assignedCount: leads.length,
+    activitiesCount: activityCount,
+    telemarketersUsed: agents.map((a) => a.name),
+    daysSpan: days,
+  };
+}
+
+export async function clearMockLeadProgress(): Promise<{
+  ok: boolean;
+  message: string;
+  clearedLeads: number;
+  clearedActivities: number;
+}> {
+  if (!configured()) return { ok: true, message: 'Database not configured', clearedLeads: 0, clearedActivities: 0 };
+  await migrate();
+
+  // Reset lead status, assignments and notes back to clean default.
+  // Real company contact information & research reports are completely untouched.
+  const leadRes = await sql(
+    `update company_data set
+       lead_status = 'unassigned',
+       assigned_to = null,
+       telemarketer_uid = null,
+       assigned_at = null,
+       lead_notes = null,
+       lead_updated_at = now()
+     where merged_into is null and (assigned_to is not null or lead_status <> 'unassigned' or lead_notes is not null)
+     returning id`,
+  );
+
+  // Clear activity log table
+  const actRes = await sql(
+    `delete from lead_activity_log returning id`,
+  );
+
+  return {
+    ok: true,
+    message: `All lead assignments, progress statuses, call notes, and activity history were cleared. ${leadRes.rows.length} leads reset to default. ${actRes.rows.length} activities wiped. Contact & research data remain 100% safe.`,
+    clearedLeads: leadRes.rows.length,
+    clearedActivities: actRes.rows.length,
+  };
+}
+
+export async function addManualLeadActivity(input: {
+  companyId: number | string;
+  status: LeadStatus;
+  telemarketerName?: string | null;
+  notes?: string | null;
+  actionDate?: string;
+}): Promise<Record<string, unknown>> {
+  if (!configured()) throw new Error('database not configured');
+  await migrate();
+  const id = Number(input.companyId);
+  if (!Number.isFinite(id) || id <= 0) throw new Error('invalid company id');
+
+  let agentName = input.telemarketerName ? input.telemarketerName.trim() : null;
+  let agentUid: string | null = null;
+  if (agentName) {
+    const target = await resolveTelemarketer(agentName).catch(() => null);
+    if (target) {
+      agentName = target.name;
+      agentUid = target.uid;
+    }
+  }
+
+  const actionTime = input.actionDate ? new Date(input.actionDate).toISOString() : new Date().toISOString();
+  const noteDate = actionTime.slice(0, 10);
+  const cleanNote = input.notes?.trim() ? `[${noteDate}] ${input.notes.trim()}` : null;
+
+  // Read current
+  const beforeRes = await sql<{ lead_status: string; assigned_to: string | null; telemarketer_uid: string | null; lead_notes: string | null }>(
+    `select lead_status, assigned_to, telemarketer_uid, lead_notes from company_data where id = $1 limit 1`,
+    [id],
+  );
+  const before = beforeRes.rows[0];
+  const prevStatus = (before?.lead_status as LeadStatus) || 'unassigned';
+  const effectiveAgent = agentName || before?.assigned_to || null;
+  const effectiveUid = agentUid || before?.telemarketer_uid || null;
+
+  let combinedNotes = before?.lead_notes || null;
+  if (cleanNote) {
+    combinedNotes = combinedNotes ? `${combinedNotes}\n${cleanNote}` : cleanNote;
+  }
+
+  const updated = await sql(
+    `update company_data set
+       lead_status = $1,
+       assigned_to = coalesce($2, assigned_to),
+       telemarketer_uid = coalesce($3, telemarketer_uid),
+       assigned_at = case when assigned_at is null and $2 is not null then $4::timestamptz else assigned_at end,
+       lead_notes = $5,
+       lead_updated_at = $4::timestamptz
+     where id = $6
+     returning *`,
+    [input.status, agentName, agentUid, actionTime, combinedNotes, id],
+  );
+
+  const logRes = await sql(
+    `insert into lead_activity_log (company_id, telemarketer_name, telemarketer_uid, action, previous_status, new_status, notes, is_mock, created_at)
+     values ($1, $2, $3, 'status_change', $4, $5, $6, false, $7::timestamptz)
+     returning *`,
+    [id, effectiveAgent, effectiveUid, prevStatus, input.status, cleanNote, actionTime],
+  );
+
+  return {
+    ok: true,
+    lead: updated.rows[0],
+    activity: logRes.rows[0],
+  };
 }

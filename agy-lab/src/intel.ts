@@ -3259,7 +3259,7 @@ export async function handleTelemarketerApi(
 export async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL, ctx: Ctx): Promise<boolean> {
   const p = url.pathname;
   const method = req.method ?? 'GET';
-  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/contact-research') && !p.startsWith('/api/parallel-contact-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/ads-market') && !p.startsWith('/api/reports') && !p.startsWith('/api/leads') && !p.startsWith('/api/telemarketers') && !p.startsWith('/api/territories') && !p.startsWith('/api/contacts')) return false;
+  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/contact-research') && !p.startsWith('/api/parallel-contact-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/ads-market') && !p.startsWith('/api/reports') && !p.startsWith('/api/leads') && !p.startsWith('/api/telemarketers') && !p.startsWith('/api/territories') && !p.startsWith('/api/contacts') && !p.startsWith('/api/lead-activity')) return false;
   if (!db.configured()) {
     ctx.json(res, 503, { error: 'report database is not configured; link DATABASE_URL to the Railway service' });
     return true;
@@ -3566,6 +3566,67 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       return true;
     }
     ctx.json(res, 200, { ok: true, deleted: true });
+    return true;
+  }
+
+  // ---- Lead Activity & Presentation Operations -----------------------------
+  if (method === 'GET' && p === '/api/lead-activity/stats') {
+    const days = parseInt(url.searchParams.get('days') || '7', 10);
+    const telemarketer = url.searchParams.get('telemarketer') || undefined;
+    const stats = await db.getLeadActivityStats({ days: isNaN(days) ? 7 : days, telemarketer });
+    ctx.json(res, 200, { ok: true, stats });
+    return true;
+  }
+
+  if (method === 'GET' && p === '/api/lead-activity/log') {
+    const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+    const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+    const telemarketer = url.searchParams.get('telemarketer') || undefined;
+    const status = url.searchParams.get('status') || undefined;
+    const search = url.searchParams.get('search') || undefined;
+    const result = await db.listLeadActivities({
+      limit: isNaN(limit) ? 50 : limit,
+      offset: isNaN(offset) ? 0 : offset,
+      telemarketer,
+      status,
+      search,
+    });
+    ctx.json(res, 200, { ok: true, ...result });
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/lead-activity/mock-generate') {
+    const body = await ctx.readJson(req).catch(() => ({}));
+    const leadCount = typeof body.leadCount === 'number' ? body.leadCount : (typeof body.count === 'number' ? body.count : 80);
+    const daysSpan = typeof body.daysSpan === 'number' ? body.daysSpan : (typeof body.days === 'number' ? body.days : 7);
+    const clearFirst = body.clearFirst !== undefined ? Boolean(body.clearFirst) : true;
+    const result = await db.generateMockLeadData({ leadCount, daysSpan, clearFirst });
+    ctx.json(res, 200, result);
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/lead-activity/reset-progress') {
+    const result = await db.clearMockLeadProgress();
+    ctx.json(res, 200, result);
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/lead-activity/record') {
+    const body = await ctx.readJson(req);
+    const companyId = body.companyId || body.company_id;
+    const status = (body.status || body.leadStatus || body.lead_status) as db.LeadStatus;
+    if (!companyId || !status) {
+      ctx.json(res, 400, { error: 'companyId and status are required' });
+      return true;
+    }
+    const result = await db.addManualLeadActivity({
+      companyId,
+      status,
+      telemarketerName: body.telemarketer || body.telemarketerName || body.telemarketer_name,
+      notes: body.notes || body.lead_notes,
+      actionDate: body.actionDate || body.action_date,
+    });
+    ctx.json(res, 200, result);
     return true;
   }
 
