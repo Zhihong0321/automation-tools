@@ -309,6 +309,18 @@ export const document = {
         },
       },
     },
+    '/api/telemarketer/roster': {
+      get: {
+        security: [],
+        operationId: 'listTelemarketerRoster',
+        tags: ['Telemarketing'],
+        summary: 'List active telemarketers roster and discovery endpoint',
+        description: 'Returns all active telemarketers with their unique UID, phone, email, and pipeline stats to discover agent IDs.',
+        responses: {
+          '200': { description: 'Roster of active telemarketers' },
+        },
+      },
+    },
     '/api/telemarketer/leads': {
       get: {
         security: [],

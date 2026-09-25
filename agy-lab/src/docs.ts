@@ -446,30 +446,56 @@ const companyId = search.data.companies[0].id;</code></pre>
 
 <section id="telemarketing">
   <h2>Telemarketer API</h2>
-  <p class="lede">Dedicated endpoints for telemarketers to read their assigned leads and record call dispositions and notes. Authenticated directly by active <strong>Telemarketer UID</strong> without needing an operator bearer token.</p>
+  <p class="lede">Dedicated endpoints for telemarketers and CRM integrations to read assigned leads and record call dispositions and notes. Authenticated directly by active <strong>Telemarketer UID</strong> or by operator bearer token (<code>$EE_AUTO_TOKEN</code>).</p>
 
-  <div class="call"><span class="h">Authentication: Telemarketer UID = Key</span>
-  <p>Every telemarketer has a unique UID (e.g. <code>TM-SARAH</code> or <code>uid-sarah</code>). You can authenticate by supplying it in any of the following formats:</p>
+  <div class="call"><span class="h">Authentication: Telemarketer UID or Operator Bearer</span>
+  <p>Every telemarketer has a unique UID (e.g. <code>TM-SARAH</code> or <code>user_5e0dc2eb25600001</code>). You can authenticate by supplying it in any of the following formats:</p>
   <ul>
-    <li>URL query param: <code>?uid=TM-SARAH</code></li>
+    <li>URL query param: <code>?uid=TM-SARAH</code> (also accepts <code>?assignedTo=Sarah Tan</code> or <code>?telemarketer=...</code>)</li>
+    <li>Path prefix: <code>/api/telemarketer/TM-SARAH/leads</code> or <code>/api/telemarketer/leads/TM-SARAH</code></li>
     <li>HTTP header: <code>X-Telemarketer-UID: TM-SARAH</code></li>
-    <li>Bearer Authorization: <code>Authorization: Bearer TM-SARAH</code></li>
-    <li>Path prefix: <code>/api/telemarketer/TM-SARAH/leads</code></li>
+    <li>Bearer Authorization: <code>Authorization: Bearer TM-SARAH</code> (or operator token <code>Authorization: Bearer $EE_AUTO_TOKEN</code>)</li>
     <li>JSON body: <code>{"uid": "TM-SARAH"}</code></li>
   </ul>
   </div>
 
-  <h3>1. Read assigned leads list</h3>
-  <div class="ep"><span class="m get">GET</span><code class="path">/api/telemarketer/leads</code><span class="tag">UID Auth &middot; returns 200</span></div>
-  <p>Alternative path: <code>/api/telemarketer/:uid/leads</code>. Returns the telemarketer's active profile, progress counters (<code>total</code>, <code>pending</code>, <code>contacted</code>, <code>interested</code>, <code>not_interested</code>, <code>do_not_call</code>), and the paginated list of leads assigned to this agent.</p>
+  <h3>1. Discover active telemarketers roster</h3>
+  <div class="ep"><span class="m get">GET</span><code class="path">/api/telemarketer/roster</code><span class="tag">Open / UID Auth &middot; returns 200</span></div>
+  <p>Returns all active telemarketers with their unique UID, name, phone, email, and live pipeline status summary. Use this endpoint to discover telemarketer UIDs to fetch leads for each agent.</p>
+<pre><code>curl -s "https://ee-auto.up.railway.app/api/telemarketer/roster"</code></pre>
+<pre><code>{
+  "ok": true,
+  "telemarketers": ["Sarah Tan", "Tong Lip Jian", "Vincent Tan"],
+  "agents": [
+    {
+      "id": 1,
+      "uid": "TM-SARAH",
+      "name": "Sarah Tan",
+      "phone": "+6012-3456789",
+      "email": "sarah@example.com",
+      "total_assigned": 45,
+      "pending_count": 20,
+      "contacted_count": 15,
+      "interested_count": 7,
+      "not_interested_count": 2,
+      "dnc_count": 1,
+      "api_url": "/api/telemarketer/TM-SARAH/leads"
+    }
+  ]
+}</code></pre>
+
+  <h3>2. Read assigned leads for a telemarketer</h3>
+  <div class="ep"><span class="m get">GET</span><code class="path">/api/telemarketer/leads</code><span class="tag">UID or Bearer &middot; returns 200</span></div>
+  <p>Alternative paths: <code>/api/telemarketer/:uid/leads</code> or <code>/api/telemarketer/leads/:uid</code>. Returns the telemarketer's active profile, progress counters (<code>total</code>, <code>pending</code>, <code>contacted</code>, <code>interested</code>, <code>not_interested</code>, <code>do_not_call</code>), and the paginated list of leads assigned to this agent.</p>
   <div class="tbl"><table><thead><tr><th>Query Param</th><th>Type</th><th>Default</th><th>Description</th></tr></thead><tbody>
-    <tr><td><code>status</code></td><td>string</td><td>all</td><td>Filter by status: <code>assigned</code>, <code>contacted</code>, <code>interested</code>, <code>not_interested</code>, <code>do_not_call</code> (or aliases: <code>pending</code>, <code>to_call</code>, <code>dnc</code>).</td></tr>
+    <tr><td><code>uid</code></td><td>string</td><td>none</td><td>Telemarketer UID, Name, or ID (e.g. <code>TM-SARAH</code>, <code>user_5e0dc2eb25600001</code>). Aliases: <code>assignedTo</code>, <code>telemarketer</code>.</td></tr>
+    <tr><td><code>status</code></td><td>string</td><td>all</td><td>Filter by status: <code>all</code>, <code>assigned</code>, <code>contacted</code>, <code>interested</code>, <code>not_interested</code>, <code>do_not_call</code> (or aliases: <code>pending</code>, <code>to_call</code>, <code>dnc</code>).</td></tr>
     <tr><td><code>search</code></td><td>string</td><td>none</td><td>Search keyword matching company name, phone, address, or category.</td></tr>
     <tr><td><code>limit</code></td><td>integer</td><td>50</td><td>Page size (1&ndash;500).</td></tr>
     <tr><td><code>offset</code></td><td>integer</td><td>0</td><td>Pagination offset.</td></tr>
     <tr><td><code>sort</code></td><td>string</td><td>created_at</td><td>Sort column (prefix <code>-</code> for descending, e.g. <code>-created_at</code>).</td></tr>
   </tbody></table></div>
-<pre><code>curl -s "https://ee-auto.up.railway.app/api/telemarketer/leads?uid=TM-SARAH&amp;status=assigned"</code></pre>
+<pre><code>curl -s "https://ee-auto.up.railway.app/api/telemarketer/leads?uid=TM-SARAH"</code></pre>
 <pre><code>{
   "ok": true,
   "telemarketer": { "id": 1, "uid": "TM-SARAH", "name": "Sarah Tan", "phone": "+6012-3456789", "email": "sarah@example.com" },
@@ -492,7 +518,7 @@ const companyId = search.data.companies[0].id;</code></pre>
   "offset": 0
 }</code></pre>
 
-  <h3>2. Read single lead detail</h3>
+  <h3>3. Read single lead detail</h3>
   <div class="ep"><span class="m get">GET</span><code class="path">/api/telemarketer/leads/:id</code><span class="tag">UID Auth &middot; returns 200</span></div>
   <p>Alternative path: <code>/api/telemarketer/:uid/leads/:id</code>. Returns complete company details, address, website, notes, plus parsed <code>decision_makers</code> with direct WhatsApp links and categorized <code>phone_contacts</code>.</p>
 <pre><code>curl -s -H "X-Telemarketer-UID: TM-SARAH" \
@@ -516,7 +542,7 @@ const companyId = search.data.companies[0].id;</code></pre>
   }
 }</code></pre>
 
-  <h3>3. Update lead status &amp; add / edit notes</h3>
+  <h3>4. Update lead status &amp; add / edit notes</h3>
   <div class="ep"><span class="m patch">PATCH</span><code class="path">/api/telemarketer/leads/:id</code><span class="tag">UID Auth &middot; returns 200</span></div>
   <p>Also accepts <code>POST</code>. Updates disposition status and notes. Enforces agent ownership: telemarketers cannot modify leads assigned to another agent.</p>
   <div class="tbl"><table><thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr></thead><tbody>
@@ -544,7 +570,7 @@ const companyId = search.data.companies[0].id;</code></pre>
   }
 }</code></pre>
 
-  <h3>4. Telemarketer profile &amp; workload summary</h3>
+  <h3>5. Telemarketer profile &amp; workload summary</h3>
   <div class="ep"><span class="m get">GET</span><code class="path">/api/telemarketer/me</code><span class="tag">UID Auth &middot; returns 200</span></div>
   <p>Alternative path: <code>/api/telemarketer/:uid/profile</code>. Returns the telemarketer's profile and breakdown of assigned leads across all statuses.</p>
 <pre><code>curl -s -H "Authorization: Bearer TM-SARAH" \

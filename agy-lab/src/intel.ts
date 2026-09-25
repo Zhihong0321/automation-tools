@@ -20,6 +20,7 @@ export interface Ctx {
   json: (res: http.ServerResponse, status: number, body: unknown) => void;
   readJson: (req: http.IncomingMessage) => Promise<Record<string, unknown>>;
   db?: Partial<typeof db>;
+  isOperator?: boolean;
 }
 
 const active = new Set<string>();
@@ -2946,7 +2947,7 @@ export async function launchContactResearch(
   return { report, alreadyRunning: false };
 }
 
-function extractTelemarketerUid(req: http.IncomingMessage, url: URL, body?: Record<string, unknown>): string {
+function extractTelemarketerUid(req: http.IncomingMessage, url: URL, body?: Record<string, unknown>, isOperator?: boolean): string {
   // 1. Header: X-Telemarketer-UID, X-Telemarketer-Id, X-Agent-Uid, X-API-Key
   const headerUid = req.headers['x-telemarketer-uid']
     || req.headers['x-telemarketer-id']
@@ -2954,26 +2955,33 @@ function extractTelemarketerUid(req: http.IncomingMessage, url: URL, body?: Reco
     || req.headers['x-api-key'];
   if (typeof headerUid === 'string' && headerUid.trim()) return headerUid.trim();
 
-  // 2. Authorization header: Bearer <uid>
-  const authHeader = req.headers.authorization ?? '';
-  if (authHeader.startsWith('Bearer ')) {
-    const token = authHeader.slice(7).trim();
-    if (token) return token;
-  }
-
-  // 3. Query params: ?uid=... or ?telemarketer_uid=... or ?key=... or ?token=...
+  // 2. Query params: ?uid=... or ?telemarketer_uid=... or ?assignedTo=... or ?telemarketer=... or ?agent=... or ?name=... or ?id=...
   const queryUid = url.searchParams.get('uid')
     || url.searchParams.get('telemarketer_uid')
     || url.searchParams.get('telemarketerUid')
     || url.searchParams.get('agent_uid')
-    || url.searchParams.get('key')
-    || url.searchParams.get('token');
+    || url.searchParams.get('assignedTo')
+    || url.searchParams.get('assigned_to')
+    || url.searchParams.get('telemarketer')
+    || url.searchParams.get('agent')
+    || url.searchParams.get('name')
+    || url.searchParams.get('id')
+    || url.searchParams.get('key');
   if (queryUid && queryUid.trim()) return queryUid.trim();
 
-  // 4. Request body: body.uid or body.telemarketer_uid or body.telemarketerUid
+  // 3. Request body: body.uid or body.telemarketer_uid or body.assignedTo etc.
   if (body) {
-    const bodyUid = body.uid || body.telemarketer_uid || body.telemarketerUid || body.agent_uid || body.key;
+    const bodyUid = body.uid || body.telemarketer_uid || body.telemarketerUid || body.agent_uid
+      || body.assignedTo || body.assigned_to || body.telemarketer || body.agent || body.name || body.id || body.key;
     if (typeof bodyUid === 'string' && bodyUid.trim()) return bodyUid.trim();
+    if (typeof bodyUid === 'number') return String(bodyUid);
+  }
+
+  // 4. Authorization header: Bearer <uid> ONLY IF NOT an operator token
+  const authHeader = req.headers.authorization ?? '';
+  if (authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7).trim();
+    if (token && !isOperator) return token;
   }
 
   return '';
@@ -2988,8 +2996,9 @@ function isLeadAssignedToAgent(
     const cleanLeadUid = lead.telemarketer_uid.replace(/^uid:/, '');
     if (cleanAgentUid === cleanLeadUid) return true;
   }
+  const norm = (s?: string | null) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
   if (lead.assigned_to && agent.name) {
-    if (lead.assigned_to.trim().toLowerCase() === agent.name.trim().toLowerCase()) return true;
+    if (norm(lead.assigned_to) === norm(agent.name)) return true;
   }
   if (agent.uid && lead.assigned_to) {
     const cleanAgentUid = agent.uid.replace(/^uid:/, '');
@@ -3021,24 +3030,19 @@ export async function handleTelemarketerApi(
   // Normalize /api/tm/ to /api/telemarketer/
   const subPath = p.replace(/^\/api\/tm/, '/api/telemarketer');
 
-  // Check for path patterns:
-  // 1. /api/telemarketer/:uid/leads
-  // 2. /api/telemarketer/:uid/leads/:id
-  // 3. /api/telemarketer/leads
-  // 4. /api/telemarketer/leads/:id
-  // 5. /api/telemarketer/me or /api/telemarketer/:uid/profile
-  let pathUid = '';
-  let leadId = '';
-
-  const pathWithUidMatch = /^\/api\/telemarketer\/([^/]+)\/leads(?:\/(\d+))?$/.exec(subPath);
-  if (pathWithUidMatch && pathWithUidMatch[1] !== 'leads') {
-    pathUid = decodeURIComponent(pathWithUidMatch[1]!);
-    leadId = pathWithUidMatch[2] || '';
-  } else {
-    const directLeadMatch = /^\/api\/telemarketer\/leads\/(\d+)$/.exec(subPath);
-    if (directLeadMatch) {
-      leadId = directLeadMatch[1]!;
-    }
+  // 0. Active Telemarketer Roster / Directory: GET /api/telemarketer/roster or /agents or /list
+  if (method === 'GET' && (subPath === '/api/telemarketer/roster' || subPath === '/api/telemarketer/agents' || subPath === '/api/telemarketer/list')) {
+    const [telemarketers, agents, stats] = await Promise.all([
+      dbi.listTelemarketers().catch(() => []),
+      dbi.getTelemarketerDetails().catch(() => []),
+      dbi.getLeadStats().catch(() => null),
+    ]);
+    const cleanAgents = agents.filter((a) => a.active).map((a) => ({
+      ...a,
+      api_url: `/api/telemarketer/${encodeURIComponent(a.uid || a.name)}/leads`,
+    }));
+    ctx.json(res, 200, { ok: true, telemarketers, agents: cleanAgents, stats });
+    return true;
   }
 
   // Parse body for write methods
@@ -3051,7 +3055,98 @@ export async function handleTelemarketerApi(
     }
   }
 
-  const suppliedUid = pathUid || extractTelemarketerUid(req, url, body);
+  // Check for path patterns:
+  // 1. /api/telemarketer/:uid/leads
+  // 2. /api/telemarketer/:uid/leads/:id
+  // 3. /api/telemarketer/leads
+  // 4. /api/telemarketer/leads/:id or /api/telemarketer/leads/:uid
+  // 5. /api/telemarketer/me or /api/telemarketer/:uid/profile
+  let pathUid = '';
+  let leadId = '';
+
+  const pathWithUidMatch = /^\/api\/telemarketer\/([^/]+)\/leads(?:\/(\d+))?$/.exec(subPath);
+  if (pathWithUidMatch && pathWithUidMatch[1] !== 'leads') {
+    pathUid = decodeURIComponent(pathWithUidMatch[1]!).replace(/^[=:]+/, '');
+    leadId = pathWithUidMatch[2] || '';
+  } else {
+    // Alternative path /api/telemarketer/leads/:param
+    const leadsParamMatch = /^\/api\/telemarketer\/leads\/([^/]+)$/.exec(subPath);
+    if (leadsParamMatch) {
+      const rawParam = decodeURIComponent(leadsParamMatch[1]!).replace(/^[=:]+/, '');
+      if (rawParam === 'roster' || rawParam === 'list' || rawParam === 'agents') {
+        const [telemarketers, agents, stats] = await Promise.all([
+          dbi.listTelemarketers().catch(() => []),
+          dbi.getTelemarketerDetails().catch(() => []),
+          dbi.getLeadStats().catch(() => null),
+        ]);
+        const cleanAgents = agents.filter((a) => a.active).map((a) => ({
+          ...a,
+          api_url: `/api/telemarketer/${encodeURIComponent(a.uid || a.name)}/leads`,
+        }));
+        ctx.json(res, 200, { ok: true, telemarketers, agents: cleanAgents, stats });
+        return true;
+      }
+      if (/\D/.test(rawParam)) {
+        // Non-digits (e.g. TM-SARAH, user_5e0dc2eb25600001, 1739157684995x634812576206372600) -> telemarketer UID
+        pathUid = rawParam;
+      } else {
+        // Pure digits: could be lead ID or telemarketer ID
+        const explicitUid = extractTelemarketerUid(req, url, body, ctx.isOperator);
+        if (explicitUid) {
+          leadId = rawParam;
+        } else {
+          const candidate = await dbi.getTelemarketerByUid(rawParam).catch(() => null);
+          if (candidate) {
+            pathUid = rawParam;
+          } else {
+            leadId = rawParam;
+          }
+        }
+      }
+    }
+  }
+
+  const isOperator = !!ctx.isOperator;
+  const suppliedUid = pathUid || extractTelemarketerUid(req, url, body, isOperator);
+
+  // If operator is authenticated and no specific telemarketer was requested (or uid=all)
+  if (isOperator && (!suppliedUid || suppliedUid === 'all')) {
+    if (method === 'GET' && !leadId) {
+      const rawStatus = url.searchParams.get('status');
+      const search = url.searchParams.get('search');
+      const sort = url.searchParams.get('sort');
+      const limit = Number(url.searchParams.get('limit') ?? 50);
+      const offset = Number(url.searchParams.get('offset') ?? 0);
+      let statusFilter = rawStatus ? rawStatus.trim() : undefined;
+      if (statusFilter) {
+        const lower = statusFilter.toLowerCase();
+        if (lower === 'pending' || lower === 'to_call' || lower === 'to call') statusFilter = 'assigned';
+        else if (lower === 'dnc') statusFilter = 'do_not_call';
+        else if (lower === 'not-interested' || lower === 'not interested') statusFilter = 'not_interested';
+      }
+      const [leadRes, stats] = await Promise.all([
+        dbi.listLeads({
+          status: statusFilter,
+          search,
+          limit,
+          offset,
+          sort,
+        }),
+        dbi.getLeadStats().catch(() => null),
+      ]);
+      ctx.json(res, 200, {
+        ok: true,
+        operator: true,
+        stats,
+        leads: leadRes.leads,
+        total: leadRes.total,
+        limit: leadRes.limit,
+        offset: leadRes.offset,
+      });
+      return true;
+    }
+  }
+
   if (!suppliedUid) {
     ctx.json(res, 401, {
       ok: false,
@@ -3093,7 +3188,7 @@ export async function handleTelemarketerApi(
   }
 
   // 2. Read leads list: GET /api/telemarketer/leads or GET /api/telemarketer/:uid/leads
-  if (method === 'GET' && !leadId && (subPath === '/api/telemarketer/leads' || pathWithUidMatch)) {
+  if (method === 'GET' && !leadId && (subPath === '/api/telemarketer/leads' || pathWithUidMatch || /^\/api\/telemarketer\/leads\/[^/]+$/.test(subPath))) {
     const rawStatus = url.searchParams.get('status');
     const search = url.searchParams.get('search');
     const sort = url.searchParams.get('sort');
@@ -3107,6 +3202,7 @@ export async function handleTelemarketerApi(
       if (lower === 'pending' || lower === 'to_call' || lower === 'to call') statusFilter = 'assigned';
       else if (lower === 'dnc') statusFilter = 'do_not_call';
       else if (lower === 'not-interested' || lower === 'not interested') statusFilter = 'not_interested';
+      else if (lower === 'all') statusFilter = undefined;
     }
 
     const [leadRes, stats] = await Promise.all([
@@ -3147,8 +3243,8 @@ export async function handleTelemarketerApi(
       return true;
     }
 
-    // Ownership check: if lead is assigned to someone else, reject
-    if (lead.assigned_to && !isLeadAssignedToAgent(lead, agent)) {
+    // Ownership check: if lead is assigned to someone else and caller is not operator, reject
+    if (!isOperator && lead.assigned_to && !isLeadAssignedToAgent(lead, agent)) {
       ctx.json(res, 403, {
         ok: false,
         error: 'This lead is assigned to another telemarketer (' + lead.assigned_to + ')',
@@ -3168,8 +3264,8 @@ export async function handleTelemarketerApi(
       return true;
     }
 
-    // Ownership check: if assigned to another agent, prevent unauthorized modification
-    if (lead.assigned_to && !isLeadAssignedToAgent(lead, agent)) {
+    // Ownership check: if assigned to another agent and caller is not operator, prevent unauthorized modification
+    if (!isOperator && lead.assigned_to && !isLeadAssignedToAgent(lead, agent)) {
       ctx.json(res, 403, {
         ok: false,
         error: 'This lead is assigned to another telemarketer (' + lead.assigned_to + ')',

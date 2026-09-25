@@ -72,6 +72,9 @@ function json(res: http.ServerResponse, status: number, body: unknown): void {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(payload),
     'cache-control': 'no-store',
+    'access-control-allow-origin': '*',
+    'access-control-allow-headers': 'authorization, content-type, x-telemarketer-uid, x-telemarketer-id, x-agent-uid, x-api-key, accept',
+    'access-control-allow-methods': 'GET, POST, PATCH, PUT, DELETE, OPTIONS',
   });
   res.end(payload);
 }
@@ -99,6 +102,8 @@ function authorized(req: http.IncomingMessage, url: URL): boolean {
     || url.pathname.startsWith('/api/parallel-contact-research')
     || url.pathname.startsWith('/api/leads')
     || url.pathname.startsWith('/api/telemarketers')
+    || url.pathname.startsWith('/api/telemarketer')
+    || url.pathname.startsWith('/api/tm')
     || url.pathname.startsWith('/api/territories')
     || url.pathname.startsWith('/api/contacts')
     || url.pathname.startsWith('/api/lead-activity');
@@ -146,6 +151,17 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   const url = new URL(req.url ?? '/', 'http://' + (req.headers.host ?? 'localhost'));
   const p = url.pathname;
   const method = req.method ?? 'GET';
+
+  // Handle CORS preflight for browser clients
+  if (method === 'OPTIONS') {
+    res.writeHead(204, {
+      'access-control-allow-origin': '*',
+      'access-control-allow-headers': 'authorization, content-type, x-telemarketer-uid, x-telemarketer-id, x-agent-uid, x-api-key, accept',
+      'access-control-allow-methods': 'GET, POST, PATCH, PUT, DELETE, OPTIONS',
+      'access-control-max-age': '86400',
+    });
+    return void res.end();
+  }
 
   // Railway's healthcheck has no token and must never be given one.
   if (p === '/healthz') return json(res, 200, { ok: true, at: new Date().toISOString() });
@@ -226,9 +242,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     res.on('close', () => log.end(req, res.statusCode));
   }
 
-  // Telemarketer API: authenticated by Telemarketer UID directly (no operator key needed)
+  // Telemarketer API: authenticated by Telemarketer UID directly (no operator key needed), or operator token
   if (!p.startsWith('/api/telemarketers') && (p.startsWith('/api/telemarketer/') || p === '/api/telemarketer' || p.startsWith('/api/tm/') || p === '/api/tm')) {
-    if (await intel.handleTelemarketerApi(req, res, url, { json, readJson })) return;
+    if (await intel.handleTelemarketerApi(req, res, url, { json, readJson, isOperator: authorized(req, url) })) return;
   }
 
   if (!authorized(req, url)) {

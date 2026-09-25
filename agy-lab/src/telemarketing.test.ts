@@ -558,7 +558,8 @@ test('Telemarketer API endpoints handle auth by Telemarketer UID, lead reading, 
   const mockDb: any = {
     configured: () => true,
     getTelemarketerByUid: async (uid: string) => {
-      if (uid === 'uid-sarah' || uid === 'sarah') {
+      const clean = uid.toLowerCase();
+      if (clean === 'uid-sarah' || clean === 'sarah' || clean === 'tm-sarah' || clean === 'sarah tan') {
         return {
           id: 1,
           uid: 'uid-sarah',
@@ -572,6 +573,12 @@ test('Telemarketer API endpoints handle auth by Telemarketer UID, lead reading, 
       }
       return null;
     },
+    listTelemarketers: async () => ['Sarah Tan', 'Vincent Tan'],
+    getTelemarketerDetails: async () => [
+      { id: 1, uid: 'uid-sarah', name: 'Sarah Tan', active: true, total_assigned: 45 },
+      { id: 2, uid: 'uid-vincent', name: 'Vincent Tan', active: true, total_assigned: 20 },
+    ],
+    getLeadStats: async () => ({ total: 65, assigned: 65 }),
     getTelemarketerStatsByUid: async () => ({
       total: 45,
       pending: 20,
@@ -837,6 +844,90 @@ test('Telemarketer API endpoints handle auth by Telemarketer UID, lead reading, 
     const { ctx: ctxPost } = makeCtx();
     const handledPost = await intel.handleTelemarketerApi(reqPost, resPost, urlPost, ctxPost as any);
     assert.equal(handledPost, false, 'handleTelemarketerApi must ignore /api/telemarketers/import (operator route)');
+  }
+
+  // 4j. Active telemarketer roster discovery: GET /api/telemarketer/roster
+  {
+    const req: any = { method: 'GET', headers: {} };
+    const res: any = {};
+    const url = new URL('http://localhost/api/telemarketer/roster');
+    const { ctx, getStatus, getBody } = makeCtx();
+    const handled = await intel.handleTelemarketerApi(req, res, url, ctx as any);
+    assert.equal(handled, true);
+    assert.equal(getStatus(), 200);
+    assert.equal(getBody().ok, true);
+    assert.ok(Array.isArray(getBody().agents));
+    assert.equal(getBody().agents.length, 2);
+    assert.equal(getBody().agents[0].name, 'Sarah Tan');
+    assert.equal(getBody().agents[0].api_url, '/api/telemarketer/uid-sarah/leads');
+  }
+
+  // 4k. Alternative path formats: GET /api/telemarketer/leads/:uid and /api/telemarketer/:uid/leads
+  {
+    const req1: any = { method: 'GET', headers: {} };
+    const res1: any = {};
+    const url1 = new URL('http://localhost/api/telemarketer/leads/uid-sarah');
+    const { ctx: ctx1, getStatus: getStatus1, getBody: getBody1 } = makeCtx();
+    const handled1 = await intel.handleTelemarketerApi(req1, res1, url1, ctx1 as any);
+    assert.equal(handled1, true);
+    assert.equal(getStatus1(), 200);
+    assert.equal(getBody1().telemarketer.name, 'Sarah Tan');
+    assert.equal(getBody1().leads.length, 1);
+
+    const req2: any = { method: 'GET', headers: {} };
+    const res2: any = {};
+    const url2 = new URL('http://localhost/api/telemarketer/leads/=TM-SARAH');
+    const { ctx: ctx2, getStatus: getStatus2, getBody: getBody2 } = makeCtx();
+    const handled2 = await intel.handleTelemarketerApi(req2, res2, url2, ctx2 as any);
+    assert.equal(handled2, true);
+    assert.equal(getStatus2(), 200);
+    assert.equal(getBody2().telemarketer.name, 'Sarah Tan');
+  }
+
+  // 4l. Query by ?assignedTo=, ?telemarketer=, ?name=
+  {
+    const req: any = { method: 'GET', headers: {} };
+    const res: any = {};
+    const url = new URL('http://localhost/api/telemarketer/leads?assignedTo=Sarah%20Tan');
+    const { ctx, getStatus, getBody } = makeCtx();
+    const handled = await intel.handleTelemarketerApi(req, res, url, ctx as any);
+    assert.equal(handled, true);
+    assert.equal(getStatus(), 200);
+    assert.equal(getBody().telemarketer.name, 'Sarah Tan');
+  }
+
+  // 4m. Operator bearer token does NOT collide with UID and allows operator to read all leads or agent leads
+  {
+    const reqAll: any = { method: 'GET', headers: { 'authorization': 'Bearer eternalgy2026eternalgy2026' } };
+    const resAll: any = {};
+    const urlAll = new URL('http://localhost/api/telemarketer/leads');
+    const { ctx: ctxAll, getStatus: getStatusAll, getBody: getBodyAll } = makeCtx();
+    (ctxAll as any).isOperator = true;
+    const handledAll = await intel.handleTelemarketerApi(reqAll, resAll, urlAll, ctxAll as any);
+    assert.equal(handledAll, true);
+    assert.equal(getStatusAll(), 200);
+    assert.equal(getBodyAll().operator, true);
+    assert.equal(getBodyAll().leads.length, 1);
+
+    // Operator querying specific telemarketer via ?uid=
+    const reqAgent: any = { method: 'GET', headers: { 'authorization': 'Bearer eternalgy2026eternalgy2026' } };
+    const resAgent: any = {};
+    const urlAgent = new URL('http://localhost/api/telemarketer/leads?uid=uid-sarah');
+    const { ctx: ctxAgent, getStatus: getStatusAgent, getBody: getBodyAgent } = makeCtx();
+    (ctxAgent as any).isOperator = true;
+    const handledAgent = await intel.handleTelemarketerApi(reqAgent, resAgent, urlAgent, ctxAgent as any);
+    assert.equal(handledAgent, true);
+    assert.equal(getStatusAgent(), 200);
+    assert.equal(getBodyAgent().telemarketer.name, 'Sarah Tan');
+  }
+
+  // 4n. TM-SARAH demo fallback in reportdb
+  {
+    const demoAgent = await db.getTelemarketerByUid('TM-SARAH');
+    assert.ok(demoAgent);
+    assert.equal(demoAgent.name, 'Sarah Tan');
+    const demoStats = await db.getTelemarketerStatsByUid('TM-SARAH');
+    assert.ok(demoStats.total >= 0);
   }
 });
 
