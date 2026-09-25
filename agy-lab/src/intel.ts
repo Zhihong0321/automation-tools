@@ -932,6 +932,14 @@ Return exactly ONE compact JSON object in a single fenced code block with keys:
     }
   ]
 }
+
+/** agy-web's synchronous HTTP route needs a short research round to finish before its proxy closes. */
+export function cloudContactResearchPrompt(company: Record<string, unknown>, targetRole?: string | null): string {
+  return contactResearchPrompt(company, targetRole).replace(
+    CONTACT_TIME_BUDGET,
+    'HARD TIME BUDGET: research for at most two minutes. Stop browsing and return the required JSON immediately with the publicly sourced details found so far. Empty arrays are valid when a detail cannot be verified.',
+  );
+}
 Max 8 decision_makers, 10 phone_contacts, 6 email_contacts. No prose outside JSON.`;
 }
 
@@ -2511,7 +2519,7 @@ async function runContactResearch(
           ...(website && !/google\.[^/]+\/(?:search|searchviewer)/i.test(website) ? { website } : {}),
           location: str(company.address),
           ...(str(company.maps_url) ? { extraUrls: [str(company.maps_url)] } : {}),
-          ...(jobType === 'research.contact.cloud' ? { prompt: contactResearchPrompt(company, targetRole) } : {}),
+          ...(jobType === 'research.contact.cloud' ? { prompt: cloudContactResearchPrompt(company, targetRole) } : {}),
         };
         // The report is the durable slot. Store the job id before the broker
         // makes it claimable, then wait without a report deadline. The worker's
@@ -2595,7 +2603,7 @@ export async function acceptContactResult(
   if (report.job_id !== jobId) throw new Error('contact result job id does not match its report slot');
   if (report.status === 'completed') return;
 
-  if (!ok && /individual quota reached|rate_limit_error|token plan usage|(?:^|\W)429(?:\W|$)|(?:^|\W)timeout(?:\W|$)|timed out/i.test(workerError ?? '')) {
+  if (!ok && /individual quota reached|rate_limit_error|token plan usage|(?:^|\W)429(?:\W|$)|(?:^|\W)timeout(?:\W|$)|timed out|upstream error/i.test(workerError ?? '')) {
     if (await db.deferContactResult(reportId, jobId)) {
       await db.logEvent({ reportId, publicId: report.public_id, jobId, stage: 'research.contact',
         event: 'contact.deferred', detail: { worker, reason: workerError } }).catch(() => {});

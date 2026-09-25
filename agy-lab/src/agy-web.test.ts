@@ -56,3 +56,17 @@ test('cloud contact runner rotates and retries once after account auth failure',
     if (previousToken === undefined) delete process.env.AGY_WEB_TOKEN; else process.env.AGY_WEB_TOKEN = previousToken;
   }
 });
+
+test('plain-text upstream errors are surfaced as retryable errors', async () => {
+  const previousToken = process.env.AGY_WEB_TOKEN;
+  const previousFetch = globalThis.fetch;
+  process.env.AGY_WEB_TOKEN = 'test-token';
+  globalThis.fetch = async (input) => new Response(new URL(String(input)).pathname === '/api/prompt'
+    ? 'upstream error' : '{"ok":true}', { status: 200 });
+  try {
+    await assert.rejects(ask('Research', 10_000), /upstream error/);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousToken === undefined) delete process.env.AGY_WEB_TOKEN; else process.env.AGY_WEB_TOKEN = previousToken;
+  }
+});

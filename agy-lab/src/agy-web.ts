@@ -27,7 +27,10 @@ async function request(path: string, body: Record<string, unknown>, timeoutMs: n
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
   });
-  const reply = await response.json() as PromptReply;
+  const raw = await response.text();
+  let reply: PromptReply;
+  try { reply = JSON.parse(raw) as PromptReply; }
+  catch { throw new Error(`agy-web upstream error (HTTP ${response.status}): ${raw.slice(0, 200)}`); }
   if (!response.ok) throw new Error(`agy-web ${path} returned HTTP ${response.status}: ${reply.error || 'request failed'}`);
   return reply;
 }

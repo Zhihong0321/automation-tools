@@ -35,7 +35,7 @@ export function start(port: number): void {
         try {
           const prompt = job.payload?.prompt;
           if (!prompt) throw new Error('contact job has no prompt');
-          const answer = await agyWeb.ask(prompt, 20 * 60_000);
+          const answer = await agyWeb.ask(prompt, 170_000);
           const parsed = extractJson(answer.answer);
           if (!parsed.value) throw new Error(`cloud AGY returned invalid JSON: ${parsed.error || 'unknown parse error'}`);
           await post(`/api/jobs/${job.id}/result`, { worker: NAME, reportId: job.payload?.reportId, ok: true, result: parsed.value });
