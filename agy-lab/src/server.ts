@@ -223,6 +223,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     res.on('close', () => log.end(req, res.statusCode));
   }
 
+  // Telemarketer API: authenticated by Telemarketer UID directly (no operator key needed)
+  if (p.startsWith('/api/telemarketer') || p.startsWith('/api/tm/')) {
+    if (await intel.handleTelemarketerApi(req, res, url, { json, readJson })) return;
+  }
+
   if (!authorized(req, url)) {
     // An OpenAI client parses the error envelope and prints its message; a bare
     // {error: string} shows up there as [object Object].

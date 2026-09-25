@@ -19,6 +19,7 @@ export { normalizePhoneNumber };
 export interface Ctx {
   json: (res: http.ServerResponse, status: number, body: unknown) => void;
   readJson: (req: http.IncomingMessage) => Promise<Record<string, unknown>>;
+  db?: Partial<typeof db>;
 }
 
 const active = new Set<string>();
@@ -2942,6 +2943,317 @@ export async function launchContactResearch(
   if (provider === 'parallel') void runContactResearch(report.public_id, report.id, company, request);
   else void resumeContactResearch();
   return { report, alreadyRunning: false };
+}
+
+function extractTelemarketerUid(req: http.IncomingMessage, url: URL, body?: Record<string, unknown>): string {
+  // 1. Header: X-Telemarketer-UID, X-Telemarketer-Id, X-Agent-Uid, X-API-Key
+  const headerUid = req.headers['x-telemarketer-uid']
+    || req.headers['x-telemarketer-id']
+    || req.headers['x-agent-uid']
+    || req.headers['x-api-key'];
+  if (typeof headerUid === 'string' && headerUid.trim()) return headerUid.trim();
+
+  // 2. Authorization header: Bearer <uid>
+  const authHeader = req.headers.authorization ?? '';
+  if (authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7).trim();
+    if (token) return token;
+  }
+
+  // 3. Query params: ?uid=... or ?telemarketer_uid=... or ?key=... or ?token=...
+  const queryUid = url.searchParams.get('uid')
+    || url.searchParams.get('telemarketer_uid')
+    || url.searchParams.get('telemarketerUid')
+    || url.searchParams.get('agent_uid')
+    || url.searchParams.get('key')
+    || url.searchParams.get('token');
+  if (queryUid && queryUid.trim()) return queryUid.trim();
+
+  // 4. Request body: body.uid or body.telemarketer_uid or body.telemarketerUid
+  if (body) {
+    const bodyUid = body.uid || body.telemarketer_uid || body.telemarketerUid || body.agent_uid || body.key;
+    if (typeof bodyUid === 'string' && bodyUid.trim()) return bodyUid.trim();
+  }
+
+  return '';
+}
+
+function isLeadAssignedToAgent(
+  lead: { assigned_to?: string | null; telemarketer_uid?: string | null },
+  agent: { uid?: string | null; name: string }
+): boolean {
+  if (agent.uid && lead.telemarketer_uid) {
+    const cleanAgentUid = agent.uid.replace(/^uid:/, '');
+    const cleanLeadUid = lead.telemarketer_uid.replace(/^uid:/, '');
+    if (cleanAgentUid === cleanLeadUid) return true;
+  }
+  if (lead.assigned_to && agent.name) {
+    if (lead.assigned_to.trim().toLowerCase() === agent.name.trim().toLowerCase()) return true;
+  }
+  if (agent.uid && lead.assigned_to) {
+    const cleanAgentUid = agent.uid.replace(/^uid:/, '');
+    const cleanLeadAssigned = lead.assigned_to.replace(/^uid:/, '');
+    if (cleanAgentUid === cleanLeadAssigned) return true;
+  }
+  return false;
+}
+
+/**
+ * Dedicated Telemarketer API.
+ * Authenticated directly by Telemarketer UID (no operator key needed).
+ * Allows telemarketers to read their assigned leads and update lead status / notes.
+ */
+export async function handleTelemarketerApi(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+  ctx: Ctx,
+): Promise<boolean> {
+  const p = url.pathname;
+  const method = req.method ?? 'GET';
+
+  if (!p.startsWith('/api/telemarketer') && !p.startsWith('/api/tm/')) return false;
+
+  const dbi = { ...db, ...(ctx.db || {}) };
+
+  // Normalize /api/tm/ to /api/telemarketer/
+  const subPath = p.replace(/^\/api\/tm/, '/api/telemarketer');
+
+  // Check for path patterns:
+  // 1. /api/telemarketer/:uid/leads
+  // 2. /api/telemarketer/:uid/leads/:id
+  // 3. /api/telemarketer/leads
+  // 4. /api/telemarketer/leads/:id
+  // 5. /api/telemarketer/me or /api/telemarketer/:uid/profile
+  let pathUid = '';
+  let leadId = '';
+
+  const pathWithUidMatch = /^\/api\/telemarketer\/([^/]+)\/leads(?:\/(\d+))?$/.exec(subPath);
+  if (pathWithUidMatch && pathWithUidMatch[1] !== 'leads') {
+    pathUid = decodeURIComponent(pathWithUidMatch[1]!);
+    leadId = pathWithUidMatch[2] || '';
+  } else {
+    const directLeadMatch = /^\/api\/telemarketer\/leads\/(\d+)$/.exec(subPath);
+    if (directLeadMatch) {
+      leadId = directLeadMatch[1]!;
+    }
+  }
+
+  // Parse body for write methods
+  let body: Record<string, unknown> = {};
+  if (method === 'PATCH' || method === 'POST') {
+    try {
+      body = await ctx.readJson(req);
+    } catch {
+      body = {};
+    }
+  }
+
+  const suppliedUid = pathUid || extractTelemarketerUid(req, url, body);
+  if (!suppliedUid) {
+    ctx.json(res, 401, {
+      ok: false,
+      error: 'Telemarketer UID is required. Provide it via ?uid=<UID>, X-Telemarketer-UID header, Authorization: Bearer <UID>, or /api/telemarketer/:uid/leads',
+    });
+    return true;
+  }
+
+  if (!dbi.configured()) {
+    ctx.json(res, 503, { ok: false, error: 'database is not configured' });
+    return true;
+  }
+
+  const agent = await dbi.getTelemarketerByUid(suppliedUid);
+  if (!agent) {
+    ctx.json(res, 403, {
+      ok: false,
+      error: 'Invalid or inactive telemarketer UID: ' + suppliedUid,
+    });
+    return true;
+  }
+
+  // 1. Telemarketer Profile & Workload: GET /api/telemarketer/me or /api/telemarketer/profile
+  if (method === 'GET' && (subPath === '/api/telemarketer/me' || subPath === '/api/telemarketer/profile' || /^\/api\/telemarketer\/[^/]+\/profile$/.test(subPath))) {
+    const stats = await dbi.getTelemarketerStatsByUid(agent.uid || agent.name);
+    ctx.json(res, 200, {
+      ok: true,
+      telemarketer: {
+        id: agent.id,
+        uid: agent.uid,
+        name: agent.name,
+        phone: agent.phone,
+        email: agent.email,
+        notes: agent.notes,
+      },
+      stats,
+    });
+    return true;
+  }
+
+  // 2. Read leads list: GET /api/telemarketer/leads or GET /api/telemarketer/:uid/leads
+  if (method === 'GET' && !leadId && (subPath === '/api/telemarketer/leads' || pathWithUidMatch)) {
+    const rawStatus = url.searchParams.get('status');
+    const search = url.searchParams.get('search');
+    const sort = url.searchParams.get('sort');
+    const limit = Number(url.searchParams.get('limit') ?? 50);
+    const offset = Number(url.searchParams.get('offset') ?? 0);
+
+    // Normalize status filter if given
+    let statusFilter = rawStatus ? rawStatus.trim() : undefined;
+    if (statusFilter) {
+      const lower = statusFilter.toLowerCase();
+      if (lower === 'pending' || lower === 'to_call' || lower === 'to call') statusFilter = 'assigned';
+      else if (lower === 'dnc') statusFilter = 'do_not_call';
+      else if (lower === 'not-interested' || lower === 'not interested') statusFilter = 'not_interested';
+    }
+
+    const [leadRes, stats] = await Promise.all([
+      dbi.listLeads({
+        assignedTo: agent.uid ? 'uid:' + agent.uid : agent.name,
+        status: statusFilter,
+        search,
+        limit,
+        offset,
+        sort,
+      }),
+      dbi.getTelemarketerStatsByUid(agent.uid || agent.name),
+    ]);
+
+    ctx.json(res, 200, {
+      ok: true,
+      telemarketer: {
+        id: agent.id,
+        uid: agent.uid,
+        name: agent.name,
+        phone: agent.phone,
+        email: agent.email,
+      },
+      stats,
+      leads: leadRes.leads,
+      total: leadRes.total,
+      limit: leadRes.limit,
+      offset: leadRes.offset,
+    });
+    return true;
+  }
+
+  // 3. Read single lead detail: GET /api/telemarketer/leads/:id or GET /api/telemarketer/:uid/leads/:id
+  if (method === 'GET' && leadId) {
+    const lead = await dbi.getLeadById(leadId);
+    if (!lead) {
+      ctx.json(res, 404, { ok: false, error: 'Lead not found: ' + leadId });
+      return true;
+    }
+
+    // Ownership check: if lead is assigned to someone else, reject
+    if (lead.assigned_to && !isLeadAssignedToAgent(lead, agent)) {
+      ctx.json(res, 403, {
+        ok: false,
+        error: 'This lead is assigned to another telemarketer (' + lead.assigned_to + ')',
+      });
+      return true;
+    }
+
+    ctx.json(res, 200, { ok: true, lead });
+    return true;
+  }
+
+  // 4. Update lead status & notes: PATCH or POST /api/telemarketer/leads/:id
+  if ((method === 'PATCH' || method === 'POST') && leadId) {
+    const lead = await dbi.getLeadById(leadId);
+    if (!lead) {
+      ctx.json(res, 404, { ok: false, error: 'Lead not found: ' + leadId });
+      return true;
+    }
+
+    // Ownership check: if assigned to another agent, prevent unauthorized modification
+    if (lead.assigned_to && !isLeadAssignedToAgent(lead, agent)) {
+      ctx.json(res, 403, {
+        ok: false,
+        error: 'This lead is assigned to another telemarketer (' + lead.assigned_to + ')',
+      });
+      return true;
+    }
+
+    const validStatuses = new Map<string, db.LeadStatus>([
+      ['assigned', 'assigned'],
+      ['to_call', 'assigned'],
+      ['to call', 'assigned'],
+      ['pending', 'assigned'],
+      ['new', 'assigned'],
+      ['contacted', 'contacted'],
+      ['called', 'contacted'],
+      ['interested', 'interested'],
+      ['warm', 'interested'],
+      ['hot', 'interested'],
+      ['won', 'interested'],
+      ['not_interested', 'not_interested'],
+      ['not interested', 'not_interested'],
+      ['not-interested', 'not_interested'],
+      ['rejected', 'not_interested'],
+      ['lost', 'not_interested'],
+      ['do_not_call', 'do_not_call'],
+      ['do not call', 'do_not_call'],
+      ['do-not-call', 'do_not_call'],
+      ['dnc', 'do_not_call'],
+      ['blacklisted', 'do_not_call'],
+      ['unassigned', 'unassigned'],
+    ]);
+
+    const rawStatus = (body.leadStatus || body.lead_status || body.status || '') as string;
+    let newStatus: db.LeadStatus | undefined;
+    if (rawStatus && typeof rawStatus === 'string') {
+      const normalized = validStatuses.get(rawStatus.trim().toLowerCase());
+      if (!normalized) {
+        ctx.json(res, 400, {
+          ok: false,
+          error: 'Invalid status: "' + rawStatus + '". Allowed values: assigned, contacted, interested, not_interested, do_not_call, unassigned (or aliases: dnc, pending, to_call)',
+        });
+        return true;
+      }
+      newStatus = normalized;
+    }
+
+    const rawNotes = (body.notes != null ? body.notes : body.lead_notes) as string | null | undefined;
+    const appendNote = (body.appendNotes || body.append_notes || body.addNote || body.add_note) as string | undefined;
+
+    if (newStatus === undefined && rawNotes === undefined && !appendNote) {
+      ctx.json(res, 400, {
+        ok: false,
+        error: 'At least one field to update is required: leadStatus (or status), notes (or lead_notes), or appendNotes',
+      });
+      return true;
+    }
+
+    let finalNotes: string | undefined;
+    if (appendNote && typeof appendNote === 'string' && appendNote.trim()) {
+      const existing = lead.lead_notes ? lead.lead_notes.trim() : '';
+      const datePrefix = new Date().toISOString().slice(0, 10);
+      const noteToAdd = `[${datePrefix}] ${appendNote.trim()}`;
+      finalNotes = existing ? `${existing}\n${noteToAdd}` : noteToAdd;
+    } else if (rawNotes !== undefined) {
+      finalNotes = rawNotes == null ? null : String(rawNotes);
+    }
+
+    const patch: Parameters<typeof db.updateLead>[1] = {};
+    if (newStatus) patch.leadStatus = newStatus;
+    if (finalNotes !== undefined) patch.notes = finalNotes;
+
+    // If the lead was unassigned, claim it for this agent
+    if (!lead.assigned_to) {
+      patch.assignedTo = agent.uid ? `uid:${agent.uid}` : agent.name;
+    }
+
+    const updated = await dbi.updateLead(leadId, patch);
+    ctx.json(res, 200, {
+      ok: true,
+      message: 'Lead updated successfully',
+      lead: updated,
+    });
+    return true;
+  }
+
+  return false;
 }
 
 /** Authenticated product API routes. */

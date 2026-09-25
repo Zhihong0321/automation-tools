@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import { JOHOR_TERRITORY, buildTerritoryResponse } from './territories.ts';
 import * as db from './reportdb.ts';
 import { page } from './portal.ts';
+import * as intel from './intel.ts';
 
 test('Johor territory dataset contains all 10 districts, towns and tamans', () => {
   assert.equal(JOHOR_TERRITORY.state, 'Johor');
@@ -550,6 +551,276 @@ test('Lead assignment client-side logic renders telemarketer cards with total le
   assert.equal(elements.assignCountAll.textContent, 200);
   assert.equal(elements.assignCountAssigned.textContent, 30);
   assert.equal(elements.assignCountContacted.textContent, 27);
+});
+
+test('Telemarketer API endpoints handle auth by Telemarketer UID, lead reading, and lead updating', async () => {
+  let lastUpdatedPatch: any = null;
+  const mockDb: any = {
+    configured: () => true,
+    getTelemarketerByUid: async (uid: string) => {
+      if (uid === 'uid-sarah' || uid === 'sarah') {
+        return {
+          id: 1,
+          uid: 'uid-sarah',
+          name: 'Sarah Tan',
+          phone: '+6012-3456789',
+          email: 'sarah@example.com',
+          active: true,
+          total_assigned: 45,
+          created_at: new Date().toISOString(),
+        };
+      }
+      return null;
+    },
+    getTelemarketerStatsByUid: async () => ({
+      total: 45,
+      pending: 20,
+      contacted: 15,
+      interested: 7,
+      not_interested: 2,
+      do_not_call: 1,
+    }),
+    listLeads: async (opts: any) => ({
+      leads: [
+        {
+          id: '101',
+          name: 'Solar Future Sdn Bhd',
+          phone: '+607-5551234',
+          lead_status: 'assigned',
+          assigned_to: 'Sarah Tan',
+          telemarketer_uid: 'uid-sarah',
+          contact_phones_count: 2,
+          contact_decision_makers_count: 1,
+        },
+      ],
+      total: 1,
+      stats: { total: 45, unassigned: 0, assigned: 20, contacted: 15, interested: 7, not_interested: 2, do_not_call: 1, contacts_found: 1, hidden: 0 },
+      limit: opts.limit ?? 50,
+      offset: opts.offset ?? 0,
+    }),
+    getLeadById: async (id: string | number) => {
+      if (String(id) === '101') {
+        return {
+          id: '101',
+          name: 'Solar Future Sdn Bhd',
+          category: 'Solar Energy',
+          phone: '+607-5551234',
+          address: 'Jalan Molek, Taman Molek',
+          lead_status: 'assigned',
+          assigned_to: 'Sarah Tan',
+          telemarketer_uid: 'uid-sarah',
+          lead_notes: 'Initial scan lead',
+          decision_makers: [{ name: 'Tan Boon Lee', title: 'Director', phone: '+6019-7112233' }],
+          phone_contacts: [{ phone: '+607-5551234', type: 'office' }, { phone: '+6019-7112233', type: 'mobile_whatsapp' }],
+        };
+      }
+      if (String(id) === '999') {
+        return {
+          id: '999',
+          name: 'Other Company Sdn Bhd',
+          assigned_to: 'John Lee',
+          telemarketer_uid: 'uid-john',
+          lead_status: 'assigned',
+        };
+      }
+      return null;
+    },
+    updateLead: async (id: string | number, patch: any) => {
+      lastUpdatedPatch = patch;
+      return {
+        id: String(id),
+        name: 'Solar Future Sdn Bhd',
+        lead_status: patch.leadStatus ?? 'assigned',
+        lead_notes: patch.notes ?? '',
+        assigned_to: 'Sarah Tan',
+        telemarketer_uid: 'uid-sarah',
+        lead_updated_at: new Date().toISOString(),
+      };
+    },
+  };
+
+  const makeCtx = (dbOverride?: any) => {
+    let statusCode = 200;
+    let responseBody: any = null;
+    return {
+      ctx: {
+        json: (_res: any, code: number, data: any) => {
+          statusCode = code;
+          responseBody = data;
+        },
+        readJson: async (_req: any) => (_req as any)._body || {},
+        db: dbOverride !== undefined ? dbOverride : mockDb,
+      },
+      getStatus: () => statusCode,
+      getBody: () => responseBody,
+    };
+  };
+
+  // 1. Missing UID should return 401
+  {
+    const req: any = { method: 'GET', headers: {} };
+    const res: any = {};
+    const url = new URL('http://localhost/api/telemarketer/leads');
+    const { ctx, getStatus, getBody } = makeCtx();
+    const handled = await intel.handleTelemarketerApi(req, res, url, ctx as any);
+    assert.equal(handled, true);
+    assert.equal(getStatus(), 401);
+    assert.equal(getBody().ok, false);
+    assert.match(getBody().error, /UID is required/i);
+  }
+
+  // 2. Non-telemarketer route should return false
+  {
+    const req: any = { method: 'GET', headers: {} };
+    const res: any = {};
+    const url = new URL('http://localhost/api/other');
+    const { ctx } = makeCtx();
+    const handled = await intel.handleTelemarketerApi(req, res, url, ctx as any);
+    assert.equal(handled, false);
+  }
+
+  // 3a. Unknown UID should return 403
+  {
+    const req: any = { method: 'GET', headers: { 'x-telemarketer-uid': 'non-existent-uid' } };
+    const res: any = {};
+    const url = new URL('http://localhost/api/telemarketer/leads');
+    const { ctx, getStatus, getBody } = makeCtx();
+    const handled = await intel.handleTelemarketerApi(req, res, url, ctx as any);
+    assert.equal(handled, true);
+    assert.equal(getStatus(), 403);
+    assert.match(getBody().error, /invalid or inactive/i);
+  }
+
+  // 4a. Read leads list via ?uid=
+  {
+    const req: any = { method: 'GET', headers: {} };
+    const res: any = {};
+    const url = new URL('http://localhost/api/telemarketer/leads?uid=uid-sarah');
+    const { ctx, getStatus, getBody } = makeCtx();
+    const handled = await intel.handleTelemarketerApi(req, res, url, ctx as any);
+    assert.equal(handled, true);
+    assert.equal(getStatus(), 200);
+    assert.equal(getBody().ok, true);
+    assert.equal(getBody().telemarketer.name, 'Sarah Tan');
+    assert.equal(getBody().stats.total, 45);
+    assert.equal(getBody().leads.length, 1);
+    assert.equal(getBody().leads[0].name, 'Solar Future Sdn Bhd');
+  }
+
+  // 4b. Read leads list via path /api/telemarketer/:uid/leads
+  {
+    const req: any = { method: 'GET', headers: {} };
+    const res: any = {};
+    const url = new URL('http://localhost/api/telemarketer/uid-sarah/leads');
+    const { ctx, getStatus, getBody } = makeCtx();
+    const handled = await intel.handleTelemarketerApi(req, res, url, ctx as any);
+    assert.equal(handled, true);
+    assert.equal(getStatus(), 200);
+    assert.equal(getBody().telemarketer.name, 'Sarah Tan');
+    assert.equal(getBody().leads[0].id, '101');
+  }
+
+  // 4c. Read single lead detail by ID with decision makers and phone contacts
+  {
+    const req: any = { method: 'GET', headers: { 'x-telemarketer-uid': 'uid-sarah' } };
+    const res: any = {};
+    const url = new URL('http://localhost/api/telemarketer/leads/101');
+    const { ctx, getStatus, getBody } = makeCtx();
+    const handled = await intel.handleTelemarketerApi(req, res, url, ctx as any);
+    assert.equal(handled, true);
+    assert.equal(getStatus(), 200);
+    assert.equal(getBody().lead.id, '101');
+    assert.equal(getBody().lead.decision_makers.length, 1);
+    assert.equal(getBody().lead.decision_makers[0].name, 'Tan Boon Lee');
+    assert.equal(getBody().lead.phone_contacts.length, 2);
+  }
+
+  // 4d. Update lead status and notes via PATCH
+  {
+    const req: any = {
+      method: 'PATCH',
+      headers: { 'x-telemarketer-uid': 'uid-sarah' },
+      _body: {
+        leadStatus: 'contacted',
+        notes: 'Spoke with Boon Lee, sending solar proposal.',
+      },
+    };
+    const res: any = {};
+    const url = new URL('http://localhost/api/telemarketer/leads/101');
+    const { ctx, getStatus, getBody } = makeCtx();
+    const handled = await intel.handleTelemarketerApi(req, res, url, ctx as any);
+    assert.equal(handled, true);
+    assert.equal(getStatus(), 200);
+    assert.equal(getBody().ok, true);
+    assert.equal(lastUpdatedPatch.leadStatus, 'contacted');
+    assert.equal(lastUpdatedPatch.notes, 'Spoke with Boon Lee, sending solar proposal.');
+  }
+
+  // 4e. Append notes with status alias via POST
+  {
+    const req: any = {
+      method: 'POST',
+      headers: { 'authorization': 'Bearer uid-sarah' },
+      _body: {
+        status: 'interested',
+        appendNotes: 'Client confirmed 10kW quota inquiry.',
+      },
+    };
+    const res: any = {};
+    const url = new URL('http://localhost/api/telemarketer/leads/101');
+    const { ctx, getStatus, getBody } = makeCtx();
+    const handled = await intel.handleTelemarketerApi(req, res, url, ctx as any);
+    assert.equal(handled, true);
+    assert.equal(getStatus(), 200);
+    assert.equal(lastUpdatedPatch.leadStatus, 'interested');
+    assert.ok(lastUpdatedPatch.notes.includes('Initial scan lead'));
+    assert.ok(lastUpdatedPatch.notes.includes('Client confirmed 10kW quota inquiry.'));
+  }
+
+  // 4f. Attempt to modify lead assigned to another telemarketer returns 403
+  {
+    const req: any = {
+      method: 'PATCH',
+      headers: { 'x-telemarketer-uid': 'uid-sarah' },
+      _body: { leadStatus: 'interested' },
+    };
+    const res: any = {};
+    const url = new URL('http://localhost/api/telemarketer/leads/999');
+    const { ctx, getStatus, getBody } = makeCtx();
+    const handled = await intel.handleTelemarketerApi(req, res, url, ctx as any);
+    assert.equal(handled, true);
+    assert.equal(getStatus(), 403);
+    assert.match(getBody().error, /assigned to another telemarketer/i);
+  }
+
+  // 4g. Attempt to submit invalid status returns 400
+  {
+    const req: any = {
+      method: 'PATCH',
+      headers: { 'x-telemarketer-uid': 'uid-sarah' },
+      _body: { leadStatus: 'some_random_status' },
+    };
+    const res: any = {};
+    const url = new URL('http://localhost/api/telemarketer/leads/101');
+    const { ctx, getStatus, getBody } = makeCtx();
+    const handled = await intel.handleTelemarketerApi(req, res, url, ctx as any);
+    assert.equal(handled, true);
+    assert.equal(getStatus(), 400);
+    assert.match(getBody().error, /Invalid status/i);
+  }
+
+  // 4h. Telemarketer profile endpoint GET /api/telemarketer/me
+  {
+    const req: any = { method: 'GET', headers: { 'authorization': 'Bearer uid-sarah' } };
+    const res: any = {};
+    const url = new URL('http://localhost/api/telemarketer/me');
+    const { ctx, getStatus, getBody } = makeCtx();
+    const handled = await intel.handleTelemarketerApi(req, res, url, ctx as any);
+    assert.equal(handled, true);
+    assert.equal(getStatus(), 200);
+    assert.equal(getBody().telemarketer.name, 'Sarah Tan');
+    assert.equal(getBody().stats.total, 45);
+  }
 });
 
 

@@ -1845,6 +1845,222 @@ export async function listLeads(options: {
   };
 }
 
+export interface LeadDetailItem extends LeadItem {
+  decision_makers?: Array<{
+    name: string;
+    title?: string;
+    phone?: string;
+    email?: string;
+    source?: string;
+  }>;
+  phone_contacts?: Array<{
+    phone?: string;
+    number_raw?: string;
+    type?: string;
+    source?: string;
+    note?: string;
+    is_primary?: boolean;
+  }>;
+  email_contacts?: Array<{
+    email: string;
+    source?: string;
+  }>;
+}
+
+export async function getLeadById(companyId: string | number): Promise<LeadDetailItem | null> {
+  if (!configured()) return null;
+  await migrate();
+  const id = Number(companyId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+
+  const res = await sql<LeadItem & { contact_result?: unknown; company_result?: unknown }>(
+    `select
+       c.id::text, c.name, c.category, c.address, c.phone, c.website, c.maps_url,
+       c.rating::float, c.reviews,
+       coalesce(c.is_hidden, false) as is_hidden,
+       coalesce(c.lead_status, 'unassigned') as lead_status,
+       c.assigned_to, c.telemarketer_uid, c.assigned_at, c.lead_notes, c.lead_updated_at,
+       c.first_seen_at, c.last_seen_at,
+       rep.public_id as research_public_id,
+       rep.status as research_status,
+       rep.version as research_version,
+       rep.result as company_result,
+       crep.public_id as contact_public_id,
+       crep.status as contact_status,
+       crep.version as contact_version,
+       crep.result as contact_result,
+       coalesce(
+         case
+           when jsonb_typeof(crep.result->'phone_contacts') = 'array'
+           then jsonb_array_length(crep.result->'phone_contacts')
+           when jsonb_typeof(crep.result->'contacts') = 'array'
+           then jsonb_array_length(crep.result->'contacts')
+           when crep.result->'preview'->>'phones' is not null
+           then (crep.result->'preview'->>'phones')::int
+           when jsonb_typeof(rep.result->'phone_contacts') = 'array'
+           then jsonb_array_length(rep.result->'phone_contacts')
+           when jsonb_typeof(rep.result->'contacts') = 'array'
+           then jsonb_array_length(rep.result->'contacts')
+           when jsonb_typeof(rep.result->'phones') = 'array'
+           then jsonb_array_length(rep.result->'phones')
+           else null
+         end,
+         0
+       )::int as contact_phones_count,
+       coalesce(
+         case
+           when jsonb_typeof(crep.result->'decision_makers') = 'array'
+           then jsonb_array_length(crep.result->'decision_makers')
+           when jsonb_typeof(crep.result->'people') = 'array'
+           then jsonb_array_length(crep.result->'people')
+           when crep.result->'preview'->>'decision_makers' is not null
+           then (crep.result->'preview'->>'decision_makers')::int
+           when jsonb_typeof(rep.result->'decision_makers') = 'array'
+           then jsonb_array_length(rep.result->'decision_makers')
+           when jsonb_typeof(rep.result->'people') = 'array'
+           then jsonb_array_length(rep.result->'people')
+           else null
+         end,
+         0
+       )::int as contact_decision_makers_count,
+       coalesce(
+         case
+           when jsonb_typeof(crep.result->'email_contacts') = 'array'
+           then jsonb_array_length(crep.result->'email_contacts')
+           when jsonb_typeof(crep.result->'emails') = 'array'
+           then jsonb_array_length(crep.result->'emails')
+           when crep.result->'preview'->>'emails' is not null
+           then (crep.result->'preview'->>'emails')::int
+           else null
+         end,
+         0
+       )::int as contact_emails_count,
+       coalesce(b.cnt, 0)::int as branch_count
+     from company_data c
+     left join lateral (
+       select public_id, status, version, result
+       from published_report
+       where company_id = c.id and report_type = 'company_research'
+       order by version desc, created_at desc limit 1
+     ) rep on true
+     left join lateral (
+       select public_id, status, version, result
+       from published_report
+       where company_id = c.id and report_type = 'contact_research'
+       order by version desc, created_at desc limit 1
+     ) crep on true
+     left join lateral (
+       select count(*) as cnt from company_data br where br.merged_into = c.id
+     ) b on true
+     where c.id = $1 and c.merged_into is null`,
+    [id],
+  );
+
+  const row = res.rows[0];
+  if (!row) return null;
+
+  const contactResult = (row.contact_result && typeof row.contact_result === 'object' ? row.contact_result : {}) as Record<string, unknown>;
+  const companyResult = (row.company_result && typeof row.company_result === 'object' ? row.company_result : {}) as Record<string, unknown>;
+
+  const rawDMs = Array.isArray(contactResult.decision_makers) ? contactResult.decision_makers
+    : (Array.isArray(contactResult.people) ? contactResult.people
+    : (Array.isArray(companyResult.decision_makers) ? companyResult.decision_makers
+    : (Array.isArray(companyResult.people) ? companyResult.people : [])));
+
+  const rawPhones = Array.isArray(contactResult.phone_contacts) ? contactResult.phone_contacts
+    : (Array.isArray(contactResult.contacts) ? contactResult.contacts
+    : (Array.isArray(contactResult.phones) ? contactResult.phones
+    : (Array.isArray(companyResult.phone_contacts) ? companyResult.phone_contacts : [])));
+
+  const rawEmails = Array.isArray(contactResult.email_contacts) ? contactResult.email_contacts
+    : (Array.isArray(contactResult.emails) ? contactResult.emails : []);
+
+  const { contact_result: _cr, company_result: _co, ...lead } = row;
+
+  return {
+    ...lead,
+    decision_makers: rawDMs as LeadDetailItem['decision_makers'],
+    phone_contacts: rawPhones as LeadDetailItem['phone_contacts'],
+    email_contacts: rawEmails as LeadDetailItem['email_contacts'],
+  };
+}
+
+export async function getTelemarketerByUid(uid: string): Promise<TelemarketerAgent | null> {
+  if (!configured()) return null;
+  await migrate();
+  const trimmed = uid.trim();
+  if (!trimmed) return null;
+  const rawKey = trimmed.startsWith('uid:') ? trimmed.slice(4) : trimmed;
+  const prefixedKey = trimmed.startsWith('uid:') ? trimmed : 'uid:' + trimmed;
+
+  const res = await sql<TelemarketerAgent>(
+    `select id, uid, name, phone, email, notes, active, created_at::text
+     from telemarketer
+     where active = true and (
+       uid = $1 or uid = $2 or uid = $3 or lower(trim(name)) = lower(trim($1)) or lower(trim(name)) = lower(trim($3))
+     )
+     order by case when uid = $1 or uid = $2 or uid = $3 then 0 else 1 end
+     limit 1`,
+    [rawKey, prefixedKey, trimmed],
+  );
+  return res.rows[0] ?? null;
+}
+
+export async function getTelemarketerStatsByUid(uid: string): Promise<{
+  total: number;
+  pending: number;
+  contacted: number;
+  interested: number;
+  not_interested: number;
+  do_not_call: number;
+}> {
+  if (!configured()) return { total: 0, pending: 0, contacted: 0, interested: 0, not_interested: 0, do_not_call: 0 };
+  await migrate();
+  const trimmed = uid.trim();
+  if (!trimmed) return { total: 0, pending: 0, contacted: 0, interested: 0, not_interested: 0, do_not_call: 0 };
+  const rawKey = trimmed.startsWith('uid:') ? trimmed.slice(4) : trimmed;
+  const prefixedKey = trimmed.startsWith('uid:') ? trimmed : 'uid:' + trimmed;
+
+  const res = await sql<{
+    total: string;
+    pending: string;
+    contacted: string;
+    interested: string;
+    not_interested: string;
+    do_not_call: string;
+  }>(
+    `select
+       count(*)::text as total,
+       count(*) filter (where coalesce(c.lead_status, 'assigned') in ('assigned', 'unassigned'))::text as pending,
+       count(*) filter (where c.lead_status = 'contacted')::text as contacted,
+       count(*) filter (where c.lead_status = 'interested')::text as interested,
+       count(*) filter (where c.lead_status = 'not_interested')::text as not_interested,
+       count(*) filter (where c.lead_status = 'do_not_call')::text as do_not_call
+     from company_data c
+     where c.merged_into is null and coalesce(c.is_hidden, false) = false
+       and (
+         c.telemarketer_uid = $1
+         or c.telemarketer_uid = $2
+         or lower(trim(c.assigned_to)) = lower(trim($3))
+         or lower(trim(c.assigned_to)) = lower(trim($1))
+         or lower(trim(c.assigned_to)) = lower(trim($2))
+         or c.telemarketer_uid in (select uid from telemarketer where uid = $1 or uid = $2 or lower(trim(name)) = lower(trim($3)) or lower(trim(name)) = lower(trim($1)))
+         or lower(trim(c.assigned_to)) in (select lower(trim(name)) from telemarketer where uid = $1 or uid = $2 or lower(trim(name)) = lower(trim($3)) or lower(trim(name)) = lower(trim($1)))
+       )`,
+    [rawKey, prefixedKey, trimmed],
+  );
+
+  const row = res.rows[0];
+  return {
+    total: Number(row?.total ?? 0),
+    pending: Number(row?.pending ?? 0),
+    contacted: Number(row?.contacted ?? 0),
+    interested: Number(row?.interested ?? 0),
+    not_interested: Number(row?.not_interested ?? 0),
+    do_not_call: Number(row?.do_not_call ?? 0),
+  };
+}
+
 async function resolveTelemarketer(value: string): Promise<{ uid: string | null; name: string }> {
   const trimmed = value.trim();
   const rawKey = trimmed.startsWith('uid:') ? trimmed.slice(4) : trimmed;
