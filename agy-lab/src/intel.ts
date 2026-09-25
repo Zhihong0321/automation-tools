@@ -933,14 +933,15 @@ Return exactly ONE compact JSON object in a single fenced code block with keys:
   ]
 }
 
+Max 8 decision_makers, 10 phone_contacts, 6 email_contacts. No prose outside JSON.`;
+}
+
 /** agy-web's synchronous HTTP route needs a short research round to finish before its proxy closes. */
 export function cloudContactResearchPrompt(company: Record<string, unknown>, targetRole?: string | null): string {
   return contactResearchPrompt(company, targetRole).replace(
     CONTACT_TIME_BUDGET,
     'HARD TIME BUDGET: research for at most two minutes. Stop browsing and return the required JSON immediately with the publicly sourced details found so far. Empty arrays are valid when a detail cannot be verified.',
   );
-}
-Max 8 decision_makers, 10 phone_contacts, 6 email_contacts. No prose outside JSON.`;
 }
 
 export function buildContactLedger(

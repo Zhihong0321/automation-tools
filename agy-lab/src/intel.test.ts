@@ -1,12 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLedger, classifyEvidence, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, keepDiscoveryEvidenceFromHosts, normaliseUrls, normalizeMobileHint, personDiscoveryPrompt, publishOutcome, redactIdentityHintsFromDiscovery, round01Prompt, scoutParsed, seniorityScore, translateChinese, unwrapUrl, validateChineseTranslation, validateFinal, validatePersonFinal, normalizePhoneNumber, contactResearchPrompt, buildContactLedger } from './intel.ts';
+import { buildLedger, classifyEvidence, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, keepDiscoveryEvidenceFromHosts, normaliseUrls, normalizeMobileHint, personDiscoveryPrompt, publishOutcome, redactIdentityHintsFromDiscovery, round01Prompt, scoutParsed, seniorityScore, translateChinese, unwrapUrl, validateChineseTranslation, validateFinal, validatePersonFinal, normalizePhoneNumber, contactResearchPrompt, cloudContactResearchPrompt, buildContactLedger } from './intel.ts';
 import { companyPage, personPage, searchPage, contactPage } from './reportui.ts';
 import type { PublishedReport } from './reportdb.ts';
 
 test('extractJson accepts fenced output and rejects prose without an object', () => {
   assert.deepEqual(extractJson('```json\n{"contacts":[]}\n```').value, { contacts: [] });
   assert.match(extractJson('No usable data').error ?? '', /no JSON/);
+});
+
+test('cloud contact prompt is callable and asks for a short sourced round', () => {
+  const prompt = cloudContactResearchPrompt({ name: 'SEDA Malaysia', website: 'https://www.seda.gov.my' });
+  assert.match(prompt, /at most two minutes/);
+  assert.match(prompt, /role_evidence_url/);
+  assert.doesNotMatch(prompt, /export function cloudContactResearchPrompt/);
 });
 
 test('Round 03 admits only what Facebook published, and only off a trusted page', () => {
