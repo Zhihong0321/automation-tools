@@ -480,6 +480,16 @@ export function migrate(): Promise<void> {
       );
       create index if not exists taman_assignment_taman_idx on taman_assignment (taman);
       create index if not exists taman_assignment_assigned_to_idx on taman_assignment (assigned_to);
+
+      update company_data c set telemarketer_uid = t.uid
+      from telemarketer t
+      where c.telemarketer_uid is null and c.assigned_to is not null
+        and t.uid is not null and lower(trim(c.assigned_to)) = lower(trim(t.name));
+
+      update taman_assignment a set telemarketer_uid = t.uid
+      from telemarketer t
+      where a.telemarketer_uid is null and a.assigned_to is not null
+        and t.uid is not null and lower(trim(a.assigned_to)) = lower(trim(t.name));
     `);
   })().catch((err) => {
     migrated = null;
@@ -1562,6 +1572,19 @@ export interface LeadStats {
 }
 
 export async function getLeadStats(): Promise<LeadStats> {
+  if (!configured()) {
+    return {
+      total: 0,
+      unassigned: 0,
+      assigned: 0,
+      contacted: 0,
+      interested: 0,
+      not_interested: 0,
+      do_not_call: 0,
+      contacts_found: 0,
+      hidden: 0,
+    };
+  }
   await migrate();
   const statsRes = await sql<{
     total: string;
@@ -1606,6 +1629,35 @@ export async function getLeadStats(): Promise<LeadStats> {
   };
 }
 
+function applyAssignedToFilter(whereConditions: string[], params: unknown[], assignedTo: string): void {
+  const trimmed = assignedTo.trim();
+  if (!trimmed || trimmed === 'all') return;
+  if (trimmed === 'unassigned') {
+    whereConditions.push(`(c.assigned_to is null or trim(c.assigned_to) = '' or coalesce(c.lead_status, 'unassigned') = 'unassigned')`);
+    return;
+  }
+
+  const rawKey = trimmed.startsWith('uid:') ? trimmed.slice(4) : trimmed;
+  const prefixedKey = trimmed.startsWith('uid:') ? trimmed : 'uid:' + trimmed;
+
+  params.push(rawKey);
+  const pRaw = params.length;
+  params.push(prefixedKey);
+  const pPrefixed = params.length;
+  params.push(trimmed);
+  const pTrimmed = params.length;
+
+  whereConditions.push(`(
+    c.telemarketer_uid = $${pRaw}
+    or c.telemarketer_uid = $${pPrefixed}
+    or lower(trim(c.assigned_to)) = lower(trim($${pTrimmed}))
+    or lower(trim(c.assigned_to)) = lower(trim($${pRaw}))
+    or lower(trim(c.assigned_to)) = lower(trim($${pPrefixed}))
+    or c.telemarketer_uid in (select uid from telemarketer where uid = $${pRaw} or uid = $${pPrefixed} or lower(trim(name)) = lower(trim($${pTrimmed})) or lower(trim(name)) = lower(trim($${pRaw})))
+    or lower(trim(c.assigned_to)) in (select lower(trim(name)) from telemarketer where uid = $${pRaw} or uid = $${pPrefixed} or lower(trim(name)) = lower(trim($${pTrimmed})) or lower(trim(name)) = lower(trim($${pRaw})))
+  )`);
+}
+
 export async function listLeads(options: {
   search?: string | null;
   status?: string | null;
@@ -1615,6 +1667,25 @@ export async function listLeads(options: {
   offset?: number;
   sort?: string | null;
 } = {}): Promise<{ leads: LeadItem[]; total: number; stats: LeadStats; limit: number; offset: number }> {
+  if (!configured()) {
+    return {
+      leads: [],
+      total: 0,
+      stats: {
+        total: 0,
+        unassigned: 0,
+        assigned: 0,
+        contacted: 0,
+        interested: 0,
+        not_interested: 0,
+        do_not_call: 0,
+        contacts_found: 0,
+        hidden: 0,
+      },
+      limit: Math.min(Math.max(Math.round(options.limit ?? 50), 1), 100),
+      offset: Math.max(Math.round(options.offset ?? 0), 0),
+    };
+  }
   await migrate();
   const limit = Math.min(Math.max(Math.round(options.limit ?? 50), 1), 100);
   const offset = Math.max(Math.round(options.offset ?? 0), 0);
@@ -1642,20 +1713,8 @@ export async function listLeads(options: {
     whereConditions.push(`(c.name ilike $${pIdx} or coalesce(c.phone,'') ilike $${pIdx} or coalesce(c.address,'') ilike $${pIdx} or coalesce(c.category,'') ilike $${pIdx})`);
   }
 
-  if (options.assignedTo && options.assignedTo !== 'all') {
-    if (options.assignedTo === 'unassigned') {
-      whereConditions.push(`(c.assigned_to is null or trim(c.assigned_to) = '')`);
-    } else {
-      const assigned = options.assignedTo.trim();
-      if (assigned.startsWith('uid:')) {
-        params.push(assigned.slice(4));
-        whereConditions.push(`c.telemarketer_uid = $${params.length}`);
-      } else {
-        params.push(assigned);
-        const pIdx = params.length;
-        whereConditions.push(`(lower(trim(c.assigned_to)) = lower(trim($${pIdx})) or c.telemarketer_uid = (select uid from telemarketer where lower(trim(name)) = lower(trim($${pIdx})) limit 1))`);
-      }
-    }
+  if (options.assignedTo) {
+    applyAssignedToFilter(whereConditions, params, options.assignedTo);
   }
 
   if (options.researchStatus === 'contacts_found') {
@@ -1780,22 +1839,25 @@ export async function listLeads(options: {
   return {
     leads: items.rows,
     total: Number(countRes.rows[0]?.total ?? 0),
-    stats,
+    stats: statsRes,
     limit,
     offset,
   };
 }
 
 async function resolveTelemarketer(value: string): Promise<{ uid: string | null; name: string }> {
-  const byUid = value.startsWith('uid:');
-  const key = byUid ? value.slice(4) : value;
+  const trimmed = value.trim();
+  const rawKey = trimmed.startsWith('uid:') ? trimmed.slice(4) : trimmed;
+  const prefixedKey = trimmed.startsWith('uid:') ? trimmed : 'uid:' + trimmed;
   const result = await sql<{ uid: string | null; name: string }>(
-    byUid
-      ? `select uid, name from telemarketer where uid = $1 and active = true`
-      : `select uid, name from telemarketer where name = $1 and active = true`,
-    [key]);
-  if (result.rows.length === 0) throw new Error('active telemarketer not found');
-  if (result.rows.length > 1) throw new Error('telemarketer name is ambiguous; select the UID');
+    `select uid, name from telemarketer
+     where active = true and (
+       uid = $1 or uid = $2 or lower(trim(name)) = lower(trim($1)) or lower(trim(name)) = lower(trim($2)) or lower(trim(name)) = lower(trim($3))
+     )
+     order by case when uid = $1 or uid = $2 then 0 else 1 end
+     limit 2`,
+    [rawKey, prefixedKey, trimmed]);
+  if (result.rows.length === 0) throw new Error('active telemarketer not found: ' + value);
   return result.rows[0]!;
 }
 
@@ -1971,6 +2033,7 @@ export interface TelemarketerAgent {
 }
 
 export async function listTelemarketers(): Promise<string[]> {
+  if (!configured()) return [];
   await migrate();
   const res = await sql<{ name: string }>(`
     select distinct name from telemarketer where active = true order by name asc
@@ -1979,6 +2042,7 @@ export async function listTelemarketers(): Promise<string[]> {
 }
 
 export async function getTelemarketerDetails(): Promise<TelemarketerAgent[]> {
+  if (!configured()) return [];
   await migrate();
   const res = await sql<TelemarketerAgent>(`
     select
@@ -1998,8 +2062,8 @@ export async function getTelemarketerDetails(): Promise<TelemarketerAgent[]> {
       count(c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'do_not_call')::int as dnc_count
     from telemarketer t
     left join company_data c on (
-      (t.uid is not null and c.telemarketer_uid = t.uid)
-      or (c.telemarketer_uid is null and lower(trim(c.assigned_to)) = lower(trim(t.name)))
+      (t.uid is not null and (c.telemarketer_uid = t.uid or c.telemarketer_uid = ('uid:' || t.uid) or lower(trim(c.assigned_to)) = lower(trim(t.uid)) or lower(trim(c.assigned_to)) = lower(trim('uid:' || t.uid))))
+      or lower(trim(c.assigned_to)) = lower(trim(t.name))
     )
     group by t.id, t.uid, t.name, t.phone, t.email, t.notes, t.active, t.created_at
     order by t.active desc, t.name asc
@@ -2503,20 +2567,8 @@ export async function getCompanyContactRows(options: {
     whereConditions.push(`(crep.public_id is not null or rep.public_id is not null or (c.phone is not null and c.phone <> ''))`);
   }
 
-  if (options.assignedTo && options.assignedTo !== 'all') {
-    if (options.assignedTo === 'unassigned') {
-      whereConditions.push(`(c.assigned_to is null or trim(c.assigned_to) = '')`);
-    } else {
-      const assigned = options.assignedTo.trim();
-      if (assigned.startsWith('uid:')) {
-        params.push(assigned.slice(4));
-        whereConditions.push(`c.telemarketer_uid = $${params.length}`);
-      } else {
-        params.push(assigned);
-        const pIdx = params.length;
-        whereConditions.push(`(lower(trim(c.assigned_to)) = lower(trim($${pIdx})) or c.telemarketer_uid = (select uid from telemarketer where lower(trim(name)) = lower(trim($${pIdx})) limit 1))`);
-      }
-    }
+  if (options.assignedTo) {
+    applyAssignedToFilter(whereConditions, params, options.assignedTo);
   }
 
   if (options.search && options.search.trim()) {

@@ -353,12 +353,25 @@ test('Lead assignment page UI is integrated into portal navigation and views', (
   assert.match(html, /function bulkAssignFromAssignmentView\(\)/);
 });
 
-test('reportdb exports getLeadStats and getTelemarketerDetails interfaces', () => {
+test('reportdb exports and executes getLeadStats and listLeads without error', async () => {
   assert.equal(typeof db.getLeadStats, 'function');
   assert.equal(typeof db.getTelemarketerDetails, 'function');
   assert.equal(typeof db.listLeads, 'function');
   assert.equal(typeof db.assignLeads, 'function');
   assert.equal(typeof db.unassignLeads, 'function');
+
+  // Verify direct invocation returns valid stats shape without throwing ReferenceError
+  const stats = await db.getLeadStats();
+  assert.equal(typeof stats, 'object');
+  assert.equal(typeof stats.total, 'number');
+  assert.equal(typeof stats.unassigned, 'number');
+
+  const leadResult = await db.listLeads({ assignedTo: 'uid:sarah' });
+  assert.equal(typeof leadResult, 'object');
+  assert.ok(Array.isArray(leadResult.leads));
+  assert.equal(typeof leadResult.total, 'number');
+  assert.equal(typeof leadResult.stats, 'object');
+  assert.equal(typeof leadResult.stats.total, 'number');
 });
 
 test('Lead assignment client-side logic renders telemarketer cards with total leads and handles filtering', async () => {
@@ -394,6 +407,12 @@ test('Lead assignment client-side logic renders telemarketer cards with total le
     assignBulkBar: { classList: { add: () => {}, remove: () => {}, toggle: () => {} } },
     assignBulkCount: { textContent: '' },
     assignSelectAllPage: { checked: false },
+    assignCountAll: { textContent: '' },
+    assignCountAssigned: { textContent: '' },
+    assignCountContacted: { textContent: '' },
+    assignCountInterested: { textContent: '' },
+    assignCountNotInterested: { textContent: '' },
+    assignCountDnc: { textContent: '' },
     toast: { textContent: '', classList: { add: () => {}, remove: () => {} } },
   };
 
@@ -511,6 +530,26 @@ test('Lead assignment client-side logic renders telemarketer cards with total le
   // Verify the active banner shows Sarah Tan and her 45 assigned leads
   assert.ok(elements.assignBannerTitle.textContent.includes('Sarah Tan'));
   assert.ok(elements.assignBannerTitle.textContent.includes('45'));
+
+  // Verify per-telemarketer status pill counts without throwing ReferenceError
+  assert.equal(elements.assignCountAll.textContent, 45);
+  assert.equal(elements.assignCountAssigned.textContent, 20); // pending
+  assert.equal(elements.assignCountContacted.textContent, 15);
+  assert.equal(elements.assignCountInterested.textContent, 7);
+  assert.equal(elements.assignCountNotInterested.textContent, 2);
+  assert.equal(elements.assignCountDnc.textContent, 1);
+
+  // Test selecting unassigned pool
+  await fns.selectAssignmentTele('unassigned');
+  assert.equal(elements.assignCountAll.textContent, 125);
+  assert.equal(elements.assignCountAssigned.textContent, 125);
+  assert.equal(elements.assignCountContacted.textContent, 0);
+
+  // Test selecting all telemarketers
+  await fns.selectAssignmentTele('all');
+  assert.equal(elements.assignCountAll.textContent, 200);
+  assert.equal(elements.assignCountAssigned.textContent, 30);
+  assert.equal(elements.assignCountContacted.textContent, 27);
 });
 
 

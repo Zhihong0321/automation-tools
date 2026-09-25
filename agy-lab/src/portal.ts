@@ -755,7 +755,7 @@ function renderAssignTelemarketerCards(){
   }else{
     agents.forEach(function(agent){
       var val=agentValue(agent);
-      var isActive=(assignState.teleFilter===val||assignState.teleFilter===agent.name||(agent.uid&&assignState.teleFilter==='uid:'+agent.uid));
+      var isActive=(assignState.teleFilter===val||assignState.teleFilter===agent.name||(agent.name&&assignState.teleFilter.toLowerCase()===agent.name.toLowerCase())||(agent.uid&&assignState.teleFilter==='uid:'+agent.uid)||(agent.uid&&assignState.teleFilter===agent.uid));
       var initials=agent.name.split(/\s+/).map(function(w){return w[0]}).slice(0,2).join('').toUpperCase()||'TM';
       var statusBadge=agent.active?'<span class="status completed">Active</span>':'<span class="status" style="color:var(--muted);">Inactive</span>';
 
@@ -817,7 +817,7 @@ function renderAssignTeleSelectors(){
     agents.forEach(function(a){
       var v=agentValue(a);
       var count=(a.total_assigned||0);
-      var sel=(cur===v||cur===a.name)?' selected':'';
+      var sel=(cur===v||cur===a.name||(a.name&&cur.toLowerCase()===a.name.toLowerCase())||(a.uid&&cur==='uid:'+a.uid)||(a.uid&&cur===a.uid))?' selected':'';
       opts+='<option value="'+attr(v)+'"'+sel+'>👤 '+esc(a.name)+' ('+count+' leads assigned)</option>';
     });
     filterSelect.innerHTML=opts;
@@ -899,7 +899,7 @@ function renderAssignActiveBanner(){
   var bSub=el('assignBannerSubtitle');
   if(!banner)return;
 
-  var filter=assignState.teleFilter;
+  var filter=assignState.teleFilter||'all';
   if(filter==='all'){
     banner.classList.add('hidden');
     return;
@@ -913,7 +913,7 @@ function renderAssignActiveBanner(){
   }
 
   var agent=assignState.agents.find(function(a){
-    return agentValue(a)===filter||a.name===filter||(a.uid&&filter==='uid:'+a.uid)||(a.uid&&filter===a.uid)||(a.uid&&filter.replace(/^uid:/,'')===a.uid.replace(/^uid[-:]/,''));
+    return agentValue(a)===filter||a.name===filter||(a.name&&filter.toLowerCase()===a.name.toLowerCase())||(a.uid&&filter==='uid:'+a.uid)||(a.uid&&filter===a.uid)||(a.uid&&filter.replace(/^uid:/,'')===a.uid.replace(/^uid[-:]/,''));
   });
 
   if(agent){
@@ -935,9 +935,10 @@ function renderAssignStatusCounts(stats){
   var cNot=el('assignCountNotInterested');
   var cDnc=el('assignCountDnc');
 
-  var agent=assignState.agents.find(function(a){
-    return agentValue(a)===filter||a.name===filter||(a.uid&&filter==='uid:'+a.uid)||(a.uid&&filter===a.uid)||(a.uid&&filter.replace(/^uid:/,'')===a.uid.replace(/^uid[-:]/,''));
-  });
+  var filter=assignState.teleFilter||'all';
+  var agent=(filter!=='all'&&filter!=='unassigned')?assignState.agents.find(function(a){
+    return agentValue(a)===filter||a.name===filter||(a.name&&filter.toLowerCase()===a.name.toLowerCase())||(a.uid&&filter==='uid:'+a.uid)||(a.uid&&filter===a.uid)||(a.uid&&filter.replace(/^uid:/,'')===a.uid.replace(/^uid[-:]/,''));
+  }):null;
 
   if(agent){
     var total=agent.total_assigned||0;
@@ -948,6 +949,13 @@ function renderAssignStatusCounts(stats){
     if(cInterested)cInterested.textContent=agent.interested_count||0;
     if(cNot)cNot.textContent=agent.not_interested_count||0;
     if(cDnc)cDnc.textContent=agent.dnc_count||0;
+  }else if(filter==='unassigned'){
+    if(cAll)cAll.textContent=stats.unassigned||0;
+    if(cAssigned)cAssigned.textContent=stats.unassigned||0;
+    if(cContacted)cContacted.textContent=0;
+    if(cInterested)cInterested.textContent=0;
+    if(cNot)cNot.textContent=0;
+    if(cDnc)cDnc.textContent=0;
   }else{
     if(cAll)cAll.textContent=stats.total||0;
     if(cAssigned)cAssigned.textContent=stats.assigned||0;
@@ -994,7 +1002,7 @@ function renderAssignmentLeads(leads){
     var teleOpts='<option value="">(Unassigned)</option>';
     (assignState.agents||[]).forEach(function(a){
       var value=agentValue(a);
-      var sel=(a.uid?lead.telemarketer_uid===a.uid:lead.assigned_to===a.name)?' selected':'';
+      var sel=((a.uid&&(lead.telemarketer_uid===a.uid||lead.telemarketer_uid==='uid:'+a.uid||lead.assigned_to===a.uid))||(lead.assigned_to&&lead.assigned_to.toLowerCase()===a.name.toLowerCase()))?' selected':'';
       teleOpts+='<option value="'+attr(value)+'"'+sel+'>'+esc(agentLabel(a))+'</option>';
     });
 
