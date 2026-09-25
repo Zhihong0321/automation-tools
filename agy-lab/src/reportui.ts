@@ -392,9 +392,13 @@ function shell(report: PublishedReport, body: string): string {
   const isAds = report.report_type === 'ads_research';
   const isContact = report.report_type === 'contact_research';
   const isParallelContact = isContact && report.request?.provider === 'parallel';
+  const pendingOver24h = isContact && active
+    && Date.now() - Date.parse(String(report.created_at)) >= 24 * 60 * 60_000;
   const statusLabel = report.status === 'completed' ? 'Research complete'
     : report.status === 'partial' ? 'Complete · noted gaps'
     : report.status === 'failed' ? 'Research failed'
+    : pendingOver24h ? 'Pending >24 hours'
+    : isContact ? 'Pending'
     : report.status;
   // How many of the four round pips are lit. Driven by status because this page
   // never loads round_status. `failed` lights none: the honest floor for a run

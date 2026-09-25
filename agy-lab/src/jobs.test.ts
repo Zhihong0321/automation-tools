@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type http from 'node:http';
-import { coolDown, create, finish, get, handle, liveTypes, quotaRetryAfterMs, snapshot, take } from './jobs.ts';
+import { activate, coolDown, create, finish, get, handle, liveTypes, quotaRetryAfterMs, snapshot, take, wait } from './jobs.ts';
 
 const ASK_TYPES = ['chatgpt.ask', 'meta.ask', 'agy.ask'];
 
@@ -114,6 +114,46 @@ test('a worker can claim pending work when its cooldown expires', async () => {
   assert.equal((await take(worker, { types: [type], waitMs: 0 })), null);
   await new Promise((r) => setTimeout(r, 30));
   assert.equal((await take(worker, { types: [type], waitMs: 0 }))?.id, job.id);
+  finish(job.id, true, {}, null);
+});
+
+test('contact work stays running after its former lease and accepts a late answer', async () => {
+  const job = create('research.contact', { name: 'Example' }, 1_000);
+  assert.equal(job.timeoutMs, 0);
+  assert.equal((await take('research-pc-1', { types: ['research.contact'], waitMs: 0 }))?.id, job.id);
+  job.startedAt = new Date(Date.now() - 2_000).toISOString();
+  assert.equal(get(job.id)?.status, 'running');
+  assert.equal(job.attempts, 1);
+  assert.equal(await take('research-pc-2', { types: ['research.contact'], waitMs: 0 }), null);
+  finish(job.id, true, { decision_makers: [{ name: 'Late' }] }, null);
+  assert.equal(job.status, 'done');
+});
+
+test('contact work is claimable only after its saved report has the job id', async () => {
+  const job = create('research.contact', { name: 'Example' }, 1_000, false);
+  assert.equal(await take('research-pc-1', { types: ['research.contact'], waitMs: 0 }), null);
+  activate(job.id);
+  assert.equal((await take('research-pc-1', { types: ['research.contact'], waitMs: 0 }))?.id, job.id);
+  const settled = wait(job.id, 0);
+  finish(job.id, true, {}, null);
+  assert.equal((await settled)?.status, 'done');
+});
+
+test('old workers cannot claim contact work, while durable workers can', async () => {
+  const job = create('research.contact', { name: 'Example' }, 0);
+  const claim = async (protocol: string | null): Promise<string | null> => {
+    let sent: Record<string, unknown> | null = null;
+    const req = { method: 'GET', headers: {}, socket: { remoteAddress: '203.0.113.7' } } as unknown as http.IncomingMessage;
+    const res = { writableEnded: false, on: () => {}, writeHead: () => {},
+      end: () => { res.writableEnded = true; } } as unknown as http.ServerResponse;
+    const url = new URL('http://lab/api/jobs/next?worker=research-pc&types=research.contact&wait=0');
+    if (protocol) url.searchParams.set('contactProtocol', protocol);
+    await handle(req, res, url, { json: (_res, _status, body) => { sent = body as Record<string, unknown>; }, readJson: async () => ({}) });
+    return (sent?.job as { id: string } | undefined)?.id ?? null;
+  };
+  assert.equal(await claim(null), null);
+  assert.equal(job.status, 'pending');
+  assert.equal(await claim('durable-v1'), job.id);
   finish(job.id, true, {}, null);
 });
 

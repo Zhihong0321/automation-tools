@@ -813,13 +813,51 @@ export async function findContactReport(companyId: string, provider: 'legacy' | 
   return out.rows[0] ?? null;
 }
 
+export async function getReportById(reportId: string): Promise<PublishedReport | null> {
+  await migrate();
+  const out = await sql<PublishedReport>('select * from published_report where id = $1', [reportId]);
+  return out.rows[0] ?? null;
+}
+
+export async function getContactReportByJobId(jobId: string): Promise<PublishedReport | null> {
+  await migrate();
+  const out = await sql<PublishedReport>(
+    `select * from published_report where report_type = 'contact_research' and job_id = $1
+     order by id desc limit 1`, [jobId]);
+  return out.rows[0] ?? null;
+}
+
+export async function markContactClaimed(reportId: string, jobId: string): Promise<boolean> {
+  await migrate();
+  const out = await sql(
+    `update published_report set status = 'running', updated_at = now()
+     where id = $1 and report_type = 'contact_research' and job_id = $2
+       and status in ('queued', 'running')`,
+    [reportId, jobId],
+  );
+  return (out.rowCount ?? 0) > 0;
+}
+
+/** A temporary provider limit leaves the report in the durable queue. */
+export async function deferContactResult(reportId: string, jobId: string): Promise<boolean> {
+  await migrate();
+  const out = await sql(
+    `update published_report set status = 'queued', job_id = null, error = null,
+       completed_at = null, updated_at = now()
+     where id = $1 and report_type = 'contact_research' and job_id = $2
+       and status <> 'completed'`,
+    [reportId, jobId],
+  );
+  return (out.rowCount ?? 0) > 0;
+}
+
 /** Saved contact reports waiting for a dedicated research lane. */
 export async function recoverableContactReports(limit: number, activePublicIds: string[]): Promise<PublishedReport[]> {
   await migrate();
   const out = await sql<PublishedReport>(
     `select * from published_report
      where report_type = 'contact_research'
-       and status in ('queued', 'running')
+       and status = 'queued'
        and coalesce(request->>'provider', 'legacy') <> 'parallel'
        and not (public_id = any($1::text[]))
      order by created_at asc
@@ -1720,6 +1758,40 @@ async function resolveTelemarketer(value: string): Promise<{ uid: string | null;
   if (result.rows.length === 0) throw new Error('active telemarketer not found');
   if (result.rows.length > 1) throw new Error('telemarketer name is ambiguous; select the UID');
   return result.rows[0]!;
+}
+
+/** Publish the worker result and its run record in one database statement. */
+export async function finalizeContactResult(input: {
+  reportId: string;
+  jobId: string;
+  discovery: Record<string, unknown>;
+  ledger: Record<string, unknown>;
+  succeeded: boolean;
+  error: string | null;
+  worker: string;
+}): Promise<boolean> {
+  await migrate();
+  const out = await sql(
+    `with accepted as (
+       update published_report set
+         status = case when $3::boolean then 'completed' else 'failed' end,
+         result = $4::jsonb, error = $5, completed_at = now(), updated_at = now()
+       where id = $1 and job_id = $2 and status <> 'completed'
+       returning id
+     )
+     insert into contact_research_run
+       (report_id, discovery, ledger, final_report, run_status, engine_metadata, completed_at, updated_at)
+     select id, $6::jsonb, $4::jsonb, $4::jsonb, $7::jsonb, $8::jsonb, now(), now()
+     from accepted
+     on conflict (report_id) do update set
+       discovery = excluded.discovery, ledger = excluded.ledger,
+       final_report = excluded.final_report, run_status = excluded.run_status,
+       engine_metadata = excluded.engine_metadata, completed_at = now(), updated_at = now()`,
+    [input.reportId, input.jobId, input.succeeded, jsonParam(input.ledger), input.error,
+      jsonParam(input.discovery), jsonParam({ discovery: input.succeeded ? 'completed' : 'failed' }),
+      jsonParam({ discovery: { engine: 'pi', worker: input.worker, job_id: input.jobId, error: input.error } })],
+  );
+  return (out.rowCount ?? 0) > 0;
 }
 
 export async function assignLeads(

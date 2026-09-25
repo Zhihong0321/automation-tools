@@ -13,18 +13,13 @@
 // webhook — no tunnel, no port forwarding, no dynamic DNS, nothing on the home
 // router to keep alive.
 //
-// IN MEMORY, DELIBERATELY. Jobs live in a Map and die with the process. A Railway
-// redeploy takes ~6 minutes and drops everything in flight, which is a real cost
-// and still the right trade for now: the alternative is a database dependency
-// added before the transport it would persist has been proven to work at all.
-// The upgrade path is one file behind the same functions; the callers do not
-// change. What IS handled is the failure this makes likely — see LEASES below.
+// Broker jobs live in a Map. Contact research has a database report row before
+// dispatch, and worker results are written there even if this Map is lost on a
+// deploy. Other job types still need their own durable result path.
 //
-// LEASES. A job handed to a worker that then dies would sit `running` forever, and
-// a queue that quietly strands work is worse than one that loses it visibly. Each
-// job carries a lease; a `running` job past its lease goes back to `pending` on
-// the next sweep, up to MAX_ATTEMPTS, after which it fails with a message saying
-// so rather than cycling forever on something that kills workers.
+// LEASES. Other job types may be retried after a lease. Contact research has no
+// lease: its report remains pending until a worker posts a result or an actual
+// worker failure.
 import http from 'node:http';
 import * as db from './reportdb.ts';
 import crypto from 'node:crypto';
@@ -48,10 +43,12 @@ export interface Job {
   worker: string | null;
   /** How many times it has been handed out. A retry after a lease expiry counts. */
   attempts: number;
-  /** Lease length. A run longer than this is assumed dead — set it above the real worst case. */
+  /** Lease length for other jobs; zero means contact work has no duration limit. */
   timeoutMs: number;
   result: unknown;
   error: string | null;
+  /** Contact jobs become claimable only after their report stores this id. */
+  ready?: boolean;
 }
 
 export interface WorkerInfo {
@@ -193,6 +190,9 @@ function sweep(): void {
   const at = Date.now();
   for (const job of jobs.values()) {
     if (job.status !== 'running' || !job.startedAt) continue;
+    // Contact reports own their lifecycle in Postgres. Time passing cannot
+    // declare their worker dead or invalidate a result that may still arrive.
+    if (job.type === 'research.contact') continue;
     // The field is what the hub shows and what this comparison uses. Raise it to
     // the payload budget before deciding, or a 20-minute agy run stored with the
     // 5-minute default is taken back while the worker is still heartbeating.
@@ -224,6 +224,7 @@ function sweep(): void {
 function pending(types: string[] | null): Job | null {
   for (const job of jobs.values()) {
     if (job.status !== 'pending') continue;
+    if (job.ready === false) continue;
     if (types && !types.includes(job.type)) continue;
     return job;
   }
@@ -262,17 +263,16 @@ function payloadTimeoutMs(payload: unknown): number {
 /**
  * How long the broker will let this job stay with one worker before taking it back.
  *
- * Browser asks keep the short lease the caller passed: a stalled ChatGPT lane is
- * supposed to be handed to another account. agy is the opposite. The worker runs
- * for as long as `payload.timeoutMs` says — contact research is twenty minutes —
- * and a five-minute lease reclaims a live run and starts it again.
+ * Browser asks keep the short lease the caller passed. agy asks use the larger
+ * of the caller budget and payload budget. Contact research has no lease.
  */
 function leaseMs(type: string, payload: unknown, timeoutMs: number): number {
+  if (type === 'research.contact') return 0;
   const asked = type === 'agy.ask' ? Math.max(timeoutMs, payloadTimeoutMs(payload)) : timeoutMs;
   return Math.min(Math.max(1_000, asked), MAX_TIMEOUT_MS);
 }
 
-export function create(type: string, payload: unknown, timeoutMs = DEFAULT_TIMEOUT_MS): Job {
+export function create(type: string, payload: unknown, timeoutMs = DEFAULT_TIMEOUT_MS, ready = true): Job {
   sweep();
   const job: Job = {
     id: crypto.randomBytes(6).toString('hex'),
@@ -287,6 +287,7 @@ export function create(type: string, payload: unknown, timeoutMs = DEFAULT_TIMEO
     timeoutMs: leaseMs(type, payload, timeoutMs),
     result: null,
     error: null,
+    ready,
   };
   jobs.set(job.id, job);
   // `reportId` rides the payload when the caller has one. Fire-and-forget: the
@@ -297,6 +298,14 @@ export function create(type: string, payload: unknown, timeoutMs = DEFAULT_TIMEO
     jobId: job.id, stage: type, event: 'job.created',
     detail: { type, timeout_ms: job.timeoutMs },
   });
+  if (ready) wake(job);
+  return job;
+}
+
+export function activate(id: string): Job | null {
+  const job = jobs.get(id);
+  if (!job || job.status !== 'pending') return job ?? null;
+  job.ready = true;
   wake(job);
   return job;
 }
@@ -412,6 +421,23 @@ export function finish(id: string, ok: boolean, result: unknown, error: string |
   return job;
 }
 
+/** Close a job that could not be linked to its report before dispatch. */
+export function cancel(id: string, reason: string): Job | null {
+  const job = jobs.get(id);
+  if (!job) return null;
+  if (job.status === 'done' || job.status === 'failed') return job;
+  job.status = 'failed';
+  job.finishedAt = now();
+  job.error = reason;
+  void db.logEvent({
+    reportId: (job.payload as { reportId?: string })?.reportId ?? null,
+    jobId: job.id, stage: job.type, event: 'job.cancelled',
+    detail: { type: job.type, worker: job.worker, attempts: job.attempts, reason },
+  });
+  settleFinished(job);
+  return job;
+}
+
 /**
  * Resolve when a job reaches a terminal state, or when `timeoutMs` runs out.
  *
@@ -428,12 +454,12 @@ export function wait(id: string, timeoutMs: number): Promise<Job | null> {
 
   return new Promise<Job | null>((resolve) => {
     const done = (j: Job | null): void => {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       finishWaiters.get(id)?.delete(settle);
       resolve(j);
     };
     const settle = (j: Job): void => done(j);
-    const timer = setTimeout(() => done(get(id)), Math.max(1_000, timeoutMs));
+    const timer = timeoutMs > 0 ? setTimeout(() => done(get(id)), Math.max(1_000, timeoutMs)) : null;
     const set = finishWaiters.get(id) ?? new Set();
     set.add(settle);
     finishWaiters.set(id, set);
@@ -487,7 +513,11 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       json(res, 400, { error: 'worker is required — name the machine asking, it is what /api/jobs reports' });
       return true;
     }
-    const types = (q.get('types') ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+    const offeredTypes = (q.get('types') ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+    // Older workers still impose a Pi deadline and can discard completed
+    // research. They may report work already claimed, but cannot claim more.
+    const types = q.get('contactProtocol') === 'durable-v1'
+      ? offeredTypes : offeredTypes.filter((type) => type !== 'research.contact');
     touch(worker, callerIp(req), types, (q.get('cooldownGroup') ?? '').trim());
     const waitSec = Number(q.get('wait'));
     const controller = new AbortController();
@@ -496,7 +526,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     res.on('close', () => controller.abort());
     const job = await take(worker, {
       waitMs: Number.isFinite(waitSec) ? waitSec * 1000 : MAX_WAIT_MS,
-      types,
+      types: types.length ? types : ['__no_supported_job_types__'],
       signal: controller.signal,
     });
     if (res.writableEnded) return true;
@@ -519,6 +549,27 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
         ...(cooldown ? { 'x-worker-cooldown-until': new Date(cooldown.until).toISOString() } : {}) });
       res.end();
       return true;
+    }
+    if (job.type === 'research.contact') {
+      const reportId = str((job.payload as { reportId?: unknown } | null)?.reportId);
+      if (reportId) {
+        try {
+          if (!await db.markContactClaimed(reportId, job.id)) {
+            job.status = 'failed';
+            job.finishedAt = now();
+            job.error = 'contact report was closed before this job could be claimed';
+            settleFinished(job);
+            res.writeHead(204, { 'cache-control': 'no-store' });
+            res.end();
+            return true;
+          }
+        } catch (error) {
+          job.status = 'pending';
+          job.startedAt = null;
+          job.worker = null;
+          throw error;
+        }
+      }
     }
     json(res, 200, { job });
     return true;
@@ -543,7 +594,9 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     // Types ride along on every beat because a redeploy empties this table: a
     // beat that re-registered the name alone would read as "here, serving
     // nothing", which the gateway treats the same as absent.
-    const types = Array.isArray(body.types) ? body.types.map((t) => str(t).trim()).filter(Boolean) : [];
+    const offeredTypes = Array.isArray(body.types) ? body.types.map((t) => str(t).trim()).filter(Boolean) : [];
+    const types = body.contactProtocol === 'durable-v1'
+      ? offeredTypes : offeredTypes.filter((type) => type !== 'research.contact');
     const group = str(body.cooldownGroup).trim();
     touch(worker, callerIp(req), types, group);
     // A cooling worker keeps beating. Restore its deadline after a broker
@@ -578,8 +631,25 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     const body = await readJson(req);
     const worker = str(body.worker).trim();
     if (worker) touch(worker, callerIp(req));
+    const current = get(result[1]!);
+    let reportId = str(body.reportId || (current?.payload as { reportId?: unknown } | null)?.reportId);
+    let savedContact = false;
+    if (!reportId && (!current || current.type === 'research.contact'))
+      reportId = (await db.getContactReportByJobId(result[1]!))?.id ?? '';
+    if (reportId && (!current || current.type === 'research.contact')) {
+      // The report row, not this volatile Map, is the destination. A worker can
+      // return after a Railway restart or long after the original request ended.
+      const intel = await import('./intel.ts');
+      await intel.acceptContactResult(reportId, result[1]!, body.ok !== false,
+        body.result ?? null, str(body.error) || null, worker);
+      savedContact = true;
+      if (!current) {
+        json(res, 200, { saved: true, reportId, jobId: result[1] });
+        return true;
+      }
+    }
     const job = finish(result[1]!, body.ok !== false, body.result ?? null, str(body.error) || null);
-    const quotaMs = job?.type.startsWith('agy.')
+    const quotaMs = job && (job.type.startsWith('agy.') || job.type === 'research.contact')
       ? num(body.retryAfterMs, 0) || quotaRetryAfterMs(str(body.error)) : null;
     const cooldownUntil = quotaMs && worker
       ? coolDown(worker, quotaMs, str(body.error).split(/\r?\n/)[0] || 'Individual quota reached') : null;
@@ -601,7 +671,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       json(res, 404, { error: 'no such job — it was evicted, or the service restarted while it ran', id: result[1] });
       return true;
     }
-    json(res, 200, { job, cooldownUntil });
+    json(res, 200, { job, cooldownUntil, ...(savedContact ? { saved: true, reportId } : {}) });
     return true;
   }
 

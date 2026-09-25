@@ -115,6 +115,8 @@ function origin(req: http.IncomingMessage): string {
 
 function envelope(req: http.IncomingMessage, report: db.PublishedReport): Record<string, unknown> {
   const base = origin(req);
+  const pendingOver24h = (report.status === 'queued' || report.status === 'running')
+    && Date.now() - Date.parse(String(report.created_at)) >= 24 * 60 * 60_000;
   const resource = report.report_type === 'business_search'
     ? 'business-search'
     : report.report_type === 'person_research' ? 'person-research'
@@ -125,6 +127,10 @@ function envelope(req: http.IncomingMessage, report: db.PublishedReport): Record
     id: report.public_id,
     type: report.report_type,
     status: report.status,
+    pending_over_24h: pendingOver24h,
+    ...(report.report_type === 'contact_research' ? { job_status: pendingOver24h ? 'pending_over_24h'
+      : report.status === 'completed' ? 'completed'
+      : report.status === 'failed' ? 'failed' : 'pending' } : {}),
     title: report.title,
     // Which pass this is on the same company. 1 unless the company has been
     // researched before; a caller comparing two dossiers needs to know which
@@ -2468,10 +2474,10 @@ async function runContactResearch(
   active.add(publicId);
   if (request.provider !== 'parallel') activeContact.add(publicId);
   try {
-    await db.updateReport(publicId, { status: 'running', error: null });
     await db.initContactResearchRun(reportId);
 
     if (request.provider === 'parallel') {
+      await db.updateReport(publicId, { status: 'running', error: null });
       try {
         const found = await searchParallelPeople(company, str(request.targetRole) || null);
         const discovery = { decision_makers: found.people, phone_contacts: [], email_contacts: [], entity_set_id: found.response.entity_set_id };
@@ -2499,16 +2505,27 @@ async function runContactResearch(
       if (autoContact.contactResearchJobType() === 'research.contact') {
         const website = str(company.website);
         const payload = {
+          reportId,
           name: str(company.name),
           ...(website && !/google\.[^/]+\/(?:search|searchviewer)/i.test(website) ? { website } : {}),
           location: str(company.address),
           ...(str(company.maps_url) ? { extraUrls: [str(company.maps_url)] } : {}),
-          timeoutMs: CONTACT_RESEARCH_TIMEOUT_MS,
         };
-        discoveryRaw = await runJob('research.contact', payload, CONTACT_RESEARCH_TIMEOUT_MS,
-          (jobId) => db.updateReport(publicId, { jobId }));
-        discoveryMeta = { model: 'research.contact', engine: 'pi', status: 'completed' };
+        // The report is the durable slot. Store the job id before the broker
+        // makes it claimable, then wait without a report deadline. The worker's
+        // result route writes directly to this row, including after a restart.
+        const job = jobs.create('research.contact', payload, 0, false);
+        try {
+          await db.updateReport(publicId, { jobId: job.id });
+        } catch (error) {
+          jobs.cancel(job.id, 'could not link contact job to its saved report');
+          throw error;
+        }
+        jobs.activate(job.id);
+        await jobs.wait(job.id, 0);
+        return;
       } else {
+        await db.updateReport(publicId, { status: 'running', error: null });
         const askResult = await ask(model, contactResearchPrompt(company, targetRole), CONTACT_RESEARCH_TIMEOUT_MS);
         discoveryMeta = { model: askResult.model, engine: askResult.engine, ms: askResult.ms };
         if (askResult.parsed) {
@@ -2559,6 +2576,43 @@ async function runContactResearch(
   } finally {
     active.delete(publicId);
     activeContact.delete(publicId);
+  }
+}
+
+/** Persist a worker answer against its pre-created report, independent of broker memory. */
+export async function acceptContactResult(
+  reportId: string,
+  jobId: string,
+  ok: boolean,
+  raw: unknown,
+  workerError: string | null,
+  worker: string,
+): Promise<void> {
+  const report = await db.getReportById(reportId);
+  if (!report || report.report_type !== 'contact_research') throw new Error('contact report slot is missing');
+  if (report.job_id !== jobId) throw new Error('contact result job id does not match its report slot');
+  if (report.status === 'completed') return;
+
+  if (!ok && /individual quota reached|rate_limit_error|token plan usage|(?:^|\W)429(?:\W|$)/i.test(workerError ?? '')) {
+    if (await db.deferContactResult(reportId, jobId)) {
+      await db.logEvent({ reportId, publicId: report.public_id, jobId, stage: 'research.contact',
+        event: 'contact.deferred', detail: { worker, reason: 'provider quota' } }).catch(() => {});
+    }
+    return;
+  }
+
+  const company = (report.company_id ? await db.getCompany(report.company_id) : null)
+    ?? object(report.request.companySnapshot);
+  const discovery = ok && raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? object(raw) : null;
+  const ledger = buildContactLedger(company, discovery);
+  const succeeded = ok && discovery !== null;
+  const error = succeeded ? null : (workerError || 'Worker returned no contact research result.');
+  if (await db.finalizeContactResult({ reportId, jobId, discovery: discovery ?? {},
+    ledger, succeeded, error, worker })) {
+    await db.logEvent({ reportId, publicId: report.public_id, jobId, stage: 'research.contact',
+      event: succeeded ? 'contact.completed' : 'contact.failed',
+      detail: { worker, error } }).catch(() => {});
   }
 }
 
@@ -2638,6 +2692,9 @@ async function ensureRunning(report: db.PublishedReport): Promise<void> {
     return;
   }
   if (report.report_type === 'contact_research') {
+    // A claimed contact job may still be running on a PC after this hub restarts.
+    // Opening its report must never replace its job id and reject that late result.
+    if (report.status === 'running') return;
     const company = report.company_id ? await db.getCompany(report.company_id) : object(object(report.request).companySnapshot);
     if (company) void runContactResearch(report.public_id, report.id, company, object(report.request));
     return;
