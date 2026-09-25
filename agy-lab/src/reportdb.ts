@@ -491,6 +491,25 @@ export function migrate(): Promise<void> {
       where a.telemarketer_uid is null and a.assigned_to is not null
         and t.uid is not null and lower(trim(a.assigned_to)) = lower(trim(t.name));
 
+      update company_data c
+      set assigned_to = a.assigned_to,
+          telemarketer_uid = a.telemarketer_uid,
+          assigned_at = coalesce(c.assigned_at, now()),
+          lead_status = case when coalesce(c.lead_status, 'unassigned') = 'unassigned' then 'assigned' else c.lead_status end,
+          lead_updated_at = now()
+      from taman_assignment a
+      join published_report r on (
+        r.report_type = 'business_search'
+        and (
+          (a.query_place is not null and lower(trim(coalesce(r.request->>'place', ''))) = lower(trim(a.query_place)))
+          or lower(trim(coalesce(r.request->>'place', ''))) = lower(trim(a.taman))
+        )
+      )
+      join search_report_company sc on (sc.report_id = r.id or sc.report_id = r.source_search_report_id)
+      where c.id = sc.company_id
+        and c.merged_into is null
+        and (c.assigned_to is null or trim(c.assigned_to) = '');
+
       insert into telemarketer (uid, name, phone, email, notes, active)
       values ('TM-SARAH', 'Sarah Tan', '+6012-3456789', 'sarah@example.com', 'Demo telemarketer for API testing and documentation', true)
       on conflict (uid) do nothing;
@@ -2799,10 +2818,35 @@ export async function findTamanCompanyIds(options: {
     const linked = await sql<{ company_id: string }>(
       `select distinct sc.company_id::text
        from search_report_company sc
-       join published_report r on (r.source_search_report_id = sc.report_id)
+       join published_report r on (r.source_search_report_id = sc.report_id or r.id = sc.report_id)
        where r.report_type = 'business_search'
          and lower(trim(coalesce(r.request->>'place', ''))) = $1`,
       [qp],
+    );
+    for (const r of linked.rows) ids.add(String(r.company_id));
+
+    const fromJson = await sql<{ id: string }>(
+      `select distinct c.id::text
+       from published_report r,
+       jsonb_array_elements(case when jsonb_typeof(r.result->'companies') = 'array' then r.result->'companies' else '[]'::jsonb end) ce
+       join company_data c on (c.place_id = ce->>'place_id' or (c.name = ce->>'name' and c.address = ce->>'address'))
+       where r.report_type = 'business_search'
+         and lower(trim(coalesce(r.request->>'place', ''))) = $1
+         and ce->>'place_id' is not null`,
+      [qp],
+    );
+    for (const r of fromJson.rows) ids.add(String(r.id));
+  }
+
+  if (options.taman && options.taman.trim() && ids.size === 0) {
+    const tm = options.taman.trim().toLowerCase();
+    const linked = await sql<{ company_id: string }>(
+      `select distinct sc.company_id::text
+       from search_report_company sc
+       join published_report r on (r.source_search_report_id = sc.report_id or r.id = sc.report_id)
+       where r.report_type = 'business_search'
+         and lower(trim(coalesce(r.request->>'place', ''))) like '%' || $1 || '%'`,
+      [tm],
     );
     for (const r of linked.rows) ids.add(String(r.company_id));
   }
