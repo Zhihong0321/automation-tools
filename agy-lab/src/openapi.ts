@@ -15,6 +15,7 @@ export const document = {
     { name: 'Company research', description: 'Enrich one persisted company through the four-round research workflow.' },
     { name: 'Person research', description: 'Create a public-professional VIP brief from a validated person in a completed company report.' },
     { name: 'Published reports', description: 'Read final public output using an opaque report identifier.' },
+    { name: 'Telemarketing', description: 'Telemarketer agent lead distribution, disposition updates, and notes authenticated by Telemarketer UID.' },
   ],
   security: [{ bearerAuth: [] }],
   paths: {
@@ -305,6 +306,112 @@ export const document = {
         responses: {
           '200': { description: 'Mobile-first HTML report', content: { 'text/html': { schema: { type: 'string' } } } },
           '404': { description: 'Report page not found' },
+        },
+      },
+    },
+    '/api/telemarketer/leads': {
+      get: {
+        security: [],
+        operationId: 'listTelemarketerLeads',
+        tags: ['Telemarketing'],
+        summary: 'Read assigned leads for a telemarketer',
+        description: 'Requires Telemarketer UID via query param ?uid=, header X-Telemarketer-UID, or Bearer auth. No operator token required.',
+        parameters: [
+          { name: 'uid', in: 'query', schema: { type: 'string' }, description: 'Telemarketer UID (e.g. TM-SARAH)' },
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['assigned', 'contacted', 'interested', 'not_interested', 'do_not_call'] } },
+          { name: 'search', in: 'query', schema: { type: 'string' } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', default: 50 } },
+          { name: 'offset', in: 'query', schema: { type: 'integer', default: 0 } },
+          { name: 'sort', in: 'query', schema: { type: 'string', default: 'created_at' } },
+        ],
+        responses: {
+          '200': { description: 'Assigned leads list and disposition statistics' },
+          '401': { description: 'Missing Telemarketer UID' },
+          '403': { description: 'Invalid or inactive Telemarketer UID' },
+          '503': { $ref: '#/components/responses/Unavailable' },
+        },
+      },
+    },
+    '/api/telemarketer/{uid}/leads': {
+      get: {
+        security: [],
+        operationId: 'listTelemarketerLeadsByPath',
+        tags: ['Telemarketing'],
+        summary: 'Read assigned leads by path UID',
+        parameters: [
+          { name: 'uid', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'status', in: 'query', schema: { type: 'string' } },
+          { name: 'search', in: 'query', schema: { type: 'string' } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', default: 50 } },
+          { name: 'offset', in: 'query', schema: { type: 'integer', default: 0 } },
+        ],
+        responses: {
+          '200': { description: 'Assigned leads list' },
+          '403': { description: 'Invalid or inactive Telemarketer UID' },
+        },
+      },
+    },
+    '/api/telemarketer/leads/{id}': {
+      get: {
+        security: [],
+        operationId: 'getTelemarketerLeadDetail',
+        tags: ['Telemarketing'],
+        summary: 'Read single lead details with contacts and decision makers',
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Company / Lead ID' },
+          { name: 'uid', in: 'query', schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': { description: 'Lead detail including phone contacts and decision makers' },
+          '403': { description: 'Lead assigned to another agent or invalid UID' },
+          '404': { description: 'Lead not found' },
+        },
+      },
+      patch: {
+        security: [],
+        operationId: 'updateTelemarketerLead',
+        tags: ['Telemarketing'],
+        summary: 'Update lead status and add / append notes',
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'uid', in: 'query', schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  leadStatus: { type: 'string', enum: ['assigned', 'contacted', 'interested', 'not_interested', 'do_not_call', 'unassigned'] },
+                  notes: { type: 'string', description: 'Replaces lead notes entirely' },
+                  appendNotes: { type: 'string', description: 'Appends to notes with date prefix' },
+                  uid: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Lead updated successfully' },
+          '400': { description: 'Invalid status or missing update fields' },
+          '403': { description: 'Lead assigned to another telemarketer' },
+          '404': { description: 'Lead not found' },
+        },
+      },
+    },
+    '/api/telemarketer/me': {
+      get: {
+        security: [],
+        operationId: 'getTelemarketerProfile',
+        tags: ['Telemarketing'],
+        summary: 'Telemarketer profile and pipeline status counts',
+        parameters: [
+          { name: 'uid', in: 'query', schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': { description: 'Telemarketer profile and statistics' },
+          '403': { description: 'Invalid or inactive Telemarketer UID' },
         },
       },
     },

@@ -18,6 +18,9 @@ test('served docs explain the complete search-to-research handoff', () => {
   assert.match(html, /identical Gemini\/AGY, social-scout, audit, and validation flow/);
   assert.match(html, /research_run\.round01/);
   assert.match(html, /GET \/public\/reports\/:reportId/);
+  assert.match(html, /Telemarketer API/);
+  assert.match(html, /\/api\/telemarketer\/leads/);
+  assert.match(html, /\/api\/telemarketer\/me/);
   assert.match(html, /\/openapi\.json/);
   assert.doesNotMatch(html, /eternalgy2026/i);
 });
@@ -53,6 +56,12 @@ test('OpenAPI contract exposes each research workflow and resolves local referen
   assert.ok(document.paths['/api/contact-research/{reportId}'].get);
   assert.ok(document.paths['/public/reports/{reportId}'].get);
   assert.deepEqual(document.paths['/public/reports/{reportId}'].get.security, []);
+  assert.ok(document.paths['/api/telemarketer/leads'].get);
+  assert.ok(document.paths['/api/telemarketer/{uid}/leads'].get);
+  assert.ok(document.paths['/api/telemarketer/leads/{id}'].get);
+  assert.ok(document.paths['/api/telemarketer/leads/{id}'].patch);
+  assert.ok(document.paths['/api/telemarketer/me'].get);
+  assert.deepEqual(document.paths['/api/telemarketer/leads'].get.security, []);
   const searchRequest = document.components.schemas.BusinessSearchRequest;
   assert.deepEqual(searchRequest.anyOf, [
     { required: ['keyword'] }, { required: ['place'] }, { required: ['location'] },

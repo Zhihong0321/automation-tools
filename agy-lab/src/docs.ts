@@ -86,6 +86,7 @@ export function body(): string {
     padding:2px 7px; border-radius:5px; }
   .ep .m.get { color:var(--accent); background:var(--accent-sunk); }
   .ep .m.post { color:var(--ok); background:rgba(95,212,160,.12); }
+  .ep .m.patch { color:var(--warn); background:rgba(238,192,106,.14); }
   .ep .path { font-size:14px; font-weight:500; color:var(--ink); }
   .ep .tag { font-size:12px; color:var(--faint); margin-left:auto; font-family:var(--mono); }
 
@@ -163,6 +164,7 @@ export function body(): string {
     <span class="nav-label">On this page</span>
     <a href="#start">Start here</a>
     <a href="#intel">Pipeline reference</a>
+    <a href="#telemarketing">Telemarketer API (Auth by UID)</a>
     <a href="#engines">The three engines</a>
     <span class="nav-label">Gateway</span>
     <a href="#chat">Chat completions</a>
@@ -440,6 +442,113 @@ const companyId = search.data.companies[0].id;</code></pre>
   <p>Poll every 5–10 seconds; do not retry the POST just because work is still running.
   A repeated POST creates a separate report. Keep the returned <code>report.id</code> and
   <code>api_url</code> in your own request record.</p></div>
+</section>
+
+<section id="telemarketing">
+  <h2>Telemarketer API</h2>
+  <p class="lede">Dedicated endpoints for telemarketers to read their assigned leads and record call dispositions and notes. Authenticated directly by active <strong>Telemarketer UID</strong> without needing an operator bearer token.</p>
+
+  <div class="call"><span class="h">Authentication: Telemarketer UID = Key</span>
+  <p>Every telemarketer has a unique UID (e.g. <code>TM-SARAH</code> or <code>uid-sarah</code>). You can authenticate by supplying it in any of the following formats:</p>
+  <ul>
+    <li>URL query param: <code>?uid=TM-SARAH</code></li>
+    <li>HTTP header: <code>X-Telemarketer-UID: TM-SARAH</code></li>
+    <li>Bearer Authorization: <code>Authorization: Bearer TM-SARAH</code></li>
+    <li>Path prefix: <code>/api/telemarketer/TM-SARAH/leads</code></li>
+    <li>JSON body: <code>{"uid": "TM-SARAH"}</code></li>
+  </ul>
+  </div>
+
+  <h3>1. Read assigned leads list</h3>
+  <div class="ep"><span class="m get">GET</span><code class="path">/api/telemarketer/leads</code><span class="tag">UID Auth &middot; returns 200</span></div>
+  <p>Alternative path: <code>/api/telemarketer/:uid/leads</code>. Returns the telemarketer's active profile, progress counters (<code>total</code>, <code>pending</code>, <code>contacted</code>, <code>interested</code>, <code>not_interested</code>, <code>do_not_call</code>), and the paginated list of leads assigned to this agent.</p>
+  <div class="tbl"><table><thead><tr><th>Query Param</th><th>Type</th><th>Default</th><th>Description</th></tr></thead><tbody>
+    <tr><td><code>status</code></td><td>string</td><td>all</td><td>Filter by status: <code>assigned</code>, <code>contacted</code>, <code>interested</code>, <code>not_interested</code>, <code>do_not_call</code> (or aliases: <code>pending</code>, <code>to_call</code>, <code>dnc</code>).</td></tr>
+    <tr><td><code>search</code></td><td>string</td><td>none</td><td>Search keyword matching company name, phone, address, or category.</td></tr>
+    <tr><td><code>limit</code></td><td>integer</td><td>50</td><td>Page size (1&ndash;500).</td></tr>
+    <tr><td><code>offset</code></td><td>integer</td><td>0</td><td>Pagination offset.</td></tr>
+    <tr><td><code>sort</code></td><td>string</td><td>created_at</td><td>Sort column (prefix <code>-</code> for descending, e.g. <code>-created_at</code>).</td></tr>
+  </tbody></table></div>
+<pre><code>curl -s "https://ee-auto.up.railway.app/api/telemarketer/leads?uid=TM-SARAH&amp;status=assigned"</code></pre>
+<pre><code>{
+  "ok": true,
+  "telemarketer": { "id": 1, "uid": "TM-SARAH", "name": "Sarah Tan", "phone": "+6012-3456789", "email": "sarah@example.com" },
+  "stats": { "total": 45, "pending": 20, "contacted": 15, "interested": 7, "not_interested": 2, "do_not_call": 1 },
+  "leads": [{
+    "id": "101",
+    "name": "Solar Future Sdn Bhd",
+    "phone": "+607-5551234",
+    "address": "Jalan Molek 1/10, Taman Molek",
+    "category": "Solar Energy",
+    "lead_status": "assigned",
+    "lead_notes": "Call after 2pm",
+    "assigned_to": "Sarah Tan",
+    "telemarketer_uid": "TM-SARAH",
+    "contact_phones_count": 2,
+    "contact_decision_makers_count": 1
+  }],
+  "total": 45,
+  "limit": 50,
+  "offset": 0
+}</code></pre>
+
+  <h3>2. Read single lead detail</h3>
+  <div class="ep"><span class="m get">GET</span><code class="path">/api/telemarketer/leads/:id</code><span class="tag">UID Auth &middot; returns 200</span></div>
+  <p>Alternative path: <code>/api/telemarketer/:uid/leads/:id</code>. Returns complete company details, address, website, notes, plus parsed <code>decision_makers</code> with direct WhatsApp links and categorized <code>phone_contacts</code>.</p>
+<pre><code>curl -s -H "X-Telemarketer-UID: TM-SARAH" \
+  "https://ee-auto.up.railway.app/api/telemarketer/leads/101"</code></pre>
+<pre><code>{
+  "ok": true,
+  "lead": {
+    "id": "101",
+    "name": "Solar Future Sdn Bhd",
+    "phone": "+607-5551234",
+    "address": "Jalan Molek 1/10, Taman Molek",
+    "lead_status": "assigned",
+    "lead_notes": "Call after 2pm",
+    "decision_makers": [
+      { "name": "Tan Boon Lee", "role": "Director", "direct_phone": "+6019-7112233", "whatsapp_url": "https://wa.me/60197112233" }
+    ],
+    "phone_contacts": [
+      { "number_raw": "+607-5551234", "type": "office", "dial_url": "tel:+6075551234" },
+      { "number_raw": "+6019-7112233", "type": "mobile_whatsapp", "whatsapp_url": "https://wa.me/60197112233" }
+    ]
+  }
+}</code></pre>
+
+  <h3>3. Update lead status &amp; add / edit notes</h3>
+  <div class="ep"><span class="m patch">PATCH</span><code class="path">/api/telemarketer/leads/:id</code><span class="tag">UID Auth &middot; returns 200</span></div>
+  <p>Also accepts <code>POST</code>. Updates disposition status and notes. Enforces agent ownership: telemarketers cannot modify leads assigned to another agent.</p>
+  <div class="tbl"><table><thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr></thead><tbody>
+    <tr><td><code>leadStatus</code></td><td>string</td><td>optional</td><td>New disposition status: <code>assigned</code>, <code>contacted</code>, <code>interested</code>, <code>not_interested</code>, <code>do_not_call</code>. (Alias <code>status</code> accepted).</td></tr>
+    <tr><td><code>notes</code></td><td>string</td><td>optional</td><td>Replaces existing lead notes entirely. (Alias <code>lead_notes</code> accepted).</td></tr>
+    <tr><td><code>appendNotes</code></td><td>string</td><td>optional</td><td>Appends text to existing notes with an automatic date prefix (e.g. <code>[2026-09-25] Spoke with director</code>). (Alias <code>addNote</code> accepted).</td></tr>
+    <tr><td><code>uid</code></td><td>string</td><td>conditional</td><td>Telemarketer UID (if not supplied via query param or header).</td></tr>
+  </tbody></table></div>
+<pre><code>curl -s -X PATCH "https://ee-auto.up.railway.app/api/telemarketer/leads/101" \
+  -H "X-Telemarketer-UID: TM-SARAH" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": "interested",
+    "appendNotes": "Director confirmed 15kW quotation request. Send WhatsApp brochure."
+  }'</code></pre>
+<pre><code>{
+  "ok": true,
+  "message": "Lead updated successfully",
+  "lead": {
+    "id": "101",
+    "name": "Solar Future Sdn Bhd",
+    "lead_status": "interested",
+    "lead_notes": "Call after 2pm\n[2026-09-25] Director confirmed 15kW quotation request. Send WhatsApp brochure.",
+    "lead_updated_at": "2026-09-25T05:20:00.000Z"
+  }
+}</code></pre>
+
+  <h3>4. Telemarketer profile &amp; workload summary</h3>
+  <div class="ep"><span class="m get">GET</span><code class="path">/api/telemarketer/me</code><span class="tag">UID Auth &middot; returns 200</span></div>
+  <p>Alternative path: <code>/api/telemarketer/:uid/profile</code>. Returns the telemarketer's profile and breakdown of assigned leads across all statuses.</p>
+<pre><code>curl -s -H "Authorization: Bearer TM-SARAH" \
+  "https://ee-auto.up.railway.app/api/telemarketer/me"</code></pre>
 </section>
 
 <section id="engines">

@@ -9,8 +9,9 @@ const BATCH = 3;
 export function contactResearchJobType(): string {
   const model = (process.env.CONTACT_RESEARCH_MODEL?.trim() || 'research.contact').toLowerCase();
   const name = model.split(/[:@/]/)[0] ?? model;
-  if (name === 'agy-web') return 'research.contact.cloud';
-  if (name === 'research.contact' || name === 'pi') return 'research.contact';
+  // The in-process cloud AGY worker is removed. A leftover CONTACT_RESEARCH_MODEL=agy-web
+  // must not mint research.contact.cloud jobs that nothing can claim.
+  if (name === 'agy-web' || name === 'research.contact' || name === 'pi') return 'research.contact';
   if (name.startsWith('chatgpt') || name.startsWith('openai') || name.startsWith('gpt') || /^o[134]/.test(name)) {
     return 'chatgpt.ask';
   }

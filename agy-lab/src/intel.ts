@@ -2922,7 +2922,6 @@ export async function launchContactResearch(
     targetRole: str(opts.targetRole).trim() || null,
     requesterId: opts.requesterId ?? null,
     provider,
-    ...(process.env.CONTACT_RESEARCH_MODEL?.trim().toLowerCase() === 'agy-web' ? { researchEngine: 'agy-web' } : {}),
     compareToReportId,
     ...(opts.autoQueued === true ? { autoQueued: 'true' } : {}),
     companySnapshot: {
