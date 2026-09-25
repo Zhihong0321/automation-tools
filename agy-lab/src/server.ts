@@ -22,6 +22,7 @@ import * as log from './logstore.ts';
 import * as intel from './intel.ts';
 import * as reportdb from './reportdb.ts';
 import * as autoContact from './autocontact.ts';
+import * as geminiContact from './gemini-contact-worker.ts';
 import { page } from './ui.ts';
 import { page as docsPage } from './docs.ts';
 import { document as openApiDocument } from './openapi.ts';
@@ -484,6 +485,7 @@ server.listen(PORT, '0.0.0.0', () => {
   reapAbandonedRuns(0);
   autoContact.init({ launch: intel.launchContactResearch });
   autoContact.start();
+  geminiContact.start();
   // Broker jobs live only in memory. Refill it from saved contact reports after
   // a restart, with no more concurrent jobs than the research lanes can run.
   setInterval(() => {
