@@ -95,9 +95,12 @@ function authorized(req: http.IncomingMessage, url: URL): boolean {
     // LAB_TOKEN, and quietly widening an existing route's audience is not this
     // change's business.
     || url.pathname.startsWith('/api/ads-market')
+    || url.pathname.startsWith('/api/parallel-contact-research')
     || url.pathname.startsWith('/api/leads')
     || url.pathname.startsWith('/api/telemarketers')
-    || url.pathname.startsWith('/api/territories');
+    || url.pathname.startsWith('/api/territories')
+    || url.pathname.startsWith('/api/contacts')
+    || url.pathname.startsWith('/api/lead-activity');
   return productRoute && PORTAL_TOKEN.length >= 16
     && crypto.timingSafeEqual(digest(supplied), digest(PORTAL_TOKEN));
 }

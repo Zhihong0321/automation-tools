@@ -2197,6 +2197,18 @@ function renderDailyProcessedChart(daily){
     sumTotal += d.total;
   });
 
+  if(sumTotal === 0){
+    cont.innerHTML = '<div style="padding:28px 24px;text-align:center;background:#f8faff;border:1px dashed #93c5fd;border-radius:8px;margin-bottom:12px;">'
+      + '<div style="font-size:26px;margin-bottom:8px;">⚡</div>'
+      + '<div style="font-weight:700;font-size:16px;color:#1e40af;margin-bottom:6px;">No Presentation Mock Data Active Yet</div>'
+      + '<p style="font-size:13px;color:#3b82f6;max-width:540px;margin:0 auto 16px;line-height:1.45;">'
+      + 'The database starts in a clean default state to keep all real leads 100% safe. Click the button below to generate realistic outreach volume, pipeline progress, and telemarketer velocity for your presentation.'
+      + '</p>'
+      + '<button class="primary" type="button" onclick="openMockDataModal()" style="height:40px;padding:0 22px;background:#2563eb;font-weight:600;font-size:13.5px;box-shadow:0 2px 4px rgba(37,99,235,0.2);">⚡ Generate Mock Data Now</button>'
+      + '</div>';
+    return;
+  }
+
   var avgDaily = Math.round((sumTotal / Math.max(daily.length, 1)) * 10) / 10;
 
   var html = '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:18px;">'
