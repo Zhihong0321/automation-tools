@@ -143,7 +143,11 @@ function cooldownFor(group: string | null): { until: number; reason: string } | 
   return null;
 }
 
-function touch(name: string, ip: string | null, types?: string[] | null, group?: string | null): WorkerInfo {
+export function isDurableContactJob(type: string): boolean {
+  return type === 'research.contact' || type === 'research.contact.cloud' || type === 'research.contact.gemini';
+}
+
+export function touch(name: string, ip: string | null, types?: string[] | null, group?: string | null): WorkerInfo {
   const existing = workers.get(name);
   const info: WorkerInfo =
     existing ?? { name, lastSeenAt: now(), ip, taken: 0, done: 0, failed: 0, types: null,
@@ -192,7 +196,7 @@ function sweep(): void {
     if (job.status !== 'running' || !job.startedAt) continue;
     // Contact reports own their lifecycle in Postgres. Time passing cannot
     // declare their worker dead or invalidate a result that may still arrive.
-    if (job.type === 'research.contact' || job.type === 'research.contact.cloud') continue;
+    if (isDurableContactJob(job.type)) continue;
     // The field is what the hub shows and what this comparison uses. Raise it to
     // the payload budget before deciding, or a 20-minute agy run stored with the
     // 5-minute default is taken back while the worker is still heartbeating.
@@ -267,7 +271,7 @@ function payloadTimeoutMs(payload: unknown): number {
  * of the caller budget and payload budget. Contact research has no lease.
  */
 function leaseMs(type: string, payload: unknown, timeoutMs: number): number {
-  if (type === 'research.contact' || type === 'research.contact.cloud') return 0;
+  if (isDurableContactJob(type)) return 0;
   const asked = type === 'agy.ask' ? Math.max(timeoutMs, payloadTimeoutMs(payload)) : timeoutMs;
   return Math.min(Math.max(1_000, asked), MAX_TIMEOUT_MS);
 }
@@ -517,7 +521,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     // Older workers still impose a Pi deadline and can discard completed
     // research. They may report work already claimed, but cannot claim more.
     const types = q.get('contactProtocol') === 'durable-v1'
-      ? offeredTypes : offeredTypes.filter((type) => type !== 'research.contact' && type !== 'research.contact.cloud');
+      ? offeredTypes : offeredTypes.filter((type) => !isDurableContactJob(type));
     touch(worker, callerIp(req), types, (q.get('cooldownGroup') ?? '').trim());
     const waitSec = Number(q.get('wait'));
     const controller = new AbortController();
@@ -550,7 +554,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       res.end();
       return true;
     }
-    if (job.type === 'research.contact' || job.type === 'research.contact.cloud') {
+    if (isDurableContactJob(job.type)) {
       const reportId = str((job.payload as { reportId?: unknown } | null)?.reportId);
       if (reportId) {
         try {
@@ -596,7 +600,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     // nothing", which the gateway treats the same as absent.
     const offeredTypes = Array.isArray(body.types) ? body.types.map((t) => str(t).trim()).filter(Boolean) : [];
     const types = body.contactProtocol === 'durable-v1'
-      ? offeredTypes : offeredTypes.filter((type) => type !== 'research.contact' && type !== 'research.contact.cloud');
+      ? offeredTypes : offeredTypes.filter((type) => !isDurableContactJob(type));
     const group = str(body.cooldownGroup).trim();
     touch(worker, callerIp(req), types, group);
     // A cooling worker keeps beating. Restore its deadline after a broker
@@ -634,9 +638,9 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     const current = get(result[1]!);
     let reportId = str(body.reportId || (current?.payload as { reportId?: unknown } | null)?.reportId);
     let savedContact = false;
-    if (!reportId && (!current || current.type === 'research.contact' || current.type === 'research.contact.cloud'))
+    if (!reportId && (!current || isDurableContactJob(current.type)))
       reportId = (await db.getContactReportByJobId(result[1]!))?.id ?? '';
-    if (reportId && (!current || current.type === 'research.contact' || current.type === 'research.contact.cloud')) {
+    if (reportId && (!current || isDurableContactJob(current.type))) {
       // The report row, not this volatile Map, is the destination. A worker can
       // return after a Railway restart or long after the original request ended.
       const intel = await import('./intel.ts');
@@ -649,7 +653,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       }
     }
     const job = finish(result[1]!, body.ok !== false, body.result ?? null, str(body.error) || null);
-    const quotaMs = job && (job.type.startsWith('agy.') || job.type === 'research.contact' || job.type === 'research.contact.cloud')
+    const quotaMs = job && (job.type.startsWith('agy.') || isDurableContactJob(job.type))
       ? num(body.retryAfterMs, 0) || quotaRetryAfterMs(str(body.error)) : null;
     const cooldownUntil = quotaMs && worker
       ? coolDown(worker, quotaMs, str(body.error).split(/\r?\n/)[0] || 'Individual quota reached') : null;

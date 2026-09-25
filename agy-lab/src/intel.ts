@@ -2515,7 +2515,7 @@ async function runContactResearch(
 
     try {
       const jobType = autoContact.contactResearchJobType();
-      if (jobType === 'research.contact' || jobType === 'research.contact.cloud') {
+      if (jobs.isDurableContactJob(jobType)) {
         const website = str(company.website);
         const payload = {
           reportId,

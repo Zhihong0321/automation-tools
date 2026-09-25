@@ -5,10 +5,20 @@ import * as db from './reportdb.ts';
 const INTERVAL_MS = 60_000;
 const BATCH = 3;
 
-/** Job type the default contact-research model needs a live worker to claim. */
+const GEMINI_CONTACT_MODELS = new Set(['gemini-3.7-flash', 'gemini-3.7', 'gemini37']);
+
+/**
+ * Job type the contact-research model needs a live worker to claim.
+ * Gemini 3.7 is an in-hub worker. A configured key also takes the normal
+ * contact queue, so those jobs are not left for a local research lane.
+ */
 export function contactResearchJobType(): string {
   const model = (process.env.CONTACT_RESEARCH_MODEL?.trim() || 'research.contact').toLowerCase();
   const name = model.split(/[:@/]/)[0] ?? model;
+  const geminiKey = Boolean(process.env.GEMINI37_API_KEY?.trim());
+  if (GEMINI_CONTACT_MODELS.has(name) || (geminiKey && (name === 'agy-web' || name === 'research.contact' || name === 'pi'))) {
+    return 'research.contact.gemini';
+  }
   // The in-process cloud AGY worker is removed. A leftover CONTACT_RESEARCH_MODEL=agy-web
   // must not mint research.contact.cloud jobs that nothing can claim.
   if (name === 'agy-web' || name === 'research.contact' || name === 'pi') return 'research.contact';
