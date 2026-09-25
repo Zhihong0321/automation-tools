@@ -393,7 +393,7 @@ export function seniorityScore(role: string): number {
 
 /** A person is one human, however many ways the rounds spelled their title. */
 function personKey(name: string): string {
-  return name.toLowerCase().normalize('NFKD').replace(/[^a-z\s]/g, '').replace(/\s+/g, ' ').trim();
+  return name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -1048,7 +1048,9 @@ export function buildContactLedger(
 
   const decisionMakers = [...seenPeople.values()]
     .sort((a, b) => num(b.seniority, 0) - num(a.seniority, 0))
-    .slice(0, 10);
+    // A current team page can name well more than ten people. Forty keeps that
+    // page, including a professional firm's associates, and still bounds the report.
+    .slice(0, 40);
 
   const emailContacts: Record<string, unknown>[] = [];
   const seenEmails = new Set<string>();
@@ -3572,9 +3574,37 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
   // ---- Lead Activity & Presentation Operations -----------------------------
   if (method === 'GET' && p === '/api/lead-activity/stats') {
     const days = parseInt(url.searchParams.get('days') || '7', 10);
+    const startDate = url.searchParams.get('startDate') || url.searchParams.get('from') || undefined;
+    const endDate = url.searchParams.get('endDate') || url.searchParams.get('to') || undefined;
     const telemarketer = url.searchParams.get('telemarketer') || undefined;
-    const stats = await db.getLeadActivityStats({ days: isNaN(days) ? 7 : days, telemarketer });
+    const sortBy = (url.searchParams.get('sortBy') || undefined) as any;
+    const limit = parseInt(url.searchParams.get('limit') || '10', 10);
+    const stats = await db.getLeadActivityStats({
+      days: isNaN(days) ? 7 : days,
+      startDate,
+      endDate,
+      telemarketer,
+      sortBy,
+      limit: isNaN(limit) ? 10 : limit,
+    });
     ctx.json(res, 200, { ok: true, stats });
+    return true;
+  }
+
+  if (method === 'GET' && p === '/api/lead-activity/leaderboard') {
+    const days = parseInt(url.searchParams.get('days') || '7', 10);
+    const startDate = url.searchParams.get('startDate') || url.searchParams.get('from') || undefined;
+    const endDate = url.searchParams.get('endDate') || url.searchParams.get('to') || undefined;
+    const sortBy = (url.searchParams.get('sortBy') || 'interested') as any;
+    const limit = parseInt(url.searchParams.get('limit') || '10', 10);
+    const result = await db.getTopTelemarketersLeaderboard({
+      days: isNaN(days) ? 7 : days,
+      startDate,
+      endDate,
+      sortBy,
+      limit: isNaN(limit) ? 10 : limit,
+    });
+    ctx.json(res, 200, result);
     return true;
   }
 

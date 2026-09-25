@@ -2942,6 +2942,24 @@ export interface LeadActivityTelemarketerSummary {
   last_active: string | null;
 }
 
+export interface TelemarketerLeaderItem {
+  rank: number;
+  name: string;
+  uid: string | null;
+  interested: number;
+  contacted: number;
+  not_interested: number;
+  do_not_call: number;
+  total_processed: number;
+  total_assigned: number;
+  conversion_rate: number;
+  daily_avg: number;
+  score: number;
+  tier: 'champion' | 'top_performer' | 'high_achiever' | 'performer';
+  tier_label: string;
+  last_active: string | null;
+}
+
 export interface LeadActivityStats {
   kpis: {
     totalActivities: number;
@@ -2962,19 +2980,262 @@ export interface LeadActivityStats {
     color: string;
   }>;
   perTelemarketerSummary: LeadActivityTelemarketerSummary[];
+  topLeaders: TelemarketerLeaderItem[];
+  dateRange: {
+    startDate: string;
+    endDate: string;
+    days: number;
+  };
 }
 
-export async function getLeadActivityStats(options?: { days?: number; telemarketer?: string }): Promise<LeadActivityStats> {
+export interface LeadActivityStatsOptions {
+  days?: number;
+  startDate?: string;
+  endDate?: string;
+  telemarketer?: string;
+  sortBy?: 'interested' | 'processed' | 'conversion' | 'contacted';
+  limit?: number;
+}
+
+export async function getTopTelemarketersLeaderboard(options?: {
+  startDate?: string;
+  endDate?: string;
+  days?: number;
+  sortBy?: 'interested' | 'processed' | 'conversion' | 'contacted';
+  limit?: number;
+}): Promise<{
+  ok: boolean;
+  dateRange: { startDate: string; endDate: string; days: number };
+  sortBy: string;
+  total: number;
+  leaders: TelemarketerLeaderItem[];
+}> {
+  if (!configured()) {
+    return {
+      ok: true,
+      dateRange: { startDate: '', endDate: '', days: 0 },
+      sortBy: options?.sortBy || 'interested',
+      total: 0,
+      leaders: [],
+    };
+  }
+  await migrate();
+
+  let startIso: string;
+  let endIso: string;
+  let numDays: number;
+  const now = new Date();
+
+  if (options?.startDate && options?.endDate) {
+    const sRaw = options.startDate.trim();
+    const eRaw = options.endDate.trim();
+    const sStr = sRaw.includes('T') ? sRaw : sRaw + 'T00:00:00.000Z';
+    const eStr = eRaw.includes('T') ? eRaw : eRaw + 'T23:59:59.999Z';
+    const s = new Date(sStr);
+    const e = new Date(eStr);
+    if (!isNaN(s.getTime()) && !isNaN(e.getTime()) && s <= e) {
+      startIso = s.toISOString();
+      endIso = e.toISOString();
+      numDays = Math.max(1, Math.min(Math.ceil((e.getTime() - s.getTime()) / 86400000), 180));
+    } else {
+      numDays = Math.min(Math.max(Number(options?.days ?? 7), 1), 90);
+      const sFallback = new Date(now.getTime() - (numDays - 1) * 86400000);
+      sFallback.setHours(0, 0, 0, 0);
+      startIso = sFallback.toISOString();
+      endIso = now.toISOString();
+    }
+  } else {
+    numDays = Math.min(Math.max(Number(options?.days ?? 7), 1), 90);
+    const sFallback = new Date(now.getTime() - (numDays - 1) * 86400000);
+    sFallback.setHours(0, 0, 0, 0);
+    startIso = sFallback.toISOString();
+    endIso = now.toISOString();
+  }
+
+  // Aggregate telemarketer outreach actions strictly within the chosen date range
+  const teleRes = await sql<{
+    name: string;
+    uid: string | null;
+    total_assigned: string;
+    contacted_count: string;
+    interested_count: string;
+    not_interested_count: string;
+    dnc_count: string;
+    processed_count: string;
+    total_activities: string;
+    last_active: string | null;
+  }>(`
+    with log_period as (
+      select
+        coalesce(telemarketer_name, telemarketer_uid, 'Unassigned') as agent_name,
+        telemarketer_uid as agent_uid,
+        count(*) filter (where new_status = 'contacted')::int as contacted_count,
+        count(*) filter (where new_status = 'interested')::int as interested_count,
+        count(*) filter (where new_status = 'not_interested')::int as not_interested_count,
+        count(*) filter (where new_status = 'do_not_call')::int as dnc_count,
+        count(*) filter (where new_status in ('contacted', 'interested', 'not_interested', 'do_not_call'))::int as processed_count,
+        count(*)::int as total_activities,
+        max(created_at) as last_active
+      from lead_activity_log
+      where created_at >= $1::timestamptz and created_at <= $2::timestamptz
+        and coalesce(telemarketer_name, telemarketer_uid) is not null
+      group by coalesce(telemarketer_name, telemarketer_uid, 'Unassigned'), telemarketer_uid
+    ),
+    active_roster as (
+      select
+        t.name as agent_name,
+        t.uid as agent_uid,
+        count(distinct c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false)::int as total_assigned
+      from telemarketer t
+      left join company_data c on (
+        (t.uid is not null and (c.telemarketer_uid = t.uid or c.telemarketer_uid = ('uid:' || t.uid) or lower(trim(c.assigned_to)) = lower(trim(t.uid)) or lower(trim(c.assigned_to)) = lower(trim('uid:' || t.uid))))
+        or lower(trim(c.assigned_to)) = lower(trim(t.name))
+      )
+      where t.active = true
+      group by t.id, t.name, t.uid
+    )
+    select
+      coalesce(r.agent_name, l.agent_name) as name,
+      coalesce(r.agent_uid, l.agent_uid) as uid,
+      coalesce(r.total_assigned, 0)::text as total_assigned,
+      coalesce(l.contacted_count, 0)::text as contacted_count,
+      coalesce(l.interested_count, 0)::text as interested_count,
+      coalesce(l.not_interested_count, 0)::text as not_interested_count,
+      coalesce(l.dnc_count, 0)::text as dnc_count,
+      coalesce(l.processed_count, 0)::text as processed_count,
+      coalesce(l.total_activities, 0)::text as total_activities,
+      l.last_active::text as last_active
+    from active_roster r
+    full outer join log_period l on (
+      lower(trim(r.agent_name)) = lower(trim(l.agent_name))
+      or (r.agent_uid is not null and r.agent_uid = l.agent_uid)
+    )
+    where coalesce(r.agent_name, l.agent_name) is not null
+  `, [startIso, endIso]);
+
+  const rawItems = teleRes.rows.map((row) => {
+    const assigned = Number(row.total_assigned || 0);
+    const contacted = Number(row.contacted_count || 0);
+    const interested = Number(row.interested_count || 0);
+    const notInterested = Number(row.not_interested_count || 0);
+    const dnc = Number(row.dnc_count || 0);
+    const processed = Number(row.processed_count || (contacted + interested + notInterested + dnc));
+    const conv = processed > 0 ? Math.round((interested / processed) * 1000) / 10 : 0;
+    const dailyAvg = Math.round((processed / Math.max(numDays, 1)) * 10) / 10;
+    return {
+      rank: 0,
+      name: row.name,
+      uid: row.uid,
+      interested,
+      contacted,
+      not_interested: notInterested,
+      do_not_call: dnc,
+      total_processed: processed,
+      total_assigned: assigned,
+      conversion_rate: conv,
+      daily_avg: dailyAvg,
+      score: interested * 10 + contacted * 2 + processed,
+      tier: 'performer' as const,
+      tier_label: 'Outreach Agent',
+      last_active: row.last_active,
+    };
+  });
+
+  const sortBy = options?.sortBy || 'interested';
+  rawItems.sort((a, b) => {
+    if (sortBy === 'processed') {
+      return b.total_processed - a.total_processed || b.interested - a.interested || b.conversion_rate - a.conversion_rate;
+    }
+    if (sortBy === 'conversion') {
+      return b.conversion_rate - a.conversion_rate || b.interested - a.interested || b.total_processed - a.total_processed;
+    }
+    if (sortBy === 'contacted') {
+      return b.contacted - a.contacted || b.interested - a.interested;
+    }
+    // default: by interested (conversions / sales leads won)
+    return b.interested - a.interested || b.conversion_rate - a.conversion_rate || b.total_processed - a.total_processed || a.name.localeCompare(b.name);
+  });
+
+  const limit = Math.min(Math.max(Number(options?.limit ?? 10), 1), 50);
+  const leaders: TelemarketerLeaderItem[] = rawItems.slice(0, limit).map((item, index) => {
+    const rank = index + 1;
+    let tier: TelemarketerLeaderItem['tier'] = 'performer';
+    let tier_label = 'Outreach Agent';
+    if (rank === 1 && item.interested > 0) {
+      tier = 'champion';
+      tier_label = '🥇 Champion';
+    } else if (rank <= 3 && item.interested > 0) {
+      tier = 'top_performer';
+      tier_label = rank === 2 ? '🥈 2nd Place' : '🥉 3rd Place';
+    } else if (rank <= 7 && (item.interested > 0 || item.total_processed > 0)) {
+      tier = 'high_achiever';
+      tier_label = '⭐ Top Achiever';
+    }
+    return {
+      ...item,
+      rank,
+      tier,
+      tier_label,
+    };
+  });
+
+  return {
+    ok: true,
+    dateRange: {
+      startDate: startIso.slice(0, 10),
+      endDate: endIso.slice(0, 10),
+      days: numDays,
+    },
+    sortBy,
+    total: rawItems.length,
+    leaders,
+  };
+}
+
+export async function getLeadActivityStats(options?: LeadActivityStatsOptions): Promise<LeadActivityStats> {
   if (!configured()) {
     return {
       kpis: { totalActivities: 0, processedToday: 0, processedYesterday: 0, totalContacted: 0, totalInterested: 0, conversionRate: 0, activeTelemarketers: 0, totalLeadsInPool: 0 },
       dailyLeadProcessed: [],
       progressByStatus: [],
       perTelemarketerSummary: [],
+      topLeaders: [],
+      dateRange: { startDate: '', endDate: '', days: 0 },
     };
   }
   await migrate();
-  const days = Math.min(Math.max(Number(options?.days ?? 7), 1), 60);
+
+  let startIso: string;
+  let endIso: string;
+  let numDays: number;
+  const now = new Date();
+
+  if (options?.startDate && options?.endDate) {
+    const sRaw = options.startDate.trim();
+    const eRaw = options.endDate.trim();
+    const sStr = sRaw.includes('T') ? sRaw : sRaw + 'T00:00:00.000Z';
+    const eStr = eRaw.includes('T') ? eRaw : eRaw + 'T23:59:59.999Z';
+    const s = new Date(sStr);
+    const e = new Date(eStr);
+    if (!isNaN(s.getTime()) && !isNaN(e.getTime()) && s <= e) {
+      startIso = s.toISOString();
+      endIso = e.toISOString();
+      numDays = Math.max(1, Math.min(Math.ceil((e.getTime() - s.getTime()) / 86400000), 180));
+    } else {
+      numDays = Math.min(Math.max(Number(options?.days ?? 7), 1), 90);
+      const sFallback = new Date(now.getTime() - (numDays - 1) * 86400000);
+      sFallback.setHours(0, 0, 0, 0);
+      startIso = sFallback.toISOString();
+      endIso = now.toISOString();
+    }
+  } else {
+    numDays = Math.min(Math.max(Number(options?.days ?? 7), 1), 90);
+    const sFallback = new Date(now.getTime() - (numDays - 1) * 86400000);
+    sFallback.setHours(0, 0, 0, 0);
+    startIso = sFallback.toISOString();
+    endIso = now.toISOString();
+  }
+
   const teleFilter = options?.telemarketer && options.telemarketer !== 'all' ? options.telemarketer.trim() : null;
 
   // 1. KPIs & Status Counts
@@ -3027,7 +3288,7 @@ export async function getLeadActivityStats(options?: { days?: number; telemarket
   `, [teleFilter]);
   const aRow = actRes.rows[0];
 
-  // 2. Daily Lead Processed (aggregated by date)
+  // 2. Daily Lead Processed (aggregated by date in the selected period)
   const dailyRes = await sql<{
     day: string;
     total: string;
@@ -3046,24 +3307,26 @@ export async function getLeadActivityStats(options?: { days?: number; telemarket
       count(*) filter (where new_status = 'do_not_call')::text as do_not_call,
       count(*) filter (where new_status = 'assigned')::text as assigned
     from lead_activity_log
-    where created_at >= (now() - ($1 || ' days')::interval)
-      and ($2::text is null or lower(trim(telemarketer_name)) = lower(trim($2)) or telemarketer_uid = $2)
+    where created_at >= $1::timestamptz and created_at <= $2::timestamptz
+      and ($3::text is null or lower(trim(telemarketer_name)) = lower(trim($3)) or telemarketer_uid = $3)
     group by to_char(created_at, 'YYYY-MM-DD')
     order by day desc
-  `, [String(days), teleFilter]);
+  `, [startIso, endIso, teleFilter]);
 
   const dailyMap = new Map<string, typeof dailyRes.rows[0]>();
   for (const r of dailyRes.rows) dailyMap.set(r.day, r);
 
   const dailyLeadProcessed: LeadActivityDailyStat[] = [];
-  const now = new Date();
-  for (let i = 0; i < days; i++) {
-    const d = new Date(now.getTime() - i * 86400000);
+  const endDateObj = new Date(endIso);
+  for (let i = 0; i < numDays; i++) {
+    const d = new Date(endDateObj.getTime() - i * 86400000);
     const dayStr = d.toISOString().slice(0, 10);
     const matched = dailyMap.get(dayStr);
     let displayDate = d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
-    if (i === 0) displayDate = 'Today (' + displayDate + ')';
-    else if (i === 1) displayDate = 'Yesterday (' + displayDate + ')';
+    const todayStr = now.toISOString().slice(0, 10);
+    const yesterdayStr = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+    if (dayStr === todayStr) displayDate = 'Today (' + displayDate + ')';
+    else if (dayStr === yesterdayStr) displayDate = 'Yesterday (' + displayDate + ')';
 
     dailyLeadProcessed.push({
       date: dayStr,
@@ -3138,7 +3401,7 @@ export async function getLeadActivityStats(options?: { days?: number; telemarket
     const pending = Number(row.pending_count || 0);
     const processed = contacted + interested + notInterested + dnc;
     const conv = processed > 0 ? Math.round((interested / processed) * 1000) / 10 : 0;
-    const dailyAvg = Math.round((processed / Math.max(days, 1)) * 10) / 10;
+    const dailyAvg = Math.round((processed / Math.max(numDays, 1)) * 10) / 10;
     return {
       name: row.name,
       uid: row.uid,
@@ -3155,6 +3418,15 @@ export async function getLeadActivityStats(options?: { days?: number; telemarket
     };
   });
 
+  // 5. Top 10 Telemarketer Leaderboard (for the selected period)
+  const leaderboardResult = await getTopTelemarketersLeaderboard({
+    startDate: options?.startDate,
+    endDate: options?.endDate,
+    days: numDays,
+    sortBy: options?.sortBy,
+    limit: options?.limit ?? 10,
+  });
+
   return {
     kpis: {
       totalActivities: Number(aRow?.total_act ?? 0),
@@ -3169,6 +3441,8 @@ export async function getLeadActivityStats(options?: { days?: number; telemarket
     dailyLeadProcessed,
     progressByStatus,
     perTelemarketerSummary,
+    topLeaders: leaderboardResult.leaders,
+    dateRange: leaderboardResult.dateRange,
   };
 }
 
@@ -3265,12 +3539,20 @@ export async function generateMockLeadData(options?: {
 
   // Ensure active telemarketers exist
   let teleList = await sql<{ name: string; uid: string }>(`select name, uid from telemarketer where active = true order by id asc`);
-  if (teleList.rows.length < 2) {
+  if (teleList.rows.length < 10) {
     const defaults = [
       { name: 'Sarah Wong', uid: 'tm_sarah' },
       { name: 'Ahmad Faris', uid: 'tm_ahmad' },
       { name: 'Jason Tan', uid: 'tm_jason' },
       { name: 'Nurul Huda', uid: 'tm_nurul' },
+      { name: 'David Lim', uid: 'tm_david' },
+      { name: 'Siti Aisyah', uid: 'tm_siti' },
+      { name: 'Kevin Chong', uid: 'tm_kevin' },
+      { name: 'Priya Raman', uid: 'tm_priya' },
+      { name: 'Hafiz Zulkifli', uid: 'tm_hafiz' },
+      { name: 'Michelle Lee', uid: 'tm_michelle' },
+      { name: 'Daniel Goh', uid: 'tm_daniel' },
+      { name: 'Farhana Yusof', uid: 'tm_farhana' },
     ];
     for (const d of defaults) {
       await sql(

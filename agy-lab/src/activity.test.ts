@@ -52,7 +52,21 @@ test('Lead Activity UI is fully integrated into portal navigation, views, charts
   assert.match(html, /id="activityLogFeedWrapper"/);
   assert.match(html, /id="activityLogPagination"/);
 
-  // 9. Modals for Mock Generation, Reset, and Manual Entry
+  // 9. Section 5: Presentation View 04 - Top 10 Telemarketer Leaderboard
+  assert.match(html, /Presentation View 04/);
+  assert.match(html, /Top 10 Telemarketer Leaderboard/);
+  assert.match(html, /id="activityCustomDateInputs"/);
+  assert.match(html, /id="actStartDate"/);
+  assert.match(html, /id="actEndDate"/);
+  assert.match(html, /id="btnSortInterested"/);
+  assert.match(html, /id="btnSortProcessed"/);
+  assert.match(html, /id="btnSortConversion"/);
+  assert.match(html, /id="btnSortContacted"/);
+  assert.match(html, /id="leaderboardDateInfo"/);
+  assert.match(html, /id="leaderboardPodiumContainer"/);
+  assert.match(html, /id="leaderboardTableContainer"/);
+
+  // 10. Modals for Mock Generation, Reset, and Manual Entry
   assert.match(html, /id="mockDataModal"/);
   assert.match(html, /id="mockLeadCount"/);
   assert.match(html, /id="mockDaysSpan"/);
@@ -68,7 +82,10 @@ test('Lead Activity UI is fully integrated into portal navigation, views, charts
   assert.match(html, /id="manualActTele"/);
   assert.match(html, /id="manualActNotes"/);
 
-  // 10. Client-side functions validation in <script>
+  // 11. Client-side functions validation in <script>
+  assert.match(html, /function onActivityTimeframeChange\(\)/);
+  assert.match(html, /function setLeaderboardSort\(/);
+  assert.match(html, /function renderLeaderboard\(/);
   assert.match(html, /function loadActivityView\(\)/);
   assert.match(html, /function loadActivityStats\(\)/);
   assert.match(html, /function renderActivityKPIs\(/);
@@ -93,6 +110,7 @@ test('Lead Activity UI is fully integrated into portal navigation, views, charts
 test('reportdb exports lead activity and presentation management interfaces', () => {
   assert.equal(typeof db.recordLeadActivity, 'function');
   assert.equal(typeof db.getLeadActivityStats, 'function');
+  assert.equal(typeof db.getTopTelemarketersLeaderboard, 'function');
   assert.equal(typeof db.listLeadActivities, 'function');
   assert.equal(typeof db.generateMockLeadData, 'function');
   assert.equal(typeof db.clearMockLeadProgress, 'function');
@@ -316,6 +334,50 @@ test('Lead Activity API endpoints in intel.ts handle stats, logs, mock generatio
       });
     }
 
+    if (sql.includes('log_period') || (sql.includes('active_roster') && sql.includes('contacted_count'))) {
+      return Response.json({
+        rows: [
+          {
+            name: 'Sarah Wong',
+            uid: 'tm_sarah',
+            total_assigned: '40',
+            contacted_count: '15',
+            interested_count: '8',
+            not_interested_count: '9',
+            dnc_count: '3',
+            processed_count: '35',
+            total_activities: '35',
+            last_active: '2026-09-25T10:00:00Z',
+          },
+          {
+            name: 'Ahmad Faris',
+            uid: 'tm_ahmad',
+            total_assigned: '30',
+            contacted_count: '10',
+            interested_count: '5',
+            not_interested_count: '7',
+            dnc_count: '2',
+            processed_count: '24',
+            total_activities: '24',
+            last_active: '2026-09-25T09:00:00Z',
+          },
+          {
+            name: 'Chloe Tan',
+            uid: 'tm_chloe',
+            total_assigned: '25',
+            contacted_count: '8',
+            interested_count: '3',
+            not_interested_count: '5',
+            dnc_count: '1',
+            processed_count: '17',
+            total_activities: '17',
+            last_active: '2026-09-25T08:30:00Z',
+          },
+        ],
+        rowCount: 3,
+      });
+    }
+
     if (sql.includes('from lead_activity_log') && sql.includes('telemarketer_name') && sql.includes('group by')) {
       return Response.json({
         rows: [
@@ -411,11 +473,11 @@ test('Lead Activity API endpoints in intel.ts handle stats, logs, mock generatio
   };
 
   try {
-    // 1. GET /api/lead-activity/stats
+    // 1. GET /api/lead-activity/stats (with custom date range)
     {
       const req: any = { method: 'GET', headers: {} };
       const res: any = {};
-      const url = new URL('http://localhost/api/lead-activity/stats?days=7');
+      const url = new URL('http://localhost/api/lead-activity/stats?startDate=2026-09-01&endDate=2026-09-25&sortBy=interested');
       const { ctx, getStatus, getBody } = makeCtx();
       const handled = await handleApi(req, res, url, ctx as any);
       assert.equal(handled, true);
@@ -425,7 +487,45 @@ test('Lead Activity API endpoints in intel.ts handle stats, logs, mock generatio
       assert.ok(Array.isArray(getBody().stats.dailyLeadProcessed));
       assert.ok(Array.isArray(getBody().stats.progressByStatus));
       assert.ok(Array.isArray(getBody().stats.perTelemarketerSummary));
+      assert.ok(Array.isArray(getBody().stats.topLeaders));
+      assert.equal(getBody().stats.topLeaders.length, 3);
+      assert.equal(getBody().stats.dateRange.startDate, '2026-09-01');
+      assert.equal(getBody().stats.dateRange.endDate, '2026-09-25');
       assert.equal(getBody().stats.kpis.totalLeadsInPool, 150);
+    }
+
+    // 1b. GET /api/lead-activity/leaderboard (Top 10 Leaderboard)
+    {
+      const req: any = { method: 'GET', headers: {} };
+      const res: any = {};
+      const url = new URL('http://localhost/api/lead-activity/leaderboard?sortBy=interested&limit=10');
+      const { ctx, getStatus, getBody } = makeCtx();
+      const handled = await handleApi(req, res, url, ctx as any);
+      assert.equal(handled, true);
+      assert.equal(getStatus(), 200);
+      assert.equal(getBody().ok, true);
+      assert.equal(getBody().sortBy, 'interested');
+      assert.ok(Array.isArray(getBody().leaders));
+      assert.equal(getBody().leaders.length, 3);
+
+      const top1 = getBody().leaders[0];
+      assert.equal(top1.rank, 1);
+      assert.equal(top1.name, 'Sarah Wong');
+      assert.equal(top1.tier, 'champion');
+      assert.equal(top1.tier_label, '🥇 Champion');
+      assert.equal(top1.interested, 8);
+
+      const top2 = getBody().leaders[1];
+      assert.equal(top2.rank, 2);
+      assert.equal(top2.name, 'Ahmad Faris');
+      assert.equal(top2.tier, 'top_performer');
+      assert.equal(top2.tier_label, '🥈 2nd Place');
+
+      const top3 = getBody().leaders[2];
+      assert.equal(top3.rank, 3);
+      assert.equal(top3.name, 'Chloe Tan');
+      assert.equal(top3.tier, 'top_performer');
+      assert.equal(top3.tier_label, '🥉 3rd Place');
     }
 
     // 2. GET /api/lead-activity/log
@@ -503,3 +603,126 @@ test('Lead Activity API endpoints in intel.ts handle stats, logs, mock generatio
     process.env.PG_PROXY_TOKEN = previousEnv.PG_PROXY_TOKEN;
   }
 });
+
+test('getTopTelemarketersLeaderboard calculates date-bounded metrics, win rates, and ranks', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousEnv = {
+    DATABASE_URL: process.env.DATABASE_URL,
+    PG_PROXY_URL: process.env.PG_PROXY_URL,
+    PG_DB_NAME: process.env.PG_DB_NAME,
+    PG_PROXY_TOKEN: process.env.PG_PROXY_TOKEN,
+  };
+  process.env.DATABASE_URL = '';
+  process.env.PG_PROXY_URL = 'http://fake-proxy';
+  process.env.PG_DB_NAME = 'test';
+  process.env.PG_PROXY_TOKEN = 'test';
+
+  globalThis.fetch = async (_url, options) => {
+    const { sql } = JSON.parse(String(options?.body));
+
+    if (sql.includes('create table') || sql.includes('create index') || sql.includes('alter table')) {
+      return Response.json({ rows: [], rowCount: 0 });
+    }
+
+    if (sql.includes('log_period') || (sql.includes('active_roster') && sql.includes('contacted_count'))) {
+      return Response.json({
+        rows: [
+          {
+            name: 'Agent Fast',
+            uid: 'tm_fast',
+            total_assigned: '50',
+            contacted_count: '20',
+            interested_count: '2',
+            not_interested_count: '15',
+            dnc_count: '5',
+            processed_count: '42',
+            total_activities: '42',
+            last_active: '2026-09-20T12:00:00Z',
+          },
+          {
+            name: 'Agent Closer',
+            uid: 'tm_closer',
+            total_assigned: '20',
+            contacted_count: '5',
+            interested_count: '10',
+            not_interested_count: '2',
+            dnc_count: '1',
+            processed_count: '18',
+            total_activities: '18',
+            last_active: '2026-09-20T11:00:00Z',
+          },
+          {
+            name: 'Agent Solid',
+            uid: 'tm_solid',
+            total_assigned: '35',
+            contacted_count: '12',
+            interested_count: '6',
+            not_interested_count: '8',
+            dnc_count: '2',
+            processed_count: '28',
+            total_activities: '28',
+            last_active: '2026-09-20T10:00:00Z',
+          },
+        ],
+        rowCount: 3,
+      });
+    }
+
+    return Response.json({ rows: [], rowCount: 0 });
+  };
+
+  try {
+    // 1. Sort by default (interested / won deals)
+    const resWon = await db.getTopTelemarketersLeaderboard({
+      startDate: '2026-09-10',
+      endDate: '2026-09-20',
+      sortBy: 'interested',
+      limit: 10,
+    });
+
+    assert.equal(resWon.ok, true);
+    assert.equal(resWon.dateRange.startDate, '2026-09-10');
+    assert.equal(resWon.dateRange.endDate, '2026-09-20');
+    assert.equal(resWon.leaders.length, 3);
+
+    // Agent Closer has 10 interested -> Rank 1 (Champion)
+    assert.equal(resWon.leaders[0].name, 'Agent Closer');
+    assert.equal(resWon.leaders[0].rank, 1);
+    assert.equal(resWon.leaders[0].tier, 'champion');
+    assert.equal(resWon.leaders[0].tier_label, '🥇 Champion');
+    assert.equal(resWon.leaders[0].conversion_rate, Math.round((10 / 18) * 1000) / 10);
+
+    // Agent Solid has 6 interested -> Rank 2 (2nd Place)
+    assert.equal(resWon.leaders[1].name, 'Agent Solid');
+    assert.equal(resWon.leaders[1].rank, 2);
+    assert.equal(resWon.leaders[1].tier, 'top_performer');
+
+    // Agent Fast has 2 interested -> Rank 3 (3rd Place)
+    assert.equal(resWon.leaders[2].name, 'Agent Fast');
+    assert.equal(resWon.leaders[2].rank, 3);
+    assert.equal(resWon.leaders[2].tier, 'top_performer');
+
+    // 2. Sort by call volume (processed)
+    const resProcessed = await db.getTopTelemarketersLeaderboard({
+      days: 7,
+      sortBy: 'processed',
+    });
+    assert.equal(resProcessed.leaders[0].name, 'Agent Fast');
+    assert.equal(resProcessed.leaders[0].total_processed, 42);
+
+    // 3. Sort by conversion rate %
+    const resConv = await db.getTopTelemarketersLeaderboard({
+      days: 7,
+      sortBy: 'conversion',
+    });
+    assert.equal(resConv.leaders[0].name, 'Agent Closer');
+    assert.ok(resConv.leaders[0].conversion_rate > resConv.leaders[1].conversion_rate);
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env.DATABASE_URL = previousEnv.DATABASE_URL;
+    process.env.PG_PROXY_URL = previousEnv.PG_PROXY_URL;
+    process.env.PG_DB_NAME = previousEnv.PG_DB_NAME;
+    process.env.PG_PROXY_TOKEN = previousEnv.PG_PROXY_TOKEN;
+  }
+});
+

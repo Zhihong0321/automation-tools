@@ -204,6 +204,17 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
 .act-progress-bar{height:10px;border-radius:5px;background:#e5e7eb;overflow:hidden;display:flex}
 .act-trans-pill{display:inline-flex;align-items:center;gap:6px;font:700 9px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;padding:4px 8px;border-radius:3px}
 .act-note-bubble{background:#f8f9fa;border:1px solid var(--soft);border-radius:4px;padding:8px 12px;font-size:12.5px;color:var(--ink);line-height:1.45;margin-top:6px}
+.act-podium{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;margin:18px 0 24px}
+.act-podium-card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:20px;display:flex;flex-direction:column;position:relative;box-shadow:0 1px 3px rgba(0,0,0,.04);transition:transform .15s,box-shadow .15s}
+.act-podium-card:hover{transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,.08)}
+.act-podium-card.rank-1{border-color:#f59e0b;background:linear-gradient(180deg,#fffbeb 0%,#fff 45%)}
+.act-podium-card.rank-2{border-color:#94a3b8;background:linear-gradient(180deg,#f8fafc 0%,#fff 45%)}
+.act-podium-card.rank-3{border-color:#d97706;background:linear-gradient(180deg,#fff7ed 0%,#fff 45%)}
+.act-rank-tag{display:inline-flex;align-items:center;gap:4px;font:750 11px/1 var(--mono);padding:4px 8px;border-radius:4px;width:max-content}
+.act-rank-tag.gold{background:#fef3c7;color:#92400e;border:1px solid #fde68a}
+.act-rank-tag.silver{background:#f1f5f9;color:#334155;border:1px solid #e2e8f0}
+.act-rank-tag.bronze{background:#ffedd5;color:#9a3412;border:1px solid #fed7aa}
+.act-rank-tag.default{background:#f3f4f6;color:#4b5563}
 </style></head><body>
 <div id="accessGate" class="gate"><div class="gate-panel"><div class="gate-mark">EE</div><h1>Private intelligence workspace.</h1><p>Enter the access key supplied by the workspace owner. You enter it once: it stays in this browser and is never added to a report link.</p><form class="gate-form" onsubmit="connect(event)"><input id="accessKey" type="password" autocomplete="current-password" placeholder="Workspace access key" aria-label="Workspace access key"><button id="connectButton" class="primary" type="submit">Enter</button></form><p id="gateError" class="gate-error" role="alert"></p><p class="gate-help"><a href="/guide" target="_blank" rel="noopener">New here? Read the guide first ↗ · 新手指南</a></p></div></div>
 <div id="portalApp" class="app" aria-hidden="true" inert>
@@ -416,13 +427,27 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
         <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
           <div style="display:flex;flex-direction:column;gap:3px;">
             <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">Timeframe</span>
-            <select class="input select" id="activityDaysSelect" onchange="loadActivityView()" style="height:38px;font-size:13px;font-weight:600;min-width:140px;">
+            <select class="input select" id="activityDaysSelect" onchange="onActivityTimeframeChange()" style="height:38px;font-size:13px;font-weight:600;min-width:140px;">
               <option value="7" selected>Last 7 Days</option>
               <option value="14">Last 14 Days</option>
-              <option value="3">Last 3 Days</option>
-              <option value="1">Today Only</option>
               <option value="30">Last 30 Days</option>
+              <option value="3">Last 3 Days</option>
+              <option value="1">Today</option>
+              <option value="yesterday">Yesterday</option>
+              <option value="this_month">This Month</option>
+              <option value="custom">📅 Custom Date Range...</option>
             </select>
+          </div>
+          <div id="activityCustomDateInputs" class="hidden" style="display:flex;align-items:flex-end;gap:6px;">
+            <div style="display:flex;flex-direction:column;gap:3px;">
+              <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">From</span>
+              <input type="date" class="input" id="actStartDate" style="height:38px;font-size:13px;padding:0 8px;">
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px;">
+              <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">To</span>
+              <input type="date" class="input" id="actEndDate" style="height:38px;font-size:13px;padding:0 8px;">
+            </div>
+            <button class="filter" type="button" onclick="loadActivityView()" style="height:38px;padding:0 12px;">Apply 🔍</button>
           </div>
           <div style="display:flex;flex-direction:column;gap:3px;">
             <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">Telemarketer</span>
@@ -488,6 +513,41 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
         </div>
         <div id="activityTeleSummaryContainer" class="agent-grid" style="margin-bottom:24px;">
           <div class="empty">Loading telemarketer summaries…</div>
+        </div>
+      </div>
+
+      <!-- Presentation Item 4: Top 10 Telemarketer Leaderboard (Select by Date Range) -->
+      <div style="margin:36px 0 16px;">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Presentation View 04</div>
+            <h2 style="margin:4px 0 0;">🏆 Top 10 Telemarketer Leaderboard</h2>
+          </div>
+          <span class="section-note">Ranked telemarketer performance, client conversions (⭐ Interested), and call velocity across the selected date range.</span>
+        </div>
+
+        <!-- Leaderboard Toolbar: Date range & Metric sorting -->
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin:0 0 16px;padding:12px 16px;background:#f8f9fa;border:1px solid var(--line);border-radius:6px;">
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+            <span style="font:600 11px/1 var(--sans);color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">Rank By:</span>
+            <div style="display:inline-flex;border:1px solid var(--line);border-radius:4px;overflow:hidden;background:#fff;">
+              <button type="button" class="filter active" id="btnSortInterested" onclick="setLeaderboardSort('interested')" style="border:none;border-radius:0;height:32px;font-size:12px;padding:0 12px;">⭐ Conversions (Wins)</button>
+              <button type="button" class="filter" id="btnSortProcessed" onclick="setLeaderboardSort('processed')" style="border:none;border-left:1px solid var(--line);border-radius:0;height:32px;font-size:12px;padding:0 12px;">📞 Call Volume</button>
+              <button type="button" class="filter" id="btnSortConversion" onclick="setLeaderboardSort('conversion')" style="border:none;border-left:1px solid var(--line);border-radius:0;height:32px;font-size:12px;padding:0 12px;">📈 Win Rate %</button>
+              <button type="button" class="filter" id="btnSortContacted" onclick="setLeaderboardSort('contacted')" style="border:none;border-left:1px solid var(--line);border-radius:0;height:32px;font-size:12px;padding:0 12px;">💬 Contacted</button>
+            </div>
+          </div>
+          <div id="leaderboardDateInfo" style="font:600 12px/1 var(--mono);color:var(--accent);">
+            Showing Last 7 Days
+          </div>
+        </div>
+
+        <!-- Top 3 Podium Highlights -->
+        <div id="leaderboardPodiumContainer" class="act-podium"></div>
+
+        <!-- Top 10 Ranked Leaderboard Table -->
+        <div id="leaderboardTableContainer" style="background:#fff;border:1px solid var(--line);border-radius:6px;padding:20px;margin-bottom:24px;overflow-x:auto;">
+          <div class="empty">Loading leaderboard…</div>
         </div>
       </div>
 
@@ -2122,6 +2182,9 @@ async function submitTamanUnassign(){
 }
 var activityState = {
   days: 7,
+  startDate: '',
+  endDate: '',
+  sortBy: 'interested',
   teleFilter: 'all',
   logLimit: 25,
   logOffset: 0,
@@ -2133,10 +2196,70 @@ var activityState = {
   log: []
 };
 
+function onActivityTimeframeChange(){
+  var dSel = el('activityDaysSelect');
+  if(!dSel) return;
+  var val = dSel.value;
+  var cInputs = el('activityCustomDateInputs');
+
+  if(val === 'custom'){
+    if(cInputs) cInputs.classList.remove('hidden');
+    var sInput = el('actStartDate');
+    var eInput = el('actEndDate');
+    var now = new Date();
+    var todayStr = now.getFullYear() + '-' + ('0' + (now.getMonth() + 1)).slice(-2) + '-' + ('0' + now.getDate()).slice(-2);
+    if(sInput && !sInput.value){
+      var d7 = new Date(Date.now() - 6 * 86400000);
+      sInput.value = d7.getFullYear() + '-' + ('0' + (d7.getMonth() + 1)).slice(-2) + '-' + ('0' + d7.getDate()).slice(-2);
+    }
+    if(eInput && !eInput.value){
+      eInput.value = todayStr;
+    }
+    activityState.startDate = (sInput && sInput.value) || '';
+    activityState.endDate = (eInput && eInput.value) || '';
+    loadActivityView();
+    return;
+  }
+
+  if(cInputs) cInputs.classList.add('hidden');
+
+  if(val === 'yesterday'){
+    var yest = new Date(Date.now() - 86400000);
+    var yStr = yest.getFullYear() + '-' + ('0' + (yest.getMonth() + 1)).slice(-2) + '-' + ('0' + yest.getDate()).slice(-2);
+    activityState.startDate = yStr;
+    activityState.endDate = yStr;
+    activityState.days = 1;
+    loadActivityView();
+    return;
+  }
+
+  if(val === 'this_month'){
+    var now = new Date();
+    var mStart = now.getFullYear() + '-' + ('0' + (now.getMonth() + 1)).slice(-2) + '-01';
+    var todayStr = now.getFullYear() + '-' + ('0' + (now.getMonth() + 1)).slice(-2) + '-' + ('0' + now.getDate()).slice(-2);
+    activityState.startDate = mStart;
+    activityState.endDate = todayStr;
+    loadActivityView();
+    return;
+  }
+
+  // Numeric days: 1, 3, 7, 14, 30
+  activityState.startDate = '';
+  activityState.endDate = '';
+  activityState.days = Number(val) || 7;
+  loadActivityView();
+}
+
 async function loadActivityView(){
   if(!state.token) return;
   var dSel = el('activityDaysSelect');
-  if(dSel) activityState.days = Number(dSel.value) || 7;
+  var mode = dSel ? dSel.value : '7';
+  if(mode === 'custom'){
+    var sInput = el('actStartDate');
+    var eInput = el('actEndDate');
+    if(sInput && sInput.value) activityState.startDate = sInput.value;
+    if(eInput && eInput.value) activityState.endDate = eInput.value;
+  }
   var tSel = el('activityTeleFilter');
   if(tSel) activityState.teleFilter = tSel.value || 'all';
 
@@ -2148,7 +2271,12 @@ async function loadActivityView(){
 
 async function loadActivityStats(){
   try{
-    var q = '/api/lead-activity/stats?days=' + activityState.days;
+    var q = '/api/lead-activity/stats?sortBy=' + encodeURIComponent(activityState.sortBy || 'interested');
+    if(activityState.startDate && activityState.endDate){
+      q += '&startDate=' + encodeURIComponent(activityState.startDate) + '&endDate=' + encodeURIComponent(activityState.endDate);
+    } else {
+      q += '&days=' + activityState.days;
+    }
     if(activityState.teleFilter && activityState.teleFilter !== 'all'){
       q += '&telemarketer=' + encodeURIComponent(activityState.teleFilter);
     }
@@ -2159,6 +2287,7 @@ async function loadActivityStats(){
       renderDailyProcessedChart(body.stats.dailyLeadProcessed || []);
       renderProgressByStatus(body.stats.dailyLeadProcessed || [], body.stats.progressByStatus || []);
       renderTelemarketerActivitySummary(body.stats.perTelemarketerSummary || []);
+      renderLeaderboard(body.stats.topLeaders || [], body.stats.dateRange || {});
       populateActivityTeleSelectors(body.stats.perTelemarketerSummary || []);
     }
   }catch(err){
@@ -2407,6 +2536,138 @@ function populateActivityTeleSelectors(summary){
 
   tSel.innerHTML = opts;
   if(mSel) mSel.innerHTML = mOpts;
+}
+
+function setLeaderboardSort(sortBy){
+  activityState.sortBy = sortBy;
+  var btns = {
+    'interested': 'btnSortInterested',
+    'processed': 'btnSortProcessed',
+    'conversion': 'btnSortConversion',
+    'contacted': 'btnSortContacted'
+  };
+  Object.keys(btns).forEach(function(k){
+    var b = el(btns[k]);
+    if(b){
+      if(k === sortBy) b.classList.add('active');
+      else b.classList.remove('active');
+    }
+  });
+  loadActivityStats();
+}
+
+function renderLeaderboard(leaders, dateRange){
+  var dInfo = el('leaderboardDateInfo');
+  if(dInfo){
+    if(dateRange && dateRange.startDate && dateRange.endDate){
+      dInfo.textContent = '📅 ' + dateRange.startDate + ' to ' + dateRange.endDate + ' (' + dateRange.days + ' days)';
+    } else {
+      dInfo.textContent = '📅 Last ' + activityState.days + ' Days';
+    }
+  }
+
+  var podCont = el('leaderboardPodiumContainer');
+  var tblCont = el('leaderboardTableContainer');
+  if(!tblCont) return;
+
+  if(!leaders || !leaders.length){
+    if(podCont) podCont.innerHTML = '';
+    tblCont.innerHTML = '<div class="empty">No telemarketer outreach records found for this date range. Click "⚡ Generate Mock Data" to populate realistic leaderboard rankings.</div>';
+    return;
+  }
+
+  // 1. Render Top 3 Podium
+  if(podCont){
+    var top3 = leaders.slice(0, 3);
+    var podHtml = '';
+    top3.forEach(function(ag){
+      var rClass = ag.rank === 1 ? 'rank-1' : (ag.rank === 2 ? 'rank-2' : 'rank-3');
+      var tagClass = ag.rank === 1 ? 'gold' : (ag.rank === 2 ? 'silver' : 'bronze');
+      var initials = (ag.name || 'TM').split(' ').map(function(s){return s[0]}).join('').slice(0, 2).toUpperCase();
+      var avatarBg = ag.rank === 1 ? '#b45309' : (ag.rank === 2 ? '#475569' : '#c2410c');
+
+      podHtml += '<div class="act-podium-card ' + rClass + '">'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">'
+        + '<span class="act-rank-tag ' + tagClass + '">' + esc(ag.tier_label || ('#' + ag.rank)) + '</span>'
+        + '<span style="font:700 12px/1 var(--mono);color:var(--muted);">Rank #' + ag.rank + '</span>'
+        + '</div>'
+        + '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">'
+        + '<div class="agent-avatar" style="background:' + avatarBg + ';color:#fff;width:44px;height:44px;font-size:16px;">' + esc(initials) + '</div>'
+        + '<div style="flex:1;min-width:0;">'
+        + '<div style="font-weight:750;font-size:15px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(ag.name) + '</div>'
+        + (ag.uid ? '<div style="font:600 10px/1 var(--mono);color:var(--accent);margin-top:3px;">' + esc(ag.uid) + '</div>' : '')
+        + '</div>'
+        + '</div>'
+        + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px;background:rgba(255,255,255,0.7);border:1px solid rgba(0,0,0,0.06);border-radius:6px;margin-bottom:12px;">'
+        + '<div>'
+        + '<div style="font:700 18px/1 var(--mono);color:var(--ok);">' + ag.interested + '</div>'
+        + '<div style="font:700 8.5px/1 var(--sans);color:var(--muted);text-transform:uppercase;margin-top:3px;">⭐ Won Leads</div>'
+        + '</div>'
+        + '<div>'
+        + '<div style="font:700 18px/1 var(--mono);color:var(--accent);">' + ag.conversion_rate + '%</div>'
+        + '<div style="font:700 8.5px/1 var(--sans);color:var(--muted);text-transform:uppercase;margin-top:3px;">📈 Win Rate</div>'
+        + '</div>'
+        + '<div>'
+        + '<div style="font:700 15px/1 var(--mono);color:var(--ink);">' + ag.total_processed + '</div>'
+        + '<div style="font:700 8.5px/1 var(--sans);color:var(--muted);text-transform:uppercase;margin-top:3px;">📞 Calls Made</div>'
+        + '</div>'
+        + '<div>'
+        + '<div style="font:700 15px/1 var(--mono);color:var(--warn);">' + ag.contacted + '</div>'
+        + '<div style="font:700 8.5px/1 var(--sans);color:var(--muted);text-transform:uppercase;margin-top:3px;">💬 Contacted</div>'
+        + '</div>'
+        + '</div>'
+        + '<div style="font-size:11.5px;color:var(--muted);display:flex;justify-content:space-between;margin-top:auto;">'
+        + '<span>Velocity: <strong>' + ag.daily_avg + ' calls/day</strong></span>'
+        + (ag.last_active ? '<span>Active ' + date(ag.last_active) + '</span>' : '')
+        + '</div>'
+        + '</div>';
+    });
+    podCont.innerHTML = podHtml;
+  }
+
+  // 2. Render Ranked Table (Ranks 1 to 10)
+  var tblHtml = '<table class="act-table">'
+    + '<thead><tr>'
+    + '<th style="width:60px;text-align:center;">Rank</th>'
+    + '<th>Telemarketer</th>'
+    + '<th style="text-align:center;color:#15785a;">⭐ Conversions (Wins)</th>'
+    + '<th style="text-align:center;color:#d97706;">📞 Contacted</th>'
+    + '<th style="text-align:center;">Total Calls Processed</th>'
+    + '<th style="text-align:center;">Win Rate %</th>'
+    + '<th style="text-align:center;">Daily Velocity</th>'
+    + '<th style="text-align:center;">Assigned Queue</th>'
+    + '<th style="text-align:right;">Performance Tier</th>'
+    + '</tr></thead><tbody>';
+
+  leaders.forEach(function(ag){
+    var tagClass = ag.rank === 1 ? 'gold' : (ag.rank === 2 ? 'silver' : (ag.rank === 3 ? 'bronze' : 'default'));
+    var rankDisplay = ag.rank === 1 ? '🥇 #1' : (ag.rank === 2 ? '🥈 #2' : (ag.rank === 3 ? '🥉 #3' : '#' + ag.rank));
+    var convColor = ag.conversion_rate >= 15 ? 'var(--ok)' : (ag.conversion_rate > 5 ? 'var(--accent)' : 'var(--muted)');
+    var initials = (ag.name || 'TM').split(' ').map(function(s){return s[0]}).join('').slice(0, 2).toUpperCase();
+
+    tblHtml += '<tr>'
+      + '<td style="text-align:center;font-weight:750;font-family:var(--mono);font-size:13px;">' + rankDisplay + '</td>'
+      + '<td>'
+      + '<div style="display:flex;align-items:center;gap:10px;">'
+      + '<div class="agent-avatar" style="width:28px;height:28px;font-size:11px;background:var(--ink);">' + esc(initials) + '</div>'
+      + '<div>'
+      + '<div style="font-weight:700;color:var(--ink);font-size:13.5px;">' + esc(ag.name) + '</div>'
+      + (ag.uid ? '<div style="font:600 9.5px/1 var(--mono);color:var(--muted);margin-top:2px;">' + esc(ag.uid) + '</div>' : '')
+      + '</div>'
+      + '</div>'
+      + '</td>'
+      + '<td style="text-align:center;font-weight:750;font-size:14px;color:#15785a;">' + ag.interested + '</td>'
+      + '<td style="text-align:center;font-weight:600;color:#d97706;">' + ag.contacted + '</td>'
+      + '<td style="text-align:center;font-weight:600;">' + ag.total_processed + '</td>'
+      + '<td style="text-align:center;font-weight:750;font-family:var(--mono);color:' + convColor + ';">' + ag.conversion_rate + '%</td>'
+      + '<td style="text-align:center;font-size:12.5px;">' + ag.daily_avg + ' /day</td>'
+      + '<td style="text-align:center;color:var(--muted);">' + ag.total_assigned + '</td>'
+      + '<td style="text-align:right;"><span class="act-rank-tag ' + tagClass + '" style="font-size:10px;">' + esc(ag.tier_label || 'Outreach Agent') + '</span></td>'
+      + '</tr>';
+  });
+
+  tblHtml += '</tbody></table>';
+  tblCont.innerHTML = tblHtml;
 }
 
 async function loadActivityLog(){

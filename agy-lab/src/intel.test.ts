@@ -900,6 +900,22 @@ test('buildContactLedger normalizes contacts, ranks decision makers, and creates
   assert.ok(emailList.includes('acme.facebook@gmail.com'));
 });
 
+test('buildContactLedger keeps a team page larger than ten people', () => {
+  const names = ['Ari Tan', 'Bea Tan', 'Cid Tan', 'Dan Tan', 'Eve Tan', 'Fay Tan', 'Gus Tan', 'Hua Tan', 'Ian Tan', 'Joy Tan', 'Kai Tan', 'Ada Lead'];
+  const discovery = {
+    decision_makers: names.map((name) => ({
+      name,
+      role: name === 'Ada Lead' ? 'Managing Director' : 'Associate',
+      role_evidence_url: 'https://example.com/team',
+    })),
+    phone_contacts: [],
+    email_contacts: [],
+  };
+  const leaders = buildContactLedger({ name: 'Example' }, discovery).decision_makers as Record<string, unknown>[];
+  assert.equal(leaders.length, 12);
+  assert.equal(leaders[0].name, 'Ada Lead');
+});
+
 test('contactPage renders telemarketer cheat sheet, 1-click actions, and decision makers', () => {
   const report: PublishedReport = {
     id: 999,
