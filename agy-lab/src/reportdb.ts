@@ -3543,3 +3543,5 @@ export async function addManualLeadActivity(input: {
     activity: logRes.rows[0],
   };
 }
+
+export const recordLeadActivity = addManualLeadActivity;
