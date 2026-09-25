@@ -335,6 +335,9 @@ test('Lead assignment page UI is integrated into portal navigation and views', (
 
   // Telemarketer cards & filters
   assert.match(html, /id="assignRosterGrid"/);
+  assert.match(html, /id="assignRosterSearch"/);
+  assert.match(html, /id="btnRosterViewList"/);
+  assert.match(html, /id="btnRosterViewCards"/);
   assert.match(html, /id="assignTeleFilter"/);
   assert.match(html, /id="assignSearchInput"/);
   assert.match(html, /id="assignActiveBanner"/);
@@ -347,6 +350,10 @@ test('Lead assignment page UI is integrated into portal navigation and views', (
   assert.match(html, /function loadAssignmentAgents\(\)/);
   assert.match(html, /function renderAssignTelemarketerCards\(\)/);
   assert.match(html, /function selectAssignmentTele\(/);
+  assert.match(html, /function setAssignRosterView\(/);
+  assert.match(html, /function onAssignRosterSearch\(/);
+  assert.match(html, /function sortAssignRoster\(/);
+  assert.match(html, /function toggleAssignRosterExpand\(\)/);
   assert.match(html, /function onAssignTeleFilterChange\(\)/);
   assert.match(html, /function loadAssignmentLeads\(\)/);
   assert.match(html, /function renderAssignmentLeads\(/);
@@ -500,7 +507,7 @@ test('Lead assignment client-side logic renders telemarketer cards with total le
     safeUrl: (v: any) => String(v ?? ''),
   };
 
-  const script = html.slice(start, end) + '; ({ assignState, loadAssignmentView, selectAssignmentTele, renderAssignTelemarketerCards })';
+  const script = html.slice(start, end) + '; ({ assignState, loadAssignmentView, selectAssignmentTele, renderAssignTelemarketerCards, setAssignRosterView, onAssignRosterSearch, clearAssignRosterSearch, sortAssignRoster, toggleAssignRosterExpand })';
   const fns = vm.runInNewContext(script, context);
 
   // Test loading the assignment view
@@ -513,14 +520,47 @@ test('Lead assignment client-side logic renders telemarketer cards with total le
   assert.equal(elements.assignStatAssigned.textContent, 75); // 30+27+12+4+2
   assert.equal(elements.assignStatAgents.textContent, 2);
 
-  // Verify telemarketer cards were rendered into the roster grid
+  // Verify telemarketer list table view was rendered by default
+  assert.equal(fns.assignState.rosterViewMode, 'list');
   const gridHtml = elements.assignRosterGrid.innerHTML;
+  assert.ok(gridHtml.includes('assign-roster-table'));
   assert.ok(gridHtml.includes('Sarah Tan'));
   assert.ok(gridHtml.includes('45')); // Total assigned to Sarah
   assert.ok(gridHtml.includes('John Lee'));
   assert.ok(gridHtml.includes('30')); // Total assigned to John
   assert.ok(gridHtml.includes('Unassigned Leads'));
   assert.ok(gridHtml.includes('125')); // Unassigned count
+
+  // Test searching telemarketer roster
+  fns.onAssignRosterSearch('John');
+  assert.equal(fns.assignState.rosterSearch, 'John');
+  const searchHtml = elements.assignRosterGrid.innerHTML;
+  assert.ok(searchHtml.includes('John Lee'));
+  assert.ok(!searchHtml.includes('Sarah Tan')); // Sarah is filtered out
+  fns.clearAssignRosterSearch();
+  assert.equal(fns.assignState.rosterSearch, '');
+  assert.ok(elements.assignRosterGrid.innerHTML.includes('Sarah Tan'));
+
+  // Test sorting telemarketer roster
+  fns.sortAssignRoster('name');
+  assert.equal(fns.assignState.rosterSortField, 'name');
+  fns.sortAssignRoster('total');
+  assert.equal(fns.assignState.rosterSortField, 'total');
+
+  // Test expand / collapse toggle
+  assert.equal(fns.assignState.rosterExpanded, false);
+  fns.toggleAssignRosterExpand();
+  assert.equal(fns.assignState.rosterExpanded, true);
+  fns.toggleAssignRosterExpand();
+  assert.equal(fns.assignState.rosterExpanded, false);
+
+  // Test view switcher (cards <-> list)
+  fns.setAssignRosterView('cards');
+  assert.equal(fns.assignState.rosterViewMode, 'cards');
+  assert.ok(elements.assignRosterGrid.innerHTML.includes('assign-agent-card'));
+  fns.setAssignRosterView('list');
+  assert.equal(fns.assignState.rosterViewMode, 'list');
+  assert.ok(elements.assignRosterGrid.innerHTML.includes('assign-roster-table'));
 
   // Test filtering by a specific telemarketer
   await fns.selectAssignmentTele('uid:sarah');

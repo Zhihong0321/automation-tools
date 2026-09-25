@@ -187,7 +187,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     return void res.end(portalPage('research'));
   }
 
-  if (method === 'GET' && p === '/telemarketing') {
+  if (method === 'GET' && (p === '/telemarketing' || p === '/telemarketing/')) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
     return void res.end(portalPage('telemarketing'));
   }

@@ -27,6 +27,10 @@ function telemarketing(html: string): string {
     .replace('<body>', '<body data-portal="telemarketing">')
     .replace('<title>EE Business Intelligence</title>', '<title>Telemarketing · EE Business Intelligence</title>')
     .replace('<div id="portalApp" class="app"', '<div id="portalApp" class="app telemarketing"')
+    .replace('<section id="discoverView" class="view active">', '<section id="discoverView" class="view">')
+    .replace('<section id="telemarketingView" class="view">', '<section id="telemarketingView" class="view active">')
+    .replace('class="mobile-tab active" data-view="discover"', 'class="mobile-tab" data-view="discover"')
+    .replace('class="mobile-tab" data-view="telemarketing"', 'class="mobile-tab active" data-view="telemarketing"')
     .replace('</style>', TELEMARKETING_CSS + '</style>')
     // The wordmark is the one nav affordance that is not a link, so it is the
     // one that has to be re-pointed: on the floor it opens the map, not the
@@ -212,6 +216,38 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
 .assign-bar-pending{background:#93c5fd}
 .assign-active-badge{display:none;position:absolute;top:10px;right:10px;font:750 8.5px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--accent);background:#dbeafe;padding:3px 7px;border-radius:3px}
 .assign-agent-card.active .assign-active-badge{display:inline-block}
+.assign-roster-grid.view-list{display:block;margin-bottom:0}
+.assign-roster-grid.view-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-bottom:24px}
+.assign-roster-table-wrap{width:100%;max-height:480px;overflow-y:auto;overflow-x:auto;border:1px solid var(--line);border-radius:6px;background:#fff;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.03)}
+.assign-roster-table-wrap.expanded{max-height:none}
+.assign-roster-table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}
+.assign-roster-table thead th{position:sticky;top:0;z-index:3;background:#f8f9fa;font:750 9px/1.2 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:11px 14px;border-bottom:2px solid var(--ink);white-space:nowrap;user-select:none}
+.assign-roster-table thead th.sortable{cursor:pointer;transition:color .15s,background .15s}
+.assign-roster-table thead th.sortable:hover{color:var(--ink);background:#f1f2f4}
+.assign-roster-row{border-bottom:1px solid var(--soft);cursor:pointer;transition:background .15s}
+.assign-roster-row:hover{background:#f8fafc}
+.assign-roster-row.active{background:#eff6ff!important;border-left:3px solid var(--accent)}
+.assign-roster-row.inactive{opacity:.75}
+.assign-roster-row td{padding:10px 14px;vertical-align:middle}
+.assign-roster-row.system-row{background:#fafbfc;border-bottom:1px solid var(--line)}
+.assign-roster-row.system-row:hover{background:#f1f5f9}
+.assign-roster-row.unassigned-row{background:#fffdf5}
+.assign-roster-row.unassigned-row:hover{background:#fef9c3}
+.assign-roster-row.unassigned-row.active{background:#fffbeb!important;border-left:3px solid #f59e0b}
+.assign-num-bold{font:700 15px/1 var(--mono);color:var(--ink)}
+.assign-num-cell{font:600 13px/1 var(--mono);color:var(--ink)}
+.assign-num-cell.pending{color:#2563eb}
+.assign-num-cell.contacted{color:var(--warn)}
+.assign-num-cell.interested{color:var(--ok);font-weight:700}
+.assign-num-cell.lost{color:var(--muted)}
+.assign-active-badge-sm{font:750 8px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--accent);background:#dbeafe;padding:2px 6px;border-radius:3px;display:inline-block}
+.assign-roster-footer{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding:9px 14px;background:#f9fafb;border:1px solid var(--line);border-radius:5px;font:500 11.5px/1 var(--sans);color:var(--muted);margin-bottom:24px}
+.assign-mini-bar{display:flex;height:6px;width:100%;max-width:130px;border-radius:3px;background:#e5e7eb;overflow:hidden}
+.assign-mini-seg{height:100%}
+.assign-mini-seg.pending{background:#93c5fd}
+.assign-mini-seg.contacted{background:var(--warn)}
+.assign-mini-seg.interested{background:var(--ok)}
+.assign-mini-seg.lost{background:#d1d5db}
 .act-chart-wrap{display:flex;align-items:flex-end;gap:14px;min-height:220px;padding:24px 12px 10px;overflow-x:auto}
 .act-bar-col{flex:1;min-width:64px;display:flex;flex-direction:column;align-items:center;gap:8px}
 .act-bar-val{font:700 12px/1 var(--mono);color:var(--ink)}
@@ -354,18 +390,29 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
         <div class="metric"><strong id="assignStatInterested" style="color:var(--ok);">0</strong><span>Interested Leads</span></div>
       </div>
 
-      <div style="margin:28px 0 12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
-        <div style="font:700 12px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:8px;">
-          <span>Telemarketer Workload & Quota Breakdown</span>
-          <span style="font-size:11px;font-weight:500;text-transform:none;color:var(--muted);">(Click any card to filter leads)</span>
+      <div style="margin:28px 0 12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <div style="font:700 12px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:8px;">
+            <span>Telemarketer Workload & Quota Breakdown</span>
+            <span style="font-size:11px;font-weight:500;text-transform:none;color:var(--muted);">(Click any row to filter leads)</span>
+          </div>
+          <span id="assignRosterCountBadge" style="font:700 10px/1 var(--mono);background:var(--soft);color:var(--ink);padding:4px 8px;border-radius:12px;">0 Agents</span>
         </div>
-        <div style="display:flex;gap:8px;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <div style="position:relative;display:flex;align-items:center;">
+            <input class="input" id="assignRosterSearch" placeholder="Filter agents by name / phone..." oninput="onAssignRosterSearch(this.value)" style="height:32px;font-size:12px;width:220px;padding-right:24px;">
+            <span style="position:absolute;right:8px;color:var(--muted);font-size:11px;pointer-events:none;">🔍</span>
+          </div>
+          <div style="display:inline-flex;border:1px solid var(--line);border-radius:3px;overflow:hidden;">
+            <button class="filter active" id="btnRosterViewList" type="button" onclick="setAssignRosterView('list')" title="Row-by-row table view" style="height:32px;padding:0 10px;font-size:9.5px;border:0;border-right:1px solid var(--line);">☰ List</button>
+            <button class="filter" id="btnRosterViewCards" type="button" onclick="setAssignRosterView('cards')" title="Card grid view" style="height:32px;padding:0 10px;font-size:9.5px;border:0;">⊞ Cards</button>
+          </div>
           <button class="filter" type="button" onclick="selectAssignmentTele('all')" style="height:32px;padding:0 10px;font-size:9.5px;">Show All Leads</button>
           <button class="filter" type="button" onclick="selectAssignmentTele('unassigned')" style="height:32px;padding:0 10px;font-size:9.5px;color:var(--warn);border-color:var(--warn);background:#fffbeb;">View Unassigned →</button>
         </div>
       </div>
 
-      <div id="assignRosterGrid" class="assign-roster-grid">
+      <div id="assignRosterGrid" class="assign-roster-grid view-list">
         <div class="empty">Loading telemarketer assignments…</div>
       </div>
 
@@ -1002,7 +1049,41 @@ async function repairReport(button){var id=button.getAttribute('data-report')||'
 function agentValue(a){return a.uid?(a.uid.startsWith('uid:')?a.uid:'uid:'+a.uid):a.name}
 function agentLabel(a){return a.uid?a.name+' ('+a.uid+')':a.name}
 
-var assignState={agents:[],leads:[],selected:{},stats:null,teleFilter:'all',statusFilter:'all',search:'',page:0,limit:30,total:0};
+var assignState={agents:[],leads:[],selected:{},stats:null,teleFilter:'all',statusFilter:'all',search:'',page:0,limit:30,total:0,rosterViewMode:'list',rosterSearch:'',rosterSortField:'total',rosterSortDir:'desc',rosterExpanded:false};
+try{if(typeof localStorage!=='undefined'){var savedView=localStorage.getItem('tele_roster_view');if(savedView==='cards'||savedView==='list')assignState.rosterViewMode=savedView;}}catch(e){}
+
+function setAssignRosterView(mode){
+  assignState.rosterViewMode=mode;
+  try{if(typeof localStorage!=='undefined')localStorage.setItem('tele_roster_view',mode)}catch(e){}
+  renderAssignTelemarketerCards();
+}
+
+function onAssignRosterSearch(val){
+  assignState.rosterSearch=val;
+  renderAssignTelemarketerCards();
+}
+
+function clearAssignRosterSearch(){
+  assignState.rosterSearch='';
+  var s=el('assignRosterSearch');
+  if(s)s.value='';
+  renderAssignTelemarketerCards();
+}
+
+function sortAssignRoster(field){
+  if(assignState.rosterSortField===field){
+    assignState.rosterSortDir=(assignState.rosterSortDir==='asc'?'desc':'asc');
+  }else{
+    assignState.rosterSortField=field;
+    assignState.rosterSortDir=(field==='name'?'asc':'desc');
+  }
+  renderAssignTelemarketerCards();
+}
+
+function toggleAssignRosterExpand(){
+  assignState.rosterExpanded=!assignState.rosterExpanded;
+  renderAssignTelemarketerCards();
+}
 
 async function loadAssignmentView(){
   if(!state.token)return;
@@ -1048,10 +1129,223 @@ function renderAssignTelemarketerCards(){
   var agents=assignState.agents||[];
   var stats=assignState.stats||{};
 
+  var countBadge=el('assignRosterCountBadge');
+  if(countBadge)countBadge.textContent=agents.length+' Agents';
+
+  var btnList=el('btnRosterViewList');
+  var btnCards=el('btnRosterViewCards');
+  var viewMode=assignState.rosterViewMode||'list';
+  if(btnList)btnList.classList.toggle('active',viewMode==='list');
+  if(btnCards)btnCards.classList.toggle('active',viewMode==='cards');
+
   var totalAllAssigned=(stats.assigned||0)+(stats.contacted||0)+(stats.interested||0)+(stats.not_interested||0)+(stats.do_not_call||0);
   var isAllActive=(assignState.teleFilter==='all');
   var isUnassignedActive=(assignState.teleFilter==='unassigned');
 
+  if(viewMode==='cards'){
+    cont.className='assign-roster-grid view-cards';
+    renderAssignTelemarketerCardsGrid(cont, agents, stats, totalAllAssigned, isAllActive, isUnassignedActive);
+  }else{
+    cont.className='assign-roster-grid view-list';
+    renderAssignTelemarketerTableView(cont, agents, stats, totalAllAssigned, isAllActive, isUnassignedActive);
+  }
+}
+
+function renderAssignTelemarketerTableView(cont, agents, stats, totalAllAssigned, isAllActive, isUnassignedActive){
+  var search=(assignState.rosterSearch||'').trim().toLowerCase();
+  var sortField=assignState.rosterSortField||'total';
+  var sortDir=assignState.rosterSortDir||'desc';
+  var isExpanded=Boolean(assignState.rosterExpanded);
+
+  var visibleAgents=agents.slice();
+  if(search){
+    visibleAgents=visibleAgents.filter(function(a){
+      var n=(a.name||'').toLowerCase();
+      var p=(a.phone||'').toLowerCase();
+      var e=(a.email||'').toLowerCase();
+      var u=(a.uid||'').toLowerCase();
+      return n.indexOf(search)>=0 || p.indexOf(search)>=0 || e.indexOf(search)>=0 || u.indexOf(search)>=0;
+    });
+  }
+
+  visibleAgents.sort(function(a, b){
+    var mult=(sortDir==='asc'?1:-1);
+    if(sortField==='name'){
+      return mult * (a.name||'').localeCompare(b.name||'');
+    }
+    if(sortField==='pending'){
+      var pA=a.pending_count!=null?Number(a.pending_count):Math.max(0,(Number(a.total_assigned)||0)-((Number(a.contacted_count)||0)+(Number(a.interested_count)||0)+(Number(a.not_interested_count)||0)+(Number(a.dnc_count)||0)));
+      var pB=b.pending_count!=null?Number(b.pending_count):Math.max(0,(Number(b.total_assigned)||0)-((Number(b.contacted_count)||0)+(Number(b.interested_count)||0)+(Number(b.not_interested_count)||0)+(Number(b.dnc_count)||0)));
+      return mult * (pA - pB);
+    }
+    if(sortField==='contacted'){
+      return mult * ((Number(a.contacted_count)||0) - (Number(b.contacted_count)||0));
+    }
+    if(sortField==='interested'){
+      return mult * ((Number(a.interested_count)||0) - (Number(b.interested_count)||0));
+    }
+    if(sortField==='lost'){
+      var lA=(Number(a.not_interested_count)||0)+(Number(a.dnc_count)||0);
+      var lB=(Number(b.not_interested_count)||0)+(Number(b.dnc_count)||0);
+      return mult * (lA - lB);
+    }
+    var tA=Number(a.total_assigned)||0;
+    var tB=Number(b.total_assigned)||0;
+    if(tA!==tB) return mult * (tA - tB);
+    return (a.name||'').localeCompare(b.name||'');
+  });
+
+  function sortArrow(field){
+    if(sortField!==field) return '<span style="opacity:.3;margin-left:4px;">↕</span>';
+    return '<span style="color:var(--accent);margin-left:4px;">'+(sortDir==='asc'?'▲':'▼')+'</span>';
+  }
+
+  function renderBar(tot, pend, cont, inter, lst){
+    if(!tot) return '<div class="assign-mini-bar" title="No leads assigned"><div style="width:100%;height:100%;background:#e5e7eb;"></div></div>';
+    var pP=Math.round((pend/tot)*100);
+    var pC=Math.round((cont/tot)*100);
+    var pI=Math.round((inter/tot)*100);
+    var pL=Math.max(0,100-(pP+pC+pI));
+    return '<div class="assign-mini-bar" title="'+pend+' pending · '+cont+' contacted · '+inter+' interested · '+lst+' lost">'
+      +'<div class="assign-mini-seg pending" style="width:'+pP+'%"></div>'
+      +'<div class="assign-mini-seg contacted" style="width:'+pC+'%"></div>'
+      +'<div class="assign-mini-seg interested" style="width:'+pI+'%"></div>'
+      +'<div class="assign-mini-seg lost" style="width:'+pL+'%"></div>'
+      +'</div>';
+  }
+
+  var html='<div class="assign-roster-table-wrap '+(isExpanded?'expanded':'')+'">'
+    +'<table class="assign-roster-table">'
+    +'<thead><tr>'
+    +'<th class="sortable" onclick="sortAssignRoster(\'name\')">Telemarketer '+sortArrow('name')+'</th>'
+    +'<th style="width:90px;">Status</th>'
+    +'<th class="sortable" style="text-align:right;width:110px;" onclick="sortAssignRoster(\'total\')">Total Leads '+sortArrow('total')+'</th>'
+    +'<th class="sortable" style="text-align:right;width:95px;" onclick="sortAssignRoster(\'pending\')">To Call '+sortArrow('pending')+'</th>'
+    +'<th class="sortable" style="text-align:right;width:95px;" onclick="sortAssignRoster(\'contacted\')">Contacted '+sortArrow('contacted')+'</th>'
+    +'<th class="sortable" style="text-align:right;width:95px;" onclick="sortAssignRoster(\'interested\')">Interested '+sortArrow('interested')+'</th>'
+    +'<th class="sortable" style="text-align:right;width:95px;" onclick="sortAssignRoster(\'lost\')">Lost / DNC '+sortArrow('lost')+'</th>'
+    +'<th style="width:140px;">Workload Breakdown</th>'
+    +'<th style="text-align:right;width:110px;">Action</th>'
+    +'</tr></thead>'
+    +'<tbody>';
+
+  // 1. All Telemarketers row
+  var allLost=((stats.not_interested||0)+(stats.do_not_call||0));
+  html+='<tr class="assign-roster-row system-row '+(isAllActive?'active':'')+'" onclick="selectAssignmentTele(\'all\')">'
+    +'<td>'
+    +'<div style="display:flex;align-items:center;gap:10px;">'
+    +'<div class="assign-agent-avatar" style="width:30px;height:30px;font-size:12px;background:var(--ink);flex-shrink:0;">👥</div>'
+    +'<div style="min-width:0;">'
+    +'<div style="font-weight:700;color:var(--ink);display:flex;align-items:center;gap:6px;">'
+    +'All Telemarketers'
+    +(isAllActive?'<span class="assign-active-badge-sm">✓ Filtered</span>':'')
+    +'</div>'
+    +'<div class="meta" style="margin:0;font-size:11px;">Entire workspace pool</div>'
+    +'</div></div></td>'
+    +'<td><span class="status completed" style="font-size:8.5px;">'+agents.length+' AGENTS</span></td>'
+    +'<td style="text-align:right;"><span class="assign-num-bold">'+totalAllAssigned+'</span></td>'
+    +'<td style="text-align:right;"><span class="assign-num-cell pending">'+(stats.assigned||0)+'</span></td>'
+    +'<td style="text-align:right;"><span class="assign-num-cell contacted">'+(stats.contacted||0)+'</span></td>'
+    +'<td style="text-align:right;"><span class="assign-num-cell interested">'+(stats.interested||0)+'</span></td>'
+    +'<td style="text-align:right;"><span class="assign-num-cell lost">'+allLost+'</span></td>'
+    +'<td>'+renderBar(totalAllAssigned, (stats.assigned||0), (stats.contacted||0), (stats.interested||0), allLost)+'</td>'
+    +'<td style="text-align:right;">'
+    +'<button class="'+(isAllActive?'primary':'filter')+'" type="button" style="height:26px;padding:0 8px;font-size:9px;">'+(isAllActive?'Viewing All':'Filter All →')+'</button>'
+    +'</td>'
+    +'</tr>';
+
+  // 2. Unassigned Leads row
+  html+='<tr class="assign-roster-row system-row unassigned-row '+(isUnassignedActive?'active':'')+'" onclick="selectAssignmentTele(\'unassigned\')">'
+    +'<td>'
+    +'<div style="display:flex;align-items:center;gap:10px;">'
+    +'<div class="assign-agent-avatar" style="width:30px;height:30px;font-size:12px;background:#f59e0b;flex-shrink:0;">📋</div>'
+    +'<div style="min-width:0;">'
+    +'<div style="font-weight:700;color:var(--ink);display:flex;align-items:center;gap:6px;">'
+    +'Unassigned Leads'
+    +(isUnassignedActive?'<span class="assign-active-badge-sm" style="color:var(--warn);background:#fef3c7;">✓ Filtered</span>':'')
+    +'</div>'
+    +'<div class="meta" style="margin:0;font-size:11px;">Waiting to be allocated</div>'
+    +'</div></div></td>'
+    +'<td><span class="status" style="color:var(--warn);background:#fffbeb;border:1px solid #fde68a;padding:2px 6px;border-radius:3px;font-size:8.5px;">UNALLOCATED</span></td>'
+    +'<td style="text-align:right;"><span class="assign-num-bold" style="color:var(--warn);">'+(stats.unassigned||0)+'</span></td>'
+    +'<td style="text-align:right;"><span class="assign-num-cell" style="color:var(--warn);">'+(stats.unassigned||0)+'</span></td>'
+    +'<td style="text-align:right;color:var(--muted);font-family:var(--mono);font-size:12px;">—</td>'
+    +'<td style="text-align:right;color:var(--muted);font-family:var(--mono);font-size:12px;">—</td>'
+    +'<td style="text-align:right;color:var(--muted);font-family:var(--mono);font-size:12px;">—</td>'
+    +'<td><span style="font-size:11px;color:var(--warn);font-weight:500;">'+(stats.unassigned||0)+' leads waiting</span></td>'
+    +'<td style="text-align:right;">'
+    +'<button class="'+(isUnassignedActive?'primary':'filter')+'" type="button" style="height:26px;padding:0 8px;font-size:9px;color:var(--warn);border-color:var(--warn);background:#fff;">'+(isUnassignedActive?'Viewing':'Assign →')+'</button>'
+    +'</td>'
+    +'</tr>';
+
+  // 3. Telemarketers rows
+  if(!visibleAgents.length){
+    if(search){
+      html+='<tr><td colspan="9" style="text-align:center;padding:32px 16px;color:var(--muted);font-size:13px;">'
+        +'No telemarketer found matching "<strong>'+esc(search)+'</strong>". '
+        +'<button class="filter" type="button" onclick="clearAssignRosterSearch()" style="height:26px;padding:0 8px;font-size:9px;margin-left:8px;">Clear Search</button>'
+        +'</td></tr>';
+    }else{
+      html+='<tr><td colspan="9" style="text-align:center;padding:32px 16px;color:var(--muted);font-size:13px;">'
+        +'No telemarketers registered yet. <a href="javascript:void(0)" onclick="switchView(\'agents\')">Add telemarketers</a> or import from atap.solar.'
+        +'</td></tr>';
+    }
+  }else{
+    visibleAgents.forEach(function(agent){
+      var val=agentValue(agent);
+      var isActive=(assignState.teleFilter===val||assignState.teleFilter===agent.name||(agent.name&&assignState.teleFilter.toLowerCase()===agent.name.toLowerCase())||(agent.uid&&assignState.teleFilter==='uid:'+agent.uid)||(agent.uid&&assignState.teleFilter===agent.uid));
+      var initials=agent.name.split(/\s+/).map(function(w){return w[0]}).slice(0,2).join('').toUpperCase()||'TM';
+      var statusBadge=agent.active?'<span class="status completed" style="font-size:8.5px;">Active</span>':'<span class="status" style="color:var(--muted);font-size:8.5px;">Inactive</span>';
+
+      var total=Number(agent.total_assigned)||0;
+      var contacted=Number(agent.contacted_count)||0;
+      var interested=Number(agent.interested_count)||0;
+      var lost=(Number(agent.not_interested_count)||0)+(Number(agent.dnc_count)||0);
+      var pending=agent.pending_count!=null?Number(agent.pending_count):Math.max(0,total-(contacted+interested+lost));
+
+      html+='<tr class="assign-roster-row '+(isActive?'active':'')+' '+(agent.active?'':'inactive')+'" id="assignCard-'+attr(agent.id)+'" data-agent="'+attr(val)+'" onclick="selectAssignmentTele(\''+attr(val)+'\')">'
+        +'<td>'
+        +'<div style="display:flex;align-items:center;gap:10px;">'
+        +'<div class="assign-agent-avatar" style="width:30px;height:30px;font-size:11px;background:'+(isActive?'var(--accent)':'#4b5563')+';flex-shrink:0;">'+esc(initials)+'</div>'
+        +'<div style="min-width:0;">'
+        +'<div style="font-weight:700;color:var(--ink);display:flex;align-items:center;gap:6px;" title="'+attr(agent.name)+'">'
+        +'<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px;">'+esc(agent.name)+'</span>'
+        +(isActive?'<span class="assign-active-badge-sm">✓ Filtered</span>':'')
+        +'</div>'
+        +'<div class="meta" style="margin:0;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px;">'
+        +(agent.phone?esc(agent.phone):(agent.email?esc(agent.email):(agent.uid?esc(agent.uid):'Telemarketer')))
+        +'</div>'
+        +'</div></div></td>'
+        +'<td>'+statusBadge+'</td>'
+        +'<td style="text-align:right;"><span class="assign-num-bold">'+total+'</span></td>'
+        +'<td style="text-align:right;"><span class="assign-num-cell pending">'+pending+'</span></td>'
+        +'<td style="text-align:right;"><span class="assign-num-cell contacted">'+contacted+'</span></td>'
+        +'<td style="text-align:right;"><span class="assign-num-cell interested">'+interested+'</span></td>'
+        +'<td style="text-align:right;"><span class="assign-num-cell lost">'+lost+'</span></td>'
+        +'<td>'+renderBar(total, pending, contacted, interested, lost)+'</td>'
+        +'<td style="text-align:right;">'
+        +'<button class="'+(isActive?'primary':'filter')+'" type="button" style="height:26px;padding:0 8px;font-size:9px;">'+(isActive?'Filtered':'Filter Leads →')+'</button>'
+        +'</td>'
+        +'</tr>';
+    });
+  }
+
+  html+='</tbody></table></div>';
+
+  var activeCount=agents.filter(function(a){return a.active}).length;
+  html+='<div class="assign-roster-footer">'
+    +'<div>Showing <strong>'+visibleAgents.length+'</strong> of <strong>'+agents.length+'</strong> telemarketers ('+activeCount+' active)'
+    +(search?' · Filtered by "'+esc(search)+'" <a href="javascript:void(0)" onclick="clearAssignRosterSearch()" style="margin-left:4px;color:var(--accent);text-decoration:none;">✕ Clear</a>':'')
+    +'</div>'
+    +'<div style="display:flex;align-items:center;gap:8px;">'
+    +(agents.length>10?('<button class="filter" type="button" onclick="toggleAssignRosterExpand()" style="height:26px;padding:0 8px;font-size:9px;">'+(isExpanded?'↕ Collapse View':'↕ Expand Table ('+agents.length+' rows)')+'</button>'):'')
+    +'</div>'
+    +'</div>';
+
+  cont.innerHTML=html;
+}
+
+function renderAssignTelemarketerCardsGrid(cont, agents, stats, totalAllAssigned, isAllActive, isUnassignedActive){
   var html='';
 
   // 1. All Telemarketers card
