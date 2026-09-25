@@ -192,7 +192,7 @@ function sweep(): void {
     if (job.status !== 'running' || !job.startedAt) continue;
     // Contact reports own their lifecycle in Postgres. Time passing cannot
     // declare their worker dead or invalidate a result that may still arrive.
-    if (job.type === 'research.contact') continue;
+    if (job.type === 'research.contact' || job.type === 'research.contact.cloud') continue;
     // The field is what the hub shows and what this comparison uses. Raise it to
     // the payload budget before deciding, or a 20-minute agy run stored with the
     // 5-minute default is taken back while the worker is still heartbeating.
@@ -267,7 +267,7 @@ function payloadTimeoutMs(payload: unknown): number {
  * of the caller budget and payload budget. Contact research has no lease.
  */
 function leaseMs(type: string, payload: unknown, timeoutMs: number): number {
-  if (type === 'research.contact') return 0;
+  if (type === 'research.contact' || type === 'research.contact.cloud') return 0;
   const asked = type === 'agy.ask' ? Math.max(timeoutMs, payloadTimeoutMs(payload)) : timeoutMs;
   return Math.min(Math.max(1_000, asked), MAX_TIMEOUT_MS);
 }
@@ -517,7 +517,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     // Older workers still impose a Pi deadline and can discard completed
     // research. They may report work already claimed, but cannot claim more.
     const types = q.get('contactProtocol') === 'durable-v1'
-      ? offeredTypes : offeredTypes.filter((type) => type !== 'research.contact');
+      ? offeredTypes : offeredTypes.filter((type) => type !== 'research.contact' && type !== 'research.contact.cloud');
     touch(worker, callerIp(req), types, (q.get('cooldownGroup') ?? '').trim());
     const waitSec = Number(q.get('wait'));
     const controller = new AbortController();
@@ -550,7 +550,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       res.end();
       return true;
     }
-    if (job.type === 'research.contact') {
+    if (job.type === 'research.contact' || job.type === 'research.contact.cloud') {
       const reportId = str((job.payload as { reportId?: unknown } | null)?.reportId);
       if (reportId) {
         try {
@@ -596,7 +596,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     // nothing", which the gateway treats the same as absent.
     const offeredTypes = Array.isArray(body.types) ? body.types.map((t) => str(t).trim()).filter(Boolean) : [];
     const types = body.contactProtocol === 'durable-v1'
-      ? offeredTypes : offeredTypes.filter((type) => type !== 'research.contact');
+      ? offeredTypes : offeredTypes.filter((type) => type !== 'research.contact' && type !== 'research.contact.cloud');
     const group = str(body.cooldownGroup).trim();
     touch(worker, callerIp(req), types, group);
     // A cooling worker keeps beating. Restore its deadline after a broker
@@ -634,9 +634,9 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     const current = get(result[1]!);
     let reportId = str(body.reportId || (current?.payload as { reportId?: unknown } | null)?.reportId);
     let savedContact = false;
-    if (!reportId && (!current || current.type === 'research.contact'))
+    if (!reportId && (!current || current.type === 'research.contact' || current.type === 'research.contact.cloud'))
       reportId = (await db.getContactReportByJobId(result[1]!))?.id ?? '';
-    if (reportId && (!current || current.type === 'research.contact')) {
+    if (reportId && (!current || current.type === 'research.contact' || current.type === 'research.contact.cloud')) {
       // The report row, not this volatile Map, is the destination. A worker can
       // return after a Railway restart or long after the original request ended.
       const intel = await import('./intel.ts');
@@ -649,7 +649,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       }
     }
     const job = finish(result[1]!, body.ok !== false, body.result ?? null, str(body.error) || null);
-    const quotaMs = job && (job.type.startsWith('agy.') || job.type === 'research.contact')
+    const quotaMs = job && (job.type.startsWith('agy.') || job.type === 'research.contact' || job.type === 'research.contact.cloud')
       ? num(body.retryAfterMs, 0) || quotaRetryAfterMs(str(body.error)) : null;
     const cooldownUntil = quotaMs && worker
       ? coolDown(worker, quotaMs, str(body.error).split(/\r?\n/)[0] || 'Individual quota reached') : null;

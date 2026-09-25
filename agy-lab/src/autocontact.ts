@@ -9,6 +9,7 @@ const BATCH = 3;
 export function contactResearchJobType(): string {
   const model = (process.env.CONTACT_RESEARCH_MODEL?.trim() || 'research.contact').toLowerCase();
   const name = model.split(/[:@/]/)[0] ?? model;
+  if (name === 'agy-web') return 'research.contact.cloud';
   if (name === 'research.contact' || name === 'pi') return 'research.contact';
   if (name.startsWith('chatgpt') || name.startsWith('openai') || name.startsWith('gpt') || /^o[134]/.test(name)) {
     return 'chatgpt.ask';
@@ -43,6 +44,8 @@ function workerLive(): boolean {
 
 /** Queue up to BATCH untouched leads when a matching worker is live. */
 export async function tick(): Promise<number> {
+  if (process.env.CONTACT_RESEARCH_MODEL?.trim().toLowerCase() === 'agy-web'
+    && process.env.AGY_WEB_AUTO_QUEUE?.trim().toLowerCase() !== 'true') return 0;
   if (ticking || !workerLive()) return 0;
   ticking = true;
   try {

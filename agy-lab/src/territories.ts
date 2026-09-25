@@ -5,12 +5,14 @@ export interface ScanBadgeInfo {
   contacts: number;
   createdAt: string;
   keyword: string | null;
+  assignedTo?: string | null;
 }
 
 export interface TamanLocation {
   name: string;
   queryPlace: string;
   scan?: ScanBadgeInfo | null;
+  assignedTo?: string | null;
 }
 
 export interface TownLocation {
@@ -3783,6 +3785,7 @@ export interface TerritoryScanStatInput {
   company_count: number;
   contact_count?: number | null;
   created_at: string;
+  assigned_to?: string | null;
 }
 
 function pickBestScan(matches: TerritoryScanStatInput[]): TerritoryScanStatInput | undefined {
@@ -3802,7 +3805,8 @@ function hasUsableScan(scan: TerritoryScanStatInput): boolean {
 
 export function buildTerritoryResponse(
   stateName = 'johor',
-  scans: TerritoryScanStatInput[] = []
+  scans: TerritoryScanStatInput[] = [],
+  tamanAssignments: Record<string, { assigned_to: string; telemarketer_uid?: string | null; assigned_at?: string } | string> = {},
 ) {
   const base = ALL_TERRITORIES[stateName.toLowerCase()] ?? JOHOR_TERRITORY;
   const districts: DistrictLocation[] = JSON.parse(JSON.stringify(base.districts));
@@ -3862,6 +3866,7 @@ export function buildTerritoryResponse(
             contacts: Number(matchingTamanScan.contact_count) || 0,
             createdAt: matchingTamanScan.created_at,
             keyword: matchingTamanScan.keyword,
+            assignedTo: matchingTamanScan.assigned_to || null,
           };
           if (hasUsableScan(matchingTamanScan)) {
             dScanned++;
@@ -3871,6 +3876,20 @@ export function buildTerritoryResponse(
               totalLeads += matchingTamanScan.company_count || 0;
               totalContacts += Number(matchingTamanScan.contact_count) || 0;
             }
+          }
+        }
+
+        const rawAssignment = tamanAssignments[tm.name]
+          || tamanAssignments[cleanStr(tm.name)]
+          || (tamanQueryNorm ? tamanAssignments[tamanQueryNorm] : undefined);
+        const assignedName = typeof rawAssignment === 'string'
+          ? rawAssignment
+          : (rawAssignment?.assigned_to || matchingTamanScan?.assigned_to || null);
+
+        if (assignedName) {
+          tm.assignedTo = assignedName;
+          if (tm.scan) {
+            tm.scan.assignedTo = assignedName;
           }
         }
       }

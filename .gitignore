@@ -4,6 +4,7 @@ node_modules/
 package-lock.json
 .tmp_*.json
 .zcode/
+.gemini/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/

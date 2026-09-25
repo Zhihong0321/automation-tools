@@ -20,6 +20,32 @@ test('no live worker claiming the job type queues nothing', async () => {
   assert.equal(launched, 0);
 });
 
+test('cloud AGY queues only when its dedicated worker is live and auto queue is enabled', async () => {
+  const previousModel = process.env.CONTACT_RESEARCH_MODEL;
+  const previousToken = process.env.AGY_WEB_TOKEN;
+  const previousAutoQueue = process.env.AGY_WEB_AUTO_QUEUE;
+  let launched = 0;
+  process.env.CONTACT_RESEARCH_MODEL = 'agy-web';
+  process.env.AGY_WEB_TOKEN = 'test-token';
+  try {
+    autoContact.init({
+      liveTypes: () => ['research.contact.cloud'],
+      backlog: async () => [company('cloud')],
+      launch: async () => { launched++; },
+    });
+    assert.equal(await autoContact.tick(), 0);
+    process.env.AGY_WEB_AUTO_QUEUE = 'true';
+    assert.equal(await autoContact.tick(), 1);
+    assert.equal(launched, 1);
+    autoContact.init({ liveTypes: () => [], backlog: async () => [company('cloud')], launch: async () => { launched++; } });
+    assert.equal(await autoContact.tick(), 0);
+  } finally {
+    if (previousModel === undefined) delete process.env.CONTACT_RESEARCH_MODEL; else process.env.CONTACT_RESEARCH_MODEL = previousModel;
+    if (previousToken === undefined) delete process.env.AGY_WEB_TOKEN; else process.env.AGY_WEB_TOKEN = previousToken;
+    if (previousAutoQueue === undefined) delete process.env.AGY_WEB_AUTO_QUEUE; else process.env.AGY_WEB_AUTO_QUEUE = previousAutoQueue;
+  }
+});
+
 test('a live worker queues min(BATCH, backlog) and logs the count', async () => {
   const launched: string[] = [];
   const lines: string[] = [];

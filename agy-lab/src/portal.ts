@@ -82,6 +82,14 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
 .taman-scan-action{border:0;background:var(--ink);color:#fff;font:700 9px/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;padding:4px 8px;border-radius:3px;cursor:pointer}
 .taman-scan-action:hover{background:var(--accent)}
 .taman-scan-action:disabled{opacity:.5;cursor:wait}
+.taman-assign-btn{border:1px dashed #b8b5ad;background:#fff;color:#555;font:600 11px/1 var(--sans);padding:3px 7px;border-radius:3px;cursor:pointer;display:inline-flex;align-items:center;gap:4px;white-space:nowrap;transition:all .15s}
+.taman-assign-btn:hover{border-color:var(--accent);color:var(--accent);background:#f0f4ff}
+.taman-assign-btn.assigned{border:1px solid #93c5fd;background:#eff6ff;color:#1d4ed8;font-weight:650}
+.taman-assign-btn.assigned:hover{border-color:#3b82f6;background:#dbeafe}
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px}
+.modal-backdrop.hidden{display:none}
+.modal-dialog{background:#fff;border-radius:8px;box-shadow:0 10px 25px rgba(0,0,0,.15);max-width:440px;width:100%;padding:22px 24px;border:1px solid var(--line)}
+.modal-head{display:flex;align-items:start;justify-content:space-between;gap:12px;border-bottom:1px solid var(--soft);padding-bottom:12px}
 @media(max-width:820px){
   .result-summary.lead-summary-grid{grid-template-columns:repeat(2,1fr)}
   .lead-row{grid-template-columns:26px 1fr;gap:12px 10px;padding:18px 0}
@@ -152,10 +160,36 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
 .contact-action-btn.wa-btn:hover{background:#20ba5a}
 .contact-action-btn.copy-btn{background:#f3f4f6;color:var(--ink)}
 .contact-cheatsheet-box{background:#fffbeb;border:1px solid #fde68a;border-radius:5px;padding:10px 14px;font-size:12px;color:#92400e;line-height:1.45}
+.assign-roster-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-bottom:24px}
+.assign-agent-card{background:#fff;border:1px solid var(--line);border-radius:6px;padding:16px;display:flex;flex-direction:column;gap:12px;cursor:pointer;transition:all .15s;position:relative}
+.assign-agent-card:hover{border-color:var(--accent);box-shadow:0 3px 12px rgba(0,0,0,.06)}
+.assign-agent-card.active{border-color:var(--accent);background:#f0f5ff;box-shadow:0 0 0 2px var(--accent)}
+.assign-agent-card.inactive{opacity:.65;background:#fdfdfd}
+.assign-agent-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.assign-agent-info{display:flex;align-items:center;gap:10px;min-width:0}
+.assign-agent-avatar{width:36px;height:36px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:700;font-size:13px;flex-shrink:0}
+.assign-agent-name{font-size:15px;font-weight:700;color:var(--ink);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.assign-agent-total{display:flex;align-items:baseline;justify-content:space-between;padding:10px 12px;background:#fafbfc;border:1px solid var(--soft);border-radius:5px}
+.assign-agent-card.active .assign-agent-total{background:#fff;border-color:#bfdbfe}
+.assign-total-num{font:700 24px/1 var(--mono);color:var(--ink)}
+.assign-total-lbl{font:700 8.5px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.assign-breakdown-row{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;text-align:center}
+.assign-breakdown-cell{background:#fafbfc;border:1px solid var(--soft);border-radius:4px;padding:6px 2px}
+.assign-agent-card.active .assign-breakdown-cell{background:#fff;border-color:#bfdbfe}
+.assign-breakdown-val{font:700 12px/1 var(--mono);color:var(--ink)}
+.assign-breakdown-lbl{margin-top:3px;font:700 7px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.assign-progress-bar{height:6px;border-radius:3px;background:#e5e7eb;overflow:hidden;display:flex}
+.assign-bar-part{height:100%}
+.assign-bar-contacted{background:var(--warn)}
+.assign-bar-interested{background:var(--ok)}
+.assign-bar-lost{background:var(--bad)}
+.assign-bar-pending{background:#93c5fd}
+.assign-active-badge{display:none;position:absolute;top:10px;right:10px;font:750 8.5px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--accent);background:#dbeafe;padding:3px 7px;border-radius:3px}
+.assign-agent-card.active .assign-active-badge{display:inline-block}
 </style></head><body>
 <div id="accessGate" class="gate"><div class="gate-panel"><div class="gate-mark">EE</div><h1>Private intelligence workspace.</h1><p>Enter the access key supplied by the workspace owner. You enter it once: it stays in this browser and is never added to a report link.</p><form class="gate-form" onsubmit="connect(event)"><input id="accessKey" type="password" autocomplete="current-password" placeholder="Workspace access key" aria-label="Workspace access key"><button id="connectButton" class="primary" type="submit">Enter</button></form><p id="gateError" class="gate-error" role="alert"></p><p class="gate-help"><a href="/guide" target="_blank" rel="noopener">New here? Read the guide first ↗ · 新手指南</a></p></div></div>
 <div id="portalApp" class="app" aria-hidden="true" inert>
-  <header class="mast"><div class="mast-inner"><button type="button" class="brand" aria-label="Home" onclick="switchView('discover')"><span class="mark">EE</span><span>Business intelligence</span></button><nav class="desktop-nav" aria-label="Workspace"><button class="nav-button active" data-view="discover" onclick="switchView('discover')">Home</button><button class="nav-button" data-view="telemarketing" onclick="switchView('telemarketing')">Telemarketing</button><button class="nav-button" data-view="leads" onclick="switchView('leads')">Leads Master</button><button class="nav-button" data-view="contacts" onclick="switchView('contacts')">Contacts Master</button><button class="nav-button" data-view="agents" onclick="switchView('agents')">Telemarketers</button><button class="nav-button" data-view="library" onclick="switchView('library')">Reports</button><a class="nav-button" href="/guide" target="_blank" rel="noopener">Guide</a><span class="access"><span class="access-dot"></span>Connected</span><button class="signout" onclick="disconnect()">Sign out</button></nav><button class="signout" onclick="disconnect()">Exit</button></div></header>
+  <header class="mast"><div class="mast-inner"><button type="button" class="brand" aria-label="Home" onclick="switchView('discover')"><span class="mark">EE</span><span>Business intelligence</span></button><nav class="desktop-nav" aria-label="Workspace"><button class="nav-button active" data-view="discover" onclick="switchView('discover')">Home</button><button class="nav-button" data-view="telemarketing" onclick="switchView('telemarketing')">Telemarketing</button><button class="nav-button" data-view="assignment" onclick="switchView('assignment')">Lead Assignment</button><button class="nav-button" data-view="leads" onclick="switchView('leads')">Leads Master</button><button class="nav-button" data-view="contacts" onclick="switchView('contacts')">Contacts Master</button><button class="nav-button" data-view="agents" onclick="switchView('agents')">Telemarketers</button><button class="nav-button" data-view="library" onclick="switchView('library')">Reports</button><a class="nav-button" href="/guide" target="_blank" rel="noopener">Guide</a><span class="access"><span class="access-dot"></span>Connected</span><button class="signout" onclick="disconnect()">Sign out</button></nav><button class="signout" onclick="disconnect()">Exit</button></div></header>
   <main class="content">
     <section id="discoverView" class="view active">
       <div class="hero"><div class="eyebrow" id="heroEyebrow">Live market discovery</div><h1 id="heroTitle">Find the companies worth knowing.</h1><p id="heroCopy">Pick one. Nothing is researched until you say so.</p></div>
@@ -213,6 +247,143 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
       </div>
       <div id="teleTerritoryContainer">
         <div class="empty">Loading Johor territory directory…</div>
+      </div>
+      <div id="tamanAssignModal" class="modal-backdrop hidden" onclick="if(event.target===this)closeTamanAssignModal()">
+        <div class="modal-dialog" role="dialog" aria-labelledby="tamanModalTitle">
+          <div class="modal-head">
+            <div>
+              <span class="sheet-title" id="tamanModalTitle">Assign Taman Leads</span>
+              <p class="modal-sub" id="tamanModalSub" style="margin:4px 0 0;font-size:12.5px;color:var(--muted);"></p>
+            </div>
+            <button type="button" class="back" onclick="closeTamanAssignModal()">✕</button>
+          </div>
+          <form onsubmit="submitTamanAssign(event)">
+            <input type="hidden" id="tamanAssignTaman" value="">
+            <input type="hidden" id="tamanAssignQueryPlace" value="">
+            <input type="hidden" id="tamanAssignPublicId" value="">
+            <input type="hidden" id="tamanAssignTown" value="">
+            <input type="hidden" id="tamanAssignDistrict" value="">
+            <div class="field" style="margin:16px 0 12px;">
+              <label for="tamanAssignTeleSelect" style="font-weight:600;font-size:12px;margin-bottom:6px;display:block;">Assign to Telemarketer *</label>
+              <select class="input select" id="tamanAssignTeleSelect" required style="width:100%;height:40px;font-size:13.5px;">
+                <option value="">Choose telemarketer...</option>
+              </select>
+            </div>
+            <div id="tamanModalCurrentAssignee" style="display:none;margin-bottom:14px;padding:8px 12px;background:#f0f4ff;border:1px solid #c7d2fe;border-radius:4px;font-size:12px;color:#1e40af;">
+              Currently assigned to: <strong id="tamanCurrentAssigneeName"></strong>
+            </div>
+            <div style="display:flex;gap:10px;margin-top:20px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
+              <div style="display:flex;gap:8px;">
+                <button class="primary" type="submit" id="tamanAssignSubmitBtn" style="height:36px;padding:0 16px;">Assign All Leads</button>
+                <button class="filter" type="button" onclick="closeTamanAssignModal()" style="height:36px;padding:0 14px;">Cancel</button>
+              </div>
+              <button class="filter" type="button" id="tamanUnassignBtn" onclick="submitTamanUnassign()" style="display:none;height:36px;padding:0 12px;color:var(--bad);border-color:#fca5a5;">Unassign</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+    <section id="assignmentView" class="view">
+      <div class="library-hero">
+        <div class="eyebrow">Lead Allocation & Workload Distribution</div>
+        <h1>Telemarketer Lead Assignment.</h1>
+        <p>Monitor lead allocation per telemarketer, filter assigned queues, inspect conversion counts, and reassign leads across your team.</p>
+      </div>
+
+      <div class="result-summary lead-summary-grid" style="margin-top:24px;">
+        <div class="metric"><strong id="assignStatTotal">0</strong><span>Total Leads Pool</span></div>
+        <div class="metric"><strong id="assignStatAssigned" style="color:var(--accent);">0</strong><span>Assigned Leads</span></div>
+        <div class="metric"><strong id="assignStatUnassigned" style="color:var(--warn);">0</strong><span>Unassigned Leads</span></div>
+        <div class="metric"><strong id="assignStatAgents" style="color:var(--ok);">0</strong><span>Active Telemarketers</span></div>
+        <div class="metric"><strong id="assignStatContacted">0</strong><span>Contacted Leads</span></div>
+        <div class="metric"><strong id="assignStatInterested" style="color:var(--ok);">0</strong><span>Interested Leads</span></div>
+      </div>
+
+      <div style="margin:28px 0 12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+        <div style="font:700 12px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:8px;">
+          <span>Telemarketer Workload & Quota Breakdown</span>
+          <span style="font-size:11px;font-weight:500;text-transform:none;color:var(--muted);">(Click any card to filter leads)</span>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="filter" type="button" onclick="selectAssignmentTele('all')" style="height:32px;padding:0 10px;font-size:9.5px;">Show All Leads</button>
+          <button class="filter" type="button" onclick="selectAssignmentTele('unassigned')" style="height:32px;padding:0 10px;font-size:9.5px;color:var(--warn);border-color:var(--warn);background:#fffbeb;">View Unassigned →</button>
+        </div>
+      </div>
+
+      <div id="assignRosterGrid" class="assign-roster-grid">
+        <div class="empty">Loading telemarketer assignments…</div>
+      </div>
+
+      <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin:24px 0 16px;padding:16px 20px;background:#f8f9fa;border:1px solid var(--line);border-radius:6px;">
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;flex:1;min-width:280px;">
+          <div style="display:flex;flex-direction:column;gap:3px;">
+            <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">Filter By Telemarketer</span>
+            <select class="input select" id="assignTeleFilter" onchange="onAssignTeleFilterChange()" style="height:38px;font-size:13px;font-weight:600;min-width:240px;">
+              <option value="all">👥 All Telemarketers</option>
+              <option value="unassigned">📋 Unassigned Leads Only</option>
+            </select>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:3px;">
+            <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">Search Company / Phone / Address</span>
+            <input class="input" id="assignSearchInput" placeholder="Search company, phone, category..." style="height:38px;font-size:13.5px;width:240px;" onkeydown="if(event.key==='Enter')applyAssignmentFilter()">
+          </div>
+          <button class="primary" type="button" onclick="applyAssignmentFilter()" style="height:38px;padding:0 16px;align-self:flex-end;">Filter</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;align-self:flex-end;">
+          <button class="filter" type="button" onclick="switchView('telemarketing')" title="Open Johor Lead Map to scan tamans and assign bulk territories">🗺️ Lead Map →</button>
+          <button class="filter" type="button" onclick="switchView('agents')" title="Manage telemarketer team accounts and notes">👥 Telemarketers →</button>
+          <button class="filter" type="button" onclick="loadAssignmentView()" style="height:38px;">Refresh</button>
+        </div>
+      </div>
+
+      <div id="assignActiveBanner" class="search-sheet hidden" style="margin:0 0 18px;padding:14px 18px;background:#eff6ff;border-color:#93c5fd;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:18px;">👤</span>
+          <div>
+            <strong id="assignBannerTitle" style="font-size:14px;color:var(--ink);">Telemarketer Queue</strong>
+            <div id="assignBannerSubtitle" style="font-size:12px;color:var(--muted);margin-top:2px;">Showing assigned leads</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="filter" type="button" onclick="selectAssignmentTele('all')" style="height:32px;padding:0 12px;font-size:9.5px;background:#fff;">Clear Filter (Show All)</button>
+        </div>
+      </div>
+
+      <div class="filters" role="group" aria-label="Assignment status filters" style="margin:16px 0 20px;">
+        <button class="filter active" data-assign-status="all" onclick="setAssignmentStatusFilter('all')">All Leads (<span id="assignCountAll">0</span>)</button>
+        <button class="filter" data-assign-status="assigned" onclick="setAssignmentStatusFilter('assigned')">⏳ Pending to Call (<span id="assignCountAssigned">0</span>)</button>
+        <button class="filter" data-assign-status="contacted" onclick="setAssignmentStatusFilter('contacted')">📞 Contacted (<span id="assignCountContacted">0</span>)</button>
+        <button class="filter" data-assign-status="interested" onclick="setAssignmentStatusFilter('interested')">⭐ Interested (<span id="assignCountInterested">0</span>)</button>
+        <button class="filter" data-assign-status="not_interested" onclick="setAssignmentStatusFilter('not_interested')">Not Interested (<span id="assignCountNotInterested">0</span>)</button>
+        <button class="filter" data-assign-status="do_not_call" onclick="setAssignmentStatusFilter('do_not_call')">⛔ DNC (<span id="assignCountDnc">0</span>)</button>
+      </div>
+
+      <div id="assignBulkBar" class="search-sheet hidden" style="margin:0 0 20px;padding:14px 18px;border-color:var(--accent);background:#f0f4ff;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+        <div style="display:flex;align-items:center;gap:14px;">
+          <strong style="font-size:13px;color:var(--ink);"><span id="assignBulkCount">0</span> selected</strong>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;user-select:none;">
+            <input type="checkbox" id="assignSelectAllPage" onchange="toggleAssignSelectAllPage(this.checked)"> Select all on this page
+          </label>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <select class="input select" id="assignBulkTargetSelect" style="height:36px;font-size:13px;background-color:#fff;min-width:200px;">
+            <option value="">Choose telemarketer...</option>
+          </select>
+          <button class="primary" type="button" onclick="bulkAssignFromAssignmentView()" style="height:36px;padding:0 14px;">Assign Selected</button>
+          <button class="filter" type="button" onclick="bulkUnassignFromAssignmentView()" style="height:36px;">Unassign Selected</button>
+        </div>
+      </div>
+
+      <div id="assignmentLeadsWrapper" class="company-list">
+        <div class="empty">Loading leads…</div>
+      </div>
+
+      <div id="assignPagination" style="display:flex;align-items:center;justify-content:space-between;padding:24px 0 32px;border-top:1px solid var(--line);margin-top:20px;">
+        <span id="assignPageInfo" style="font:500 12px/1 var(--mono);color:var(--muted);">Showing 0 of 0</span>
+        <div style="display:flex;gap:8px;">
+          <button id="btnPrevAssign" class="filter" type="button" onclick="prevAssignPage()" disabled>&larr; Previous</button>
+          <button id="btnNextAssign" class="filter" type="button" onclick="nextAssignPage()" disabled>Next &rarr;</button>
+        </div>
       </div>
     </section>
     <section id="leadsView" class="view">
@@ -300,7 +471,7 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
       <div id="contactsSummary" class="result-summary lead-summary-grid" style="margin-top:24px;">
         <div class="metric"><strong id="statContactsTotalCompanies">0</strong><span>Companies with People</span></div>
         <div class="metric"><strong id="statContactsTotalDMs" style="color:var(--accent);">0</strong><span>People</span></div>
-        <div class="metric"><strong id="statContactsTotalPhones" style="color:var(--ok);">0</strong><span>Direct Phones</span></div>
+        <div class="metric"><strong id="statContactsTotalPhones" style="color:var(--ok);">0</strong><span>Total Phones</span></div>
         <div class="metric"><strong id="statContactsTotalMobile" style="color:var(--ok);">0</strong><span>WhatsApp / Mobile</span></div>
         <div class="metric"><strong id="statContactsTotalEmails">0</strong><span>Direct Emails</span></div>
       </div>
@@ -409,7 +580,7 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
     </section>
     <section id="libraryView" class="view"><div class="library-hero"><div class="eyebrow">Persistent knowledge base</div><h1>Research library.</h1><p>Browse every market scan, company dossier and VIP brief in one place. Completed public reports keep the same permanent link.</p><div class="library-tools"><button id="retryFailedButton" class="primary" type="button" onclick="retryFailedReports(this)">Re-run all failed reports</button><span id="retryFailedNote" class="retry-note" role="status" aria-live="polite"></span></div></div><div class="filters" role="group" aria-label="Report type"><button class="filter active" data-filter="all" onclick="setFilter('all')">All reports</button><button class="filter" data-filter="company_research" onclick="setFilter('company_research')">Company research</button><button class="filter" data-filter="contact_research" onclick="setFilter('contact_research')">Contacts</button><button class="filter" data-filter="person_research" onclick="setFilter('person_research')">VIP briefs</button><button class="filter" data-filter="ads_research" onclick="setFilter('ads_research')">Ads</button><button class="filter" data-filter="ads_market" onclick="setFilter('ads_market')">Ads market</button><button class="filter" data-filter="business_search" onclick="setFilter('business_search')">Business lists</button></div><div id="reportList" class="report-list"><div class="empty">Loading research library…</div></div></section>
   </main>
-  <nav class="mobile-nav" aria-label="Workspace"><button class="mobile-tab active" data-view="discover" onclick="switchView('discover')"><span></span>Home</button><button class="mobile-tab" data-view="telemarketing" onclick="switchView('telemarketing')"><span></span>Map</button><button class="mobile-tab" data-view="leads" onclick="switchView('leads')"><span></span>Leads</button><button class="mobile-tab" data-view="contacts" onclick="switchView('contacts')"><span></span>Contacts</button><button class="mobile-tab" data-view="agents" onclick="switchView('agents')"><span></span>Agents</button><button class="mobile-tab" data-view="library" onclick="switchView('library')"><span></span>Reports</button><a class="mobile-tab" href="/guide" target="_blank" rel="noopener"><span></span>Guide</a></nav>
+  <nav class="mobile-nav" aria-label="Workspace"><button class="mobile-tab active" data-view="discover" onclick="switchView('discover')"><span></span>Home</button><button class="mobile-tab" data-view="telemarketing" onclick="switchView('telemarketing')"><span></span>Map</button><button class="mobile-tab" data-view="assignment" onclick="switchView('assignment')"><span></span>Assign</button><button class="mobile-tab" data-view="leads" onclick="switchView('leads')"><span></span>Leads</button><button class="mobile-tab" data-view="contacts" onclick="switchView('contacts')"><span></span>Contacts</button><button class="mobile-tab" data-view="agents" onclick="switchView('agents')"><span></span>Agents</button><button class="mobile-tab" data-view="library" onclick="switchView('library')"><span></span>Reports</button><a class="mobile-tab" href="/guide" target="_blank" rel="noopener"><span></span>Guide</a></nav>
 </div><div id="toast" class="toast" role="status"></div>
 <script>
 'use strict';
@@ -429,7 +600,7 @@ async function api(path,options){options=options||{};var headers=Object.assign({
 async function connect(event){if(event)event.preventDefault();var key=el('accessKey').value.trim();if(!key)return;state.token=key;el('connectButton').disabled=true;el('gateError').textContent='';try{await api('/api/reports?limit=1');eeKey.save(key);el('accessGate').classList.add('hidden');el('portalApp').removeAttribute('inert');el('portalApp').setAttribute('aria-hidden','false');await loadLibrary();showToast('Workspace connected')}catch(error){state.token='';el('gateError').textContent=error.status===401?'Access key not accepted.':error.message}finally{el('connectButton').disabled=false}}
 function disconnect(){eeKey.clear();state.token='';location.reload()}
 function authLost(error){if(error&&error.status===401){eeKey.clear();state.token='';el('accessGate').classList.remove('hidden');el('gateError').textContent='Your access expired. Enter the workspace key again.';return true}return false}
-function switchView(name){document.querySelectorAll('.view').forEach(function(node){node.classList.toggle('active',node.id===name+'View')});document.querySelectorAll('[data-view]').forEach(function(node){node.classList.toggle('active',node.getAttribute('data-view')===name)});if(name==='library')loadLibrary();else if(name==='leads')loadLeadsView();else if(name==='contacts')loadContactsView();else if(name==='telemarketing')loadTelemarketingView();else if(name==='agents')loadAgentsView();else goHome();window.scrollTo({top:0,behavior:'smooth'})}
+function switchView(name){document.querySelectorAll('.view').forEach(function(node){node.classList.toggle('active',node.id===name+'View')});document.querySelectorAll('[data-view]').forEach(function(node){node.classList.toggle('active',node.getAttribute('data-view')===name)});if(name==='library')loadLibrary();else if(name==='assignment')loadAssignmentView();else if(name==='leads')loadLeadsView();else if(name==='contacts')loadContactsView();else if(name==='telemarketing')loadTelemarketingView();else if(name==='agents')loadAgentsView();else goHome();window.scrollTo({top:0,behavior:'smooth'})}
 function upsertJob(report,kind){state.jobs[report.id]=Object.assign({},state.jobs[report.id]||{},{report:report,kind:kind});renderJobs()}
 function renderJobs(){var values=Object.keys(state.jobs).map(function(key){return state.jobs[key]});el('activeSection').classList.toggle('hidden',values.length===0);el('jobs').innerHTML=values.map(function(job){var r=job.report;var done=terminal.indexOf(r.status)>=0;var pulse=r.status==='failed'?'bad':done?'done':'';var label=job.kind==='search'?'Market scan':job.kind==='lookup'?'Company lookup':job.kind==='vip'?'VIP brief':job.kind==='ads'?'Ads':job.kind==='contact'?'Contact research':'Company research';var open=safeUrl(r.view_url);return '<article class="job"><div class="job-type">'+label+'</div><div><div class="job-title">'+esc(r.title)+'</div><div class="job-meta">'+esc(r.status)+' · '+esc(r.id)+'</div></div><div class="job-action"><span class="pulse '+pulse+'"></span>'+(open?'<a class="text-action" target="_blank" rel="noopener" href="'+attr(open)+'">View <span>↗</span></a>':'')+'</div></article>'}).join('')}
 function poll(report,kind){upsertJob(report,kind);if(terminal.indexOf(report.status)>=0)return;setTimeout(async function(){try{var body=await api(report.api_url);upsertJob(body.report,kind);if(terminal.indexOf(body.report.status)<0){poll(body.report,kind);return}await loadLibrary();if((kind==='search'||kind==='lookup')&&body.report.status!=='failed'){renderSearch(body,kind)}if(kind==='deep'){showToast(body.report.status==='failed'?'Company research failed':'Company dossier is ready')}if(kind==='vip'){showToast(body.report.status==='failed'?'VIP brief failed':'VIP brief is ready')}if(kind==='adsmarket'){showToast(body.report.status==='failed'?'Ads market research failed':'Ads market report is ready')}if(kind==='contact'){showToast(body.report.status==='failed'?'Contact research failed':'Contact details are ready')}if(body.report.status==='failed')showToast(body.report.error||'Research failed')}catch(error){if(!authLost(error)){showToast(error.message);if(error.status===404){forgetReport(report.id)}else{poll(report,kind)}}}},5000)}
@@ -482,11 +653,511 @@ async function deleteReport(button){var id=button.getAttribute('data-report')||'
 // with the HTML, so only the error path has to put the label back.
 async function retryReport(button){var id=button.getAttribute('data-report')||'';var title=button.getAttribute('data-title')||'this report';if(!id)return;button.disabled=true;button.textContent='Queueing…';try{var body=await api('/api/reports/'+encodeURIComponent(id)+'/retry',{method:'POST'});if(body.report)poll(body.report,kindFor(body.report));await loadLibrary();showToast('Re-run queued for "'+title+'" — same report link, follow it in Active work.')}catch(error){button.disabled=false;button.innerHTML='Re-run <span>↻</span>';if(!authLost(error))showToast(error.message)}}
 async function repairReport(button){var id=button.getAttribute('data-report')||'';if(!id)return;button.disabled=true;button.textContent='Repairing…';try{var body=await api('/api/reports/'+encodeURIComponent(id)+'/repair',{method:'POST'});await loadLibrary();showToast('Saved '+(body.saved&&body.saved.linked||0)+' businesses from the existing report. No new scan was needed.')}catch(error){button.disabled=false;button.innerHTML='Repair save <span>↻</span>';if(!authLost(error))showToast('Repair failed: '+error.message)}}
+function agentValue(a){return a.uid?(a.uid.startsWith('uid:')?a.uid:'uid:'+a.uid):a.name}
+function agentLabel(a){return a.uid?a.name+' ('+a.uid+')':a.name}
+
+var assignState={agents:[],leads:[],selected:{},stats:null,teleFilter:'all',statusFilter:'all',search:'',page:0,limit:30,total:0};
+
+async function loadAssignmentView(){
+  if(!state.token)return;
+  await loadAssignmentAgents();
+  await loadAssignmentLeads();
+}
+
+async function loadAssignmentAgents(){
+  try{
+    var body=await api('/api/telemarketers');
+    assignState.agents=body.agents||[];
+    assignState.stats=body.stats||null;
+    renderAssignStats(body.stats||{});
+    renderAssignTelemarketerCards();
+    renderAssignTeleSelectors();
+  }catch(err){
+    if(!authLost(err))showToast('Failed to load telemarketers: '+err.message);
+  }
+}
+
+function renderAssignStats(stats){
+  var sTotal=el('assignStatTotal');
+  var sAssigned=el('assignStatAssigned');
+  var sUnassigned=el('assignStatUnassigned');
+  var sAgents=el('assignStatAgents');
+  var sContacted=el('assignStatContacted');
+  var sInterested=el('assignStatInterested');
+
+  var totalAssigned=(stats.assigned||0)+(stats.contacted||0)+(stats.interested||0)+(stats.not_interested||0)+(stats.do_not_call||0);
+  var activeAgents=(assignState.agents||[]).filter(function(a){return a.active}).length;
+
+  if(sTotal)sTotal.textContent=stats.total||0;
+  if(sAssigned)sAssigned.textContent=totalAssigned;
+  if(sUnassigned)sUnassigned.textContent=stats.unassigned||0;
+  if(sAgents)sAgents.textContent=activeAgents;
+  if(sContacted)sContacted.textContent=stats.contacted||0;
+  if(sInterested)sInterested.textContent=stats.interested||0;
+}
+
+function renderAssignTelemarketerCards(){
+  var cont=el('assignRosterGrid');
+  if(!cont)return;
+  var agents=assignState.agents||[];
+  var stats=assignState.stats||{};
+
+  var totalAllAssigned=(stats.assigned||0)+(stats.contacted||0)+(stats.interested||0)+(stats.not_interested||0)+(stats.do_not_call||0);
+  var isAllActive=(assignState.teleFilter==='all');
+  var isUnassignedActive=(assignState.teleFilter==='unassigned');
+
+  var html='';
+
+  // 1. All Telemarketers card
+  html+='<article class="assign-agent-card '+(isAllActive?'active':'')+'" onclick="selectAssignmentTele(\'all\')">'
+    +'<span class="assign-active-badge">✓ Filtered</span>'
+    +'<div class="assign-agent-head">'
+    +'<div class="assign-agent-info">'
+    +'<div class="assign-agent-avatar" style="background:var(--ink);">👥</div>'
+    +'<div><div class="assign-agent-name">All Telemarketers</div><div class="meta">Entire workspace pool</div></div>'
+    +'</div>'
+    +'<span class="status completed">'+agents.length+' Agents</span>'
+    +'</div>'
+    +'<div class="assign-agent-total">'
+    +'<div><div class="assign-total-num">'+totalAllAssigned+'</div><div class="assign-total-lbl">Total Leads Assigned</div></div>'
+    +'<button class="primary" type="button" style="height:28px;padding:0 10px;font-size:9.5px;">'+(isAllActive?'Viewing All':'Filter All →')+'</button>'
+    +'</div>'
+    +'<div class="assign-breakdown-row">'
+    +'<div class="assign-breakdown-cell"><div class="assign-breakdown-val">'+(stats.assigned||0)+'</div><div class="assign-breakdown-lbl">To Call</div></div>'
+    +'<div class="assign-breakdown-cell"><div class="assign-breakdown-val" style="color:var(--warn);">'+(stats.contacted||0)+'</div><div class="assign-breakdown-lbl">Contacted</div></div>'
+    +'<div class="assign-breakdown-cell"><div class="assign-breakdown-val" style="color:var(--ok);">'+(stats.interested||0)+'</div><div class="assign-breakdown-lbl">Interested</div></div>'
+    +'<div class="assign-breakdown-cell"><div class="assign-breakdown-val" style="color:var(--bad);">'+((stats.not_interested||0)+(stats.do_not_call||0))+'</div><div class="assign-breakdown-lbl">Lost/DNC</div></div>'
+    +'</div>'
+    +'</article>';
+
+  // 2. Unassigned Leads card
+  html+='<article class="assign-agent-card '+(isUnassignedActive?'active':'')+'" onclick="selectAssignmentTele(\'unassigned\')">'
+    +'<span class="assign-active-badge">✓ Filtered</span>'
+    +'<div class="assign-agent-head">'
+    +'<div class="assign-agent-info">'
+    +'<div class="assign-agent-avatar" style="background:#f59e0b;">📋</div>'
+    +'<div><div class="assign-agent-name">Unassigned Leads</div><div class="meta">Waiting to be allocated</div></div>'
+    +'</div>'
+    +'<span class="status" style="color:var(--warn);background:#fffbeb;border:1px solid #fde68a;padding:2px 6px;border-radius:3px;">Unallocated</span>'
+    +'</div>'
+    +'<div class="assign-agent-total">'
+    +'<div><div class="assign-total-num" style="color:var(--warn);">'+(stats.unassigned||0)+'</div><div class="assign-total-lbl">Leads Waiting Assignment</div></div>'
+    +'<button class="filter" type="button" style="height:28px;padding:0 10px;font-size:9.5px;color:var(--warn);border-color:var(--warn);background:#fff;">'+(isUnassignedActive?'Viewing':'Assign →')+'</button>'
+    +'</div>'
+    +'<div style="font-size:11.5px;color:var(--muted);line-height:1.4;background:#fafbfc;border:1px solid var(--soft);border-radius:4px;padding:8px 10px;">'
+    +'Select this card to view and bulk-assign waiting leads to your telemarketers.'
+    +'</div>'
+    +'</article>';
+
+  // 3. Telemarketers cards
+  if(!agents.length){
+    html+='<div class="empty" style="grid-column:1/-1;">No telemarketers registered yet. <a href="javascript:void(0)" onclick="switchView(\'agents\')">Add telemarketers</a> or import from atap.solar.</div>';
+  }else{
+    agents.forEach(function(agent){
+      var val=agentValue(agent);
+      var isActive=(assignState.teleFilter===val||assignState.teleFilter===agent.name||(agent.uid&&assignState.teleFilter==='uid:'+agent.uid));
+      var initials=agent.name.split(/\s+/).map(function(w){return w[0]}).slice(0,2).join('').toUpperCase()||'TM';
+      var statusBadge=agent.active?'<span class="status completed">Active</span>':'<span class="status" style="color:var(--muted);">Inactive</span>';
+
+      var total=Number(agent.total_assigned)||0;
+      var contacted=Number(agent.contacted_count)||0;
+      var interested=Number(agent.interested_count)||0;
+      var lost=(Number(agent.not_interested_count)||0)+(Number(agent.dnc_count)||0);
+      var pending=agent.pending_count!=null?Number(agent.pending_count):Math.max(0,total-(contacted+interested+lost));
+
+      var pPending=total>0?Math.round((pending/total)*100):0;
+      var pContacted=total>0?Math.round((contacted/total)*100):0;
+      var pInterested=total>0?Math.round((interested/total)*100):0;
+      var pLost=total>0?Math.max(0,100-(pPending+pContacted+pInterested)):0;
+
+      html+='<article class="assign-agent-card '+(isActive?'active':'')+' '+(agent.active?'':'inactive')+'" id="assignCard-'+attr(agent.id)+'" data-agent="'+attr(val)+'" onclick="selectAssignmentTele(\''+attr(val)+'\')">'
+        +'<span class="assign-active-badge">✓ Filtered</span>'
+        +'<div class="assign-agent-head">'
+        +'<div class="assign-agent-info">'
+        +'<div class="assign-agent-avatar">'+esc(initials)+'</div>'
+        +'<div style="min-width:0;"><div class="assign-agent-name" title="'+attr(agent.name)+'">'+esc(agent.name)+'</div>'
+        +(agent.phone?'<div class="meta">'+esc(agent.phone)+'</div>':(agent.email?'<div class="meta">'+esc(agent.email)+'</div>':'<div class="meta">Telemarketer</div>'))
+        +'</div>'
+        +'</div>'
+        +statusBadge
+        +'</div>'
+        +'<div class="assign-agent-total">'
+        +'<div><div class="assign-total-num">'+total+'</div><div class="assign-total-lbl">Total Leads Assigned</div></div>'
+        +'<button class="primary" type="button" style="height:28px;padding:0 10px;font-size:9.5px;">'+(isActive?'Filtered':'Filter Leads →')+'</button>'
+        +'</div>'
+        +'<div class="assign-breakdown-row">'
+        +'<div class="assign-breakdown-cell"><div class="assign-breakdown-val">'+pending+'</div><div class="assign-breakdown-lbl">To Call</div></div>'
+        +'<div class="assign-breakdown-cell"><div class="assign-breakdown-val" style="color:var(--warn);">'+contacted+'</div><div class="assign-breakdown-lbl">Contacted</div></div>'
+        +'<div class="assign-breakdown-cell"><div class="assign-breakdown-val" style="color:var(--ok);">'+interested+'</div><div class="assign-breakdown-lbl">Interested</div></div>'
+        +'<div class="assign-breakdown-cell"><div class="assign-breakdown-val" style="color:var(--bad);">'+lost+'</div><div class="assign-breakdown-lbl">Lost/DNC</div></div>'
+        +'</div>'
+        +(total>0?('<div class="assign-progress-bar" title="'+pending+' to call · '+contacted+' contacted · '+interested+' interested · '+lost+' lost">'
+          +'<div class="assign-bar-part assign-bar-pending" style="width:'+pPending+'%"></div>'
+          +'<div class="assign-bar-part assign-bar-contacted" style="width:'+pContacted+'%"></div>'
+          +'<div class="assign-bar-part assign-bar-interested" style="width:'+pInterested+'%"></div>'
+          +'<div class="assign-bar-part assign-bar-lost" style="width:'+pLost+'%"></div>'
+          +'</div>'):'')
+        +'</article>';
+    });
+  }
+
+  cont.innerHTML=html;
+}
+
+function renderAssignTeleSelectors(){
+  var filterSelect=el('assignTeleFilter');
+  var bulkSelect=el('assignBulkTargetSelect');
+  var stats=assignState.stats||{};
+  var agents=assignState.agents||[];
+
+  if(filterSelect){
+    var cur=assignState.teleFilter||filterSelect.value||'all';
+    var opts='<option value="all">👥 All Telemarketers</option>'
+      +'<option value="unassigned">📋 Unassigned Leads Only ('+(stats.unassigned||0)+' leads)</option>';
+    agents.forEach(function(a){
+      var v=agentValue(a);
+      var count=(a.total_assigned||0);
+      var sel=(cur===v||cur===a.name)?' selected':'';
+      opts+='<option value="'+attr(v)+'"'+sel+'>👤 '+esc(a.name)+' ('+count+' leads assigned)</option>';
+    });
+    filterSelect.innerHTML=opts;
+    filterSelect.value=cur;
+  }
+
+  if(bulkSelect){
+    var bOpts='<option value="">Choose telemarketer...</option>';
+    agents.filter(function(a){return a.active}).forEach(function(a){
+      bOpts+='<option value="'+attr(agentValue(a))+'">👤 '+esc(agentLabel(a))+'</option>';
+    });
+    bulkSelect.innerHTML=bOpts;
+  }
+}
+
+async function selectAssignmentTele(agentVal){
+  assignState.teleFilter=agentVal;
+  assignState.page=0;
+  var sel=el('assignTeleFilter');
+  if(sel)sel.value=agentVal;
+  renderAssignTelemarketerCards();
+  await loadAssignmentLeads();
+}
+
+async function onAssignTeleFilterChange(){
+  var sel=el('assignTeleFilter');
+  if(!sel)return;
+  assignState.teleFilter=sel.value;
+  assignState.page=0;
+  renderAssignTelemarketerCards();
+  await loadAssignmentLeads();
+}
+
+async function applyAssignmentFilter(){
+  var sInput=el('assignSearchInput');
+  assignState.search=sInput?sInput.value.trim():'';
+  assignState.page=0;
+  await loadAssignmentLeads();
+}
+
+async function setAssignmentStatusFilter(status){
+  assignState.statusFilter=status;
+  assignState.page=0;
+  document.querySelectorAll('[data-assign-status]').forEach(function(node){
+    node.classList.toggle('active',node.getAttribute('data-assign-status')===status);
+  });
+  await loadAssignmentLeads();
+}
+
+async function loadAssignmentLeads(){
+  if(!state.token)return;
+  var wrapper=el('assignmentLeadsWrapper');
+  if(!wrapper)return;
+  wrapper.innerHTML='<div class="empty">Loading assigned leads…</div>';
+
+  var q='/api/leads?limit='+assignState.limit+'&offset='+(assignState.page*assignState.limit);
+  if(assignState.statusFilter!=='all')q+='&status='+encodeURIComponent(assignState.statusFilter);
+  if(assignState.search)q+='&search='+encodeURIComponent(assignState.search);
+  if(assignState.teleFilter!=='all')q+='&assignedTo='+encodeURIComponent(assignState.teleFilter);
+
+  try{
+    var body=await api(q);
+    assignState.leads=body.leads||[];
+    assignState.total=body.total||0;
+
+    renderAssignActiveBanner();
+    renderAssignStatusCounts(body.stats||{});
+    renderAssignmentLeads(body.leads||[]);
+    renderAssignPagination(body.total||0);
+  }catch(err){
+    wrapper.innerHTML='<div class="empty error">'+esc(err.message)+'</div>';
+    if(!authLost(err))showToast(err.message);
+  }
+}
+
+function renderAssignActiveBanner(){
+  var banner=el('assignActiveBanner');
+  var bTitle=el('assignBannerTitle');
+  var bSub=el('assignBannerSubtitle');
+  if(!banner)return;
+
+  var filter=assignState.teleFilter;
+  if(filter==='all'){
+    banner.classList.add('hidden');
+    return;
+  }
+  banner.classList.remove('hidden');
+
+  if(filter==='unassigned'){
+    if(bTitle)bTitle.textContent='📋 Unassigned Leads Pool';
+    if(bSub)bSub.textContent='Showing '+assignState.total+' leads waiting to be assigned to a telemarketer.';
+    return;
+  }
+
+  var agent=assignState.agents.find(function(a){
+    return agentValue(a)===filter||a.name===filter||(a.uid&&filter==='uid:'+a.uid)||(a.uid&&filter===a.uid)||(a.uid&&filter.replace(/^uid:/,'')===a.uid.replace(/^uid[-:]/,''));
+  });
+
+  if(agent){
+    var total=agent.total_assigned||0;
+    var pending=agent.pending_count!=null?agent.pending_count:Math.max(0,total-((agent.contacted_count||0)+(agent.interested_count||0)+(agent.not_interested_count||0)+(agent.dnc_count||0)));
+    if(bTitle)bTitle.textContent='👤 '+agent.name+' · '+total+' Total Leads Assigned';
+    if(bSub)bSub.textContent=pending+' pending to call · '+(agent.contacted_count||0)+' contacted · '+(agent.interested_count||0)+' interested · '+((agent.not_interested_count||0)+(agent.dnc_count||0))+' lost/dnc';
+  }else{
+    if(bTitle)bTitle.textContent='👤 Filter: '+filter+' ('+assignState.total+' leads)';
+    if(bSub)bSub.textContent='Showing assigned leads matching current filter.';
+  }
+}
+
+function renderAssignStatusCounts(stats){
+  var cAll=el('assignCountAll');
+  var cAssigned=el('assignCountAssigned');
+  var cContacted=el('assignCountContacted');
+  var cInterested=el('assignCountInterested');
+  var cNot=el('assignCountNotInterested');
+  var cDnc=el('assignCountDnc');
+
+  var agent=assignState.agents.find(function(a){
+    return agentValue(a)===filter||a.name===filter||(a.uid&&filter==='uid:'+a.uid)||(a.uid&&filter===a.uid)||(a.uid&&filter.replace(/^uid:/,'')===a.uid.replace(/^uid[-:]/,''));
+  });
+
+  if(agent){
+    var total=agent.total_assigned||0;
+    var pending=agent.pending_count!=null?agent.pending_count:Math.max(0,total-((agent.contacted_count||0)+(agent.interested_count||0)+(agent.not_interested_count||0)+(agent.dnc_count||0)));
+    if(cAll)cAll.textContent=total;
+    if(cAssigned)cAssigned.textContent=pending;
+    if(cContacted)cContacted.textContent=agent.contacted_count||0;
+    if(cInterested)cInterested.textContent=agent.interested_count||0;
+    if(cNot)cNot.textContent=agent.not_interested_count||0;
+    if(cDnc)cDnc.textContent=agent.dnc_count||0;
+  }else{
+    if(cAll)cAll.textContent=stats.total||0;
+    if(cAssigned)cAssigned.textContent=stats.assigned||0;
+    if(cContacted)cContacted.textContent=stats.contacted||0;
+    if(cInterested)cInterested.textContent=stats.interested||0;
+    if(cNot)cNot.textContent=stats.not_interested||0;
+    if(cDnc)cDnc.textContent=stats.do_not_call||0;
+  }
+}
+
+function renderAssignmentLeads(leads){
+  var wrapper=el('assignmentLeadsWrapper');
+  if(!wrapper)return;
+  if(!leads.length){
+    if(assignState.teleFilter==='unassigned'){
+      wrapper.innerHTML='<div class="empty">🎉 No unassigned leads! All leads have been allocated to telemarketers.</div>';
+    }else if(assignState.teleFilter!=='all'){
+      wrapper.innerHTML='<div class="empty">No leads found for this telemarketer with the current status filter.<br><br><button class="filter" type="button" onclick="selectAssignmentTele(\'unassigned\')">View Unassigned Leads to Allocate →</button></div>';
+    }else{
+      wrapper.innerHTML='<div class="empty">No leads found matching filter.</div>';
+    }
+    return;
+  }
+
+  wrapper.innerHTML=leads.map(function(lead){
+    var checked=Boolean(assignState.selected[lead.id]);
+    var phone=lead.phone||'';
+    var website=safeUrl(lead.website);
+    var maps=safeUrl(lead.maps_url);
+    var rating=lead.rating?(' · ★ '+lead.rating+(lead.reviews?' / '+lead.reviews:'')):'';
+    var branchBadge=lead.branch_count>0?(' <span class="branch-tag" title="'+lead.branch_count+' branches consolidated">'+lead.branch_count+' branch'+(lead.branch_count>1?'es':'')+'</span>'):'';
+
+    var contactPhones=Number(lead.contact_phones_count)||0;
+    var contactDMs=Number(lead.contact_decision_makers_count)||0;
+    var hasContact=Boolean(lead.contact_public_id||contactPhones>0||contactDMs>0);
+    var contactPill='';
+    if(hasContact){
+      contactPill='<div class="contact-pill" title="'+contactPhones+' phone route'+(contactPhones===1?'':'s')+' and '+contactDMs+' decision maker'+(contactDMs===1?'':'s')+' identified">📞 <strong>'+contactPhones+' Contact Number'+(contactPhones===1?'':'s')+' Found</strong>'+(contactDMs>0?(' · 👤 '+contactDMs+' Leader'+(contactDMs===1?'':'s')):'')+'</div>';
+    }
+
+    var dossierLink=lead.research_public_id?('<a class="vip" target="_blank" rel="noopener" href="/r/'+attr(lead.research_public_id)+'">Dossier V'+(lead.research_version||1)+' ↗</a>'):'';
+    var contactLink=lead.contact_public_id?('<a class="vip contact-vip" target="_blank" rel="noopener" href="/r/'+attr(lead.contact_public_id)+'">📞 Contacts ('+contactPhones+' phones) ↗</a>'):'';
+
+    var teleOpts='<option value="">(Unassigned)</option>';
+    (assignState.agents||[]).forEach(function(a){
+      var value=agentValue(a);
+      var sel=(a.uid?lead.telemarketer_uid===a.uid:lead.assigned_to===a.name)?' selected':'';
+      teleOpts+='<option value="'+attr(value)+'"'+sel+'>'+esc(agentLabel(a))+'</option>';
+    });
+
+    var statuses=['unassigned','assigned','contacted','interested','not_interested','do_not_call'];
+    var statusOpts=statuses.map(function(s){
+      var sel=(lead.lead_status===s)?' selected':'';
+      var lbl=s==='do_not_call'?'DNC':s.replace('_',' ');
+      return '<option value="'+s+'"'+sel+'>'+lbl+'</option>';
+    }).join('');
+
+    var notesSnippet=lead.lead_notes?(esc(lead.lead_notes.slice(0,60))+(lead.lead_notes.length>60?'…':'')):'Add notes';
+
+    return '<article class="lead-row '+(hasContact?'has-contact-research':'')+'">'
+      +'<div><input type="checkbox" id="assignCheck-'+attr(lead.id)+'" class="lead-check" '+(checked?'checked ':'')+'onchange="toggleAssignSelectLead(\''+attr(lead.id)+'\', this.checked)"></div>'
+      +'<div>'
+      +'<h3>'+esc(lead.name)+branchBadge+'</h3>'
+      +'<div class="meta">'+esc(lead.category||'Business')+esc(rating)+'</div>'
+      +'<div class="address" style="margin-top:4px;">'+esc(lead.address||'Address not published')+'</div>'
+      +contactPill
+      +'</div>'
+      +'<div class="company-contact">'
+      +'<div class="phone">'+(phone?('<a class="source-link" href="tel:'+attr(phone.replace(/[^+\d]/g,''))+'" style="font-size:13px;">'+esc(phone)+'</a>'):'<span class="meta">No phone</span>')+'</div>'
+      +'<div class="actions" style="display:flex;gap:8px;margin-top:4px;">'+(website?('<a class="source-link" target="_blank" rel="noopener" href="'+attr(website)+'">Web</a>'):'')+(maps?('<a class="source-link" target="_blank" rel="noopener" href="'+attr(maps)+'">Maps</a>'):'')+'</div>'
+      +'<div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;align-items:flex-start;">'+contactLink+dossierLink+'</div>'
+      +'</div>'
+      +'<div style="display:grid;gap:8px;">'
+      +'<div>'
+      +'<label style="display:block;font:700 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Assigned to</label>'
+      +'<select class="tele-select" onchange="updateAssignLeadAssignee(\''+attr(lead.id)+'\', this)">'+teleOpts+'</select>'
+      +'</div>'
+      +'<div>'
+      +'<label style="display:block;font:700 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Status</label>'
+      +'<select class="status-select '+attr(lead.lead_status||'unassigned')+'" onchange="updateAssignLeadStatus(\''+attr(lead.id)+'\', this)">'+statusOpts+'</select>'
+      +'</div>'
+      +'</div>'
+      +'<div style="display:grid;gap:6px;align-content:start;">'
+      +'<div style="display:flex;gap:6px;align-items:center;">'
+      +'<button class="filter" type="button" style="min-height:30px;padding:0 8px;font-size:9px;white-space:nowrap;" data-id="'+attr(lead.id)+'" data-notes="'+attr(lead.lead_notes||'')+'" onclick="promptLeadNotes(this)">📝 '+(lead.lead_notes?'Notes':'+ Note')+'</button>'
+      +'</div>'
+      +(lead.lead_notes?('<span style="font-size:11px;color:var(--muted);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+attr(lead.lead_notes)+'">'+notesSnippet+'</span>'):'')
+      +'</div>'
+      +'</article>';
+  }).join('');
+}
+
+async function updateAssignLeadAssignee(companyId,selectEl){
+  var assignee=selectEl.value.trim();
+  try{
+    await api('/api/leads/'+encodeURIComponent(companyId),{
+      method:'PATCH',
+      body:JSON.stringify({assignedTo:assignee||null,leadStatus:assignee?'assigned':'unassigned'})
+    });
+    showToast(assignee?'Assigned to '+assignee:'Lead unassigned');
+    await loadAssignmentAgents();
+    await loadAssignmentLeads();
+  }catch(err){
+    if(!authLost(err))showToast('Failed to update assignment: '+err.message);
+  }
+}
+
+async function updateAssignLeadStatus(companyId,selectEl){
+  var status=selectEl.value;
+  selectEl.className='status-select '+status;
+  try{
+    await api('/api/leads/'+encodeURIComponent(companyId),{
+      method:'PATCH',
+      body:JSON.stringify({leadStatus:status})
+    });
+    showToast('Status updated to '+status);
+    await loadAssignmentAgents();
+  }catch(err){
+    if(!authLost(err))showToast('Failed to update status: '+err.message);
+  }
+}
+
+function updateAssignBulkBar(){
+  var keys=Object.keys(assignState.selected).filter(function(k){return assignState.selected[k]});
+  var bulkBar=el('assignBulkBar');
+  var bulkCount=el('assignBulkCount');
+  if(bulkBar)bulkBar.classList.toggle('hidden',keys.length===0);
+  if(bulkCount)bulkCount.textContent=keys.length;
+}
+
+function toggleAssignSelectLead(id,checked){
+  assignState.selected[id]=checked;
+  updateAssignBulkBar();
+}
+
+function toggleAssignSelectAllPage(checked){
+  assignState.leads.forEach(function(lead){
+    assignState.selected[lead.id]=checked;
+    var cb=el('assignCheck-'+lead.id);
+    if(cb)cb.checked=checked;
+  });
+  updateAssignBulkBar();
+}
+
+async function bulkAssignFromAssignmentView(){
+  var keys=Object.keys(assignState.selected).filter(function(k){return assignState.selected[k]});
+  var bulkSelect=el('assignBulkTargetSelect');
+  var tele=bulkSelect?bulkSelect.value.trim():'';
+  if(!keys.length){showToast('No companies selected.');return}
+  if(!tele){showToast('Choose a telemarketer to assign to.');return}
+  try{
+    var res=await api('/api/leads/assign',{method:'POST',body:JSON.stringify({companyIds:keys,assignedTo:tele})});
+    showToast('Assigned '+(res.updated||keys.length)+' companies to '+tele);
+    assignState.selected={};
+    updateAssignBulkBar();
+    var allCb=el('assignSelectAllPage');
+    if(allCb)allCb.checked=false;
+    await loadAssignmentAgents();
+    await loadAssignmentLeads();
+  }catch(err){
+    if(!authLost(err))showToast('Failed to assign: '+err.message);
+  }
+}
+
+async function bulkUnassignFromAssignmentView(){
+  var keys=Object.keys(assignState.selected).filter(function(k){return assignState.selected[k]});
+  if(!keys.length){showToast('No companies selected.');return}
+  if(!window.confirm('Unassign '+keys.length+' selected companies?'))return;
+  try{
+    var res=await api('/api/leads/unassign',{method:'POST',body:JSON.stringify({companyIds:keys})});
+    showToast('Unassigned '+(res.updated||keys.length)+' companies');
+    assignState.selected={};
+    updateAssignBulkBar();
+    var allCb=el('assignSelectAllPage');
+    if(allCb)allCb.checked=false;
+    await loadAssignmentAgents();
+    await loadAssignmentLeads();
+  }catch(err){
+    if(!authLost(err))showToast('Failed to unassign: '+err.message);
+  }
+}
+
+function prevAssignPage(){
+  if(assignState.page>0){
+    assignState.page--;
+    loadAssignmentLeads();
+  }
+}
+
+function nextAssignPage(){
+  if((assignState.page+1)*assignState.limit<assignState.total){
+    assignState.page++;
+    loadAssignmentLeads();
+  }
+}
+
+function renderAssignPagination(total){
+  var start=assignState.page*assignState.limit+(total>0?1:0);
+  var end=Math.min((assignState.page+1)*assignState.limit,total);
+  var pageInfo=el('assignPageInfo');
+  var btnPrev=el('btnPrevAssign');
+  var btnNext=el('btnNextAssign');
+  if(pageInfo)pageInfo.textContent='Showing '+start+'–'+end+' of '+total+' companies';
+  if(btnPrev)btnPrev.disabled=assignState.page===0;
+  if(btnNext)btnNext.disabled=end>=total;
+}
+
 var leadState={leads:[],selected:{},telemarketers:[],statusFilter:'all',search:'',teleFilter:'all',researchFilter:'all',page:0,limit:30,total:0};
 async function loadLeadsView(){if(!state.token)return;await loadTelemarketers();await loadLeads()}
 async function loadTelemarketers(){try{var body=await api('/api/telemarketers');leadState.telemarketers=(body.agents||[]).filter(function(a){return a.active});renderTelemarketerSelectors()}catch(err){if(!authLost(err))showToast('Failed to load telemarketers: '+err.message)}}
-function agentValue(a){return a.uid?'uid:'+a.uid:a.name}
-function agentLabel(a){return a.uid?a.name+' ('+a.uid+')':a.name}
 function renderTelemarketerSelectors(){var filterSelect=el('leadTeleFilter');var bulkSelect=el('bulkAssignSelect');if(filterSelect){var cur=filterSelect.value;var opts='<option value="all">All Telemarketers</option><option value="unassigned">Unassigned Only</option>';leadState.telemarketers.forEach(function(a){opts+='<option value="'+attr(agentValue(a))+'">'+esc(agentLabel(a))+'</option>'});filterSelect.innerHTML=opts;filterSelect.value=cur||'all'}if(bulkSelect){var bOpts='<option value="">Choose telemarketer...</option>';leadState.telemarketers.forEach(function(a){bOpts+='<option value="'+attr(agentValue(a))+'">'+esc(agentLabel(a))+'</option>'});bulkSelect.innerHTML=bOpts}}
 async function loadLeads(){if(!state.token)return;var wrapper=el('leadTableWrapper');if(!wrapper)return;var q='/api/leads?limit='+leadState.limit+'&offset='+(leadState.page*leadState.limit);if(leadState.statusFilter!=='all')q+='&status='+encodeURIComponent(leadState.statusFilter);if(leadState.search)q+='&search='+encodeURIComponent(leadState.search);if(leadState.teleFilter!=='all')q+='&assignedTo='+encodeURIComponent(leadState.teleFilter);if(leadState.researchFilter!=='all')q+='&researchStatus='+encodeURIComponent(leadState.researchFilter);wrapper.innerHTML='<div class="empty">Loading company master list…</div>';try{var body=await api(q);leadState.leads=body.leads||[];leadState.total=body.total||0;renderLeadsSummary(body.stats||{});renderLeads(body.leads||[]);renderLeadsPagination(body.total||0)}catch(err){wrapper.innerHTML='<div class="empty error">'+esc(err.message)+'</div>';if(!authLost(err))showToast(err.message)}}
 function renderLeadsSummary(stats){var sTotal=el('statTotal');var sUnassigned=el('statUnassigned');var sAssigned=el('statAssigned');var sContacted=el('statContacted');var sContacts=el('statContacts');var sHidden=el('statHidden');if(sTotal)sTotal.textContent=stats.total||0;if(sUnassigned)sUnassigned.textContent=stats.unassigned||0;if(sAssigned)sAssigned.textContent=stats.assigned||0;if(sContacted)sContacted.textContent=(stats.contacted||0)+(stats.interested||0);if(sContacts)sContacts.textContent=stats.contacts_found||0;if(sHidden)sHidden.textContent=stats.hidden||0;var cAll=el('countAll');var cUn=el('countUnassigned');var cAss=el('countAssigned');var cCon=el('countContacted');var cInt=el('countInterested');var cNot=el('countNotInterested');var cDnc=el('countDnc');var cHid=el('countHidden');if(cAll)cAll.textContent=stats.total||0;if(cUn)cUn.textContent=stats.unassigned||0;if(cAss)cAss.textContent=stats.assigned||0;if(cCon)cCon.textContent=stats.contacted||0;if(cInt)cInt.textContent=stats.interested||0;if(cNot)cNot.textContent=stats.not_interested||0;if(cDnc)cDnc.textContent=stats.do_not_call||0;if(cHid)cHid.textContent=stats.hidden||0}
@@ -853,6 +1524,7 @@ async function loadTelemarketingView(){
   if(cont&&!teleState.data)cont.innerHTML='<div class="empty">Loading Johor territory directory…</div>';
   var stateVal=el('teleStateSelect')?el('teleStateSelect').value:'johor';
   try{
+    loadTelemarketers();
     var body=await api('/api/territories?state='+encodeURIComponent(stateVal));
     teleState.data=body;
     renderTeleSummary(body.stats||{});
@@ -908,7 +1580,9 @@ function renderTerritoryCards(){
     if(f){
       filteredTowns=d.towns.filter(function(t){
         if(t.name.toLowerCase().indexOf(f)>=0)return true;
-        return t.tamans.some(function(tm){return tm.name.toLowerCase().indexOf(f)>=0});
+        return t.tamans.some(function(tm){
+          return tm.name.toLowerCase().indexOf(f)>=0 || (tm.assignedTo && tm.assignedTo.toLowerCase().indexOf(f)>=0);
+        });
       });
       if(!filteredTowns.length&&d.name.toLowerCase().indexOf(f)<0)return;
     }
@@ -923,7 +1597,9 @@ function renderTerritoryCards(){
     townsToRender.forEach(function(t){
       var filteredTamans=t.tamans;
       if(f&&t.name.toLowerCase().indexOf(f)<0){
-        filteredTamans=t.tamans.filter(function(tm){return tm.name.toLowerCase().indexOf(f)>=0});
+        filteredTamans=t.tamans.filter(function(tm){
+          return tm.name.toLowerCase().indexOf(f)>=0 || (tm.assignedTo && tm.assignedTo.toLowerCase().indexOf(f)>=0);
+        });
       }
       var tScan=t.scan;
       var tScanned=tScan&&(tScan.status==='completed'||(tScan.status==='partial'&&tScan.count>0));
@@ -942,9 +1618,16 @@ function renderTerritoryCards(){
         var isScanning=scan&&terminal.indexOf(scan.status)<0;
         var pillClass=isScanned?'scanned':isScanning?'scanning':'';
         var pipClass=isScanned?'scanned':isScanning?'scanning':'';
+        var assignedTo=tm.assignedTo||(scan&&scan.assignedTo)||'';
+        var leadCount=scan?scan.count:0;
         html+='<div class="taman-pill '+pillClass+'">';
         html+='<span class="taman-pip '+pipClass+'"></span>';
         html+='<span class="taman-name">'+esc(tm.name)+'</span>';
+        if(assignedTo){
+          html+='<button class="taman-assign-btn assigned" type="button" data-taman="'+attr(tm.name)+'" data-town="'+attr(t.name)+'" data-dist="'+attr(d.name)+'" data-place="'+attr(tm.queryPlace)+'" data-public-id="'+attr(scan?scan.publicId:'')+'" data-count="'+attr(leadCount)+'" data-assigned="'+attr(assignedTo)+'" onclick="openTamanAssignModal(this)" title="Assigned to '+esc(assignedTo)+' (click to reassign or unassign)">&#128100; '+esc(assignedTo)+'</button>';
+        }else{
+          html+='<button class="taman-assign-btn" type="button" data-taman="'+attr(tm.name)+'" data-town="'+attr(t.name)+'" data-dist="'+attr(d.name)+'" data-place="'+attr(tm.queryPlace)+'" data-public-id="'+attr(scan?scan.publicId:'')+'" data-count="'+attr(leadCount)+'" onclick="openTamanAssignModal(this)" title="Assign leads in '+esc(tm.name)+' to a telemarketer">+ Assign</button>';
+        }
         if(isScanned){
           html+='<a class="taman-link" target="_blank" rel="noopener" href="/r/'+attr(scan.publicId)+'" title="Open search report">'+esc(scan.count)+(scan.status==='partial'?' businesses · partial':' leads')+'<span title="Leads where a phone number was found"> · '+esc(scan.contacts)+' contacts</span> &#8599;</a>';
           html+='<button class="taman-scan-action" style="background:transparent;color:var(--muted);border:1px solid var(--line);" type="button" data-place="'+attr(tm.queryPlace)+'" data-name="'+attr(tm.name)+'" onclick="queueTerritoryFromBtn(this)" title="Re-scan market">&#8635;</button>';
@@ -1026,6 +1709,147 @@ async function queueTerritoryScan(btn,targetPlace,label){
     btn.disabled=false;
     btn.textContent=origText;
     if(!authLost(err))showToast('Failed to queue scan: '+err.message);
+  }
+}
+async function openTamanAssignModal(btn){
+  var taman=btn.getAttribute('data-taman')||'';
+  var town=btn.getAttribute('data-town')||'';
+  var dist=btn.getAttribute('data-dist')||'';
+  var place=btn.getAttribute('data-place')||'';
+  var pId=btn.getAttribute('data-public-id')||'';
+  var count=Number(btn.getAttribute('data-count'))||0;
+  var currentAssigned=btn.getAttribute('data-assigned')||'';
+
+  var modal=el('tamanAssignModal');
+  if(!modal)return;
+  el('tamanAssignTaman').value=taman;
+  el('tamanAssignTown').value=town;
+  el('tamanAssignDistrict').value=dist;
+  el('tamanAssignQueryPlace').value=place;
+  el('tamanAssignPublicId').value=pId;
+
+  el('tamanModalTitle').textContent=(currentAssigned?'Reassign':'Assign')+' Leads · '+taman;
+  var subText=town+(dist?' ('+dist+')':'');
+  if(count>0) subText+=' · '+count+' lead'+(count===1?'':'s')+' will be assigned';
+  else subText+=' · 0 leads scanned yet (will auto-assign upon scan)';
+  el('tamanModalSub').textContent=subText;
+
+  var curBox=el('tamanModalCurrentAssignee');
+  var curName=el('tamanCurrentAssigneeName');
+  var unassignBtn=el('tamanUnassignBtn');
+  if(currentAssigned){
+    if(curBox)curBox.style.display='block';
+    if(curName)curName.textContent=currentAssigned;
+    if(unassignBtn)unassignBtn.style.display='inline-block';
+    el('tamanAssignSubmitBtn').textContent='Update Assignment';
+  }else{
+    if(curBox)curBox.style.display='none';
+    if(unassignBtn)unassignBtn.style.display='none';
+    el('tamanAssignSubmitBtn').textContent=count>0?'Assign '+count+' Leads':'Assign Taman';
+  }
+
+  if(!leadState.telemarketers||!leadState.telemarketers.length){
+    await loadTelemarketers();
+  }
+  var sel=el('tamanAssignTeleSelect');
+  if(sel){
+    var opts='<option value="">Choose telemarketer...</option>';
+    (leadState.telemarketers||[]).forEach(function(a){
+      var val=agentValue(a);
+      var selected=(currentAssigned && (a.name.toLowerCase()===currentAssigned.toLowerCase() || (a.uid && currentAssigned==='uid:'+a.uid)))?' selected':'';
+      opts+='<option value="'+attr(val)+'"'+selected+'>'+esc(agentLabel(a))+'</option>';
+    });
+    sel.innerHTML=opts;
+  }
+  modal.classList.remove('hidden');
+}
+function closeTamanAssignModal(){
+  var modal=el('tamanAssignModal');
+  if(modal)modal.classList.add('hidden');
+}
+async function submitTamanAssign(e){
+  if(e&&e.preventDefault)e.preventDefault();
+  var taman=el('tamanAssignTaman').value;
+  var town=el('tamanAssignTown').value;
+  var dist=el('tamanAssignDistrict').value;
+  var place=el('tamanAssignQueryPlace').value;
+  var pId=el('tamanAssignPublicId').value;
+  var sel=el('tamanAssignTeleSelect');
+  var tele=sel?sel.value.trim():'';
+  if(!tele){showToast('Please select a telemarketer.');return}
+  var btn=el('tamanAssignSubmitBtn');
+  if(btn){btn.disabled=true;btn.textContent='Assigning…'}
+  try{
+    var res=await api('/api/territories/assign',{
+      method:'POST',
+      body:JSON.stringify({
+        state:el('teleStateSelect')?el('teleStateSelect').value:'johor',
+        taman:taman,
+        town:town,
+        district:dist,
+        queryPlace:place,
+        publicId:pId,
+        assignedTo:tele
+      })
+    });
+    var assignedName=res.assignedTo||tele;
+    if(teleState.data&&teleState.data.districts){
+      teleState.data.districts.forEach(function(d){
+        (d.towns||[]).forEach(function(t){
+          (t.tamans||[]).forEach(function(tm){
+            if(tm.name===taman||tm.queryPlace===place){
+              tm.assignedTo=assignedName;
+              if(tm.scan)tm.scan.assignedTo=assignedName;
+            }
+          });
+        });
+      });
+    }
+    closeTamanAssignModal();
+    renderTerritoryCards();
+    showToast('Assigned '+(res.updated||0)+' leads in '+taman+' to '+assignedName);
+  }catch(err){
+    if(!authLost(err))showToast('Failed to assign: '+err.message);
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Assign All Leads'}
+  }
+}
+async function submitTamanUnassign(){
+  var taman=el('tamanAssignTaman').value;
+  var place=el('tamanAssignQueryPlace').value;
+  var pId=el('tamanAssignPublicId').value;
+  if(!window.confirm('Unassign leads in '+taman+'?'))return;
+  var btn=el('tamanUnassignBtn');
+  if(btn){btn.disabled=true;btn.textContent='Unassigning…'}
+  try{
+    var res=await api('/api/territories/unassign',{
+      method:'POST',
+      body:JSON.stringify({
+        state:el('teleStateSelect')?el('teleStateSelect').value:'johor',
+        taman:taman,
+        queryPlace:place,
+        publicId:pId
+      })
+    });
+    if(teleState.data&&teleState.data.districts){
+      teleState.data.districts.forEach(function(d){
+        (d.towns||[]).forEach(function(t){
+          (t.tamans||[]).forEach(function(tm){
+            if(tm.name===taman||tm.queryPlace===place){
+              delete tm.assignedTo;
+              if(tm.scan)delete tm.scan.assignedTo;
+            }
+          });
+        });
+      });
+    }
+    closeTamanAssignModal();
+    renderTerritoryCards();
+    showToast('Unassigned leads in '+taman);
+  }catch(err){
+    if(!authLost(err))showToast('Failed to unassign: '+err.message);
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Unassign'}
   }
 }
 (function boot(){var saved=eeKey.read();if(saved){el('accessKey').value=saved;connect()}else{setTimeout(function(){el('accessKey').focus()},80)}})();

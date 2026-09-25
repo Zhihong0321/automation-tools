@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import vm from 'node:vm';
 import { JOHOR_TERRITORY, buildTerritoryResponse } from './territories.ts';
+import * as db from './reportdb.ts';
 import { page } from './portal.ts';
 
 test('Johor territory dataset contains all 10 districts, towns and tamans', () => {
@@ -165,4 +167,350 @@ test('partial business lists with companies appear as scanned tamans', () => {
   assert.match(html, /esc\(tScan\.contacts\)\+' contacts/);
   assert.match(html, /stats\.totalContacts\|\|0/);
 });
+
+test('buildTerritoryResponse incorporates taman assignment and exposes assigned telemarketer', () => {
+  const scans = [
+    {
+      public_id: 'report_pelangi',
+      status: 'completed',
+      place: 'taman pelangi, johor bahru city centre, johor',
+      keyword: 'business',
+      company_count: 120,
+      contact_count: 112,
+      created_at: new Date().toISOString(),
+      assigned_to: 'Sarah Tan',
+    },
+    {
+      public_id: 'report_sentosa',
+      status: 'completed',
+      place: 'taman sentosa, johor bahru city centre, johor',
+      keyword: 'business',
+      company_count: 120,
+      contact_count: 68,
+      created_at: new Date().toISOString(),
+    },
+  ];
+
+  const assignments = {
+    'Taman Sentosa': {
+      assigned_to: 'John Lee',
+      telemarketer_uid: 'uid-john',
+      assigned_at: new Date().toISOString(),
+    },
+    'Taman Kebun Teh': 'Alice Wong',
+  };
+
+  const res = buildTerritoryResponse('johor', scans, assignments);
+  const jb = res.districts.find((d) => d.name === 'Johor Bahru');
+  const cityCentre = jb?.towns.find((t) => t.name.includes('Johor Bahru City Centre'));
+  assert.ok(cityCentre);
+
+  // Pelangi gets assignedTo from scan's assigned_to
+  const pelangi = cityCentre.tamans.find((tm) => tm.name === 'Taman Pelangi');
+  assert.ok(pelangi);
+  assert.equal(pelangi.assignedTo, 'Sarah Tan');
+  assert.equal(pelangi.scan?.assignedTo, 'Sarah Tan');
+
+  // Sentosa gets assignedTo from assignments override
+  const sentosa = cityCentre.tamans.find((tm) => tm.name === 'Taman Sentosa');
+  assert.ok(sentosa);
+  assert.equal(sentosa.assignedTo, 'John Lee');
+  assert.equal(sentosa.scan?.assignedTo, 'John Lee');
+
+  // Kebun Teh (unscanned) gets assignedTo from assignments
+  const kebunTeh = cityCentre.tamans.find((tm) => tm.name === 'Taman Kebun Teh');
+  assert.ok(kebunTeh);
+  assert.equal(kebunTeh.assignedTo, 'Alice Wong');
+  assert.equal(kebunTeh.scan, undefined);
+});
+
+test('Lead Map page UI includes taman assignment button, telemarketer indicator, and assignment modal', () => {
+  const html = page();
+
+  // Modal dialog elements
+  assert.match(html, /id="tamanAssignModal"/);
+  assert.match(html, /id="tamanModalTitle"/);
+  assert.match(html, /id="tamanAssignTeleSelect"/);
+  assert.match(html, /id="tamanAssignSubmitBtn"/);
+  assert.match(html, /id="tamanUnassignBtn"/);
+
+  // Assignment buttons and styles
+  assert.match(html, /\.taman-assign-btn/);
+  assert.match(html, /\.taman-assign-btn\.assigned/);
+  assert.match(html, /openTamanAssignModal/);
+  assert.match(html, /closeTamanAssignModal/);
+  assert.match(html, /submitTamanAssign/);
+  assert.match(html, /submitTamanUnassign/);
+
+  // Endpoint calls
+  assert.match(html, /\/api\/territories\/assign/);
+  assert.match(html, /\/api\/territories\/unassign/);
+});
+
+test('reportdb exports taman assignment interfaces', () => {
+  assert.equal(typeof db.getTamanAssignments, 'function');
+  assert.equal(typeof db.findTamanCompanyIds, 'function');
+  assert.equal(typeof db.assignTamanLeads, 'function');
+  assert.equal(typeof db.unassignTamanLeads, 'function');
+});
+
+test('submitTamanAssign and submitTamanUnassign update local state and call territories API', async () => {
+  const html = page();
+  const start = html.indexOf('async function submitTamanAssign');
+  const end = html.indexOf('(function boot', start);
+  assert.ok(start > 0 && end > start);
+
+  const apiCalls: { path: string; body: any }[] = [];
+  const town = {
+    id: 'town-1',
+    name: 'Johor Bahru City Centre',
+    tamans: [
+      { name: 'Taman Pelangi', queryPlace: 'Taman Pelangi, Johor Bahru City Centre, Johor', assignedTo: undefined as string | undefined }
+    ]
+  };
+
+  const formValues: Record<string, string> = {
+    tamanAssignTaman: 'Taman Pelangi',
+    tamanAssignTown: 'Johor Bahru City Centre',
+    tamanAssignDistrict: 'Johor Bahru',
+    tamanAssignQueryPlace: 'Taman Pelangi, Johor Bahru City Centre, Johor',
+    tamanAssignPublicId: 'scan-1',
+    tamanAssignTeleSelect: 'Sarah Tan',
+    teleStateSelect: 'johor',
+  };
+
+  const context: Record<string, any> = {
+    teleState: { data: { districts: [{ id: 'dist-1', towns: [town] }] } },
+    el: (id: string) => {
+      if (id === 'tamanAssignModal') return { classList: { add: () => {}, remove: () => {} } };
+      if (id === 'tamanAssignSubmitBtn') return { disabled: false, textContent: '' };
+      if (id === 'tamanUnassignBtn') return { disabled: false, textContent: '' };
+      return { value: formValues[id] || '' };
+    },
+    api: async (path: string, options: { body: string }) => {
+      const body = JSON.parse(options.body);
+      apiCalls.push({ path, body });
+      return { ok: true, updated: 120, assignedTo: body.assignedTo || 'Sarah Tan' };
+    },
+    renderTerritoryCards: () => {},
+    closeTamanAssignModal: () => {},
+    showToast: () => {},
+    authLost: () => false,
+    window: { confirm: () => true },
+  };
+
+  const script = html.slice(start, end) + '; ({ submitTamanAssign, submitTamanUnassign })';
+  const fns = vm.runInNewContext(script, context);
+
+  // 1. Test assigning
+  await fns.submitTamanAssign({ preventDefault: () => {} });
+  assert.equal(apiCalls.length, 1);
+  assert.equal(apiCalls[0].path, '/api/territories/assign');
+  assert.equal(apiCalls[0].body.taman, 'Taman Pelangi');
+  assert.equal(apiCalls[0].body.assignedTo, 'Sarah Tan');
+  assert.equal(town.tamans[0].assignedTo, 'Sarah Tan');
+
+  // 2. Test unassigning
+  await fns.submitTamanUnassign();
+  assert.equal(apiCalls.length, 2);
+  assert.equal(apiCalls[1].path, '/api/territories/unassign');
+  assert.equal(apiCalls[1].body.taman, 'Taman Pelangi');
+  assert.equal(town.tamans[0].assignedTo, undefined);
+});
+
+test('Lead assignment page UI is integrated into portal navigation and views', () => {
+  const html = page();
+
+  // Navigation tabs
+  assert.match(html, /<button class="nav-button" data-view="assignment"/);
+  assert.match(html, /<button class="mobile-tab" data-view="assignment"/);
+
+  // Assignment view container & stats
+  assert.match(html, /id="assignmentView"/);
+  assert.match(html, /id="assignStatTotal"/);
+  assert.match(html, /id="assignStatAssigned"/);
+  assert.match(html, /id="assignStatUnassigned"/);
+  assert.match(html, /id="assignStatAgents"/);
+
+  // Telemarketer cards & filters
+  assert.match(html, /id="assignRosterGrid"/);
+  assert.match(html, /id="assignTeleFilter"/);
+  assert.match(html, /id="assignSearchInput"/);
+  assert.match(html, /id="assignActiveBanner"/);
+  assert.match(html, /id="assignBulkBar"/);
+  assert.match(html, /id="assignmentLeadsWrapper"/);
+  assert.match(html, /id="assignPagination"/);
+
+  // Client-side functions exist
+  assert.match(html, /function loadAssignmentView\(\)/);
+  assert.match(html, /function loadAssignmentAgents\(\)/);
+  assert.match(html, /function renderAssignTelemarketerCards\(\)/);
+  assert.match(html, /function selectAssignmentTele\(/);
+  assert.match(html, /function onAssignTeleFilterChange\(\)/);
+  assert.match(html, /function loadAssignmentLeads\(\)/);
+  assert.match(html, /function renderAssignmentLeads\(/);
+  assert.match(html, /function updateAssignLeadAssignee\(/);
+  assert.match(html, /function bulkAssignFromAssignmentView\(\)/);
+});
+
+test('reportdb exports getLeadStats and getTelemarketerDetails interfaces', () => {
+  assert.equal(typeof db.getLeadStats, 'function');
+  assert.equal(typeof db.getTelemarketerDetails, 'function');
+  assert.equal(typeof db.listLeads, 'function');
+  assert.equal(typeof db.assignLeads, 'function');
+  assert.equal(typeof db.unassignLeads, 'function');
+});
+
+test('Lead assignment client-side logic renders telemarketer cards with total leads and handles filtering', async () => {
+  const html = page();
+  const start = html.indexOf('function agentValue');
+  const end = html.indexOf('var leadState={', start);
+  assert.ok(start > 0 && end > start);
+
+  const elements: Record<string, any> = {
+    assignStatTotal: { textContent: '' },
+    assignStatAssigned: { textContent: '' },
+    assignStatUnassigned: { textContent: '' },
+    assignStatAgents: { textContent: '' },
+    assignStatContacted: { textContent: '' },
+    assignStatInterested: { textContent: '' },
+    assignRosterGrid: { innerHTML: '' },
+    assignTeleFilter: { value: 'all', innerHTML: '' },
+    assignBulkTargetSelect: { innerHTML: '' },
+    assignSearchInput: { value: '' },
+    assignActiveBanner: { classList: { add: () => {}, remove: () => {}, contains: () => false } },
+    assignBannerTitle: { textContent: '' },
+    assignBannerSubtitle: { textContent: '' },
+    assignCountAll: { textContent: '' },
+    assignCountAssigned: { textContent: '' },
+    assignCountContacted: { textContent: '' },
+    assignCountInterested: { textContent: '' },
+    assignCountNotInterested: { textContent: '' },
+    assignCountDnc: { textContent: '' },
+    assignmentLeadsWrapper: { innerHTML: '' },
+    assignPageInfo: { textContent: '' },
+    btnPrevAssign: { disabled: false },
+    btnNextAssign: { disabled: false },
+    assignBulkBar: { classList: { add: () => {}, remove: () => {}, toggle: () => {} } },
+    assignBulkCount: { textContent: '' },
+    assignSelectAllPage: { checked: false },
+    toast: { textContent: '', classList: { add: () => {}, remove: () => {} } },
+  };
+
+  const sampleAgents = [
+    {
+      id: 1,
+      uid: 'uid-sarah',
+      name: 'Sarah Tan',
+      phone: '+6012-3456789',
+      email: 'sarah@example.com',
+      active: true,
+      total_assigned: 45,
+      pending_count: 20,
+      contacted_count: 15,
+      interested_count: 7,
+      not_interested_count: 2,
+      dnc_count: 1,
+    },
+    {
+      id: 2,
+      uid: 'uid-john',
+      name: 'John Lee',
+      phone: '+6017-9876543',
+      email: 'john@example.com',
+      active: true,
+      total_assigned: 30,
+      pending_count: 10,
+      contacted_count: 12,
+      interested_count: 5,
+      not_interested_count: 2,
+      dnc_count: 1,
+    },
+  ];
+
+  const sampleStats = {
+    total: 200,
+    unassigned: 125,
+    assigned: 30,
+    contacted: 27,
+    interested: 12,
+    not_interested: 4,
+    do_not_call: 2,
+    contacts_found: 85,
+    hidden: 0,
+  };
+
+  const sampleLeads = [
+    {
+      id: 'c1',
+      name: 'Alpha Engineering Sdn Bhd',
+      category: 'Engineering Contractor',
+      phone: '+607-1234567',
+      address: 'Jalan Ros Merah, Johor Jaya',
+      lead_status: 'assigned',
+      assigned_to: 'Sarah Tan',
+      telemarketer_uid: 'uid-sarah',
+      contact_phones_count: 2,
+      contact_decision_makers_count: 1,
+    },
+  ];
+
+  let lastApiQuery = '';
+  const context = {
+    state: { token: 'mock-token', jobs: {}, reports: [] },
+    el: (id: string) => elements[id] || null,
+    document: {
+      querySelectorAll: () => [],
+      getElementById: (id: string) => elements[id] || null,
+    },
+    api: async (path: string) => {
+      lastApiQuery = path;
+      if (path === '/api/telemarketers') {
+        return { agents: sampleAgents, telemarketers: ['Sarah Tan', 'John Lee'], stats: sampleStats };
+      }
+      if (path.startsWith('/api/leads')) {
+        return { leads: sampleLeads, total: 1, stats: sampleStats };
+      }
+      return {};
+    },
+    showToast: () => {},
+    authLost: () => false,
+    esc: (v: any) => String(v ?? ''),
+    attr: (v: any) => String(v ?? ''),
+    safeUrl: (v: any) => String(v ?? ''),
+  };
+
+  const script = html.slice(start, end) + '; ({ assignState, loadAssignmentView, selectAssignmentTele, renderAssignTelemarketerCards })';
+  const fns = vm.runInNewContext(script, context);
+
+  // Test loading the assignment view
+  await fns.loadAssignmentView();
+
+  // Verify telemarketers were loaded with stats
+  assert.equal(fns.assignState.agents.length, 2);
+  assert.equal(elements.assignStatTotal.textContent, 200);
+  assert.equal(elements.assignStatUnassigned.textContent, 125);
+  assert.equal(elements.assignStatAssigned.textContent, 75); // 30+27+12+4+2
+  assert.equal(elements.assignStatAgents.textContent, 2);
+
+  // Verify telemarketer cards were rendered into the roster grid
+  const gridHtml = elements.assignRosterGrid.innerHTML;
+  assert.ok(gridHtml.includes('Sarah Tan'));
+  assert.ok(gridHtml.includes('45')); // Total assigned to Sarah
+  assert.ok(gridHtml.includes('John Lee'));
+  assert.ok(gridHtml.includes('30')); // Total assigned to John
+  assert.ok(gridHtml.includes('Unassigned Leads'));
+  assert.ok(gridHtml.includes('125')); // Unassigned count
+
+  // Test filtering by a specific telemarketer
+  await fns.selectAssignmentTele('uid:sarah');
+  assert.equal(fns.assignState.teleFilter, 'uid:sarah');
+  assert.ok(lastApiQuery.includes('assignedTo=uid%3Asarah') || lastApiQuery.includes('assignedTo=uid:sarah'));
+  assert.equal(elements.assignTeleFilter.value, 'uid:sarah');
+
+  // Verify the active banner shows Sarah Tan and her 45 assigned leads
+  assert.ok(elements.assignBannerTitle.textContent.includes('Sarah Tan'));
+  assert.ok(elements.assignBannerTitle.textContent.includes('45'));
+});
+
 

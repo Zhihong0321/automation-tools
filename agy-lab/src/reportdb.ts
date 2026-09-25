@@ -464,6 +464,22 @@ export function migrate(): Promise<void> {
             foreign key (telemarketer_uid) references telemarketer(uid) on delete set null;
         end if;
       end $$;
+
+      create table if not exists taman_assignment (
+        id bigserial primary key,
+        state text not null default 'johor',
+        district text,
+        town text,
+        taman text not null,
+        query_place text,
+        assigned_to text not null,
+        telemarketer_uid text,
+        assigned_at timestamptz not null default now(),
+        updated_at timestamptz not null default now(),
+        constraint taman_assignment_state_taman_key unique (state, taman)
+      );
+      create index if not exists taman_assignment_taman_idx on taman_assignment (taman);
+      create index if not exists taman_assignment_assigned_to_idx on taman_assignment (assigned_to);
     `);
   })().catch((err) => {
     migrated = null;
@@ -865,6 +881,17 @@ export async function recoverableContactReports(limit: number, activePublicIds: 
     [activePublicIds, Math.max(0, Math.floor(limit))],
   );
   return out.rows;
+}
+
+/** The in-process cloud worker stops with the hub, so a restart can safely retry its unfinished slots. */
+export async function requeueInterruptedCloudContactReports(): Promise<number> {
+  await migrate();
+  const out = await sql(
+    `update published_report set status = 'queued', job_id = null, error = null, updated_at = now()
+     where report_type = 'contact_research' and status = 'running'
+       and request->>'researchEngine' = 'agy-web'`,
+  );
+  return out.rowCount ?? 0;
 }
 
 export async function pendingContactReportCount(): Promise<number> {
@@ -1534,6 +1561,51 @@ export interface LeadStats {
   hidden: number;
 }
 
+export async function getLeadStats(): Promise<LeadStats> {
+  await migrate();
+  const statsRes = await sql<{
+    total: string;
+    unassigned: string;
+    assigned: string;
+    contacted: string;
+    interested: string;
+    not_interested: string;
+    do_not_call: string;
+    contacts_found: string;
+    hidden: string;
+  }>(
+    `select
+       count(*) filter (where coalesce(c.is_hidden, false) = false)::text as total,
+       count(*) filter (where coalesce(c.is_hidden, false) = false and (c.assigned_to is null or trim(c.assigned_to) = '' or coalesce(c.lead_status, 'unassigned') = 'unassigned'))::text as unassigned,
+       count(*) filter (where coalesce(c.is_hidden, false) = false and c.assigned_to is not null and trim(c.assigned_to) <> '' and coalesce(c.lead_status, 'assigned') = 'assigned')::text as assigned,
+       count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'contacted')::text as contacted,
+       count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'interested')::text as interested,
+       count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'not_interested')::text as not_interested,
+       count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'do_not_call')::text as do_not_call,
+       count(distinct c.id) filter (where coalesce(c.is_hidden, false) = false and crep.public_id is not null and crep.status in ('completed', 'partial'))::text as contacts_found,
+       count(*) filter (where coalesce(c.is_hidden, false) = true)::text as hidden
+     from company_data c
+     left join lateral (
+       select public_id, status from published_report
+       where company_id = c.id and report_type = 'contact_research'
+       order by version desc, created_at desc limit 1
+     ) crep on true
+     where c.merged_into is null`,
+  );
+  const statsRow = statsRes.rows[0];
+  return {
+    total: Number(statsRow?.total ?? 0),
+    unassigned: Number(statsRow?.unassigned ?? 0),
+    assigned: Number(statsRow?.assigned ?? 0),
+    contacted: Number(statsRow?.contacted ?? 0),
+    interested: Number(statsRow?.interested ?? 0),
+    not_interested: Number(statsRow?.not_interested ?? 0),
+    do_not_call: Number(statsRow?.do_not_call ?? 0),
+    contacts_found: Number(statsRow?.contacts_found ?? 0),
+    hidden: Number(statsRow?.hidden ?? 0),
+  };
+}
+
 export async function listLeads(options: {
   search?: string | null;
   status?: string | null;
@@ -1555,8 +1627,12 @@ export async function listLeads(options: {
   } else {
     whereConditions.push('coalesce(c.is_hidden, false) = false');
     if (options.status && options.status !== 'all') {
-      params.push(options.status.trim());
-      whereConditions.push(`c.lead_status = $${params.length}`);
+      if (options.status === 'unassigned') {
+        whereConditions.push(`(coalesce(c.lead_status, 'unassigned') = 'unassigned' or c.assigned_to is null or trim(c.assigned_to) = '')`);
+      } else {
+        params.push(options.status.trim());
+        whereConditions.push(`c.lead_status = $${params.length}`);
+      }
     }
   }
 
@@ -1568,13 +1644,17 @@ export async function listLeads(options: {
 
   if (options.assignedTo && options.assignedTo !== 'all') {
     if (options.assignedTo === 'unassigned') {
-      whereConditions.push(`c.assigned_to is null`);
+      whereConditions.push(`(c.assigned_to is null or trim(c.assigned_to) = '')`);
     } else {
       const assigned = options.assignedTo.trim();
-      params.push(assigned.startsWith('uid:') ? assigned.slice(4) : assigned);
-      whereConditions.push(assigned.startsWith('uid:')
-        ? `c.telemarketer_uid = $${params.length}`
-        : `c.assigned_to = $${params.length}`);
+      if (assigned.startsWith('uid:')) {
+        params.push(assigned.slice(4));
+        whereConditions.push(`c.telemarketer_uid = $${params.length}`);
+      } else {
+        params.push(assigned);
+        const pIdx = params.length;
+        whereConditions.push(`(lower(trim(c.assigned_to)) = lower(trim($${pIdx})) or c.telemarketer_uid = (select uid from telemarketer where lower(trim(name)) = lower(trim($${pIdx})) limit 1))`);
+      }
     }
   }
 
@@ -1694,49 +1774,8 @@ export async function listLeads(options: {
        where ${whereClause}`,
       params,
     ),
-    sql<{
-      total: string;
-      unassigned: string;
-      assigned: string;
-      contacted: string;
-      interested: string;
-      not_interested: string;
-      do_not_call: string;
-      contacts_found: string;
-      hidden: string;
-    }>(
-      `select
-         count(*) filter (where coalesce(c.is_hidden, false) = false)::text as total,
-         count(*) filter (where coalesce(c.is_hidden, false) = false and coalesce(c.lead_status, 'unassigned') = 'unassigned')::text as unassigned,
-         count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'assigned')::text as assigned,
-         count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'contacted')::text as contacted,
-         count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'interested')::text as interested,
-         count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'not_interested')::text as not_interested,
-         count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'do_not_call')::text as do_not_call,
-         count(distinct c.id) filter (where coalesce(c.is_hidden, false) = false and crep.public_id is not null and crep.status in ('completed', 'partial'))::text as contacts_found,
-         count(*) filter (where coalesce(c.is_hidden, false) = true)::text as hidden
-       from company_data c
-       left join lateral (
-         select public_id, status from published_report
-         where company_id = c.id and report_type = 'contact_research'
-         order by version desc, created_at desc limit 1
-       ) crep on true
-       where c.merged_into is null`,
-    ),
+    getLeadStats(),
   ]);
-
-  const statsRow = statsRes.rows[0];
-  const stats: LeadStats = {
-    total: Number(statsRow?.total ?? 0),
-    unassigned: Number(statsRow?.unassigned ?? 0),
-    assigned: Number(statsRow?.assigned ?? 0),
-    contacted: Number(statsRow?.contacted ?? 0),
-    interested: Number(statsRow?.interested ?? 0),
-    not_interested: Number(statsRow?.not_interested ?? 0),
-    do_not_call: Number(statsRow?.do_not_call ?? 0),
-    contacts_found: Number(statsRow?.contacts_found ?? 0),
-    hidden: Number(statsRow?.hidden ?? 0),
-  };
 
   return {
     leads: items.rows,
@@ -1924,6 +1963,7 @@ export interface TelemarketerAgent {
   active: boolean;
   created_at: string;
   total_assigned: number;
+  pending_count?: number;
   contacted_count: number;
   interested_count: number;
   not_interested_count: number;
@@ -1950,15 +1990,17 @@ export async function getTelemarketerDetails(): Promise<TelemarketerAgent[]> {
       t.notes,
       t.active,
       t.created_at::text,
-      count(c.id) filter (where c.merged_into is null)::int as total_assigned,
-      count(c.id) filter (where c.merged_into is null and c.lead_status = 'contacted')::int as contacted_count,
-      count(c.id) filter (where c.merged_into is null and c.lead_status = 'interested')::int as interested_count,
-      count(c.id) filter (where c.merged_into is null and c.lead_status = 'not_interested')::int as not_interested_count,
-      count(c.id) filter (where c.merged_into is null and c.lead_status = 'do_not_call')::int as dnc_count
+      count(c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false)::int as total_assigned,
+      count(c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and coalesce(c.lead_status, 'assigned') in ('assigned', 'unassigned'))::int as pending_count,
+      count(c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'contacted')::int as contacted_count,
+      count(c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'interested')::int as interested_count,
+      count(c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'not_interested')::int as not_interested_count,
+      count(c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'do_not_call')::int as dnc_count
     from telemarketer t
-    left join company_data c on c.telemarketer_uid = t.uid
-      or (t.uid is null and c.telemarketer_uid is null
-          and lower(trim(c.assigned_to)) = lower(trim(t.name)))
+    left join company_data c on (
+      (t.uid is not null and c.telemarketer_uid = t.uid)
+      or (c.telemarketer_uid is null and lower(trim(c.assigned_to)) = lower(trim(t.name)))
+    )
     group by t.id, t.uid, t.name, t.phone, t.email, t.notes, t.active, t.created_at
     order by t.active desc, t.name asc
   `);
@@ -2111,6 +2153,10 @@ export async function updateTelemarketer(
       `update company_data set assigned_to = $1 where lower(trim(assigned_to)) = lower(trim($2))`,
       [newName, oldName]
     );
+    await sql(
+      `update taman_assignment set assigned_to = $1 where lower(trim(assigned_to)) = lower(trim($2))`,
+      [newName, oldName]
+    );
   }
 
   const agents = await getTelemarketerDetails();
@@ -2127,6 +2173,12 @@ export async function deleteTelemarketer(id: number, unassignLeads: boolean = tr
     await sql(
       `update company_data set assigned_to = null, telemarketer_uid = null,
          lead_status = 'unassigned', lead_updated_at = now()
+       where telemarketer_uid = (select uid from telemarketer where id = $1)
+          or (telemarketer_uid is null and lower(trim(assigned_to)) = lower(trim($2)))`,
+      [id, agentName]
+    );
+    await sql(
+      `delete from taman_assignment
        where telemarketer_uid = (select uid from telemarketer where id = $1)
           or (telemarketer_uid is null and lower(trim(assigned_to)) = lower(trim($2)))`,
       [id, agentName]
@@ -2206,6 +2258,7 @@ export interface TerritoryScanStat {
   keyword: string | null;
   company_count: number;
   contact_count: number;
+  assigned_to?: string | null;
   created_at: string;
 }
 
@@ -2234,6 +2287,15 @@ export async function getTerritoryScanStats(): Promise<TerritoryScanStat[]> {
             and nullif(btrim(coalesce(c.phone, '')), '') is not null),
         0
       )::int as contact_count,
+      (
+        select c.assigned_to
+        from search_report_company sc
+        join company_data c on c.id = sc.company_id
+        where sc.report_id = r.source_search_report_id and c.assigned_to is not null
+        group by c.assigned_to
+        order by count(*) desc
+        limit 1
+      ) as assigned_to,
       r.created_at::text
     from published_report r
     where r.report_type = 'business_search'
@@ -2242,6 +2304,167 @@ export async function getTerritoryScanStats(): Promise<TerritoryScanStat[]> {
     limit 2000
   `);
   return res.rows;
+}
+
+export interface TamanAssignmentRecord {
+  taman: string;
+  district?: string | null;
+  town?: string | null;
+  assigned_to: string;
+  telemarketer_uid: string | null;
+  assigned_at: string;
+}
+
+export async function getTamanAssignments(state = 'johor'): Promise<Record<string, TamanAssignmentRecord>> {
+  if (!configured()) return {};
+  await migrate();
+  const res = await sql<TamanAssignmentRecord>(
+    `select taman, district, town, assigned_to, telemarketer_uid, assigned_at::text
+     from taman_assignment
+     where lower(state) = lower($1)`,
+    [state.trim()],
+  );
+  const map: Record<string, TamanAssignmentRecord> = {};
+  for (const row of res.rows) {
+    map[row.taman] = row;
+  }
+  return map;
+}
+
+export async function findTamanCompanyIds(options: {
+  publicId?: string;
+  queryPlace?: string;
+  taman?: string;
+}): Promise<string[]> {
+  if (!configured()) return [];
+  await migrate();
+  const ids = new Set<string>();
+
+  if (options.publicId && options.publicId.trim()) {
+    const pId = options.publicId.trim();
+    const linked = await sql<{ company_id: string }>(
+      `select distinct sc.company_id::text
+       from search_report_company sc
+       join published_report r on (r.source_search_report_id = sc.report_id or r.id = sc.report_id)
+       where r.public_id = $1`,
+      [pId],
+    );
+    for (const r of linked.rows) ids.add(String(r.company_id));
+
+    const fromJson = await sql<{ id: string }>(
+      `select distinct c.id::text
+       from published_report r,
+       jsonb_array_elements(case when jsonb_typeof(r.result->'companies') = 'array' then r.result->'companies' else '[]'::jsonb end) ce
+       join company_data c on (c.place_id = ce->>'place_id' or (c.name = ce->>'name' and c.address = ce->>'address'))
+       where r.public_id = $1 and ce->>'place_id' is not null`,
+      [pId],
+    );
+    for (const r of fromJson.rows) ids.add(String(r.id));
+  }
+
+  if (options.queryPlace && options.queryPlace.trim()) {
+    const qp = options.queryPlace.trim().toLowerCase();
+    const linked = await sql<{ company_id: string }>(
+      `select distinct sc.company_id::text
+       from search_report_company sc
+       join published_report r on (r.source_search_report_id = sc.report_id)
+       where r.report_type = 'business_search'
+         and lower(trim(coalesce(r.request->>'place', ''))) = $1`,
+      [qp],
+    );
+    for (const r of linked.rows) ids.add(String(r.company_id));
+  }
+
+  return Array.from(ids);
+}
+
+export async function assignTamanLeads(options: {
+  state?: string;
+  district?: string;
+  town?: string;
+  taman: string;
+  queryPlace?: string;
+  publicId?: string;
+  assignedTo: string;
+  notes?: string | null;
+}): Promise<{ ok: boolean; updated: number; assignedTo: string; telemarketer_uid: string | null; taman: string }> {
+  if (!configured()) return { ok: true, updated: 0, assignedTo: options.assignedTo, telemarketer_uid: null, taman: options.taman };
+  await migrate();
+  const state = (options.state || 'johor').trim();
+  const taman = options.taman.trim();
+  if (!taman) throw new Error('taman name is required');
+  const assignedTo = options.assignedTo.trim();
+  if (!assignedTo) throw new Error('assignedTo is required');
+
+  const target = await resolveTelemarketer(assignedTo);
+  const agentUid = target.uid;
+
+  await sql(
+    `insert into taman_assignment (state, district, town, taman, query_place, assigned_to, telemarketer_uid, assigned_at, updated_at)
+     values ($1, $2, $3, $4, $5, $6, $7, now(), now())
+     on conflict (state, taman) do update set
+       district = coalesce(excluded.district, taman_assignment.district),
+       town = coalesce(excluded.town, taman_assignment.town),
+       query_place = coalesce(excluded.query_place, taman_assignment.query_place),
+       assigned_to = excluded.assigned_to,
+       telemarketer_uid = excluded.telemarketer_uid,
+       assigned_at = now(),
+       updated_at = now()`,
+    [state, options.district?.trim() || null, options.town?.trim() || null, taman, options.queryPlace?.trim() || null, target.name, agentUid],
+  );
+
+  const companyIds = await findTamanCompanyIds({
+    publicId: options.publicId,
+    queryPlace: options.queryPlace,
+    taman,
+  });
+
+  let updatedCount = 0;
+  if (companyIds.length > 0) {
+    const res = await assignLeads(companyIds, target.name, options.notes);
+    updatedCount = res.updated;
+  }
+
+  return {
+    ok: true,
+    updated: updatedCount,
+    assignedTo: target.name,
+    telemarketer_uid: agentUid,
+    taman,
+  };
+}
+
+export async function unassignTamanLeads(options: {
+  state?: string;
+  taman: string;
+  queryPlace?: string;
+  publicId?: string;
+}): Promise<{ ok: boolean; updated: number; taman: string }> {
+  if (!configured()) return { ok: true, updated: 0, taman: options.taman };
+  await migrate();
+  const state = (options.state || 'johor').trim();
+  const taman = options.taman.trim();
+  if (!taman) throw new Error('taman name is required');
+
+  await sql(`delete from taman_assignment where lower(state) = lower($1) and lower(taman) = lower($2)`, [state, taman]);
+
+  const companyIds = await findTamanCompanyIds({
+    publicId: options.publicId,
+    queryPlace: options.queryPlace,
+    taman,
+  });
+
+  let updatedCount = 0;
+  if (companyIds.length > 0) {
+    const res = await unassignLeads(companyIds);
+    updatedCount = res.updated;
+  }
+
+  return {
+    ok: true,
+    updated: updatedCount,
+    taman,
+  };
 }
 
 export interface RawCompanyContactRow {
@@ -2282,10 +2505,17 @@ export async function getCompanyContactRows(options: {
 
   if (options.assignedTo && options.assignedTo !== 'all') {
     if (options.assignedTo === 'unassigned') {
-      whereConditions.push(`c.assigned_to is null`);
+      whereConditions.push(`(c.assigned_to is null or trim(c.assigned_to) = '')`);
     } else {
-      params.push(options.assignedTo.trim());
-      whereConditions.push(`c.assigned_to = $${params.length}`);
+      const assigned = options.assignedTo.trim();
+      if (assigned.startsWith('uid:')) {
+        params.push(assigned.slice(4));
+        whereConditions.push(`c.telemarketer_uid = $${params.length}`);
+      } else {
+        params.push(assigned);
+        const pIdx = params.length;
+        whereConditions.push(`(lower(trim(c.assigned_to)) = lower(trim($${pIdx})) or c.telemarketer_uid = (select uid from telemarketer where lower(trim(name)) = lower(trim($${pIdx})) limit 1))`);
+      }
     }
   }
 
@@ -2337,4 +2567,3 @@ export async function close(): Promise<void> {
   if (pool) await pool.end();
   pool = null;
 }
-

@@ -2502,7 +2502,8 @@ async function runContactResearch(
     let discoveryMeta: Record<string, unknown> = { model, engine: autoContact.contactResearchJobType(), status: 'failed' };
 
     try {
-      if (autoContact.contactResearchJobType() === 'research.contact') {
+      const jobType = autoContact.contactResearchJobType();
+      if (jobType === 'research.contact' || jobType === 'research.contact.cloud') {
         const website = str(company.website);
         const payload = {
           reportId,
@@ -2510,11 +2511,12 @@ async function runContactResearch(
           ...(website && !/google\.[^/]+\/(?:search|searchviewer)/i.test(website) ? { website } : {}),
           location: str(company.address),
           ...(str(company.maps_url) ? { extraUrls: [str(company.maps_url)] } : {}),
+          ...(jobType === 'research.contact.cloud' ? { prompt: contactResearchPrompt(company, targetRole) } : {}),
         };
         // The report is the durable slot. Store the job id before the broker
         // makes it claimable, then wait without a report deadline. The worker's
         // result route writes directly to this row, including after a restart.
-        const job = jobs.create('research.contact', payload, 0, false);
+        const job = jobs.create(jobType, payload, 0, false);
         try {
           await db.updateReport(publicId, { jobId: job.id });
         } catch (error) {
@@ -2593,10 +2595,10 @@ export async function acceptContactResult(
   if (report.job_id !== jobId) throw new Error('contact result job id does not match its report slot');
   if (report.status === 'completed') return;
 
-  if (!ok && /individual quota reached|rate_limit_error|token plan usage|(?:^|\W)429(?:\W|$)/i.test(workerError ?? '')) {
+  if (!ok && /individual quota reached|rate_limit_error|token plan usage|(?:^|\W)429(?:\W|$)|(?:^|\W)timeout(?:\W|$)|timed out/i.test(workerError ?? '')) {
     if (await db.deferContactResult(reportId, jobId)) {
       await db.logEvent({ reportId, publicId: report.public_id, jobId, stage: 'research.contact',
-        event: 'contact.deferred', detail: { worker, reason: 'provider quota' } }).catch(() => {});
+        event: 'contact.deferred', detail: { worker, reason: workerError } }).catch(() => {});
     }
     return;
   }
@@ -2910,6 +2912,7 @@ export async function launchContactResearch(
     targetRole: str(opts.targetRole).trim() || null,
     requesterId: opts.requesterId ?? null,
     provider,
+    ...(process.env.CONTACT_RESEARCH_MODEL?.trim().toLowerCase() === 'agy-web' ? { researchEngine: 'agy-web' } : {}),
     compareToReportId,
     ...(opts.autoQueued === true ? { autoQueued: 'true' } : {}),
     companySnapshot: {
@@ -2945,8 +2948,60 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
   // ---- Telemarketing territory / lead-map --------------------------------
   if (method === 'GET' && p === '/api/territories') {
     const state = url.searchParams.get('state') || 'johor';
-    const scans = await db.getTerritoryScanStats().catch(() => []);
-    const result = territories.buildTerritoryResponse(state, scans);
+    const [scans, assignments] = await Promise.all([
+      db.getTerritoryScanStats().catch(() => []),
+      db.getTamanAssignments(state).catch(() => ({})),
+    ]);
+    const result = territories.buildTerritoryResponse(state, scans, assignments);
+    ctx.json(res, 200, result);
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/territories/assign') {
+    const body = await ctx.readJson(req);
+    const taman = str(body.taman || body.name).trim();
+    const assignedTo = str(body.assignedTo || body.assigned_to).trim();
+    if (!taman) {
+      ctx.json(res, 400, { error: 'taman is required' });
+      return true;
+    }
+    if (!assignedTo || assignedTo === 'unassigned') {
+      const result = await db.unassignTamanLeads({
+        state: str(body.state || 'johor').trim(),
+        taman,
+        queryPlace: str(body.queryPlace || body.query_place).trim() || undefined,
+        publicId: str(body.publicId || body.public_id).trim() || undefined,
+      });
+      ctx.json(res, 200, result);
+      return true;
+    }
+    const result = await db.assignTamanLeads({
+      state: str(body.state || 'johor').trim(),
+      district: str(body.district).trim() || undefined,
+      town: str(body.town).trim() || undefined,
+      taman,
+      queryPlace: str(body.queryPlace || body.query_place).trim() || undefined,
+      publicId: str(body.publicId || body.public_id).trim() || undefined,
+      assignedTo,
+      notes: str(body.notes).trim() || null,
+    });
+    ctx.json(res, 200, result);
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/territories/unassign') {
+    const body = await ctx.readJson(req);
+    const taman = str(body.taman || body.name).trim();
+    if (!taman) {
+      ctx.json(res, 400, { error: 'taman is required' });
+      return true;
+    }
+    const result = await db.unassignTamanLeads({
+      state: str(body.state || 'johor').trim(),
+      taman,
+      queryPlace: str(body.queryPlace || body.query_place).trim() || undefined,
+      publicId: str(body.publicId || body.public_id).trim() || undefined,
+    });
     ctx.json(res, 200, result);
     return true;
   }
@@ -3125,11 +3180,12 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
   }
 
   if (method === 'GET' && p === '/api/telemarketers') {
-    const [telemarketers, agents] = await Promise.all([
+    const [telemarketers, agents, stats] = await Promise.all([
       db.listTelemarketers().catch(() => []),
       db.getTelemarketerDetails().catch(() => []),
+      db.getLeadStats().catch(() => null),
     ]);
-    ctx.json(res, 200, { telemarketers, agents });
+    ctx.json(res, 200, { telemarketers, agents, stats });
     return true;
   }
 

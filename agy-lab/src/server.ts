@@ -22,6 +22,7 @@ import * as log from './logstore.ts';
 import * as intel from './intel.ts';
 import * as reportdb from './reportdb.ts';
 import * as autoContact from './autocontact.ts';
+import * as cloudContactWorker from './cloud-contact-worker.ts';
 import { page } from './ui.ts';
 import { page as docsPage } from './docs.ts';
 import { document as openApiDocument } from './openapi.ts';
@@ -463,6 +464,13 @@ function reapAbandonedRuns(staleMinutes: number): void {
 }
 
 server.listen(PORT, '0.0.0.0', () => {
+  cloudContactWorker.start(PORT);
+  void (async () => {
+    if (process.env.CONTACT_RESEARCH_MODEL?.trim().toLowerCase() === 'agy-web') {
+      const count = await reportdb.requeueInterruptedCloudContactReports();
+      if (count) console.log(`[cloud-contact] requeued ${count} interrupted report(s)`);
+    }
+  })().catch((error) => console.error('[cloud-contact] startup failed: ' + String(error)));
   console.log('agy-lab listening on :' + PORT);
   console.log('  HOME     ' + agy.HOME);
   console.log('  agy      ' + (fs.existsSync(agy.BIN) ? agy.BIN : 'not installed yet - POST /api/install'));
