@@ -104,14 +104,14 @@ export const NAME_KEY_SQL = nameKeySql();
 export const REGISTERED_SQL =
   "~* '(^|[[:space:]])(sdn[[:space:]]*bhd|sendirian[[:space:]]+berhad|berhad|bhd|plt|llp|pte[[:space:]]*ltd|ltd|limited|inc|incorporated|corp|corporation|gmbh|pty)$'";
 
-export type GeminiKeyKind = 'grounding' | 'official';
+export type GeminiKeyKind = 'grounding' | 'official' | 'tavily';
 
 export async function listGeminiContactKeys(): Promise<Array<{ id: number; kind: GeminiKeyKind; secret: string }>> {
   await migrate();
   const out = await sql(`select id, kind, secret from gemini_contact_key order by kind, id`);
   return out.rows.map((row) => ({
     id: Number(row.id),
-    kind: row.kind === 'official' ? 'official' : 'grounding',
+    kind: row.kind === 'official' ? 'official' : row.kind === 'tavily' ? 'tavily' : 'grounding',
     secret: String(row.secret ?? ''),
   }));
 }
@@ -132,12 +132,14 @@ export function migrate(): Promise<void> {
     await sql(`
       create table if not exists gemini_contact_key (
         id bigserial primary key,
-        kind text not null check (kind in ('grounding', 'official')),
+        kind text not null,
         secret text not null,
         created_at timestamptz not null default now(),
         unique (kind, secret)
       );
     `);
+    await sql(`alter table gemini_contact_key drop constraint if exists gemini_contact_key_kind_check;`).catch(() => {});
+    await sql(`alter table gemini_contact_key add constraint gemini_contact_key_kind_check check (kind in ('grounding', 'official', 'tavily'));`).catch(() => {});
     await sql(`
       create table if not exists published_report (
         id bigserial primary key,

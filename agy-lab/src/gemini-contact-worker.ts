@@ -267,29 +267,80 @@ type GenerateCall = {
   retries?: number;
 };
 
-export function createKeyPool() {
+export type KeyPoolOptions = {
+  concurrency?: number;
+  monthlyLimit?: number;
+};
+
+export function createKeyPool(options: KeyPoolOptions = {}) {
+  const concurrency = options.concurrency ?? KEY_CONCURRENCY;
+  const monthlyLimit = options.monthlyLimit ?? 0;
   const state = {
     keys: [] as string[],
     inflight: new Map<string, number>(),
     coolUntil: new Map<string, number>(),
-    waiters: [] as Array<(lease: { secret: string; release: (coolMs?: number) => void }) => void>,
+    usage: new Map<string, { month: string; count: number }>(),
+    rrIndex: 0,
+    waiters: [] as Array<(lease: { secret: string; release: (coolMs?: number, quotaExceeded?: boolean) => void }) => void>,
   };
-  function usable(key: string): boolean {
-    return (state.coolUntil.get(key) ?? 0) <= Date.now();
+
+  function currentMonth(): string {
+    const d = new Date();
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
   }
+
+  function getMonthUsage(key: string): number {
+    const m = currentMonth();
+    const cur = state.usage.get(key);
+    if (!cur || cur.month !== m) return 0;
+    return cur.count;
+  }
+
+  function incrementUsage(key: string): void {
+    const m = currentMonth();
+    const cur = state.usage.get(key);
+    if (!cur || cur.month !== m) {
+      state.usage.set(key, { month: m, count: 1 });
+    } else {
+      cur.count += 1;
+    }
+  }
+
+  function endOfMonthMs(): number {
+    const d = new Date();
+    const nextMonth = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
+    return Math.max(60_000, nextMonth.getTime() - Date.now());
+  }
+
+  function usable(key: string): boolean {
+    if ((state.coolUntil.get(key) ?? 0) > Date.now()) return false;
+    if (monthlyLimit > 0 && getMonthUsage(key) >= monthlyLimit) return false;
+    return true;
+  }
+
   function wake(): void {
-    for (const key of state.keys) {
+    if (!state.keys.length || !state.waiters.length) return;
+    const len = state.keys.length;
+    for (let attempt = 0; attempt < len && state.waiters.length; attempt++) {
+      const idx = (state.rrIndex + attempt) % len;
+      const key = state.keys[idx]!;
       if (!usable(key)) continue;
-      while ((state.inflight.get(key) ?? 0) < KEY_CONCURRENCY && state.waiters.length) {
+      while ((state.inflight.get(key) ?? 0) < concurrency && state.waiters.length) {
+        state.rrIndex = (idx + 1) % len;
         const resolve = state.waiters.shift()!;
         state.inflight.set(key, (state.inflight.get(key) ?? 0) + 1);
+        incrementUsage(key);
         let released = false;
         resolve({
           secret: key,
-          release(coolMs = 0) {
+          release(coolMs = 0, quotaExceeded = false) {
             if (released) return;
             released = true;
-            if (coolMs > 0) state.coolUntil.set(key, Date.now() + coolMs);
+            if (quotaExceeded) {
+              state.coolUntil.set(key, Date.now() + Math.max(coolMs, endOfMonthMs()));
+            } else if (coolMs > 0) {
+              state.coolUntil.set(key, Date.now() + coolMs);
+            }
             state.inflight.set(key, Math.max(0, (state.inflight.get(key) ?? 1) - 1));
             wake();
           },
@@ -297,33 +348,55 @@ export function createKeyPool() {
       }
     }
   }
+
   return {
     setKeys(keys: string[]) {
-      state.keys = [...new Set(keys.map((key) => key.trim()).filter(Boolean))];
+      state.keys = [...new Set(keys.map((k) => k.trim()).filter(Boolean))];
       wake();
     },
     acquire() {
-      return new Promise<{ secret: string; release: (coolMs?: number) => void }>((resolve) => {
+      return new Promise<{ secret: string; release: (coolMs?: number, quotaExceeded?: boolean) => void }>((resolve) => {
         state.waiters.push(resolve);
         wake();
       });
     },
+    stats() {
+      return state.keys.map((secret) => ({
+        secret,
+        tail: maskKey(secret),
+        usedThisMonth: getMonthUsage(secret),
+        monthlyLimit: monthlyLimit > 0 ? monthlyLimit : null,
+        cooling: (state.coolUntil.get(secret) ?? 0) > Date.now(),
+      }));
+    },
+    slots() {
+      return state.keys.filter(usable).length * concurrency;
+    },
   };
 }
 
-const groundingPool = createKeyPool();
-const officialPool = createKeyPool();
+export const TAVILY_MONTHLY_LIMIT = 1000;
+const tavilyPool = createKeyPool({ monthlyLimit: TAVILY_MONTHLY_LIMIT, concurrency: KEY_CONCURRENCY });
+const officialPool = createKeyPool({ concurrency: KEY_CONCURRENCY });
 
-export async function loadRuntimeKeys(env: NodeJS.ProcessEnv = process.env): Promise<{ grounding: string[]; official: string[] }> {
-  let grounding: string[] = [];
+export async function loadRuntimeKeys(env: NodeJS.ProcessEnv = process.env): Promise<{ tavily: string[]; official: string[]; grounding: string[] }> {
+  let tavily: string[] = [];
   let official: string[] = [];
   try {
     const rows = await db.listGeminiContactKeys();
-    grounding = rows.filter((row) => row.kind === 'grounding').map((row) => row.secret);
+    tavily = rows.filter((row) => row.kind === 'tavily').map((row) => row.secret);
     official = rows.filter((row) => row.kind === 'official').map((row) => row.secret);
-  } catch { /* the table is created on migrate; a caller without a database uses env */ }
-  if (!grounding.length && env.GEMINI37_API_KEY?.trim()) grounding = [env.GEMINI37_API_KEY.trim()];
-  return { grounding, official };
+    if (!tavily.length) {
+      tavily = rows.filter((row) => row.kind === 'grounding' && row.secret.startsWith('tvly-')).map((row) => row.secret);
+    }
+  } catch { /* database table created on migrate; caller without db uses env */ }
+
+  if (!tavily.length) {
+    const envTav = env.TAVILY_API_KEYS ?? env.TAVILY_API_KEY ?? (env.GEMINI37_API_KEY?.startsWith('tvly-') ? env.GEMINI37_API_KEY : '');
+    const split = envTav.split(/[,\n]/).map((k) => k.trim()).filter(Boolean);
+    if (split.length) tavily = split;
+  }
+  return { tavily, official, grounding: tavily };
 }
 
 function maskKey(secret: string): string {
@@ -336,33 +409,145 @@ export async function handleKeys(
   url: URL,
   ctx: { json: (res: unknown, status: number, body: unknown) => void; readJson: (req: unknown) => Promise<Record<string, unknown>> },
 ): Promise<boolean> {
-  if (url.pathname !== '/api/gemini-contact-keys') return false;
+  if (url.pathname !== '/api/gemini-contact-keys' && url.pathname !== '/api/contact-keys') return false;
   const method = req.method ?? 'GET';
   if (method === 'GET') {
     const keys = await db.listGeminiContactKeys();
-    const view = (kind: 'grounding' | 'official') => keys.filter((row) => row.kind === kind).map((row) => ({ id: row.id, tail: maskKey(row.secret) }));
-    const grounding = view('grounding');
-    const official = view('official');
+    const tavilyStats = tavilyPool.stats();
+    const officialStats = officialPool.stats();
+    const view = (kind: 'tavily' | 'official' | 'grounding') =>
+      keys.filter((row) => row.kind === kind).map((row) => ({ id: row.id, tail: maskKey(row.secret) }));
     ctx.json(res, 200, {
-      grounding,
-      official,
-      step1Slots: Math.max(grounding.length, 0) * KEY_CONCURRENCY,
-      step2Slots: official.length * KEY_CONCURRENCY,
+      tavily: tavilyStats.length ? tavilyStats : view('tavily'),
+      official: officialStats.length ? officialStats : view('official'),
+      grounding: tavilyStats.length ? tavilyStats : (view('tavily').length ? view('tavily') : view('grounding')),
+      step1Slots: tavilyPool.slots() || keys.filter((r) => r.kind === 'tavily').length * KEY_CONCURRENCY,
+      step2Slots: officialPool.slots() || keys.filter((r) => r.kind === 'official').length * KEY_CONCURRENCY,
     });
     return true;
   }
   if (method === 'POST') {
     const body = await ctx.readJson(req);
-    if (Array.isArray(body.grounding)) await db.replaceGeminiContactKeys('grounding', body.grounding.map(String));
-    if (Array.isArray(body.official)) await db.replaceGeminiContactKeys('official', body.official.map(String));
+    if (Array.isArray(body.tavily)) {
+      await db.replaceGeminiContactKeys('tavily', body.tavily.map(String));
+    } else if (Array.isArray(body.grounding)) {
+      await db.replaceGeminiContactKeys('tavily', body.grounding.map(String));
+    }
+    if (Array.isArray(body.official)) {
+      await db.replaceGeminiContactKeys('official', body.official.map(String));
+    }
     const keys = await loadRuntimeKeys();
-    groundingPool.setKeys(keys.grounding);
+    tavilyPool.setKeys(keys.tavily);
     officialPool.setKeys(keys.official);
-    ctx.json(res, 200, { ok: true, step1Slots: keys.grounding.length * KEY_CONCURRENCY, step2Slots: keys.official.length * KEY_CONCURRENCY });
+    ctx.json(res, 200, {
+      ok: true,
+      step1Slots: tavilyPool.slots(),
+      step2Slots: officialPool.slots(),
+    });
     return true;
   }
   ctx.json(res, 405, { error: 'method not allowed' });
   return true;
+}
+
+export async function tavilySearch(
+  target: Target,
+  apiKey: string,
+  fetchImpl: FetchImpl = fetch,
+  timeoutMs = 30_000,
+): Promise<{ sources: Source[]; queries: string[] }> {
+  const cleanName = target.name.trim();
+  const cleanLocation = target.location.trim();
+  const queries: string[] = [];
+
+  if (cleanLocation) {
+    queries.push(`"${cleanName}" ${cleanLocation}`);
+  } else {
+    queries.push(`"${cleanName}"`);
+  }
+  queries.push(`"${cleanName}" official website contact`);
+
+  const results: Array<{ title: string; url: string; content?: string }> = [];
+
+  await Promise.all(
+    queries.map(async (query) => {
+      let res: Response;
+      try {
+        res = await fetchImpl('https://api.tavily.com/search', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            api_key: apiKey,
+            query,
+            max_results: 8,
+            search_depth: 'advanced',
+            include_answer: false,
+          }),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (cause) {
+        const name = cause instanceof Error ? cause.name : '';
+        throw fail(
+          name === 'TimeoutError' || name === 'AbortError'
+            ? 'tavily search timed out'
+            : `upstream error: ${(cause as Error)?.message ?? cause}`,
+          'timeout',
+        );
+      }
+      const raw = await res.text();
+      if (res.status === 429 || /usage_limit|quota|credit|rate_limit/i.test(raw)) {
+        throw fail(`429 rate_limit_error: tavily quota or rate limit: ${raw.slice(0, 200)}`, 'rate_limit');
+      }
+      if (!res.ok) {
+        throw fail(`upstream error: tavily answered ${res.status}: ${raw.slice(0, 200)}`, 'timeout');
+      }
+      const body = tryParseJson(raw);
+      if (body && Array.isArray(body.results)) {
+        for (const item of body.results as Array<Record<string, unknown>>) {
+          const url = publicUrl(item.url);
+          const title = cleanCell(item.title, 200);
+          const content = cleanCell(item.content, 400);
+          if (url && !isSearchPage(url)) {
+            results.push({ url, title, content });
+          }
+        }
+      }
+    }),
+  );
+
+  const targetHost = target.website ? hostOf(target.website) : '';
+  const seenUrls = new Set<string>();
+  const sources: Source[] = [];
+
+  for (const item of results) {
+    const key = dedupeKey(item.url);
+    if (seenUrls.has(key)) continue;
+    seenUrls.add(key);
+
+    const host = hostOf(item.url);
+    let kind = 'other';
+    if (targetHost && (host === targetHost || host.endsWith('.' + targetHost))) {
+      kind = 'official';
+    } else if (/\b(facebook|instagram|linkedin|twitter|tiktok)\.com$/i.test(host)) {
+      kind = 'social';
+    } else if (/\b(maps\.google\.|waze\.com|tripadvisor\.com|yelp\.com|foursquare\.com)/i.test(host)) {
+      kind = 'maps';
+    } else if (/\b(emis\.com|sme100\.asia|panjiva\.com|ctoscredit\.com|yellowpages\.my|kompass\.com|cidb\.gov\.my|ssm\.com\.my)/i.test(host)) {
+      kind = 'registry';
+    } else if (/\b(thestar\.com\.my|nst\.com\.my|theedgemarkets\.com|optionstheedge\.com|bloomberg\.com|malaymail\.com)/i.test(host)) {
+      kind = 'news';
+    } else if (/\b(directory|yellowpages|find|info)/i.test(host)) {
+      kind = 'directory';
+    }
+
+    sources.push({
+      url: item.url,
+      kind,
+      why: item.content || item.title || 'tavily search result',
+    });
+  }
+
+  return { sources, queries };
 }
 
 async function postGenerate(prompt: string, call: GenerateCall, fetchImpl: FetchImpl, timeoutMs: number): Promise<string> {
@@ -587,7 +772,7 @@ export function toResearchResult(target: Target, extracted: Record<string, unkno
     phone_contacts: phones,
     email_contacts: emails,
     research_meta: {
-      engine: GEMINI37_MODEL,
+      engine: String(meta.engine || ('tavily + ' + OFFICIAL_MODEL)),
       queries: Array.isArray(meta.queries) ? meta.queries.map((query) => cleanCell(query, 200)).filter(Boolean) : [],
       sources: urls,
     },
@@ -598,26 +783,28 @@ export async function research(raw: unknown, deps: {
   env?: NodeJS.ProcessEnv;
   fetchImpl?: FetchImpl;
   now?: Date;
-  groundingKey?: string;
+  tavilyKey?: string;
   officialKey?: string;
+  groundingKey?: string;
 } = {}): Promise<Record<string, unknown>> {
   const target = targetFromPayload(raw);
   const config = resolveConfig(deps.env ?? process.env);
-  const groundingKey = deps.groundingKey ?? config.apiKey;
-  const officialKey = deps.officialKey ?? '';
-  if (!groundingKey) throw fail('GEMINI37_API_KEY is not set', 'not_installed');
+  const keys = await loadRuntimeKeys(deps.env ?? process.env);
+  const tavilyKey = deps.tavilyKey ?? deps.groundingKey ?? keys.tavily[0] ?? '';
+  const officialKey = deps.officialKey ?? keys.official[0] ?? '';
+  if (!tavilyKey) throw fail('TAVILY_API_KEY is not set', 'not_installed');
   if (!officialKey) throw fail('official Gemini API key is not set', 'not_installed');
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const foundText = await postGenerate(findPagesPrompt(target), {
-    url: `${config.baseUrl}/v1beta/models/${encodeURIComponent(config.model)}:generateContent`,
-    headers: { authorization: `Bearer ${groundingKey}`, 'content-type': 'application/json' },
-    tools: [{ google_search: {} }],
-    generationConfig: { thinkingConfig: { thinkingLevel: 'high' } },
-  }, fetchImpl, config.timeoutMs);
-  const found = extractLastJson(foundText);
-  if (!found || found.searched !== true) throw fail('upstream error: gemini search did not run', 'timeout');
-  const urls = await collectPageUrls(target, normaliseSources(found.sources), fetchImpl, config, deps.now);
-  if (!urls.length) return toResearchResult(target, { people: [], phones: [], emails: [] }, [], found);
+
+  const searchResult = await tavilySearch(target, tavilyKey, fetchImpl, config.timeoutMs);
+  const urls = await collectPageUrls(target, searchResult.sources, fetchImpl, config, deps.now);
+  if (!urls.length) {
+    return toResearchResult(target, { people: [], phones: [], emails: [] }, [], {
+      engine: 'tavily + ' + OFFICIAL_MODEL,
+      queries: searchResult.queries,
+    });
+  }
+
   const extractedText = await postGenerate(extractContactsPrompt(target, urls), {
     url: `${OFFICIAL_BASE_URL}/v1beta/models/${encodeURIComponent(OFFICIAL_MODEL)}:generateContent`,
     headers: { 'x-goog-api-key': officialKey, 'content-type': 'application/json' },
@@ -628,7 +815,10 @@ export async function research(raw: unknown, deps: {
   if (!extracted || !Array.isArray(extracted.people) || !Array.isArray(extracted.phones) || !Array.isArray(extracted.emails)) {
     throw fail('upstream error: gemini extract step returned no contact JSON', 'timeout');
   }
-  return toResearchResult(target, extracted, urls, found);
+  return toResearchResult(target, extracted, urls, {
+    engine: 'tavily + ' + OFFICIAL_MODEL,
+    queries: searchResult.queries,
+  });
 }
 
 function errorText(cause: unknown): string {
@@ -649,30 +839,28 @@ async function execute(name: string, job: jobs.Job, env: NodeJS.ProcessEnv): Pro
       return;
     }
     const keys = await loadRuntimeKeys(env);
-    groundingPool.setKeys(keys.grounding);
+    tavilyPool.setKeys(keys.tavily);
     officialPool.setKeys(keys.official);
-    const search = await groundingPool.acquire();
+    const search = await tavilyPool.acquire();
     const target = targetFromPayload(job.payload);
     const config = resolveConfig(env);
-    let foundText = '';
+    let searchResult: { sources: Source[]; queries: string[] };
     try {
-      foundText = await postGenerate(findPagesPrompt(target), {
-        url: `${config.baseUrl}/v1beta/models/${encodeURIComponent(config.model)}:generateContent`,
-        headers: { authorization: `Bearer ${search.secret}`, 'content-type': 'application/json' },
-        tools: [{ google_search: {} }],
-        generationConfig: { thinkingConfig: { thinkingLevel: 'high' } },
-      }, fetch, config.timeoutMs);
+      searchResult = await tavilySearch(target, search.secret, fetch, config.timeoutMs);
       search.release();
     } catch (cause) {
-      search.release(/429|rate_limit|quota/i.test(errorText(cause)) ? 15 * 60_000 : 0);
+      const isRate = /429|rate_limit|quota|credit/i.test(errorText(cause));
+      search.release(isRate ? 60_000 : 0, isRate);
       throw cause;
     }
-    const found = extractLastJson(foundText);
-    if (!found || found.searched !== true) throw fail('upstream error: gemini search did not run', 'timeout');
-    const urls = await collectPageUrls(target, normaliseSources(found.sources), fetch, config);
+    const urls = await collectPageUrls(target, searchResult.sources, fetch, config);
     let result: Record<string, unknown>;
-    if (!urls.length) result = toResearchResult(target, { people: [], phones: [], emails: [] }, [], found);
-    else {
+    if (!urls.length) {
+      result = toResearchResult(target, { people: [], phones: [], emails: [] }, [], {
+        engine: 'tavily + ' + OFFICIAL_MODEL,
+        queries: searchResult.queries,
+      });
+    } else {
       const page = await officialPool.acquire();
       try {
         const extractedText = await postGenerate(extractContactsPrompt(target, urls), {
@@ -685,7 +873,10 @@ async function execute(name: string, job: jobs.Job, env: NodeJS.ProcessEnv): Pro
         if (!extracted || !Array.isArray(extracted.people) || !Array.isArray(extracted.phones) || !Array.isArray(extracted.emails)) {
           throw fail('upstream error: gemini extract step returned no contact JSON', 'timeout');
         }
-        result = toResearchResult(target, extracted, urls, found);
+        result = toResearchResult(target, extracted, urls, {
+          engine: 'tavily + ' + OFFICIAL_MODEL,
+          queries: searchResult.queries,
+        });
         page.release();
       } catch (cause) {
         page.release(/429|rate_limit|quota/i.test(errorText(cause)) ? 15 * 60_000 : 0);
@@ -704,7 +895,7 @@ async function execute(name: string, job: jobs.Job, env: NodeJS.ProcessEnv): Pro
         const intel = await import('./intel.ts');
         await intel.acceptContactResult(reportId, job.id, false, null, message, name);
       } catch (saveErr) {
-        console.error('[gemini37] could not save contact result: ' + (saveErr as Error).message);
+        console.error('[contact] could not save contact result: ' + (saveErr as Error).message);
       }
     }
     jobs.finish(job.id, false, null, message);
@@ -720,16 +911,16 @@ async function lane(name: string, env: NodeJS.ProcessEnv): Promise<void> {
     jobs.touch(name, '127.0.0.1', [JOB_TYPE]);
     try {
       const keys = await loadRuntimeKeys(env);
-      groundingPool.setKeys(keys.grounding);
+      tavilyPool.setKeys(keys.tavily);
       officialPool.setKeys(keys.official);
-      if (!keys.grounding.length || !keys.official.length) {
+      if (!keys.tavily.length || !keys.official.length) {
         await new Promise((resolve) => setTimeout(resolve, 3_000));
         continue;
       }
       const job = await jobs.take(name, { types: [JOB_TYPE], waitMs: 5_000 });
       if (job) await execute(name, job, env);
     } catch (cause) {
-      console.error(`[gemini37] ${name} ${errorText(cause)}`);
+      console.error(`[contact] ${name} ${errorText(cause)}`);
       await new Promise((resolve) => setTimeout(resolve, 5_000));
     }
   }
@@ -740,10 +931,10 @@ export function start(env: NodeJS.ProcessEnv = process.env): void {
   const running = new Set<string>();
   const fit = async () => {
     const keys = await loadRuntimeKeys(env);
-    groundingPool.setKeys(keys.grounding);
+    tavilyPool.setKeys(keys.tavily);
     officialPool.setKeys(keys.official);
-    const capacity = keys.grounding.length && keys.official.length
-      ? (keys.grounding.length + keys.official.length) * KEY_CONCURRENCY
+    const capacity = keys.tavily.length && keys.official.length
+      ? (keys.tavily.length + keys.official.length) * KEY_CONCURRENCY
       : 0;
     for (let i = 0; i < capacity; i++) {
       const name = laneName(i);
@@ -756,5 +947,5 @@ export function start(env: NodeJS.ProcessEnv = process.env): void {
   void fit();
   const timer = setInterval(() => { void fit(); }, 3_000);
   timer.unref();
-  console.log(`[gemini37] contact worker ${WORKER_NAME} claiming ${JOB_TYPE}`);
+  console.log(`[contact] worker ${WORKER_NAME} claiming ${JOB_TYPE}`);
 }

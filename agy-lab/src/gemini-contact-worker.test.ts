@@ -11,7 +11,9 @@ import {
   research,
   resolveConfig,
   targetFromPayload,
+  tavilySearch,
   toResearchResult,
+  TAVILY_MONTHLY_LIMIT,
 } from './gemini-contact-worker.ts';
 
 const ENV = {
@@ -80,45 +82,108 @@ test('each gemini key runs at most two calls at once', async () => {
   assert.equal(highest, 2);
 });
 
-test('research runs find then extract for one assigned company', async () => {
-  const prompts: string[] = [];
-  const calls: Array<{ url: string; tools: unknown; auth: string }> = [];
-  const fetchRedirect: typeof fetch = async (url, init) => {
+test('research runs tavily find then gemini extract for one assigned company', async () => {
+  const tavilyQueries: string[] = [];
+  const calls: Array<{ url: string; tools?: unknown; auth: string; body: unknown }> = [];
+  const fetchMock: typeof fetch = async (url, init) => {
     const href = String(url);
-    if (href.includes('vertexaisearch')) {
-      const response = new Response('', { status: 200 });
-      Object.defineProperty(response, 'url', { value: 'https://acme-bakery.example/about' });
-      return response;
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    const body = JSON.parse(String(init?.body ?? '{}'));
+    if (href.includes('api.tavily.com')) {
+      tavilyQueries.push(body.query);
+      calls.push({ url: href, auth: body.api_key, body });
+      return new Response(JSON.stringify({
+        results: [
+          {
+            title: 'Acme Bakery About Us',
+            url: 'https://acme-bakery.example/about',
+            content: 'Acme Bakery in Johor Bahru. Siti Aminah is Owner.',
+          },
+          {
+            title: 'Jobstreet',
+            url: 'https://www.jobstreet.com.my/job/9',
+            content: 'Ad',
+          },
+        ],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
     }
-    const body = JSON.parse(String(init?.body));
-    const headers = init?.headers as Record<string, string>;
-    prompts.push(body.contents[0].parts[0].text);
-    calls.push({ url: href, tools: body.tools, auth: headers.authorization || headers['x-goog-api-key'] || '' });
-    const text = prompts.length === 1
-      ? '{"searched":true,"queries":["Acme Bakery"],"sources":[{"url":"https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc","kind":"official","why":"site"},{"url":"https://www.jobstreet.com.my/job/9","kind":"jobs","why":"ad"}]}'
-      : '{"people":[{"name":"Siti Aminah","position":"Owner","evidence_url":"https://acme-bakery.example/about"}],"phones":[{"number":"07-555 0101","label":"Siti Aminah mobile","evidence_url":"https://acme-bakery.example/contact"}],"emails":[{"email":"hello@acme-bakery.example","label":"General","evidence_url":"https://acme-bakery.example/contact"}]}';
-    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), { status: 200 });
+    calls.push({ url: href, tools: body.tools, auth: headers['x-goog-api-key'] || '', body });
+    const text = '{"people":[{"name":"Siti Aminah","position":"Owner","evidence_url":"https://acme-bakery.example/about"}],"phones":[{"number":"07-555 0101","label":"Siti Aminah mobile","evidence_url":"https://acme-bakery.example/contact"}],"emails":[{"email":"hello@acme-bakery.example","label":"General","evidence_url":"https://acme-bakery.example/contact"}]}';
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   const result = await research({
     name: 'Acme Bakery',
     location: '12 Jalan Example, Johor Bahru',
     website: 'https://acme-bakery.example/contact',
-  }, { env: ENV, fetchImpl: fetchRedirect, groundingKey: 'ground-key', officialKey: 'official-key' });
-  assert.equal(prompts.length, 2);
-  assert.equal(calls[0]?.tools[0] && 'google_search' in (calls[0].tools[0] as object), true);
-  assert.equal(calls[1]?.tools[0] && 'url_context' in (calls[1].tools[0] as object), true);
-  assert.equal(JSON.stringify(calls[1]?.tools).includes('google_search'), false);
-  assert.match(calls[0]?.url ?? '', /gemini-3\.7-flash/);
-  assert.match(calls[1]?.url ?? '', /gemini-3\.8-flash/);
-  assert.equal(calls[1]?.auth, 'official-key');
-  assert.doesNotMatch(prompts[0]!, /acme-bakery\.example/);
-  assert.doesNotMatch(prompts[1]!, /jobstreet/i);
+  }, { env: ENV, fetchImpl: fetchMock, tavilyKey: 'tvly-test-key', officialKey: 'official-key' });
+
+  assert.equal(tavilyQueries.length, 2);
+  assert.match(tavilyQueries[0]!, /Acme Bakery.*Johor Bahru/);
+  assert.match(tavilyQueries[1]!, /official website contact/);
+
+  const officialCall = calls.find((c) => c.url.includes('generativelanguage.googleapis.com'));
+  assert.ok(officialCall);
+  assert.equal(officialCall.auth, 'official-key');
+  assert.match(officialCall.url, /gemini-3\.8-flash/);
+  assert.equal(officialCall.tools && 'url_context' in ((officialCall.tools as unknown[])[0] as object), true);
+
   const people = result.decision_makers as Array<Record<string, unknown>>;
   assert.equal(people[0]?.name, 'Siti Aminah');
   assert.equal(people[0]?.role, 'Owner');
   assert.equal(people[0]?.direct_phone, '07-555 0101');
   assert.equal((result.email_contacts as Array<Record<string, unknown>>)[0]?.email, 'hello@acme-bakery.example');
+  const meta = result.research_meta as Record<string, unknown>;
+  assert.match(String(meta.engine), /tavily/);
 });
+
+test('tavily key pool rotates round-robin and enforces monthly limit', async () => {
+  const pool = createKeyPool({ monthlyLimit: 3, concurrency: 1 });
+  pool.setKeys(['key-a', 'key-b']);
+
+  // key-a, then key-b, then key-a, then key-b, etc.
+  const lease1 = await pool.acquire();
+  assert.equal(lease1.secret, 'key-a');
+  lease1.release();
+
+  const lease2 = await pool.acquire();
+  assert.equal(lease2.secret, 'key-b');
+  lease2.release();
+
+  const lease3 = await pool.acquire();
+  assert.equal(lease3.secret, 'key-a');
+  lease3.release();
+
+  const lease4 = await pool.acquire();
+  assert.equal(lease4.secret, 'key-b');
+  lease4.release();
+
+  const lease5 = await pool.acquire();
+  assert.equal(lease5.secret, 'key-a'); // key-a has now hit 3 uses (monthly limit: 3)
+  lease5.release();
+
+  // key-a should now be exhausted for this month
+  const lease6 = await pool.acquire();
+  assert.equal(lease6.secret, 'key-b'); // key-b has now hit 3 uses
+  lease6.release();
+
+  // Both key-a and key-b have hit 3 uses -> slots() is 0
+  assert.equal(pool.slots(), 0);
+  const stats = pool.stats();
+  assert.equal(stats[0]?.usedThisMonth, 3);
+  assert.equal(stats[1]?.usedThisMonth, 3);
+});
+
+test('tavily search handles rate limits and quota exceeded error', async () => {
+  const fetch429: typeof fetch = async () => new Response('{"error":"usage_limit_reached"}', { status: 429 });
+  await assert.rejects(
+    () => tavilySearch({ name: 'Acme', location: '', website: '', extraUrls: [] }, 'test-key', fetch429),
+    (err: unknown) => {
+      assert.match(String(err), /rate_limit/);
+      return true;
+    },
+  );
+});
+
 
 test('a returned name, phone, and email are kept even when the citation is not an exact page match', () => {
   const result = toResearchResult(

@@ -32,7 +32,15 @@ function geminiContactModel(name: string): boolean {
 export function contactResearchJobType(): string {
   const name = modelName();
   if (chatgptModel(name)) return 'chatgpt.ask';
-  if (process.env.GEMINI37_API_KEY?.trim() || geminiContactModel(name)) return 'research.contact.gemini';
+  if (
+    process.env.TAVILY_API_KEY?.trim() ||
+    process.env.TAVILY_API_KEYS?.trim() ||
+    process.env.GEMINI37_API_KEY?.trim() ||
+    geminiContactModel(name) ||
+    name.includes('tavily')
+  ) {
+    return 'research.contact.gemini';
+  }
   return 'research.contact';
 }
 
