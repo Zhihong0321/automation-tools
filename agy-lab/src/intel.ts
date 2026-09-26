@@ -394,7 +394,9 @@ export function seniorityScore(role: string): number {
 
 /** A person is one human, however many ways the rounds spelled their title. */
 function personKey(name: string): string {
-  return name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+  const folded = name.toLowerCase().normalize('NFKD').replace(/\s+/g, ' ').trim();
+  const letters = folded.replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+  return letters || folded;
 }
 
 /**
@@ -1027,8 +1029,10 @@ export function buildContactLedger(
     if (!name) continue;
     const key = personKey(name);
     const existing = seenPeople.get(key);
-    const roleUrl = directUrl(first(person, ['role_evidence_url', 'evidence_url', 'role_url', 'source_url']));
-    const profileUrl = directUrl(first(person, ['profile_url', 'personal_profile_url', 'linkedin_url']));
+    const cited = first(person, ['role_evidence_url', 'evidence_url', 'role_url', 'source_url']);
+    const roleUrl = directUrl(cited) || cited || null;
+    const profileCited = first(person, ['profile_url', 'personal_profile_url', 'linkedin_url']);
+    const profileUrl = directUrl(profileCited) || profileCited || null;
     const directPhone = first(person, ['direct_phone', 'phone', 'mobile']);
     const directEmail = first(person, ['direct_email', 'email']);
     const score = seniorityScore(role);
@@ -1048,10 +1052,7 @@ export function buildContactLedger(
   }
 
   const decisionMakers = [...seenPeople.values()]
-    .sort((a, b) => num(b.seniority, 0) - num(a.seniority, 0))
-    // A current team page can name well more than ten people. Forty keeps that
-    // page, including a professional firm's associates, and still bounds the report.
-    .slice(0, 40);
+    .sort((a, b) => num(b.seniority, 0) - num(a.seniority, 0));
 
   const emailContacts: Record<string, unknown>[] = [];
   const seenEmails = new Set<string>();

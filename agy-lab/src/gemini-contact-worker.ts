@@ -367,18 +367,13 @@ function seniority(role: string): number {
 }
 
 function personKey(name: string): string {
-  return name.toLowerCase().normalize('NFKD').replace(/[^a-z\s]/g, '').replace(/\s+/g, ' ').trim();
+  const folded = name.toLowerCase().normalize('NFKD').replace(/\s+/g, ' ').trim();
+  const letters = folded.replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+  return letters || folded;
 }
 
 function cleanCell(value: unknown, max = 200): string {
   return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
-}
-
-function allowedUrl(value: unknown, urls: string[]): string {
-  const url = publicUrl(value);
-  if (!url) return '';
-  const key = dedupeKey(url);
-  return urls.some((candidate) => dedupeKey(candidate) === key) ? url : '';
 }
 
 function nameInLabel(name: string, label: string): boolean {
@@ -411,15 +406,15 @@ export function toResearchResult(target: Target, extracted: Record<string, unkno
   for (const row of Array.isArray(extracted.people) ? extracted.people : []) {
     const record = row as Record<string, unknown>;
     const name = cleanCell(record.name, 160);
-    const evidence = allowedUrl(record.evidence_url, urls);
     const key = personKey(name);
-    if (!name || !evidence || !key || seenPeople.has(key)) continue;
+    if (!name || seenPeople.has(key)) continue;
     seenPeople.add(key);
+    const evidence = publicUrl(record.evidence_url) || cleanCell(record.evidence_url, 500);
     const role = cleanCell(record.position, 160);
     people.push({
       name, role, seniority: seniority(role), direct_phone: null, direct_email: null,
       profile_url: /linkedin\.com\/in\//i.test(evidence) ? evidence : null,
-      role_evidence_url: evidence,
+      role_evidence_url: evidence || null,
     });
   }
   people.sort((a, b) => Number(b.seniority) - Number(a.seniority) || String(a.name).localeCompare(String(b.name)));
@@ -429,12 +424,12 @@ export function toResearchResult(target: Target, extracted: Record<string, unkno
   for (const row of Array.isArray(extracted.phones) ? extracted.phones : []) {
     const record = row as Record<string, unknown>;
     const number = cleanCell(record.number, 80);
-    const evidence = allowedUrl(record.evidence_url, urls);
     const digits = number.replace(/\D/g, '');
-    if (!number || !evidence || digits.length < 6 || seenPhones.has(digits)) continue;
+    if (!number || digits.length < 6 || seenPhones.has(digits)) continue;
     seenPhones.add(digits);
+    const evidence = publicUrl(record.evidence_url) || cleanCell(record.evidence_url, 500);
     const label = cleanCell(record.label, 120) || 'Office';
-    phones.push({ type: phoneType(label), number_raw: number, label, evidence_url: evidence });
+    phones.push({ type: phoneType(label), number_raw: number, label, evidence_url: evidence || null });
   }
 
   const emails: Record<string, unknown>[] = [];
@@ -442,11 +437,11 @@ export function toResearchResult(target: Target, extracted: Record<string, unkno
   for (const row of Array.isArray(extracted.emails) ? extracted.emails : []) {
     const record = row as Record<string, unknown>;
     const email = cleanCell(record.email, 160).toLowerCase();
-    const evidence = allowedUrl(record.evidence_url, urls);
-    if (!evidence || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || seenEmails.has(email)) continue;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || seenEmails.has(email)) continue;
     seenEmails.add(email);
+    const evidence = publicUrl(record.evidence_url) || cleanCell(record.evidence_url, 500);
     const label = cleanCell(record.label, 120) || (emailType(email) === 'general' ? 'General' : 'Work email');
-    emails.push({ type: emailType(email), email, label, evidence_url: evidence });
+    emails.push({ type: emailType(email), email, label, evidence_url: evidence || null });
   }
 
   for (const person of people) {

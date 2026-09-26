@@ -10,6 +10,7 @@ import {
   research,
   resolveConfig,
   targetFromPayload,
+  toResearchResult,
 } from './gemini-contact-worker.ts';
 
 const ENV = {
@@ -92,4 +93,23 @@ test('research runs find then extract for one assigned company', async () => {
   assert.equal(people[0]?.role, 'Owner');
   assert.equal(people[0]?.direct_phone, '07-555 0101');
   assert.equal((result.email_contacts as Array<Record<string, unknown>>)[0]?.email, 'hello@acme-bakery.example');
+});
+
+test('a returned name, phone, and email are kept even when the citation is not an exact page match', () => {
+  const result = toResearchResult(
+    { name: 'Kedai', website: '', extraUrls: [], location: 'Johor Bahru' },
+    {
+      people: [
+        { name: '黄文福', position: '东主', evidence_url: 'https://shop.example/about' },
+        { name: 'Ali bin Abu', position: 'Manager', evidence_url: 'https://other.example/team' },
+      ],
+      phones: [{ number: '012-3456789', label: 'Office', evidence_url: 'https://not-listed.example/x' }],
+      emails: [{ email: 'ali@shop.example', label: 'Ali', evidence_url: '' }],
+    },
+    ['https://shop.example/about'],
+  );
+  const people = result.decision_makers as Array<Record<string, unknown>>;
+  assert.deepEqual(people.map((person) => person.name).sort(), ['Ali bin Abu', '黄文福'].sort());
+  assert.equal((result.phone_contacts as Array<Record<string, unknown>>)[0]?.number_raw, '012-3456789');
+  assert.equal((result.email_contacts as Array<Record<string, unknown>>)[0]?.email, 'ali@shop.example');
 });
