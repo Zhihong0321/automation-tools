@@ -104,10 +104,40 @@ export const NAME_KEY_SQL = nameKeySql();
 export const REGISTERED_SQL =
   "~* '(^|[[:space:]])(sdn[[:space:]]*bhd|sendirian[[:space:]]+berhad|berhad|bhd|plt|llp|pte[[:space:]]*ltd|ltd|limited|inc|incorporated|corp|corporation|gmbh|pty)$'";
 
+export type GeminiKeyKind = 'grounding' | 'official';
+
+export async function listGeminiContactKeys(): Promise<Array<{ id: number; kind: GeminiKeyKind; secret: string }>> {
+  await migrate();
+  const out = await sql(`select id, kind, secret from gemini_contact_key order by kind, id`);
+  return out.rows.map((row) => ({
+    id: Number(row.id),
+    kind: row.kind === 'official' ? 'official' : 'grounding',
+    secret: String(row.secret ?? ''),
+  }));
+}
+
+export async function replaceGeminiContactKeys(kind: GeminiKeyKind, secrets: string[]): Promise<void> {
+  await migrate();
+  const clean = [...new Set(secrets.map((secret) => secret.trim()).filter((secret) => secret.length >= 10))];
+  await sql(`delete from gemini_contact_key where kind = $1`, [kind]);
+  for (const secret of clean) {
+    await sql(`insert into gemini_contact_key (kind, secret) values ($1, $2) on conflict (kind, secret) do nothing`, [kind, secret]);
+  }
+}
+
 /** Apply only the report-owned schema. The historical core schema remains in schema.sql. */
 export function migrate(): Promise<void> {
   if (migrated) return migrated;
   migrated = (async () => {
+    await sql(`
+      create table if not exists gemini_contact_key (
+        id bigserial primary key,
+        kind text not null check (kind in ('grounding', 'official')),
+        secret text not null,
+        created_at timestamptz not null default now(),
+        unique (kind, secret)
+      );
+    `);
     await sql(`
       create table if not exists published_report (
         id bigserial primary key,

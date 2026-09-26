@@ -9,8 +9,11 @@ import * as jobs from './jobs.ts';
 export const JOB_TYPE = 'research.contact.gemini';
 export const WORKER_NAME = 'gemini37-contact';
 export const GEMINI37_MODEL = 'gemini-3.7-flash';
+export const OFFICIAL_MODEL = 'gemini-3.8-flash';
+export const KEY_CONCURRENCY = 2;
 
 const DEFAULT_BASE_URL = 'https://asiasouth.up.railway.app';
+const OFFICIAL_BASE_URL = 'https://generativelanguage.googleapis.com';
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_REDIRECT_TIMEOUT_MS = 12_000;
 const MAX_SOURCES = 12;
@@ -256,19 +259,124 @@ function answerText(body: Record<string, unknown>): string {
   return parts.map((part) => typeof (part as { text?: unknown })?.text === 'string' ? (part as { text: string }).text : '').filter(Boolean).join('\n');
 }
 
-export async function generateContent(prompt: string, config: GeminiConfig, fetchImpl: FetchImpl = fetch): Promise<string> {
-  const endpoint = `${config.baseUrl}/v1beta/models/${encodeURIComponent(config.model)}:generateContent`;
+type GenerateCall = {
+  url: string;
+  headers: Record<string, string>;
+  tools: unknown[];
+  generationConfig?: Record<string, unknown>;
+  retries?: number;
+};
+
+export function createKeyPool() {
+  const state = {
+    keys: [] as string[],
+    inflight: new Map<string, number>(),
+    coolUntil: new Map<string, number>(),
+    waiters: [] as Array<(lease: { secret: string; release: (coolMs?: number) => void }) => void>,
+  };
+  function usable(key: string): boolean {
+    return (state.coolUntil.get(key) ?? 0) <= Date.now();
+  }
+  function wake(): void {
+    for (const key of state.keys) {
+      if (!usable(key)) continue;
+      while ((state.inflight.get(key) ?? 0) < KEY_CONCURRENCY && state.waiters.length) {
+        const resolve = state.waiters.shift()!;
+        state.inflight.set(key, (state.inflight.get(key) ?? 0) + 1);
+        let released = false;
+        resolve({
+          secret: key,
+          release(coolMs = 0) {
+            if (released) return;
+            released = true;
+            if (coolMs > 0) state.coolUntil.set(key, Date.now() + coolMs);
+            state.inflight.set(key, Math.max(0, (state.inflight.get(key) ?? 1) - 1));
+            wake();
+          },
+        });
+      }
+    }
+  }
+  return {
+    setKeys(keys: string[]) {
+      state.keys = [...new Set(keys.map((key) => key.trim()).filter(Boolean))];
+      wake();
+    },
+    acquire() {
+      return new Promise<{ secret: string; release: (coolMs?: number) => void }>((resolve) => {
+        state.waiters.push(resolve);
+        wake();
+      });
+    },
+  };
+}
+
+const groundingPool = createKeyPool();
+const officialPool = createKeyPool();
+
+export async function loadRuntimeKeys(env: NodeJS.ProcessEnv = process.env): Promise<{ grounding: string[]; official: string[] }> {
+  let grounding: string[] = [];
+  let official: string[] = [];
+  try {
+    const rows = await db.listGeminiContactKeys();
+    grounding = rows.filter((row) => row.kind === 'grounding').map((row) => row.secret);
+    official = rows.filter((row) => row.kind === 'official').map((row) => row.secret);
+  } catch { /* the table is created on migrate; a caller without a database uses env */ }
+  if (!grounding.length && env.GEMINI37_API_KEY?.trim()) grounding = [env.GEMINI37_API_KEY.trim()];
+  return { grounding, official };
+}
+
+function maskKey(secret: string): string {
+  return secret.length <= 4 ? '••••' : `••••${secret.slice(-4)}`;
+}
+
+export async function handleKeys(
+  req: { method?: string },
+  res: { writeHead?: unknown },
+  url: URL,
+  ctx: { json: (res: unknown, status: number, body: unknown) => void; readJson: (req: unknown) => Promise<Record<string, unknown>> },
+): Promise<boolean> {
+  if (url.pathname !== '/api/gemini-contact-keys') return false;
+  const method = req.method ?? 'GET';
+  if (method === 'GET') {
+    const keys = await db.listGeminiContactKeys();
+    const view = (kind: 'grounding' | 'official') => keys.filter((row) => row.kind === kind).map((row) => ({ id: row.id, tail: maskKey(row.secret) }));
+    const grounding = view('grounding');
+    const official = view('official');
+    ctx.json(res, 200, {
+      grounding,
+      official,
+      step1Slots: Math.max(grounding.length, 0) * KEY_CONCURRENCY,
+      step2Slots: official.length * KEY_CONCURRENCY,
+    });
+    return true;
+  }
+  if (method === 'POST') {
+    const body = await ctx.readJson(req);
+    if (Array.isArray(body.grounding)) await db.replaceGeminiContactKeys('grounding', body.grounding.map(String));
+    if (Array.isArray(body.official)) await db.replaceGeminiContactKeys('official', body.official.map(String));
+    const keys = await loadRuntimeKeys();
+    groundingPool.setKeys(keys.grounding);
+    officialPool.setKeys(keys.official);
+    ctx.json(res, 200, { ok: true, step1Slots: keys.grounding.length * KEY_CONCURRENCY, step2Slots: keys.official.length * KEY_CONCURRENCY });
+    return true;
+  }
+  ctx.json(res, 405, { error: 'method not allowed' });
+  return true;
+}
+
+async function postGenerate(prompt: string, call: GenerateCall, fetchImpl: FetchImpl, timeoutMs: number): Promise<string> {
   let response: Response;
   try {
-    response = await fetchImpl(endpoint, {
+    response = await fetchImpl(call.url, {
       method: 'POST',
-      headers: { authorization: `Bearer ${config.apiKey}`, 'content-type': 'application/json' },
+      headers: call.headers,
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        tools: [{ google_search: {} }],
-        generationConfig: { thinkingConfig: { thinkingLevel: 'high' } },
+        tools: call.tools,
+        ...(call.generationConfig ? { generationConfig: call.generationConfig } : {}),
       }),
-      signal: AbortSignal.timeout(config.timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (cause) {
     const name = cause instanceof Error ? cause.name : '';
@@ -276,6 +384,11 @@ export async function generateContent(prompt: string, config: GeminiConfig, fetc
   }
   const raw = await response.text();
   if (response.status === 429 || /rate_limit|quota/i.test(raw)) throw fail(`429 rate_limit_error: ${raw.slice(0, 300)}`);
+  if (response.status === 503 && (call.retries ?? 0) > 0) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    return postGenerate(prompt, { ...call, retries: (call.retries ?? 1) - 1 }, fetchImpl, timeoutMs);
+  }
+  if (response.status === 503) throw fail('503 high demand: gemini is temporarily overloaded', 'timeout');
   if (!response.ok) throw fail(`upstream error: gemini answered ${response.status}: ${raw.slice(0, 300)}`, 'timeout');
   if (!raw.trim()) throw fail('upstream error: gemini returned zero bytes', 'timeout');
   const body = tryParseJson(raw);
@@ -481,17 +594,36 @@ export function toResearchResult(target: Target, extracted: Record<string, unkno
   };
 }
 
-export async function research(raw: unknown, deps: { env?: NodeJS.ProcessEnv; fetchImpl?: FetchImpl; now?: Date } = {}): Promise<Record<string, unknown>> {
+export async function research(raw: unknown, deps: {
+  env?: NodeJS.ProcessEnv;
+  fetchImpl?: FetchImpl;
+  now?: Date;
+  groundingKey?: string;
+  officialKey?: string;
+} = {}): Promise<Record<string, unknown>> {
   const target = targetFromPayload(raw);
   const config = resolveConfig(deps.env ?? process.env);
-  if (!config.apiKey) throw fail('GEMINI37_API_KEY is not set', 'not_installed');
+  const groundingKey = deps.groundingKey ?? config.apiKey;
+  const officialKey = deps.officialKey ?? '';
+  if (!groundingKey) throw fail('GEMINI37_API_KEY is not set', 'not_installed');
+  if (!officialKey) throw fail('official Gemini API key is not set', 'not_installed');
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const foundText = await generateContent(findPagesPrompt(target), config, fetchImpl);
+  const foundText = await postGenerate(findPagesPrompt(target), {
+    url: `${config.baseUrl}/v1beta/models/${encodeURIComponent(config.model)}:generateContent`,
+    headers: { authorization: `Bearer ${groundingKey}`, 'content-type': 'application/json' },
+    tools: [{ google_search: {} }],
+    generationConfig: { thinkingConfig: { thinkingLevel: 'high' } },
+  }, fetchImpl, config.timeoutMs);
   const found = extractLastJson(foundText);
   if (!found || found.searched !== true) throw fail('upstream error: gemini search did not run', 'timeout');
   const urls = await collectPageUrls(target, normaliseSources(found.sources), fetchImpl, config, deps.now);
   if (!urls.length) return toResearchResult(target, { people: [], phones: [], emails: [] }, [], found);
-  const extractedText = await generateContent(extractContactsPrompt(target, urls), config, fetchImpl);
+  const extractedText = await postGenerate(extractContactsPrompt(target, urls), {
+    url: `${OFFICIAL_BASE_URL}/v1beta/models/${encodeURIComponent(OFFICIAL_MODEL)}:generateContent`,
+    headers: { 'x-goog-api-key': officialKey, 'content-type': 'application/json' },
+    tools: [{ url_context: {} }],
+    retries: 2,
+  }, fetchImpl, config.timeoutMs);
   const extracted = extractLastJson(extractedText);
   if (!extracted || !Array.isArray(extracted.people) || !Array.isArray(extracted.phones) || !Array.isArray(extracted.emails)) {
     throw fail('upstream error: gemini extract step returned no contact JSON', 'timeout');
@@ -516,7 +648,50 @@ async function execute(name: string, job: jobs.Job, env: NodeJS.ProcessEnv): Pro
       jobs.finish(job.id, false, null, 'contact report was closed before this job could be claimed');
       return;
     }
-    const result = await research(job.payload, { env });
+    const keys = await loadRuntimeKeys(env);
+    groundingPool.setKeys(keys.grounding);
+    officialPool.setKeys(keys.official);
+    const search = await groundingPool.acquire();
+    const target = targetFromPayload(job.payload);
+    const config = resolveConfig(env);
+    let foundText = '';
+    try {
+      foundText = await postGenerate(findPagesPrompt(target), {
+        url: `${config.baseUrl}/v1beta/models/${encodeURIComponent(config.model)}:generateContent`,
+        headers: { authorization: `Bearer ${search.secret}`, 'content-type': 'application/json' },
+        tools: [{ google_search: {} }],
+        generationConfig: { thinkingConfig: { thinkingLevel: 'high' } },
+      }, fetch, config.timeoutMs);
+      search.release();
+    } catch (cause) {
+      search.release(/429|rate_limit|quota/i.test(errorText(cause)) ? 15 * 60_000 : 0);
+      throw cause;
+    }
+    const found = extractLastJson(foundText);
+    if (!found || found.searched !== true) throw fail('upstream error: gemini search did not run', 'timeout');
+    const urls = await collectPageUrls(target, normaliseSources(found.sources), fetch, config);
+    let result: Record<string, unknown>;
+    if (!urls.length) result = toResearchResult(target, { people: [], phones: [], emails: [] }, [], found);
+    else {
+      const page = await officialPool.acquire();
+      try {
+        const extractedText = await postGenerate(extractContactsPrompt(target, urls), {
+          url: `${OFFICIAL_BASE_URL}/v1beta/models/${encodeURIComponent(OFFICIAL_MODEL)}:generateContent`,
+          headers: { 'x-goog-api-key': page.secret, 'content-type': 'application/json' },
+          tools: [{ url_context: {} }],
+          retries: 2,
+        }, fetch, config.timeoutMs);
+        const extracted = extractLastJson(extractedText);
+        if (!extracted || !Array.isArray(extracted.people) || !Array.isArray(extracted.phones) || !Array.isArray(extracted.emails)) {
+          throw fail('upstream error: gemini extract step returned no contact JSON', 'timeout');
+        }
+        result = toResearchResult(target, extracted, urls, found);
+        page.release();
+      } catch (cause) {
+        page.release(/429|rate_limit|quota/i.test(errorText(cause)) ? 15 * 60_000 : 0);
+        throw cause;
+      }
+    }
     if (reportId) {
       const intel = await import('./intel.ts');
       await intel.acceptContactResult(reportId, job.id, true, result, null, name);
@@ -544,7 +719,14 @@ async function lane(name: string, env: NodeJS.ProcessEnv): Promise<void> {
   for (;;) {
     jobs.touch(name, '127.0.0.1', [JOB_TYPE]);
     try {
-      const job = await jobs.take(name, { types: [JOB_TYPE], waitMs: 20_000 });
+      const keys = await loadRuntimeKeys(env);
+      groundingPool.setKeys(keys.grounding);
+      officialPool.setKeys(keys.official);
+      if (!keys.grounding.length || !keys.official.length) {
+        await new Promise((resolve) => setTimeout(resolve, 3_000));
+        continue;
+      }
+      const job = await jobs.take(name, { types: [JOB_TYPE], waitMs: 5_000 });
       if (job) await execute(name, job, env);
     } catch (cause) {
       console.error(`[gemini37] ${name} ${errorText(cause)}`);
@@ -553,14 +735,26 @@ async function lane(name: string, env: NodeJS.ProcessEnv): Promise<void> {
   }
 }
 
-/** Register on the hub roster and claim research.contact.gemini jobs. No-op without an API key. */
+/** One lane per key slot. Each key runs at most two calls at once, and step 2 never uses the search key. */
 export function start(env: NodeJS.ProcessEnv = process.env): void {
-  const config = resolveConfig(env);
-  if (!config.apiKey) return;
-  for (let i = 0; i < config.lanes; i++) {
-    const name = laneName(i);
-    jobs.touch(name, '127.0.0.1', [JOB_TYPE]);
-    void lane(name, env);
-  }
-  console.log(`[gemini37] contact worker ${WORKER_NAME} claiming ${JOB_TYPE} (${config.lanes} lane${config.lanes === 1 ? '' : 's'})`);
+  const running = new Set<string>();
+  const fit = async () => {
+    const keys = await loadRuntimeKeys(env);
+    groundingPool.setKeys(keys.grounding);
+    officialPool.setKeys(keys.official);
+    const capacity = keys.grounding.length && keys.official.length
+      ? (keys.grounding.length + keys.official.length) * KEY_CONCURRENCY
+      : 0;
+    for (let i = 0; i < capacity; i++) {
+      const name = laneName(i);
+      if (running.has(name)) continue;
+      running.add(name);
+      jobs.touch(name, '127.0.0.1', [JOB_TYPE]);
+      void lane(name, env);
+    }
+  };
+  void fit();
+  const timer = setInterval(() => { void fit(); }, 3_000);
+  timer.unref();
+  console.log(`[gemini37] contact worker ${WORKER_NAME} claiming ${JOB_TYPE}`);
 }

@@ -2613,7 +2613,7 @@ export async function acceptContactResult(
   if (report.job_id !== jobId) throw new Error('contact result job id does not match its report slot');
   if (report.status === 'completed') return;
 
-  if (!ok && /individual quota reached|rate_limit_error|token plan usage|(?:^|\W)429(?:\W|$)|(?:^|\W)timeout(?:\W|$)|timed out|upstream error/i.test(workerError ?? '')) {
+  if (!ok && /individual quota reached|rate_limit_error|token plan usage|high demand|(?:^|\W)429(?:\W|$)|(?:^|\W)503(?:\W|$)|(?:^|\W)timeout(?:\W|$)|timed out|upstream error/i.test(workerError ?? '')) {
     if (await db.deferContactResult(reportId, jobId)) {
       await db.logEvent({ reportId, publicId: report.public_id, jobId, stage: 'research.contact',
         event: 'contact.deferred', detail: { worker, reason: workerError } }).catch(() => {});

@@ -4,6 +4,7 @@ import * as jobs from './jobs.ts';
 import {
   JOB_TYPE,
   WORKER_NAME,
+  createKeyPool,
   extractContactsPrompt,
   findPagesPrompt,
   laneName,
@@ -62,8 +63,26 @@ test('the hub gives a gemini contact job to the gemini worker', async () => {
   jobs.finish(job.id, true, { ok: true }, null);
 });
 
+test('each gemini key runs at most two calls at once', async () => {
+  const pool = createKeyPool();
+  pool.setKeys(['ground-a', 'ground-b']);
+  let highest = 0;
+  const active = new Map<string, number>();
+  await Promise.all(Array.from({ length: 8 }, async () => {
+    const lease = await pool.acquire();
+    const now = (active.get(lease.secret) ?? 0) + 1;
+    active.set(lease.secret, now);
+    highest = Math.max(highest, now);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    active.set(lease.secret, (active.get(lease.secret) ?? 1) - 1);
+    lease.release();
+  }));
+  assert.equal(highest, 2);
+});
+
 test('research runs find then extract for one assigned company', async () => {
   const prompts: string[] = [];
+  const calls: Array<{ url: string; tools: unknown; auth: string }> = [];
   const fetchRedirect: typeof fetch = async (url, init) => {
     const href = String(url);
     if (href.includes('vertexaisearch')) {
@@ -72,9 +91,9 @@ test('research runs find then extract for one assigned company', async () => {
       return response;
     }
     const body = JSON.parse(String(init?.body));
+    const headers = init?.headers as Record<string, string>;
     prompts.push(body.contents[0].parts[0].text);
-    assert.deepEqual(body.tools, [{ google_search: {} }]);
-    assert.equal(body.generationConfig.thinkingConfig.thinkingLevel, 'high');
+    calls.push({ url: href, tools: body.tools, auth: headers.authorization || headers['x-goog-api-key'] || '' });
     const text = prompts.length === 1
       ? '{"searched":true,"queries":["Acme Bakery"],"sources":[{"url":"https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc","kind":"official","why":"site"},{"url":"https://www.jobstreet.com.my/job/9","kind":"jobs","why":"ad"}]}'
       : '{"people":[{"name":"Siti Aminah","position":"Owner","evidence_url":"https://acme-bakery.example/about"}],"phones":[{"number":"07-555 0101","label":"Siti Aminah mobile","evidence_url":"https://acme-bakery.example/contact"}],"emails":[{"email":"hello@acme-bakery.example","label":"General","evidence_url":"https://acme-bakery.example/contact"}]}';
@@ -84,8 +103,14 @@ test('research runs find then extract for one assigned company', async () => {
     name: 'Acme Bakery',
     location: '12 Jalan Example, Johor Bahru',
     website: 'https://acme-bakery.example/contact',
-  }, { env: ENV, fetchImpl: fetchRedirect });
+  }, { env: ENV, fetchImpl: fetchRedirect, groundingKey: 'ground-key', officialKey: 'official-key' });
   assert.equal(prompts.length, 2);
+  assert.equal(calls[0]?.tools[0] && 'google_search' in (calls[0].tools[0] as object), true);
+  assert.equal(calls[1]?.tools[0] && 'url_context' in (calls[1].tools[0] as object), true);
+  assert.equal(JSON.stringify(calls[1]?.tools).includes('google_search'), false);
+  assert.match(calls[0]?.url ?? '', /gemini-3\.7-flash/);
+  assert.match(calls[1]?.url ?? '', /gemini-3\.8-flash/);
+  assert.equal(calls[1]?.auth, 'official-key');
   assert.doesNotMatch(prompts[0]!, /acme-bakery\.example/);
   assert.doesNotMatch(prompts[1]!, /jobstreet/i);
   const people = result.decision_makers as Array<Record<string, unknown>>;

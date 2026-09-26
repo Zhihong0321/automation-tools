@@ -284,6 +284,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (await jobs.handle(req, res, url, { json, readJson })) return;
   }
 
+  if (p === '/api/gemini-contact-keys') {
+    if (await geminiContact.handleKeys(req, res, url, { json, readJson })) return;
+  }
+
   // ---- logs ---------------------------------------------------------------
   // One record per request, newest first. ?errors=1 (or /api/logs/errors) is the
   // error log: everything that answered 4xx/5xx or recorded a failure.
