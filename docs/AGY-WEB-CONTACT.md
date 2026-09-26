@@ -1,5 +1,7 @@
 # Contact research worker
 
-Contact research runs on the normal `research.contact` worker. The in-process cloud worker (`cloud-agy-contact-1`, job type `research.contact.cloud`) is removed. It called agy-web, and with no active account every report failed.
+Contact research does not use the removed cloud AGY account pool. A Gemini model id is not a chat-gateway model.
 
-A leftover `CONTACT_RESEARCH_MODEL=agy-web` is treated as `research.contact` unless `GEMINI37_API_KEY` is set. With that key, the hub starts `gemini37-contact` and assigns contact jobs as `research.contact.gemini`. That worker runs two Gemini 3.7 searches in the hub process. It does not call agy-web and it does not hand the job to local-worker. Automatic queueing of untouched companies still stays off for `agy-web` unless `AGY_WEB_AUTO_QUEUE=true`.
+With `GEMINI37_API_KEY` set, the hub starts `gemini37-contact` and assigns contact jobs as `research.contact.gemini`. That worker is a contact-research worker: two Gemini searches in the hub process, first for public pages from the company name and address, then for the people, phones, and emails printed on those pages. It does not hand the job to local-worker. A leftover `CONTACT_RESEARCH_MODEL=agy-web`, or a Gemini model id, uses this worker. Without the key, contact jobs stay on a live `research.contact` worker.
+
+`AGY_WEB_AUTO_QUEUE=true` queues companies that have never had a legacy contact report, and companies whose legacy contact reports all failed, while `research.contact.gemini` or `research.contact` is live. Completed and in-progress reports are left alone. The queue stays off for a leftover `agy-web` setting until that flag is true.

@@ -58,6 +58,38 @@ test('a leftover agy-web setting uses the normal research worker and ignores the
   }
 });
 
+test('a gemini model id is the in-hub contact worker, not the chat gateway', async () => {
+  const previousModel = process.env.CONTACT_RESEARCH_MODEL;
+  const previousKey = process.env.GEMINI37_API_KEY;
+  const previousAutoQueue = process.env.AGY_WEB_AUTO_QUEUE;
+  let launched = 0;
+  process.env.CONTACT_RESEARCH_MODEL = 'gamini-3.7-flash';
+  process.env.GEMINI37_API_KEY = 'test-key';
+  process.env.AGY_WEB_AUTO_QUEUE = 'true';
+  try {
+    assert.equal(autoContact.contactResearchJobType(), 'research.contact.gemini');
+    process.env.CONTACT_RESEARCH_MODEL = 'gemini-3.7-flash';
+    assert.equal(autoContact.contactResearchJobType(), 'research.contact.gemini');
+    autoContact.init({
+      liveTypes: () => ['agy.ask', 'research.contact'],
+      backlog: async () => [company('gateway')],
+      launch: async () => { launched++; },
+    });
+    assert.equal(await autoContact.tick(), 0);
+    autoContact.init({
+      liveTypes: () => ['research.contact.gemini'],
+      backlog: async () => [company('gemini')],
+      launch: async () => { launched++; },
+    });
+    assert.equal(await autoContact.tick(), 1);
+    assert.equal(launched, 1);
+  } finally {
+    if (previousModel === undefined) delete process.env.CONTACT_RESEARCH_MODEL; else process.env.CONTACT_RESEARCH_MODEL = previousModel;
+    if (previousKey === undefined) delete process.env.GEMINI37_API_KEY; else process.env.GEMINI37_API_KEY = previousKey;
+    if (previousAutoQueue === undefined) delete process.env.AGY_WEB_AUTO_QUEUE; else process.env.AGY_WEB_AUTO_QUEUE = previousAutoQueue;
+  }
+});
+
 test('a configured Gemini key makes the hub assign contact jobs to the gemini worker', async () => {
   const previousModel = process.env.CONTACT_RESEARCH_MODEL;
   const previousKey = process.env.GEMINI37_API_KEY;

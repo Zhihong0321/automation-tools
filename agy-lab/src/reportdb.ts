@@ -987,7 +987,12 @@ export async function requeueAbandonedContactReports(since: string): Promise<num
   return out.rowCount ?? 0;
 }
 
-/** Active, visible, non-DNC companies that have never had a contact report. */
+/**
+ * Active, visible, non-DNC companies the auto-queue may research.
+ * A lead qualifies when it has never had a legacy contact report, or when its
+ * legacy contact reports are all failed. A queued, running, completed, or
+ * partial report keeps the company out of the backlog.
+ */
 export async function contactResearchBacklog(limit: number): Promise<Record<string, unknown>[]> {
   await migrate();
   const out = await sql(
@@ -998,9 +1003,19 @@ export async function contactResearchBacklog(limit: number): Promise<Record<stri
        and coalesce(c.lead_status, 'unassigned') <> 'do_not_call'
        and not exists (
          select 1 from published_report p
-         where p.company_id = c.id and p.report_type = 'contact_research'
+         where p.company_id = c.id
+           and p.report_type = 'contact_research'
+           and coalesce(p.request->>'provider', 'legacy') <> 'parallel'
+           and p.status <> 'failed'
        )
-     order by c.id asc
+     order by
+       case when exists (
+         select 1 from published_report p
+         where p.company_id = c.id
+           and p.report_type = 'contact_research'
+           and p.status = 'failed'
+       ) then 0 else 1 end,
+       c.id asc
      limit $1`,
     [limit],
   );

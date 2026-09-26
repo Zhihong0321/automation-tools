@@ -22,7 +22,6 @@
 import crypto from 'node:crypto';
 import type http from 'node:http';
 import * as agy from './agy.ts';
-import * as agyWeb from './agy-web.ts';
 import * as sessions from './sessions.ts';
 import * as meta from './meta.ts';
 import * as queue from './queue.ts';
@@ -63,7 +62,7 @@ function fail(status: number, message: string, type = 'invalid_request_error'): 
 type Location = queue.Location;
 
 type Route = { location: Location } & (
-  | { engine: 'agy'; model: string; cloud?: boolean }
+  | { engine: 'agy'; model: string }
   // `pinnedSession` records whether the CALLER named the account, as in
   // `chatgpt:mini-2@mini`, or whether `session` is just the default this resolver
   // filled in. On the mini that difference decides who picks the account: a
@@ -161,11 +160,6 @@ export function resolveModel(raw: string): Route {
   }
   const [head, ...rest] = wanted.split(/[:/]/);
   const name = (head ?? '').toLowerCase();
-  if (name === 'agy-web') {
-    if (pinned === 'mini') throw fail(404, 'agy-web runs only in the cloud.', 'model_not_found');
-    if (!agyWeb.configured()) throw fail(503, 'AGY_WEB_TOKEN is not configured.', 'engine_unavailable');
-    return { engine: 'agy', model: 'agy-web', location: 'container', cloud: true };
-  }
   // Gemini is served here through the AGY runtime.  Keeping `gemini` as a
   // first-class alias lets feature-specific configuration say what it wants
   // (for example VIP_GEMINI_MODEL=gemini) without inventing a second engine or
@@ -261,7 +255,6 @@ function models(): Record<string, unknown> {
     object: 'list',
     data: [
       entry('agy', { engine: 'agy', location: 'container' }),
-      ...(agyWeb.configured() ? [entry('agy-web', { engine: 'agy', location: 'cloud', ready: true })] : []),
       ...named('chatgpt', cgpt, 'chatgpt'),
       ...(cgpt.length ? [entry('chatgpt', { engine: 'chatgpt', alias_for: 'chatgpt:' + defaultSession('chatgpt') })] : []),
       ...named('meta', metaSessions, 'meta'),
@@ -511,14 +504,6 @@ async function engineAsk(
   opts: { timeoutMs?: number; tools?: boolean; onDelta?: (chunk: string) => void } = {},
 ): Promise<AskResult> {
   if (route.location === 'mini') return miniAsk(route, prompt, opts);
-
-  if (route.engine === 'agy' && route.cloud) {
-    const out = await agyWeb.ask(prompt, opts.timeoutMs ?? AGY_TIMEOUT_MS).catch((error: unknown) => {
-      throw fail(502, error instanceof Error ? error.message : String(error), 'engine_error');
-    });
-    opts.onDelta?.(out.answer);
-    return { answer: out.answer, ms: out.ms, model: route.model, engine: 'agy' };
-  }
 
   if (route.engine === 'agy') {
     // A dead session and a slow one are different problems with different fixes,

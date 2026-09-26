@@ -938,7 +938,7 @@ Return exactly ONE compact JSON object in a single fenced code block with keys:
 Max 8 decision_makers, 10 phone_contacts, 6 email_contacts. No prose outside JSON.`;
 }
 
-/** agy-web's synchronous HTTP route needs a short research round to finish before its proxy closes. */
+/** Shorter contact prompt kept for an old cloud job slot. New jobs do not use it. */
 export function cloudContactResearchPrompt(company: Record<string, unknown>, targetRole?: string | null): string {
   return contactResearchPrompt(company, targetRole).replace(
     CONTACT_TIME_BUDGET,
@@ -2539,7 +2539,11 @@ async function runContactResearch(
         jobs.activate(job.id);
         await jobs.wait(job.id, 0);
         return;
-      } else {
+      }
+      if (jobType !== 'chatgpt.ask') {
+        throw new Error('contact research needs a live contact worker');
+      }
+      {
         await db.updateReport(publicId, { status: 'running', error: null });
         const askResult = await ask(model, contactResearchPrompt(company, targetRole), CONTACT_RESEARCH_TIMEOUT_MS);
         discoveryMeta = { model: askResult.model, engine: askResult.engine, ms: askResult.ms };
