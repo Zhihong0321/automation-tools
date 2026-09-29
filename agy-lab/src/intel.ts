@@ -2999,7 +2999,7 @@ function isLeadAssignedToAgent(
   if (agent.uid && lead.telemarketer_uid) {
     const cleanAgentUid = agent.uid.replace(/^uid:/, '');
     const cleanLeadUid = lead.telemarketer_uid.replace(/^uid:/, '');
-    if (cleanAgentUid === cleanLeadUid) return true;
+    return cleanAgentUid === cleanLeadUid;
   }
   const norm = (s?: string | null) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
   if (lead.assigned_to && agent.name) {
@@ -3210,6 +3210,37 @@ export async function handleTelemarketerApi(
       else if (lower === 'all') statusFilter = undefined;
     }
 
+    const leadType = url.searchParams.get('leadType') || url.searchParams.get('type');
+    if (leadType === 'ads' || subPath.includes('/ads-leads')) {
+      const [adsRes, stats] = await Promise.all([
+        dbi.listAtapSolarRegistrations({
+          assignedTo: agent.uid ? 'uid:' + agent.uid : agent.name,
+          status: statusFilter,
+          search,
+          limit,
+          offset,
+          sort,
+        }),
+        dbi.getTelemarketerStatsByUid(agent.uid || agent.name),
+      ]);
+      ctx.json(res, 200, {
+        ok: true,
+        telemarketer: {
+          id: agent.id,
+          uid: agent.uid,
+          name: agent.name,
+          phone: agent.phone,
+          email: agent.email,
+        },
+        stats,
+        leads: adsRes.leads,
+        total: adsRes.total,
+        limit: adsRes.limit,
+        offset: adsRes.offset,
+      });
+      return true;
+    }
+
     const [leadRes, stats] = await Promise.all([
       dbi.listLeads({
         assignedTo: agent.uid ? 'uid:' + agent.uid : agent.name,
@@ -3363,7 +3394,7 @@ export async function handleTelemarketerApi(
 export async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL, ctx: Ctx): Promise<boolean> {
   const p = url.pathname;
   const method = req.method ?? 'GET';
-  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/contact-research') && !p.startsWith('/api/parallel-contact-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/ads-market') && !p.startsWith('/api/reports') && !p.startsWith('/api/leads') && !p.startsWith('/api/telemarketers') && !p.startsWith('/api/territories') && !p.startsWith('/api/contacts') && !p.startsWith('/api/lead-activity')) return false;
+  if (!p.startsWith('/api/business-search') && !p.startsWith('/api/company-research') && !p.startsWith('/api/contact-research') && !p.startsWith('/api/parallel-contact-research') && !p.startsWith('/api/person-research') && !p.startsWith('/api/ads-research') && !p.startsWith('/api/ads-market') && !p.startsWith('/api/reports') && !p.startsWith('/api/leads') && !p.startsWith('/api/ads-leads') && !p.startsWith('/api/telemarketers') && !p.startsWith('/api/territories') && !p.startsWith('/api/contacts') && !p.startsWith('/api/lead-activity')) return false;
   if (!db.configured()) {
     ctx.json(res, 503, { error: 'report database is not configured; link DATABASE_URL to the Railway service' });
     return true;
@@ -3566,6 +3597,184 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     const result = await db.hideLeads(companyIds, hide);
     ctx.json(res, 200, { ok: true, hide, ...result });
     return true;
+  }
+
+  // ---- Ads & Form Submissions Leads (atap_solar_registrations) ------------
+  if (method === 'GET' && p === '/api/ads-leads/stats') {
+    const stats = await db.getAtapSolarRegistrationStats();
+    ctx.json(res, 200, { ok: true, stats });
+    return true;
+  }
+
+  if (method === 'GET' && p === '/api/ads-leads/export') {
+    const search = url.searchParams.get('search');
+    const status = url.searchParams.get('status');
+    const assignedTo = url.searchParams.get('assignedTo') || url.searchParams.get('assigned_to');
+    const source = url.searchParams.get('source');
+    const state = url.searchParams.get('state');
+    const result = await db.listAtapSolarRegistrations({ search, status, assignedTo, source, state, limit: 1000, offset: 0 });
+    const escapeCsv = (val: unknown) => {
+      const s = String(val == null ? '' : val);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [
+      [
+        'ID',
+        'Lead ID',
+        'Full Name',
+        'Phone Number',
+        'TNB Account No',
+        'Area / Address',
+        'State',
+        'Property Type',
+        'Monthly Bill (RM)',
+        'System Size',
+        'Estimated Savings',
+        'Roof Type',
+        'Email',
+        'Lead Status',
+        'Assigned To',
+        'Assigned At',
+        'Source',
+        'UTM Source',
+        'UTM Medium',
+        'UTM Campaign',
+        'Lead Notes',
+        'Submission Date',
+      ].map(escapeCsv).join(','),
+    ];
+    for (const lead of result.leads) {
+      lines.push([
+        escapeCsv(lead.id),
+        escapeCsv(lead.lead_id),
+        escapeCsv(lead.full_name),
+        escapeCsv(lead.phone_number),
+        escapeCsv(lead.tnb_account_no),
+        escapeCsv(lead.area),
+        escapeCsv(lead.state),
+        escapeCsv(lead.property_type),
+        escapeCsv(lead.monthly_bill),
+        escapeCsv(lead.system_size),
+        escapeCsv(lead.estimated_savings),
+        escapeCsv(lead.roof_type),
+        escapeCsv(lead.email),
+        escapeCsv(lead.lead_status),
+        escapeCsv(lead.assigned_to),
+        escapeCsv(lead.assigned_at),
+        escapeCsv(lead.source),
+        escapeCsv(lead.utm_source),
+        escapeCsv(lead.utm_medium),
+        escapeCsv(lead.utm_campaign),
+        escapeCsv(lead.lead_notes),
+        escapeCsv(lead.created_at),
+      ].join(','));
+    }
+    const csvData = lines.join('\r\n');
+    res.writeHead(200, {
+      'content-type': 'text/csv; charset=utf-8',
+      'content-disposition': `attachment; filename="ads-leads-${new Date().toISOString().slice(0, 10)}.csv"`,
+      'cache-control': 'no-store',
+    });
+    res.end(csvData);
+    return true;
+  }
+
+  if (method === 'GET' && p === '/api/ads-leads') {
+    const search = url.searchParams.get('search');
+    const status = url.searchParams.get('status');
+    const assignedTo = url.searchParams.get('assignedTo') || url.searchParams.get('assigned_to');
+    const source = url.searchParams.get('source');
+    const state = url.searchParams.get('state');
+    const limit = Number(url.searchParams.get('limit') ?? 50);
+    const offset = Number(url.searchParams.get('offset') ?? 0);
+    const sort = url.searchParams.get('sort');
+    const result = await db.listAtapSolarRegistrations({ search, status, assignedTo, source, state, limit, offset, sort });
+    ctx.json(res, 200, result);
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/ads-leads/assign') {
+    const body = await ctx.readJson(req);
+    const rawIds = Array.isArray(body.registrationIds) ? body.registrationIds : (Array.isArray(body.ids) ? body.ids : [body.id || body.registrationId]);
+    const registrationIds = rawIds.map((id: unknown) => Number(id)).filter((n: number) => Number.isFinite(n) && n > 0);
+    const assignedTo = str(body.assignedTo || body.assigned_to).trim();
+    const notes = str(body.notes).trim() || null;
+    if (!registrationIds.length) {
+      ctx.json(res, 400, { error: 'registrationIds is required' });
+      return true;
+    }
+    if (!assignedTo) {
+      ctx.json(res, 400, { error: 'assignedTo is required' });
+      return true;
+    }
+    const result = await db.assignAtapSolarRegistrations(registrationIds, assignedTo, notes);
+    ctx.json(res, 200, { ok: true, ...result, assignedTo });
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/ads-leads/unassign') {
+    const body = await ctx.readJson(req);
+    const rawIds = Array.isArray(body.registrationIds) ? body.registrationIds : (Array.isArray(body.ids) ? body.ids : [body.id || body.registrationId]);
+    const registrationIds = rawIds.map((id: unknown) => Number(id)).filter((n: number) => Number.isFinite(n) && n > 0);
+    if (!registrationIds.length) {
+      ctx.json(res, 400, { error: 'registrationIds is required' });
+      return true;
+    }
+    const result = await db.unassignAtapSolarRegistrations(registrationIds);
+    ctx.json(res, 200, { ok: true, ...result });
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/ads-leads/hide') {
+    const body = await ctx.readJson(req);
+    const rawIds = Array.isArray(body.registrationIds) ? body.registrationIds : (Array.isArray(body.ids) ? body.ids : [body.id || body.registrationId]);
+    const registrationIds = rawIds.map((id: unknown) => Number(id)).filter((n: number) => Number.isFinite(n) && n > 0);
+    const hide = body.hide !== undefined ? Boolean(body.hide) : (body.isHidden !== undefined ? Boolean(body.isHidden) : (body.is_hidden !== undefined ? Boolean(body.is_hidden) : true));
+    if (!registrationIds.length) {
+      ctx.json(res, 400, { error: 'registrationIds is required' });
+      return true;
+    }
+    const result = await db.hideAtapSolarRegistrations(registrationIds, hide);
+    ctx.json(res, 200, { ok: true, hide, ...result });
+    return true;
+  }
+
+  const adsLeadMatch = /^\/api\/ads-leads\/(\d+)$/.exec(p);
+  if (adsLeadMatch) {
+    const regId = adsLeadMatch[1]!;
+    if (method === 'GET') {
+      const lead = await db.getAtapSolarRegistrationById(regId);
+      if (!lead) {
+        ctx.json(res, 404, { error: 'lead registration not found', id: regId });
+        return true;
+      }
+      ctx.json(res, 200, { ok: true, lead });
+      return true;
+    }
+    if (method === 'PATCH') {
+      const body = await ctx.readJson(req);
+      const validStatuses = new Set(['unassigned', 'assigned', 'contacted', 'interested', 'not_interested', 'do_not_call']);
+      const rawStatus = str(body.leadStatus || body.lead_status || body.status).trim();
+      const leadStatus = validStatuses.has(rawStatus) ? rawStatus as db.LeadStatus : undefined;
+      const patch: Parameters<typeof db.updateAtapSolarRegistration>[1] = {};
+      if (leadStatus) patch.leadStatus = leadStatus;
+      if (Object.prototype.hasOwnProperty.call(body, 'assignedTo') || Object.prototype.hasOwnProperty.call(body, 'assigned_to')) {
+        patch.assignedTo = body.assignedTo == null && body.assigned_to == null ? null : str(body.assignedTo || body.assigned_to).trim() || null;
+      }
+      if (Object.prototype.hasOwnProperty.call(body, 'notes') || Object.prototype.hasOwnProperty.call(body, 'lead_notes')) {
+        patch.notes = body.notes == null && body.lead_notes == null ? null : str(body.notes || body.lead_notes);
+      }
+      if (Object.prototype.hasOwnProperty.call(body, 'isHidden') || Object.prototype.hasOwnProperty.call(body, 'is_hidden')) {
+        patch.isHidden = Boolean(body.isHidden ?? body.is_hidden);
+      }
+      const updated = await db.updateAtapSolarRegistration(regId, patch);
+      if (!updated) {
+        ctx.json(res, 404, { error: 'lead registration not found', id: regId });
+        return true;
+      }
+      ctx.json(res, 200, { ok: true, lead: updated });
+      return true;
+    }
   }
 
   // ---- Master People & Contact Directory ----------------------------------

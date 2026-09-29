@@ -576,6 +576,48 @@ export function migrate(): Promise<void> {
       create index if not exists lead_activity_log_created_at_idx on lead_activity_log (created_at desc);
       create index if not exists lead_activity_log_tele_idx on lead_activity_log (telemarketer_name);
       create index if not exists lead_activity_log_new_status_idx on lead_activity_log (new_status);
+
+      create table if not exists atap_solar_registrations (
+        id serial primary key,
+        lead_id varchar(50) not null,
+        full_name varchar(255),
+        phone_number varchar(50),
+        tnb_account_no varchar(50),
+        area varchar(255) not null,
+        state varchar(100) not null,
+        property_type varchar(100) default 'Residential',
+        monthly_bill numeric(10, 2),
+        email varchar(255),
+        roof_type varchar(100),
+        system_size varchar(50),
+        estimated_savings varchar(100),
+        source text,
+        utm_source text,
+        utm_medium text,
+        utm_campaign text,
+        notes text,
+        raw_data jsonb,
+        created_at timestamptz default current_timestamp
+      );
+      alter table atap_solar_registrations add column if not exists lead_status text not null default 'unassigned';
+      alter table atap_solar_registrations add column if not exists assigned_to text;
+      alter table atap_solar_registrations add column if not exists telemarketer_uid text;
+      alter table atap_solar_registrations add column if not exists assigned_at timestamptz;
+      alter table atap_solar_registrations add column if not exists lead_notes text;
+      alter table atap_solar_registrations add column if not exists lead_updated_at timestamptz default now();
+      alter table atap_solar_registrations add column if not exists is_hidden boolean not null default false;
+
+      create index if not exists atap_reg_lead_id_idx on atap_solar_registrations (lead_id);
+      create index if not exists atap_reg_lead_status_idx on atap_solar_registrations (lead_status);
+      create index if not exists atap_reg_assigned_to_idx on atap_solar_registrations (assigned_to);
+      create index if not exists atap_reg_telemarketer_uid_idx on atap_solar_registrations (telemarketer_uid);
+      create index if not exists atap_reg_created_at_idx on atap_solar_registrations (created_at desc);
+      create index if not exists atap_reg_source_idx on atap_solar_registrations (source);
+      create index if not exists atap_reg_state_idx on atap_solar_registrations (state);
+
+      alter table lead_activity_log add column if not exists registration_id integer;
+      alter table lead_activity_log add column if not exists lead_type text not null default 'gmap';
+      create index if not exists lead_activity_log_reg_idx on lead_activity_log (registration_id);
     `);
   })().catch((err) => {
     migrated = null;
@@ -2314,7 +2356,18 @@ export async function assignLeads(
     [target.name, notes?.trim() || null, ids, agentUid],
   );
 
-  for (const cid of ids) {
+  const assignedIds = res.rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id));
+  if (assignedIds.length) {
+    // Assignment history is not ownership: keep only the latest assignment record
+    // so a reassigned lead is not still associated with its previous agent.
+    await sql(
+      `delete from lead_activity_log
+       where company_id = any($1::bigint[]) and action = 'assignment'`,
+      [assignedIds],
+    );
+  }
+
+  for (const cid of assignedIds) {
     await sql(
       `insert into lead_activity_log (company_id, telemarketer_name, telemarketer_uid, action, previous_status, new_status, notes, is_mock, created_at)
        values ($1, $2, $3, 'assignment', 'unassigned', 'assigned', $4, false, now())`,
@@ -4076,3 +4129,489 @@ export async function addManualLeadActivity(input: {
 }
 
 export const recordLeadActivity = addManualLeadActivity;
+
+// ---------------------------------------------------------------------------
+// Ads & Form Submissions (public.atap_solar_registrations)
+// ---------------------------------------------------------------------------
+
+export interface AtapSolarRegistrationLead {
+  id: number;
+  lead_id: string;
+  full_name: string | null;
+  phone_number: string | null;
+  tnb_account_no: string | null;
+  area: string;
+  state: string;
+  property_type: string | null;
+  monthly_bill: number | null;
+  email: string | null;
+  roof_type: string | null;
+  system_size: string | null;
+  estimated_savings: string | null;
+  source: string | null;
+  utm_source: string | null;
+  utm_medium: string | null;
+  utm_campaign: string | null;
+  notes: string | null;
+  raw_data: Record<string, unknown> | null;
+  created_at: string;
+  lead_status: LeadStatus;
+  assigned_to: string | null;
+  telemarketer_uid: string | null;
+  assigned_at: string | null;
+  lead_notes: string | null;
+  lead_updated_at: string | null;
+  is_hidden: boolean;
+}
+
+export interface AtapSolarRegistrationStats {
+  total: number;
+  unassigned: number;
+  assigned: number;
+  contacted: number;
+  interested: number;
+  not_interested: number;
+  do_not_call: number;
+  hidden: number;
+  google_ads: number;
+  facebook_ads: number;
+  other_sources: number;
+}
+
+function applyAdsAssignedToFilter(whereConditions: string[], params: unknown[], assignedTo: string): void {
+  const trimmed = assignedTo.trim().replace(/^[=:]+/, '');
+  if (!trimmed || trimmed === 'all') return;
+  if (trimmed === 'unassigned') {
+    whereConditions.push(`(assigned_to is null or trim(assigned_to) = '' or coalesce(lead_status, 'unassigned') = 'unassigned')`);
+    return;
+  }
+
+  const rawKey = trimmed.startsWith('uid:') ? trimmed.slice(4) : trimmed;
+  const prefixedKey = trimmed.startsWith('uid:') ? trimmed : 'uid:' + trimmed;
+  const numId = Number(rawKey);
+  const isNumeric = Number.isFinite(numId) && numId > 0 && String(numId) === rawKey;
+
+  params.push(rawKey);
+  const pRaw = params.length;
+  params.push(prefixedKey);
+  const pPrefixed = params.length;
+  params.push(trimmed);
+  const pTrimmed = params.length;
+  params.push(isNumeric);
+  const pIsNum = params.length;
+  params.push(isNumeric ? numId : 0);
+  const pNumId = params.length;
+
+  whereConditions.push(`(
+    telemarketer_uid = $${pRaw}
+    or telemarketer_uid = $${pPrefixed}
+    or lower(trim(assigned_to)) = lower(trim($${pTrimmed}))
+    or lower(trim(assigned_to)) = lower(trim($${pRaw}))
+    or lower(trim(assigned_to)) = lower(trim($${pPrefixed}))
+    or lower(regexp_replace(trim(coalesce(assigned_to, '')), '\\s+', ' ', 'g')) = lower(regexp_replace(trim($${pRaw}), '\\s+', ' ', 'g'))
+    or telemarketer_uid in (
+      select uid from telemarketer
+      where uid = $${pRaw} or uid = $${pPrefixed}
+        or lower(trim(name)) = lower(trim($${pTrimmed}))
+        or lower(trim(name)) = lower(trim($${pRaw}))
+        or lower(regexp_replace(trim(name), '\\s+', ' ', 'g')) = lower(regexp_replace(trim($${pRaw}), '\\s+', ' ', 'g'))
+        or ($${pIsNum}::boolean and id = $${pNumId}::int)
+    )
+    or lower(trim(assigned_to)) in (
+      select lower(trim(name)) from telemarketer
+      where uid = $${pRaw} or uid = $${pPrefixed}
+        or lower(trim(name)) = lower(trim($${pTrimmed}))
+        or lower(trim(name)) = lower(trim($${pRaw}))
+        or lower(regexp_replace(trim(name), '\\s+', ' ', 'g')) = lower(regexp_replace(trim($${pRaw}), '\\s+', ' ', 'g'))
+        or ($${pIsNum}::boolean and id = $${pNumId}::int)
+    )
+  )`);
+}
+
+export async function getAtapSolarRegistrationStats(): Promise<AtapSolarRegistrationStats> {
+  if (!configured()) {
+    return {
+      total: 0,
+      unassigned: 0,
+      assigned: 0,
+      contacted: 0,
+      interested: 0,
+      not_interested: 0,
+      do_not_call: 0,
+      hidden: 0,
+      google_ads: 0,
+      facebook_ads: 0,
+      other_sources: 0,
+    };
+  }
+  await migrate();
+  const res = await sql<{
+    total: string;
+    unassigned: string;
+    assigned: string;
+    contacted: string;
+    interested: string;
+    not_interested: string;
+    do_not_call: string;
+    hidden: string;
+    google_ads: string;
+    facebook_ads: string;
+    other_sources: string;
+  }>(
+    `select
+       count(*) filter (where coalesce(is_hidden, false) = false)::text as total,
+       count(*) filter (where coalesce(is_hidden, false) = false and (assigned_to is null or trim(assigned_to) = '' or coalesce(lead_status, 'unassigned') = 'unassigned'))::text as unassigned,
+       count(*) filter (where coalesce(is_hidden, false) = false and assigned_to is not null and trim(assigned_to) <> '' and coalesce(lead_status, 'assigned') = 'assigned')::text as assigned,
+       count(*) filter (where coalesce(is_hidden, false) = false and lead_status = 'contacted')::text as contacted,
+       count(*) filter (where coalesce(is_hidden, false) = false and lead_status = 'interested')::text as interested,
+       count(*) filter (where coalesce(is_hidden, false) = false and lead_status = 'not_interested')::text as not_interested,
+       count(*) filter (where coalesce(is_hidden, false) = false and lead_status = 'do_not_call')::text as do_not_call,
+       count(*) filter (where coalesce(is_hidden, false) = true)::text as hidden,
+       count(*) filter (where coalesce(is_hidden, false) = false and lower(coalesce(source, utm_source, '')) ilike '%google%')::text as google_ads,
+       count(*) filter (where coalesce(is_hidden, false) = false and lower(coalesce(source, utm_source, '')) ilike '%facebook%')::text as facebook_ads,
+       count(*) filter (where coalesce(is_hidden, false) = false and lower(coalesce(source, utm_source, '')) not ilike '%google%' and lower(coalesce(source, utm_source, '')) not ilike '%facebook%')::text as other_sources
+     from atap_solar_registrations`,
+  );
+  const row = res.rows[0];
+  return {
+    total: Number(row?.total ?? 0),
+    unassigned: Number(row?.unassigned ?? 0),
+    assigned: Number(row?.assigned ?? 0),
+    contacted: Number(row?.contacted ?? 0),
+    interested: Number(row?.interested ?? 0),
+    not_interested: Number(row?.not_interested ?? 0),
+    do_not_call: Number(row?.do_not_call ?? 0),
+    hidden: Number(row?.hidden ?? 0),
+    google_ads: Number(row?.google_ads ?? 0),
+    facebook_ads: Number(row?.facebook_ads ?? 0),
+    other_sources: Number(row?.other_sources ?? 0),
+  };
+}
+
+export async function listAtapSolarRegistrations(options: {
+  search?: string | null;
+  status?: string | null;
+  assignedTo?: string | null;
+  source?: string | null;
+  state?: string | null;
+  limit?: number;
+  offset?: number;
+  sort?: string | null;
+} = {}): Promise<{ leads: AtapSolarRegistrationLead[]; total: number; stats: AtapSolarRegistrationStats; limit: number; offset: number }> {
+  if (!configured()) {
+    return {
+      leads: [],
+      total: 0,
+      stats: {
+        total: 0,
+        unassigned: 0,
+        assigned: 0,
+        contacted: 0,
+        interested: 0,
+        not_interested: 0,
+        do_not_call: 0,
+        hidden: 0,
+        google_ads: 0,
+        facebook_ads: 0,
+        other_sources: 0,
+      },
+      limit: Math.min(Math.max(Math.round(options.limit ?? 50), 1), 100),
+      offset: Math.max(Math.round(options.offset ?? 0), 0),
+    };
+  }
+  await migrate();
+  const limit = Math.min(Math.max(Math.round(options.limit ?? 50), 1), 100);
+  const offset = Math.max(Math.round(options.offset ?? 0), 0);
+
+  const whereConditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (options.status === 'hidden') {
+    whereConditions.push('coalesce(is_hidden, false) = true');
+  } else {
+    whereConditions.push('coalesce(is_hidden, false) = false');
+    if (options.status && options.status !== 'all') {
+      if (options.status === 'unassigned') {
+        whereConditions.push(`(coalesce(lead_status, 'unassigned') = 'unassigned' or assigned_to is null or trim(assigned_to) = '')`);
+      } else {
+        params.push(options.status.trim());
+        whereConditions.push(`lead_status = $${params.length}`);
+      }
+    }
+  }
+
+  if (options.search && options.search.trim()) {
+    params.push(`%${options.search.trim()}%`);
+    const pIdx = params.length;
+    whereConditions.push(`(
+      full_name ilike $${pIdx}
+      or coalesce(phone_number, '') ilike $${pIdx}
+      or coalesce(email, '') ilike $${pIdx}
+      or area ilike $${pIdx}
+      or state ilike $${pIdx}
+      or lead_id ilike $${pIdx}
+      or coalesce(tnb_account_no, '') ilike $${pIdx}
+      or coalesce(notes, '') ilike $${pIdx}
+      or coalesce(utm_campaign, '') ilike $${pIdx}
+      or coalesce(source, '') ilike $${pIdx}
+    )`);
+  }
+
+  if (options.assignedTo) {
+    applyAdsAssignedToFilter(whereConditions, params, options.assignedTo);
+  }
+
+  if (options.source && options.source !== 'all') {
+    params.push(`%${options.source.trim()}%`);
+    const pIdx = params.length;
+    whereConditions.push(`(source ilike $${pIdx} or utm_source ilike $${pIdx})`);
+  }
+
+  if (options.state && options.state !== 'all') {
+    params.push(options.state.trim());
+    const pIdx = params.length;
+    whereConditions.push(`lower(state) = lower($${pIdx})`);
+  }
+
+  const whereClause = whereConditions.length > 0 ? whereConditions.join(' and ') : 'true';
+
+  let orderBy = 'created_at desc, id desc';
+  if (options.sort === 'name') orderBy = 'lower(coalesce(full_name, lead_id)) asc';
+  else if (options.sort === 'bill') orderBy = 'monthly_bill desc nulls last, id desc';
+  else if (options.sort === 'assigned_at') orderBy = 'assigned_at desc nulls last, id desc';
+
+  const [items, countRes, statsRes] = await Promise.all([
+    sql<AtapSolarRegistrationLead>(
+      `select
+         id, lead_id, full_name, phone_number, tnb_account_no, area, state,
+         property_type, monthly_bill::float, email, roof_type, system_size, estimated_savings,
+         source, utm_source, utm_medium, utm_campaign, notes, raw_data,
+         created_at, coalesce(lead_status, 'unassigned') as lead_status,
+         assigned_to, telemarketer_uid, assigned_at, lead_notes, lead_updated_at,
+         coalesce(is_hidden, false) as is_hidden
+       from atap_solar_registrations
+       where ${whereClause}
+       order by ${orderBy}
+       limit $${params.length + 1} offset $${params.length + 2}`,
+      [...params, limit, offset],
+    ),
+    sql<{ total: string }>(
+      `select count(*)::text as total
+       from atap_solar_registrations
+       where ${whereClause}`,
+      params,
+    ),
+    getAtapSolarRegistrationStats(),
+  ]);
+
+  return {
+    leads: items.rows,
+    total: Number(countRes.rows[0]?.total ?? 0),
+    stats: statsRes,
+    limit,
+    offset,
+  };
+}
+
+export async function getAtapSolarRegistrationById(registrationId: string | number): Promise<AtapSolarRegistrationLead | null> {
+  await migrate();
+  const id = Number(registrationId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+
+  const res = await sql<AtapSolarRegistrationLead>(
+    `select
+       id, lead_id, full_name, phone_number, tnb_account_no, area, state,
+       property_type, monthly_bill::float, email, roof_type, system_size, estimated_savings,
+       source, utm_source, utm_medium, utm_campaign, notes, raw_data,
+       created_at, coalesce(lead_status, 'unassigned') as lead_status,
+       assigned_to, telemarketer_uid, assigned_at, lead_notes, lead_updated_at,
+       coalesce(is_hidden, false) as is_hidden
+     from atap_solar_registrations
+     where id = $1
+     limit 1`,
+    [id],
+  );
+  return res.rows[0] ?? null;
+}
+
+export async function updateAtapSolarRegistration(
+  registrationId: string | number,
+  patch: {
+    leadStatus?: LeadStatus;
+    assignedTo?: string | null;
+    notes?: string | null;
+    isHidden?: boolean;
+  },
+): Promise<AtapSolarRegistrationLead | null> {
+  await migrate();
+  const id = Number(registrationId);
+  if (!Number.isFinite(id) || id <= 0) throw new Error('invalid registration id');
+
+  let agentUid: string | null = null;
+  let assignedName: string | null = null;
+  if (patch.assignedTo && patch.assignedTo.trim()) {
+    const target = await resolveTelemarketer(patch.assignedTo.trim());
+    agentUid = target.uid;
+    assignedName = target.name;
+  }
+
+  const beforeRes = await sql<{ lead_status: string; assigned_to: string | null; telemarketer_uid: string | null; lead_notes: string | null }>(
+    `select lead_status, assigned_to, telemarketer_uid, lead_notes from atap_solar_registrations where id = $1 limit 1`,
+    [id],
+  ).catch(() => ({ rows: [] as { lead_status: string; assigned_to: string | null; telemarketer_uid: string | null; lead_notes: string | null }[], rowCount: 0 }));
+  const before = beforeRes.rows[0];
+
+  const hasStatus = Object.prototype.hasOwnProperty.call(patch, 'leadStatus');
+  const hasAssignedTo = Object.prototype.hasOwnProperty.call(patch, 'assignedTo');
+  const hasNotes = Object.prototype.hasOwnProperty.call(patch, 'notes');
+  const hasIsHidden = Object.prototype.hasOwnProperty.call(patch, 'isHidden');
+
+  const res = await sql<AtapSolarRegistrationLead>(
+    `update atap_solar_registrations set
+       lead_status = case when $2::boolean then $3 else lead_status end,
+       assigned_to = case when $4::boolean then $5 else assigned_to end,
+       telemarketer_uid = case when $4::boolean then $10 else telemarketer_uid end,
+       assigned_at = case when $4::boolean then (case when $5 is null then null else coalesce(assigned_at, now()) end) else assigned_at end,
+       lead_notes = case when $6::boolean then $7 else lead_notes end,
+       is_hidden = case when $8::boolean then $9::boolean else is_hidden end,
+       lead_updated_at = now()
+     where id = $1
+     returning
+       id, lead_id, full_name, phone_number, tnb_account_no, area, state,
+       property_type, monthly_bill::float, email, roof_type, system_size, estimated_savings,
+       source, utm_source, utm_medium, utm_campaign, notes, raw_data,
+       created_at, coalesce(lead_status, 'unassigned') as lead_status,
+       assigned_to, telemarketer_uid, assigned_at, lead_notes, lead_updated_at,
+       coalesce(is_hidden, false) as is_hidden`,
+    [
+      id,
+      hasStatus, patch.leadStatus ?? null,
+      hasAssignedTo, assignedName,
+      hasNotes, patch.notes ?? null,
+      hasIsHidden, Boolean(patch.isHidden),
+      agentUid,
+    ],
+  );
+
+  const updatedRow = res.rows[0];
+  if (updatedRow) {
+    const prevStatus = (before?.lead_status as LeadStatus) || 'unassigned';
+    const newStatus = (updatedRow.lead_status as LeadStatus) || prevStatus;
+    const teleName = updatedRow.assigned_to ?? before?.assigned_to ?? null;
+    const teleUid = updatedRow.telemarketer_uid ?? before?.telemarketer_uid ?? null;
+    if (hasStatus && patch.leadStatus && patch.leadStatus !== prevStatus) {
+      await sql(
+        `insert into lead_activity_log (registration_id, lead_type, telemarketer_name, telemarketer_uid, action, previous_status, new_status, notes, is_mock, created_at)
+         values ($1, 'ads', $2, $3, 'status_change', $4, $5, $6, false, now())`,
+        [id, teleName, teleUid, prevStatus, newStatus, patch.notes ?? null],
+      ).catch(() => {});
+    } else if (hasNotes && patch.notes) {
+      await sql(
+        `insert into lead_activity_log (registration_id, lead_type, telemarketer_name, telemarketer_uid, action, previous_status, new_status, notes, is_mock, created_at)
+         values ($1, 'ads', $2, $3, 'note_added', $4, $4, $5, false, now())`,
+        [id, teleName, teleUid, newStatus, patch.notes],
+      ).catch(() => {});
+    }
+  }
+
+  return updatedRow ?? null;
+}
+
+export async function assignAtapSolarRegistrations(
+  registrationIds: (string | number)[],
+  assignedTo: string,
+  notes?: string | null,
+): Promise<{ updated: number }> {
+  await migrate();
+  const trimmed = assignedTo.trim();
+  if (!trimmed) throw new Error('assignedTo is required');
+  const ids = registrationIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0);
+  if (!ids.length) return { updated: 0 };
+
+  const target = await resolveTelemarketer(trimmed);
+  const agentUid = target.uid;
+
+  const res = await sql(
+    `update atap_solar_registrations set
+       assigned_to = $1,
+       telemarketer_uid = $4,
+       assigned_at = now(),
+       lead_status = case when coalesce(lead_status, 'unassigned') = 'unassigned' then 'assigned' else lead_status end,
+       lead_notes = case when $2::text is not null and $2 <> ''
+                         then case when lead_notes is not null and lead_notes <> ''
+                                   then lead_notes || E'\n' || $2
+                                   else $2 end
+                         else lead_notes end,
+       lead_updated_at = now()
+     where id = any($3::int[])
+     returning id`,
+    [target.name, notes?.trim() || null, ids, agentUid],
+  );
+
+  const assignedIds = res.rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id));
+  if (assignedIds.length) {
+    await sql(
+      `delete from lead_activity_log
+       where registration_id = any($1::int[]) and action = 'assignment'`,
+      [assignedIds],
+    ).catch(() => {});
+  }
+
+  for (const cid of assignedIds) {
+    await sql(
+      `insert into lead_activity_log (registration_id, lead_type, telemarketer_name, telemarketer_uid, action, previous_status, new_status, notes, is_mock, created_at)
+       values ($1, 'ads', $2, $3, 'assignment', 'unassigned', 'assigned', $4, false, now())`,
+      [cid, target.name, agentUid, notes?.trim() || null],
+    ).catch(() => {});
+  }
+
+  return { updated: res.rows.length };
+}
+
+export async function unassignAtapSolarRegistrations(registrationIds: (string | number)[]): Promise<{ updated: number }> {
+  await migrate();
+  const ids = registrationIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0);
+  if (!ids.length) return { updated: 0 };
+
+  const res = await sql(
+    `update atap_solar_registrations set
+        assigned_to = null,
+        telemarketer_uid = null,
+        assigned_at = null,
+        lead_status = 'unassigned',
+        lead_updated_at = now()
+     where id = any($1::int[])
+     returning id`,
+    [ids],
+  );
+
+  for (const cid of ids) {
+    await sql(
+      `insert into lead_activity_log (registration_id, lead_type, telemarketer_name, telemarketer_uid, action, previous_status, new_status, notes, is_mock, created_at)
+       values ($1, 'ads', null, null, 'unassign', 'assigned', 'unassigned', null, false, now())`,
+      [cid],
+    ).catch(() => {});
+  }
+
+  return { updated: res.rows.length };
+}
+
+export async function hideAtapSolarRegistrations(
+  registrationIds: (string | number)[],
+  hide: boolean = true,
+): Promise<{ updated: number }> {
+  await migrate();
+  const ids = registrationIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0);
+  if (!ids.length) return { updated: 0 };
+
+  const res = await sql(
+    `update atap_solar_registrations set
+       is_hidden = $2::boolean,
+       lead_updated_at = now()
+     where id = any($1::int[])
+     returning id`,
+    [ids, hide],
+  );
+  return { updated: res.rows.length };
+}
+

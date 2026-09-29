@@ -7,7 +7,7 @@
 // The same page also accepts LAB_TOKEN for owner testing.
 import { TOKEN_STORE_JS } from './tokenstore.ts';
 
-export type PageKind = 'research' | 'telemarketing';
+export type PageKind = 'research' | 'telemarketing' | 'registrations';
 
 // The calling floor gets the same workspace, minus the surfaces that are not
 // part of calling: Home's discovery chooser, the report library and the guide.
@@ -36,6 +36,30 @@ function telemarketing(html: string): string {
     // one that has to be re-pointed: on the floor it opens the map, not the
     // discovery chooser it would otherwise reveal.
     .replace("switchView('discover')", "switchView('telemarketing')");
+}
+
+const REGISTRATIONS_CSS =
+  '.registrations .nav-button[data-view="discover"],' +
+  '.registrations .nav-button[data-view="library"],' +
+  '.registrations .nav-button[href="/guide"],' +
+  '.registrations .mobile-tab[data-view="discover"],' +
+  '.registrations .mobile-tab[data-view="library"],' +
+  '.registrations .mobile-tab[href="/guide"],' +
+  '.registrations .gate-help{display:none}';
+
+function registrations(html: string): string {
+  return html
+    .replace('<body>', '<body data-portal="registrations">')
+    .replace('<title>EE Business Intelligence</title>', '<title>Incoming Registrations · Atap Solar Leads</title>')
+    .replace('<div id="portalApp" class="app"', '<div id="portalApp" class="app registrations"')
+    .replace('<section id="discoverView" class="view active">', '<section id="discoverView" class="view">')
+    .replace('<section id="adsLeadsView" class="view">', '<section id="adsLeadsView" class="view active">')
+    .replace('class="nav-button active" data-view="discover"', 'class="nav-button" data-view="discover"')
+    .replace('class="nav-button" data-view="adsLeads"', 'class="nav-button active" data-view="adsLeads"')
+    .replace('class="mobile-tab active" data-view="discover"', 'class="mobile-tab" data-view="discover"')
+    .replace('class="mobile-tab" data-view="adsLeads"', 'class="mobile-tab active" data-view="adsLeads"')
+    .replace('</style>', REGISTRATIONS_CSS + '</style>')
+    .replace("switchView('discover')", "switchView('adsLeads')");
 }
 export function page(kind: PageKind = 'research'): string {
   const html = String.raw`<!doctype html>
@@ -277,10 +301,14 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
 .act-rank-tag.silver{background:#f1f5f9;color:#334155;border:1px solid #e2e8f0}
 .act-rank-tag.bronze{background:#ffedd5;color:#9a3412;border:1px solid #fed7aa}
 .act-rank-tag.default{background:#f3f4f6;color:#4b5563}
+.new-incoming-pill{display:inline-flex;align-items:center;gap:4px;font:750 9px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;padding:3px 7px;border-radius:3px;background:#ecfdf5;color:#065f46;border:1px solid #6ee7b7;animation:incomingPulse 2s infinite}
+@keyframes incomingPulse{0%,100%{box-shadow:0 0 0 0 rgba(16,185,129,.4)}50%{box-shadow:0 0 0 4px rgba(16,185,129,.15)}}
+.live-monitor-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:6px;margin:20px 0 16px;font-size:12.5px;color:#065f46;flex-wrap:wrap}
+.new-lead-alert{background:#fef3c7;border:1px solid #fde68a;color:#92400e;padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:13px;display:flex;align-items:center;justify-content:space-between}
 </style></head><body>
 <div id="accessGate" class="gate"><div class="gate-panel"><div class="gate-mark">EE</div><h1>Private intelligence workspace.</h1><p>Enter the access key supplied by the workspace owner. You enter it once: it stays in this browser and is never added to a report link.</p><form class="gate-form" onsubmit="connect(event)"><input id="accessKey" type="password" autocomplete="current-password" placeholder="Workspace access key" aria-label="Workspace access key"><button id="connectButton" class="primary" type="submit">Enter</button></form><p id="gateError" class="gate-error" role="alert"></p><p class="gate-help"><a href="/guide" target="_blank" rel="noopener">New here? Read the guide first ↗ · 新手指南</a></p></div></div>
 <div id="portalApp" class="app" aria-hidden="true" inert>
-  <header class="mast"><div class="mast-inner"><button type="button" class="brand" aria-label="Home" onclick="switchView('discover')"><span class="mark">EE</span><span>Business intelligence</span></button><nav class="desktop-nav" aria-label="Workspace"><button class="nav-button active" data-view="discover" onclick="switchView('discover')">Home</button><button class="nav-button" data-view="telemarketing" onclick="switchView('telemarketing')">Telemarketing</button><button class="nav-button" data-view="assignment" onclick="switchView('assignment')">Lead Assignment</button><button class="nav-button" data-view="activity" onclick="switchView('activity')">Lead Activity</button><button class="nav-button" data-view="leads" onclick="switchView('leads')">Leads Master</button><button class="nav-button" data-view="contacts" onclick="switchView('contacts')">Contacts Master</button><button class="nav-button" data-view="agents" onclick="switchView('agents')">Telemarketers</button><button class="nav-button" data-view="library" onclick="switchView('library')">Reports</button><a class="nav-button" href="/guide" target="_blank" rel="noopener">Guide</a><span class="access"><span class="access-dot"></span>Connected</span><button class="signout" onclick="disconnect()">Sign out</button></nav><button class="signout" onclick="disconnect()">Exit</button></div></header>
+  <header class="mast"><div class="mast-inner"><button type="button" class="brand" aria-label="Home" onclick="switchView('discover')"><span class="mark">EE</span><span>Business intelligence</span></button><nav class="desktop-nav" aria-label="Workspace"><button class="nav-button active" data-view="discover" onclick="switchView('discover')">Home</button><button class="nav-button" data-view="telemarketing" onclick="switchView('telemarketing')">Telemarketing</button><button class="nav-button" data-view="assignment" onclick="switchView('assignment')">Lead Assignment</button><button class="nav-button" data-view="activity" onclick="switchView('activity')">Lead Activity</button><button class="nav-button" data-view="leads" onclick="switchView('leads')">Leads Master</button><button class="nav-button" data-view="adsLeads" onclick="switchView('adsLeads')">⚡ Ads Leads</button><button class="nav-button" data-view="contacts" onclick="switchView('contacts')">Contacts Master</button><button class="nav-button" data-view="agents" onclick="switchView('agents')">Telemarketers</button><button class="nav-button" data-view="library" onclick="switchView('library')">Reports</button><a class="nav-button" href="/guide" target="_blank" rel="noopener">Guide</a><span class="access"><span class="access-dot"></span>Connected</span><button class="signout" onclick="disconnect()">Sign out</button></nav><button class="signout" onclick="disconnect()">Exit</button></div></header>
   <main class="content">
     <section id="discoverView" class="view active">
       <div class="hero"><div class="eyebrow" id="heroEyebrow">Live market discovery</div><h1 id="heroTitle">Find the companies worth knowing.</h1><p id="heroCopy">Pick one. Nothing is researched until you say so.</p></div>
@@ -296,7 +324,7 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
       <div class="library-hero">
         <div class="eyebrow">Territory Coverage & Market Scans</div>
         <h1>Telemarketing Lead Map.</h1>
-        <p>Systematically blanket commercial zones and neighborhoods across Johor. Drill down by District, Town, and Taman to dispatch Google Maps business market scans.</p>
+        <p>Systematically blanket commercial zones and neighborhoods across Johor and Selangor. Drill down by District, Town, and Taman to dispatch Google Maps business market scans.</p>
       </div>
       <div class="result-summary" style="margin-top:24px;">
         <div class="metric"><strong id="teleDistrictsCount">10</strong><span>Districts</span></div>
@@ -308,8 +336,9 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
         <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;flex:1;min-width:280px;">
           <div style="display:flex;flex-direction:column;gap:3px;">
             <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">State</span>
-            <select class="input select" id="teleStateSelect" onchange="loadTelemarketingView()" style="height:38px;font-size:13px;font-weight:600;min-width:110px;">
+            <select class="input select" id="teleStateSelect" onchange="onTeleStateChange()" style="height:38px;font-size:13px;font-weight:600;min-width:110px;">
               <option value="johor" selected>Johor</option>
+              <option value="selangor">Selangor</option>
             </select>
           </div>
           <div style="display:flex;flex-direction:column;gap:3px;">
@@ -432,7 +461,7 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
           <button class="primary" type="button" onclick="applyAssignmentFilter()" style="height:38px;padding:0 16px;align-self:flex-end;">Filter</button>
         </div>
         <div style="display:flex;gap:8px;align-items:center;align-self:flex-end;">
-          <button class="filter" type="button" onclick="switchView('telemarketing')" title="Open Johor Lead Map to scan tamans and assign bulk territories">🗺️ Lead Map →</button>
+          <button class="filter" type="button" onclick="switchView('telemarketing')" title="Open Lead Map to scan tamans and assign bulk territories">🗺️ Lead Map →</button>
           <button class="filter" type="button" onclick="switchView('agents')" title="Manage telemarketer team accounts and notes">👥 Telemarketers →</button>
           <button class="filter" type="button" onclick="loadAssignmentView()" style="height:38px;">Refresh</button>
         </div>
@@ -855,6 +884,135 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
         </div>
       </div>
     </section>
+    <section id="adsLeadsView" class="view">
+      <div class="library-hero">
+        <div class="eyebrow">Paid acquisition &amp; customer signups</div>
+        <h1>Ads &amp; Landing Page Leads.</h1>
+        <p>Direct consumer and business solar inquiries submitted via Google Ads, Facebook Ads campaigns, and landing page calculator forms (<code>atap_solar_registrations</code>). Kept strictly isolated from Google Maps scout data.</p>
+        <div class="library-tools" style="display:flex;gap:10px;align-items:center;">
+          <button class="primary" type="button" onclick="loadAdsLeads()" style="height:38px;padding:0 16px;">Refresh ↻</button>
+          <button class="filter" type="button" onclick="exportAdsLeadsCsv()" style="height:38px;padding:0 16px;">Export CSV ↗</button>
+        </div>
+      </div>
+
+      <div id="adsLeadSummary" class="result-summary lead-summary-grid" style="margin-top:24px;">
+        <div class="metric"><strong id="statAdsTotal">0</strong><span>Total Ads Leads</span></div>
+        <div class="metric"><strong id="statAdsUnassigned" style="color:var(--warn);">0</strong><span>Unassigned</span></div>
+        <div class="metric"><strong id="statAdsAssigned" style="color:var(--accent);">0</strong><span>Assigned</span></div>
+        <div class="metric"><strong id="statAdsContacted" style="color:var(--ok);">0</strong><span>Contacted</span></div>
+        <div class="metric"><strong id="statAdsInterested" style="color:var(--ok);">0</strong><span>Interested ⭐</span></div>
+        <div class="metric"><strong id="statAdsLost" style="color:var(--bad);">0</strong><span>Lost / DNC</span></div>
+      </div>
+
+      <div class="live-monitor-banner" id="adsLiveBanner">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span class="pulse done" style="width:9px;height:9px;"></span>
+          <strong>Live Ingestion Stream Active</strong>
+          <span style="color:var(--muted);font-size:12px;">Auto-checking for incoming Google Ads &amp; form registrations every 15s</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span id="adsNewCounter" style="font:700 11px/1 var(--mono);background:#d1fae5;color:#065f46;padding:3px 8px;border-radius:4px;">Live Stream Active</span>
+          <button class="filter" id="btnToggleAutoRefresh" type="button" onclick="toggleAdsAutoRefresh()" style="height:28px;padding:0 10px;font-size:9.5px;background:#fff;">⏸ Pause</button>
+        </div>
+      </div>
+      <div id="adsNewAlert" class="new-lead-alert hidden">
+        <span id="adsNewAlertText">🔔 New registration received!</span>
+        <button class="filter" type="button" onclick="dismissAdsAlert()" style="height:26px;padding:0 8px;font-size:9px;">Dismiss ✕</button>
+      </div>
+
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:24px 0 16px;">
+        <button class="filter active" data-ads-status="all" onclick="setAdsLeadStatusFilter('all')">All (<span id="countAdsAll">0</span>)</button>
+        <button class="filter" data-ads-status="unassigned" onclick="setAdsLeadStatusFilter('unassigned')">Unassigned (<span id="countAdsUnassigned">0</span>)</button>
+        <button class="filter" data-ads-status="assigned" onclick="setAdsLeadStatusFilter('assigned')">Assigned (<span id="countAdsAssigned">0</span>)</button>
+        <button class="filter" data-ads-status="contacted" onclick="setAdsLeadStatusFilter('contacted')">Contacted (<span id="countAdsContacted">0</span>)</button>
+        <button class="filter" data-ads-status="interested" onclick="setAdsLeadStatusFilter('interested')">Interested (<span id="countAdsInterested">0</span>)</button>
+        <button class="filter" data-ads-status="not_interested" onclick="setAdsLeadStatusFilter('not_interested')">Not Interested (<span id="countAdsNotInterested">0</span>)</button>
+        <button class="filter" data-ads-status="do_not_call" onclick="setAdsLeadStatusFilter('do_not_call')">DNC (<span id="countAdsDnc">0</span>)</button>
+        <button class="filter" data-ads-status="hidden" onclick="setAdsLeadStatusFilter('hidden')">Hidden (<span id="countAdsHidden">0</span>)</button>
+      </div>
+
+      <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin:0 0 16px;">
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;flex:1;min-width:280px;">
+          <input class="input" id="adsLeadSearch" placeholder="Search name, phone, email, lead ID, area, TNB..." style="max-width:320px;height:40px;font-size:14px;" onkeydown="if(event.key==='Enter')applyAdsLeadFilter()">
+          <select class="input select" id="adsLeadTeleFilter" onchange="applyAdsLeadFilter()" style="max-width:200px;height:40px;font-size:13px;">
+            <option value="all">All Telemarketers</option>
+            <option value="unassigned">Unassigned Only</option>
+          </select>
+          <select class="input select" id="adsLeadStateFilter" onchange="applyAdsLeadFilter()" style="max-width:160px;height:40px;font-size:13px;">
+            <option value="all">All States</option>
+            <option value="Kuala Lumpur">Kuala Lumpur</option>
+            <option value="Selangor">Selangor</option>
+            <option value="Johor">Johor</option>
+            <option value="Pulau Pinang">Pulau Pinang</option>
+            <option value="Perak">Perak</option>
+            <option value="Melaka">Melaka</option>
+            <option value="Negeri Sembilan">Negeri Sembilan</option>
+            <option value="Kedah">Kedah</option>
+            <option value="Pahang">Pahang</option>
+          </select>
+          <select class="input select" id="adsLeadSourceFilter" onchange="applyAdsLeadFilter()" style="max-width:160px;height:40px;font-size:13px;">
+            <option value="all">All Sources</option>
+            <option value="google_ads">Google Ads</option>
+            <option value="facebook_ads">Facebook Ads</option>
+            <option value="direct">Direct</option>
+          </select>
+          <button class="primary" type="button" onclick="applyAdsLeadFilter()" style="height:40px;padding:0 16px;">Filter</button>
+        </div>
+      </div>
+
+      <div id="bulkAdsBar" class="bulk-bar hidden" style="margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;cursor:pointer;">
+            <input type="checkbox" id="selectAllAdsPage" onchange="toggleSelectAllAdsPage(this.checked)">
+            <span><span id="bulkAdsCount">0</span> selected</span>
+          </label>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <select class="input select" id="bulkAdsAssignSelect" style="height:38px;font-size:13px;background-color:#fff;min-width:180px;">
+            <option value="">Choose telemarketer...</option>
+          </select>
+          <button class="primary" type="button" onclick="bulkAssignAdsSelected()" style="height:38px;padding:0 16px;">Assign Selected</button>
+          <button class="filter" type="button" onclick="bulkUnassignAdsSelected()" style="height:38px;">Unassign</button>
+          <button class="filter" id="btnBulkAdsHide" type="button" onclick="bulkHideAdsSelected(true)" style="height:38px;color:var(--muted);" title="Hide selected leads">🚫 Hide Selected</button>
+          <button class="filter" id="btnBulkAdsUnhide" type="button" onclick="bulkHideAdsSelected(false)" style="height:38px;color:var(--ok);border-color:var(--ok);background:#ecfdf5;" title="Unhide selected leads">👁️ Unhide Selected</button>
+        </div>
+      </div>
+
+      <div id="adsLeadTableWrapper" class="company-list">
+        <div class="empty">Loading ads leads…</div>
+      </div>
+
+      <div id="adsLeadPagination" style="display:flex;align-items:center;justify-content:space-between;padding:24px 0 32px;border-top:1px solid var(--line);margin-top:20px;">
+        <span id="adsPageInfo" style="font:500 12px/1 var(--mono);color:var(--muted);">Showing 0 of 0</span>
+        <div style="display:flex;gap:8px;">
+          <button id="btnPrevAdsLeads" class="filter" type="button" onclick="prevAdsLeadsPage()" disabled>&larr; Previous</button>
+          <button id="btnNextAdsLeads" class="filter" type="button" onclick="nextAdsLeadsPage()" disabled>Next &rarr;</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Modal: Ads Lead Raw Data / Tracking Inspector -->
+    <div id="adsRawModal" class="modal-backdrop hidden" onclick="if(event.target===this)closeAdsRawModal()">
+      <div class="modal-dialog" role="dialog" aria-labelledby="adsRawModalTitle" style="max-width:680px;">
+        <div class="modal-head">
+          <div>
+            <span class="sheet-title" id="adsRawModalTitle">Raw Tracking &amp; Submission Data</span>
+            <p id="adsRawModalSub" style="margin:4px 0 0;font-size:12px;color:var(--muted);"></p>
+          </div>
+          <button type="button" class="back" onclick="closeAdsRawModal()">✕</button>
+        </div>
+        <div style="margin:16px 0 12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span style="font:700 11px/1 var(--mono);color:var(--muted);text-transform:uppercase;">JSON Payload</span>
+            <button class="filter" type="button" onclick="copyText(el('adsRawContent').textContent, 'Raw Lead JSON')" style="height:28px;padding:0 8px;font-size:9.5px;">Copy JSON</button>
+          </div>
+          <pre id="adsRawContent" style="background:#1e1e1e;color:#d4d4d4;padding:16px;border-radius:6px;font:12px/1.5 var(--mono);max-height:420px;overflow:auto;white-space:pre-wrap;word-break:break-all;"></pre>
+        </div>
+        <div style="display:flex;justify-content:flex-end;">
+          <button class="primary" type="button" onclick="closeAdsRawModal()">Close</button>
+        </div>
+      </div>
+    </div>
     <section id="contactsView" class="view">
       <div class="library-hero">
         <div class="eyebrow">People, grouped by company</div>
@@ -973,7 +1131,7 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
     </section>
     <section id="libraryView" class="view"><div class="library-hero"><div class="eyebrow">Persistent knowledge base</div><h1>Research library.</h1><p>Browse every market scan, company dossier and VIP brief in one place. Completed public reports keep the same permanent link.</p><div class="library-tools"><button id="retryFailedButton" class="primary" type="button" onclick="retryFailedReports(this)">Re-run all failed reports</button><span id="retryFailedNote" class="retry-note" role="status" aria-live="polite"></span></div></div><div class="filters" role="group" aria-label="Report type"><button class="filter active" data-filter="all" onclick="setFilter('all')">All reports</button><button class="filter" data-filter="company_research" onclick="setFilter('company_research')">Company research</button><button class="filter" data-filter="contact_research" onclick="setFilter('contact_research')">Contacts</button><button class="filter" data-filter="person_research" onclick="setFilter('person_research')">VIP briefs</button><button class="filter" data-filter="ads_research" onclick="setFilter('ads_research')">Ads</button><button class="filter" data-filter="ads_market" onclick="setFilter('ads_market')">Ads market</button><button class="filter" data-filter="business_search" onclick="setFilter('business_search')">Business lists</button></div><div id="reportList" class="report-list"><div class="empty">Loading research library…</div></div></section>
   </main>
-  <nav class="mobile-nav" aria-label="Workspace"><button class="mobile-tab active" data-view="discover" onclick="switchView('discover')"><span></span>Home</button><button class="mobile-tab" data-view="telemarketing" onclick="switchView('telemarketing')"><span></span>Map</button><button class="mobile-tab" data-view="assignment" onclick="switchView('assignment')"><span></span>Assign</button><button class="mobile-tab" data-view="activity" onclick="switchView('activity')"><span></span>Activity</button><button class="mobile-tab" data-view="leads" onclick="switchView('leads')"><span></span>Leads</button><button class="mobile-tab" data-view="contacts" onclick="switchView('contacts')"><span></span>Contacts</button><button class="mobile-tab" data-view="agents" onclick="switchView('agents')"><span></span>Agents</button><button class="mobile-tab" data-view="library" onclick="switchView('library')"><span></span>Reports</button><a class="mobile-tab" href="/guide" target="_blank" rel="noopener"><span></span>Guide</a></nav>
+  <nav class="mobile-nav" aria-label="Workspace"><button class="mobile-tab active" data-view="discover" onclick="switchView('discover')"><span></span>Home</button><button class="mobile-tab" data-view="telemarketing" onclick="switchView('telemarketing')"><span></span>Map</button><button class="mobile-tab" data-view="assignment" onclick="switchView('assignment')"><span></span>Assign</button><button class="mobile-tab" data-view="activity" onclick="switchView('activity')"><span></span>Activity</button><button class="mobile-tab" data-view="leads" onclick="switchView('leads')"><span></span>Leads</button><button class="mobile-tab" data-view="adsLeads" onclick="switchView('adsLeads')"><span></span>Ads</button><button class="mobile-tab" data-view="contacts" onclick="switchView('contacts')"><span></span>Contacts</button><button class="mobile-tab" data-view="agents" onclick="switchView('agents')"><span></span>Agents</button><button class="mobile-tab" data-view="library" onclick="switchView('library')"><span></span>Reports</button><a class="mobile-tab" href="/guide" target="_blank" rel="noopener"><span></span>Guide</a></nav>
 </div><div id="toast" class="toast" role="status"></div>
 <script>
 'use strict';
@@ -990,10 +1148,10 @@ function showToast(message){var node=el('toast');node.textContent=message;node.c
 function copyText(text,label){if(!text)return;if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(function(){showToast('Copied: '+(label||text))}).catch(function(){fallbackCopy(text,label)})}else{fallbackCopy(text,label)}}
 function fallbackCopy(text,label){var ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();try{document.execCommand('copy');showToast('Copied: '+(label||text))}catch(e){showToast('Failed to copy')}finally{document.body.removeChild(ta)}}
 async function api(path,options){options=options||{};var headers=Object.assign({'Authorization':'Bearer '+state.token},options.headers||{});if(options.body)headers['Content-Type']='application/json';var response=await fetch(path,Object.assign({},options,{headers:headers}));var text=await response.text();var body={};try{body=text?JSON.parse(text):{}}catch(e){body={error:text||'Invalid server response'}}if(!response.ok){var message=typeof body.error==='string'?body.error:(body.error&&body.error.message)||('Request failed: '+response.status);var error=new Error(message);error.status=response.status;throw error}return body}
-async function connect(event){if(event)event.preventDefault();var key=el('accessKey').value.trim();if(!key)return;state.token=key;el('connectButton').disabled=true;el('gateError').textContent='';try{await api('/api/reports?limit=1');eeKey.save(key);el('accessGate').classList.add('hidden');el('portalApp').removeAttribute('inert');el('portalApp').setAttribute('aria-hidden','false');await loadLibrary();if(document.body.getAttribute('data-portal')==='telemarketing')switchView('telemarketing');showToast('Workspace connected')}catch(error){state.token='';el('gateError').textContent=error.status===401?'Access key not accepted.':error.message}finally{el('connectButton').disabled=false}}
+async function connect(event){if(event)event.preventDefault();var key=el('accessKey').value.trim();if(!key)return;state.token=key;el('connectButton').disabled=true;el('gateError').textContent='';try{await api('/api/reports?limit=1');eeKey.save(key);el('accessGate').classList.add('hidden');el('portalApp').removeAttribute('inert');el('portalApp').setAttribute('aria-hidden','false');await loadLibrary();if(document.body.getAttribute('data-portal')==='registrations')switchView('adsLeads');else if(document.body.getAttribute('data-portal')==='telemarketing')switchView('telemarketing');showToast('Workspace connected')}catch(error){state.token='';el('gateError').textContent=error.status===401?'Access key not accepted.':error.message}finally{el('connectButton').disabled=false}}
 function disconnect(){eeKey.clear();state.token='';location.reload()}
 function authLost(error){if(error&&error.status===401){eeKey.clear();state.token='';el('accessGate').classList.remove('hidden');el('gateError').textContent='Your access expired. Enter the workspace key again.';return true}return false}
-function switchView(name){document.querySelectorAll('.view').forEach(function(node){node.classList.toggle('active',node.id===name+'View')});document.querySelectorAll('[data-view]').forEach(function(node){node.classList.toggle('active',node.getAttribute('data-view')===name)});if(name==='library')loadLibrary();else if(name==='activity')loadActivityView();else if(name==='assignment')loadAssignmentView();else if(name==='leads')loadLeadsView();else if(name==='contacts')loadContactsView();else if(name==='telemarketing')loadTelemarketingView();else if(name==='agents')loadAgentsView();else goHome();window.scrollTo({top:0,behavior:'smooth'})}
+function switchView(name){if(name!=='adsLeads'&&typeof adsLeadState!=='undefined'&&adsLeadState.autoRefreshTimer){clearInterval(adsLeadState.autoRefreshTimer);adsLeadState.autoRefreshTimer=null}document.querySelectorAll('.view').forEach(function(node){node.classList.toggle('active',node.id===name+'View')});document.querySelectorAll('[data-view]').forEach(function(node){node.classList.toggle('active',node.getAttribute('data-view')===name)});if(name==='library')loadLibrary();else if(name==='activity')loadActivityView();else if(name==='assignment')loadAssignmentView();else if(name==='leads')loadLeadsView();else if(name==='adsLeads')loadAdsLeadsView();else if(name==='contacts')loadContactsView();else if(name==='telemarketing')loadTelemarketingView();else if(name==='agents')loadAgentsView();else goHome();window.scrollTo({top:0,behavior:'smooth'})}
 function upsertJob(report,kind){state.jobs[report.id]=Object.assign({},state.jobs[report.id]||{},{report:report,kind:kind});renderJobs()}
 function renderJobs(){var values=Object.keys(state.jobs).map(function(key){return state.jobs[key]});el('activeSection').classList.toggle('hidden',values.length===0);el('jobs').innerHTML=values.map(function(job){var r=job.report;var done=terminal.indexOf(r.status)>=0;var pulse=r.status==='failed'?'bad':done?'done':'';var label=job.kind==='search'?'Market scan':job.kind==='lookup'?'Company lookup':job.kind==='vip'?'VIP brief':job.kind==='ads'?'Ads':job.kind==='contact'?'Contact research':'Company research';var open=safeUrl(r.view_url);return '<article class="job"><div class="job-type">'+label+'</div><div><div class="job-title">'+esc(r.title)+'</div><div class="job-meta">'+esc(r.status)+' · '+esc(r.id)+'</div></div><div class="job-action"><span class="pulse '+pulse+'"></span>'+(open?'<a class="text-action" target="_blank" rel="noopener" href="'+attr(open)+'">View <span>↗</span></a>':'')+'</div></article>'}).join('')}
 function poll(report,kind){upsertJob(report,kind);if(terminal.indexOf(report.status)>=0)return;setTimeout(async function(){try{var body=await api(report.api_url);upsertJob(body.report,kind);if(terminal.indexOf(body.report.status)<0){poll(body.report,kind);return}await loadLibrary();if((kind==='search'||kind==='lookup')&&body.report.status!=='failed'){renderSearch(body,kind)}if(kind==='deep'){showToast(body.report.status==='failed'?'Company research failed':'Company dossier is ready')}if(kind==='vip'){showToast(body.report.status==='failed'?'VIP brief failed':'VIP brief is ready')}if(kind==='adsmarket'){showToast(body.report.status==='failed'?'Ads market research failed':'Ads market report is ready')}if(kind==='contact'){showToast(body.report.status==='failed'?'Contact research failed':'Contact details are ready')}if(body.report.status==='failed')showToast(body.report.error||'Research failed')}catch(error){if(!authLost(error)){showToast(error.message);if(error.status===404){forgetReport(report.id)}else{poll(report,kind)}}}},5000)}
@@ -1806,7 +1964,516 @@ function renderAssignPagination(total){
 var leadState={leads:[],selected:{},telemarketers:[],statusFilter:'all',search:'',teleFilter:'all',researchFilter:'all',page:0,limit:30,total:0};
 async function loadLeadsView(){if(!state.token)return;await loadTelemarketers();await loadLeads()}
 async function loadTelemarketers(){try{var body=await api('/api/telemarketers');leadState.telemarketers=(body.agents||[]).filter(function(a){return a.active});renderTelemarketerSelectors()}catch(err){if(!authLost(err))showToast('Failed to load telemarketers: '+err.message)}}
-function renderTelemarketerSelectors(){var filterSelect=el('leadTeleFilter');var bulkSelect=el('bulkAssignSelect');if(filterSelect){var cur=filterSelect.value;var opts='<option value="all">All Telemarketers</option><option value="unassigned">Unassigned Only</option>';leadState.telemarketers.forEach(function(a){opts+='<option value="'+attr(agentValue(a))+'">'+esc(agentLabel(a))+'</option>'});filterSelect.innerHTML=opts;filterSelect.value=cur||'all'}if(bulkSelect){var bOpts='<option value="">Choose telemarketer...</option>';leadState.telemarketers.forEach(function(a){bOpts+='<option value="'+attr(agentValue(a))+'">'+esc(agentLabel(a))+'</option>'});bulkSelect.innerHTML=bOpts}}
+function renderTelemarketerSelectors(){
+  var filterSelect=el('leadTeleFilter');
+  var bulkSelect=el('bulkAssignSelect');
+  var adsFilterSelect=el('adsLeadTeleFilter');
+  var adsBulkSelect=el('bulkAdsAssignSelect');
+  if(filterSelect){
+    var cur=filterSelect.value;
+    var opts='<option value="all">All Telemarketers</option><option value="unassigned">Unassigned Only</option>';
+    leadState.telemarketers.forEach(function(a){opts+='<option value="'+attr(agentValue(a))+'">'+esc(agentLabel(a))+'</option>'});
+    filterSelect.innerHTML=opts;
+    filterSelect.value=cur||'all';
+  }
+  if(bulkSelect){
+    var bOpts='<option value="">Choose telemarketer...</option>';
+    leadState.telemarketers.forEach(function(a){bOpts+='<option value="'+attr(agentValue(a))+'">'+esc(agentLabel(a))+'</option>'});
+    bulkSelect.innerHTML=bOpts;
+  }
+  if(adsFilterSelect){
+    var adsCur=adsFilterSelect.value;
+    var adsOpts='<option value="all">All Telemarketers</option><option value="unassigned">Unassigned Only</option>';
+    leadState.telemarketers.forEach(function(a){adsOpts+='<option value="'+attr(agentValue(a))+'">'+esc(agentLabel(a))+'</option>'});
+    adsFilterSelect.innerHTML=adsOpts;
+    adsFilterSelect.value=adsCur||'all';
+  }
+  if(adsBulkSelect){
+    var bAdsOpts='<option value="">Choose telemarketer...</option>';
+    leadState.telemarketers.forEach(function(a){bAdsOpts+='<option value="'+attr(agentValue(a))+'">'+esc(agentLabel(a))+'</option>'});
+    adsBulkSelect.innerHTML=bAdsOpts;
+  }
+}
+
+var adsLeadState={
+  leads:[],
+  selected:{},
+  statusFilter:'all',
+  search:'',
+  teleFilter:'all',
+  sourceFilter:'all',
+  stateFilter:'all',
+  page:0,
+  limit:30,
+  total:0,
+  lastMaxId:0,
+  autoRefreshTimer:null
+};
+
+function timeAgo(dateVal){
+  if(!dateVal)return'';
+  try{
+    var ms=Date.now()-new Date(dateVal).getTime();
+    if(isNaN(ms))return date(dateVal);
+    var mins=Math.floor(ms/60000);
+    if(mins<1)return'Just now';
+    if(mins<60)return mins+'m ago';
+    var hrs=Math.floor(mins/60);
+    if(hrs<24)return hrs+'h ago';
+    var days=Math.floor(hrs/24);
+    if(days<7)return days+'d ago';
+    return date(dateVal);
+  }catch(e){
+    return date(dateVal);
+  }
+}
+
+function toggleAdsAutoRefresh(){
+  var btn=el('btnToggleAutoRefresh');
+  if(adsLeadState.autoRefreshTimer){
+    clearInterval(adsLeadState.autoRefreshTimer);
+    adsLeadState.autoRefreshTimer=null;
+    if(btn){btn.textContent='▶ Resume';btn.style.background='#fef3c7';}
+    showToast('Live stream paused');
+  }else{
+    adsLeadState.autoRefreshTimer=setInterval(function(){
+      var v=el('adsLeadsView');
+      if(v&&v.classList.contains('active'))loadAdsLeads(true);
+    },15000);
+    if(btn){btn.textContent='⏸ Pause';btn.style.background='#fff';}
+    showToast('Live stream active (every 15s)');
+    loadAdsLeads(true);
+  }
+}
+
+function dismissAdsAlert(){
+  var alertEl=el('adsNewAlert');
+  if(alertEl)alertEl.classList.add('hidden');
+}
+
+async function loadAdsLeadsView(){
+  if(!state.token)return;
+  await loadTelemarketers();
+  await loadAdsLeads();
+  if(!adsLeadState.autoRefreshTimer){
+    adsLeadState.autoRefreshTimer=setInterval(function(){
+      var v=el('adsLeadsView');
+      if(v&&v.classList.contains('active'))loadAdsLeads(true);
+    },15000);
+  }
+}
+
+async function loadAdsLeads(quiet){
+  if(!state.token)return;
+  var wrapper=el('adsLeadTableWrapper');
+  if(!wrapper)return;
+  if(!quiet)wrapper.innerHTML='<div class="empty">Loading ads leads…</div>';
+  var q='/api/ads-leads?limit='+adsLeadState.limit+'&offset='+(adsLeadState.page*adsLeadState.limit);
+  if(adsLeadState.statusFilter!=='all')q+='&status='+encodeURIComponent(adsLeadState.statusFilter);
+  if(adsLeadState.search)q+='&search='+encodeURIComponent(adsLeadState.search);
+  if(adsLeadState.teleFilter!=='all')q+='&assignedTo='+encodeURIComponent(adsLeadState.teleFilter);
+  if(adsLeadState.sourceFilter!=='all')q+='&source='+encodeURIComponent(adsLeadState.sourceFilter);
+  if(adsLeadState.stateFilter!=='all')q+='&state='+encodeURIComponent(adsLeadState.stateFilter);
+
+  try{
+    var body=await api(q);
+    var newLeads=body.leads||[];
+
+    if(newLeads.length){
+      var maxId=Math.max.apply(null,newLeads.map(function(l){return l.id||0}));
+      if(adsLeadState.lastMaxId && maxId>adsLeadState.lastMaxId){
+        var fresh=newLeads.filter(function(l){return l.id>adsLeadState.lastMaxId});
+        if(fresh.length){
+          var alertEl=el('adsNewAlert');
+          var alertTxt=el('adsNewAlertText');
+          if(alertEl&&alertTxt){
+            alertTxt.textContent='🔔 '+fresh.length+' new incoming registration'+(fresh.length===1?'':'s')+' received: '+(fresh[0].full_name||fresh[0].lead_id)+' ('+(fresh[0].area||fresh[0].state)+')';
+            alertEl.classList.remove('hidden');
+          }
+          showToast('⚡ '+fresh.length+' new registration(s) received!');
+        }
+      }
+      adsLeadState.lastMaxId=Math.max(adsLeadState.lastMaxId||0,maxId);
+    }
+
+    adsLeadState.leads=newLeads;
+    adsLeadState.total=body.total||0;
+    renderAdsLeadsSummary(body.stats||{});
+
+    var counterBadge=el('adsNewCounter');
+    if(counterBadge){
+      var unassignedCount=(body.stats&&body.stats.unassigned)||0;
+      counterBadge.textContent=unassignedCount+' unassigned incoming';
+    }
+
+    renderAdsLeads(newLeads);
+    renderAdsLeadsPagination(body.total||0);
+  }catch(err){
+    if(!quiet&&wrapper)wrapper.innerHTML='<div class="empty error">'+esc(err.message)+'</div>';
+    if(!authLost(err)&&!quiet)showToast(err.message);
+  }
+}
+
+function renderAdsLeadsSummary(stats){
+  var sTotal=el('statAdsTotal');
+  var sUnassigned=el('statAdsUnassigned');
+  var sAssigned=el('statAdsAssigned');
+  var sContacted=el('statAdsContacted');
+  var sInterested=el('statAdsInterested');
+  var sLost=el('statAdsLost');
+
+  if(sTotal)sTotal.textContent=stats.total||0;
+  if(sUnassigned)sUnassigned.textContent=stats.unassigned||0;
+  if(sAssigned)sAssigned.textContent=stats.assigned||0;
+  if(sContacted)sContacted.textContent=stats.contacted||0;
+  if(sInterested)sInterested.textContent=stats.interested||0;
+  if(sLost)sLost.textContent=(stats.not_interested||0)+(stats.do_not_call||0);
+
+  var cAll=el('countAdsAll');
+  var cUn=el('countAdsUnassigned');
+  var cAss=el('countAdsAssigned');
+  var cCon=el('countAdsContacted');
+  var cInt=el('countAdsInterested');
+  var cNot=el('countAdsNotInterested');
+  var cDnc=el('countAdsDnc');
+  var cHid=el('countAdsHidden');
+
+  if(cAll)cAll.textContent=stats.total||0;
+  if(cUn)cUn.textContent=stats.unassigned||0;
+  if(cAss)cAss.textContent=stats.assigned||0;
+  if(cCon)cCon.textContent=stats.contacted||0;
+  if(cInt)cInt.textContent=stats.interested||0;
+  if(cNot)cNot.textContent=stats.not_interested||0;
+  if(cDnc)cDnc.textContent=stats.do_not_call||0;
+  if(cHid)cHid.textContent=stats.hidden||0;
+}
+
+function setAdsLeadStatusFilter(status){
+  adsLeadState.statusFilter=status;
+  adsLeadState.page=0;
+  document.querySelectorAll('[data-ads-status]').forEach(function(node){
+    node.classList.toggle('active',node.getAttribute('data-ads-status')===status);
+  });
+  loadAdsLeads();
+}
+
+function applyAdsLeadFilter(){
+  var searchInput=el('adsLeadSearch');
+  var teleSelect=el('adsLeadTeleFilter');
+  var stateSelect=el('adsLeadStateFilter');
+  var sourceSelect=el('adsLeadSourceFilter');
+  adsLeadState.search=searchInput?searchInput.value.trim():'';
+  adsLeadState.teleFilter=teleSelect?teleSelect.value:'all';
+  adsLeadState.stateFilter=stateSelect?stateSelect.value:'all';
+  adsLeadState.sourceFilter=sourceSelect?sourceSelect.value:'all';
+  adsLeadState.page=0;
+  loadAdsLeads();
+}
+
+function prevAdsLeadsPage(){
+  if(adsLeadState.page>0){
+    adsLeadState.page--;
+    loadAdsLeads();
+  }
+}
+
+function nextAdsLeadsPage(){
+  if((adsLeadState.page+1)*adsLeadState.limit<adsLeadState.total){
+    adsLeadState.page++;
+    loadAdsLeads();
+  }
+}
+
+function renderAdsLeadsPagination(total){
+  var start=adsLeadState.page*adsLeadState.limit+(total>0?1:0);
+  var end=Math.min((adsLeadState.page+1)*adsLeadState.limit,total);
+  var pageInfo=el('adsPageInfo');
+  var btnPrev=el('btnPrevAdsLeads');
+  var btnNext=el('btnNextAdsLeads');
+  if(pageInfo)pageInfo.textContent='Showing '+start+'–'+end+' of '+total+' inquiries';
+  if(btnPrev)btnPrev.disabled=adsLeadState.page===0;
+  if(btnNext)btnNext.disabled=end>=total;
+}
+
+function updateAdsBulkBar(){
+  var keys=Object.keys(adsLeadState.selected).filter(function(k){return adsLeadState.selected[k]});
+  var bulkBar=el('bulkAdsBar');
+  var bulkCount=el('bulkAdsCount');
+  if(bulkBar)bulkBar.classList.toggle('hidden',keys.length===0);
+  if(bulkCount)bulkCount.textContent=keys.length;
+}
+
+function toggleSelectAdsLead(id,checked){
+  adsLeadState.selected[id]=checked;
+  updateAdsBulkBar();
+}
+
+function toggleSelectAllAdsPage(checked){
+  adsLeadState.leads.forEach(function(lead){
+    adsLeadState.selected[lead.id]=checked;
+    var cb=el('adsLeadCheck-'+lead.id);
+    if(cb)cb.checked=checked;
+  });
+  updateAdsBulkBar();
+}
+
+async function bulkAssignAdsSelected(){
+  var keys=Object.keys(adsLeadState.selected).filter(function(k){return adsLeadState.selected[k]}).map(Number);
+  var bulkSelect=el('bulkAdsAssignSelect');
+  var tele=bulkSelect?bulkSelect.value.trim():'';
+  if(!keys.length){showToast('No leads selected.');return}
+  if(!tele){showToast('Choose a telemarketer to assign to.');return}
+  try{
+    var res=await api('/api/ads-leads/assign',{method:'POST',body:JSON.stringify({ids:keys,assignedTo:tele})});
+    showToast('Assigned '+(res.updated||keys.length)+' leads to '+tele);
+    adsLeadState.selected={};
+    updateAdsBulkBar();
+    var allCb=el('selectAllAdsPage');
+    if(allCb)allCb.checked=false;
+    await loadAdsLeads();
+  }catch(err){
+    if(!authLost(err))showToast('Failed to assign: '+err.message);
+  }
+}
+
+async function bulkUnassignAdsSelected(){
+  var keys=Object.keys(adsLeadState.selected).filter(function(k){return adsLeadState.selected[k]}).map(Number);
+  if(!keys.length){showToast('No leads selected.');return}
+  if(!window.confirm('Unassign '+keys.length+' selected leads?'))return;
+  try{
+    var res=await api('/api/ads-leads/unassign',{method:'POST',body:JSON.stringify({ids:keys})});
+    showToast('Unassigned '+(res.updated||keys.length)+' leads');
+    adsLeadState.selected={};
+    updateAdsBulkBar();
+    var allCb=el('selectAllAdsPage');
+    if(allCb)allCb.checked=false;
+    await loadAdsLeads();
+  }catch(err){
+    if(!authLost(err))showToast('Failed to unassign: '+err.message);
+  }
+}
+
+async function bulkHideAdsSelected(hide){
+  var keys=Object.keys(adsLeadState.selected).filter(function(k){return adsLeadState.selected[k]}).map(Number);
+  if(!keys.length){showToast('No leads selected.');return}
+  var actionName=hide?'Hide':'Unhide';
+  if(!window.confirm(actionName+' '+keys.length+' selected leads?'))return;
+  try{
+    var res=await api('/api/ads-leads/hide',{method:'POST',body:JSON.stringify({ids:keys,hide:hide})});
+    showToast((hide?'Hidden ':'Restored ')+(res.updated||keys.length)+' leads');
+    adsLeadState.selected={};
+    updateAdsBulkBar();
+    var allCb=el('selectAllAdsPage');
+    if(allCb)allCb.checked=false;
+    await loadAdsLeads();
+  }catch(err){
+    if(!authLost(err))showToast('Failed to update leads: '+err.message);
+  }
+}
+
+async function toggleHideAdsLead(id,hide){
+  try{
+    await api('/api/ads-leads/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({isHidden:hide})});
+    showToast(hide?'Lead hidden':'Lead restored to active list');
+    await loadAdsLeads();
+  }catch(err){
+    if(!authLost(err))showToast('Failed to update lead: '+err.message);
+  }
+}
+
+async function updateAdsLeadStatus(id,selectEl){
+  var status=selectEl.value;
+  selectEl.className='status-select '+status;
+  try{
+    await api('/api/ads-leads/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({leadStatus:status})});
+    showToast('Status updated to '+status);
+  }catch(err){
+    if(!authLost(err))showToast('Failed to update status: '+err.message);
+  }
+}
+
+async function updateAdsLeadAssignee(id,selectEl){
+  var assignee=selectEl.value.trim();
+  try{
+    await api('/api/ads-leads/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({assignedTo:assignee||null,leadStatus:assignee?'assigned':'unassigned'})});
+    showToast(assignee?'Assigned to '+assignee:'Lead unassigned');
+    await loadAdsLeads();
+  }catch(err){
+    if(!authLost(err))showToast('Failed to update assignment: '+err.message);
+  }
+}
+
+async function editAdsLeadNotes(id,currentNotes){
+  var note=window.prompt('Ads Lead notes / feedback:',currentNotes||'');
+  if(note==null)return;
+  try{
+    await api('/api/ads-leads/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({leadNotes:note.trim()})});
+    showToast('Notes saved');
+    await loadAdsLeads();
+  }catch(err){
+    if(!authLost(err))showToast('Failed to save notes: '+err.message);
+  }
+}
+
+function promptAdsLeadNotes(btn){
+  var id=btn.getAttribute('data-id');
+  var notes=btn.getAttribute('data-notes')||'';
+  return editAdsLeadNotes(id,notes);
+}
+
+function viewAdsLeadRawData(id){
+  var lead=adsLeadState.leads.find(function(l){return l.id===id});
+  if(!lead)return;
+  var modal=el('adsRawModal');
+  var title=el('adsRawModalTitle');
+  var sub=el('adsRawModalSub');
+  var content=el('adsRawContent');
+  if(title)title.textContent='Raw Tracking & Ingest Data: '+lead.lead_id;
+  if(sub)sub.textContent=(lead.full_name||'Applicant')+' · '+lead.area+', '+lead.state+' ('+date(lead.created_at)+')';
+  var payload=lead.raw_data||{
+    lead_id:lead.lead_id,
+    full_name:lead.full_name,
+    phone_number:lead.phone_number,
+    tnb_account_no:lead.tnb_account_no,
+    area:lead.area,
+    state:lead.state,
+    property_type:lead.property_type,
+    monthly_bill:lead.monthly_bill,
+    email:lead.email,
+    roof_type:lead.roof_type,
+    system_size:lead.system_size,
+    estimated_savings:lead.estimated_savings,
+    source:lead.source,
+    utm_source:lead.utm_source,
+    utm_medium:lead.utm_medium,
+    utm_campaign:lead.utm_campaign,
+    created_at:lead.created_at
+  };
+  if(content)content.textContent=JSON.stringify(payload,null,2);
+  if(modal)modal.classList.remove('hidden');
+}
+
+function closeAdsRawModal(){
+  var modal=el('adsRawModal');
+  if(modal)modal.classList.add('hidden');
+}
+
+function exportAdsLeadsCsv(){
+  var q='/api/ads-leads/export?token='+encodeURIComponent(state.token);
+  if(adsLeadState.statusFilter!=='all')q+='&status='+encodeURIComponent(adsLeadState.statusFilter);
+  if(adsLeadState.search)q+='&search='+encodeURIComponent(adsLeadState.search);
+  if(adsLeadState.teleFilter!=='all')q+='&assignedTo='+encodeURIComponent(adsLeadState.teleFilter);
+  if(adsLeadState.sourceFilter!=='all')q+='&source='+encodeURIComponent(adsLeadState.sourceFilter);
+  if(adsLeadState.stateFilter!=='all')q+='&state='+encodeURIComponent(adsLeadState.stateFilter);
+  window.open(q,'_blank');
+}
+
+function renderAdsLeads(leads){
+  var wrapper=el('adsLeadTableWrapper');
+  if(!wrapper)return;
+  if(!leads.length){
+    wrapper.innerHTML='<div class="empty">No ads or form submission leads found matching the filter.</div>';
+    return;
+  }
+  wrapper.innerHTML=leads.map(function(lead){
+    var checked=Boolean(adsLeadState.selected[lead.id]);
+    var phone=lead.phone_number||'';
+    var waDigits=phone.replace(/\D/g,'');
+    if(waDigits.startsWith('0'))waDigits='60'+waDigits.slice(1);
+
+    var custName=lead.full_name||'Tuan/Puan';
+    var loc=lead.area?(lead.area+(lead.state?(', '+lead.state):'')):(lead.state||'Malaysia');
+    var billPart=lead.monthly_bill!=null?(' (anggaran bil RM '+lead.monthly_bill+'/bln)'):'';
+    var sizePart=lead.system_size?(' dan saiz sistem '+lead.system_size):'';
+    var waMsg='Hi '+custName+', saya dari Atap Solar berkenaan pendaftaran kalkulator solar anda untuk premis di '+loc+billPart+'. Adakah ini masa yang sesuai untuk kami terangkan anggaran penjimatan'+sizePart+'?';
+    var waHref=waDigits?'https://wa.me/'+waDigits+'?text='+encodeURIComponent(waMsg):'';
+
+    var isHidden=Boolean(lead.is_hidden||adsLeadState.statusFilter==='hidden');
+    var isRecent=false;
+    if(lead.created_at){
+      var createdMs=new Date(lead.created_at).getTime();
+      if(!isNaN(createdMs)&&(Date.now()-createdMs)<24*3600*1000){
+        isRecent=true;
+      }
+    }
+    var recentPill=isRecent?'<span class="new-incoming-pill">⚡ NEW INCOMING</span>':'';
+    var timeAgoText=lead.created_at?(' ('+timeAgo(lead.created_at)+')'):'';
+
+    var teleOpts='<option value="">(Unassigned)</option>';
+    leadState.telemarketers.forEach(function(a){
+      var value=agentValue(a);
+      var sel=(a.uid?lead.telemarketer_uid===a.uid:(lead.assigned_to&&lead.assigned_to.toLowerCase()===a.name.toLowerCase()))?' selected':'';
+      teleOpts+='<option value="'+attr(value)+'"'+sel+'>'+esc(agentLabel(a))+'</option>';
+    });
+
+    var statuses=['unassigned','assigned','contacted','interested','not_interested','do_not_call'];
+    var statusOpts=statuses.map(function(s){
+      var sel=(lead.lead_status===s)?' selected':'';
+      var lbl=s==='do_not_call'?'DNC':s.replace('_',' ');
+      return '<option value="'+s+'"'+sel+'>'+lbl+'</option>';
+    }).join('');
+
+    var billTag=lead.monthly_bill!=null?('⚡ Bill: <strong>RM '+Number(lead.monthly_bill).toFixed(2)+'</strong>'):'';
+    var systemTag=lead.system_size?(' · Size: <strong>'+esc(lead.system_size)+'</strong>'):'';
+    var savingsTag=lead.estimated_savings?(' · Est: '+esc(lead.estimated_savings)):'';
+    var roofTag=lead.roof_type?(' · Roof: '+esc(lead.roof_type)):'';
+    var propTag=lead.property_type?(' <span style="font-size:11px;color:var(--muted);background:#f3f4f6;padding:1px 5px;border-radius:3px;">'+esc(lead.property_type)+'</span>'):'';
+
+    var utmSummary=[];
+    if(lead.source)utmSummary.push(lead.source);
+    if(lead.utm_campaign)utmSummary.push(lead.utm_campaign);
+    else if(lead.utm_source)utmSummary.push(lead.utm_source);
+    var utmText=utmSummary.length?'['+utmSummary.join(' · ')+']':'';
+
+    var notesSnippet=lead.lead_notes?(esc(lead.lead_notes.slice(0,60))+(lead.lead_notes.length>60?'…':'')):'Add notes';
+    var hideBtn=isHidden?'<button class="filter" type="button" style="min-height:30px;padding:0 8px;font-size:9px;white-space:nowrap;border-color:var(--ok);color:var(--ok);background:#ecfdf5;" title="Restore lead to active list" onclick="toggleHideAdsLead('+lead.id+', false)">👁️ Unhide</button>':'<button class="filter" type="button" style="min-height:30px;padding:0 8px;font-size:9px;white-space:nowrap;color:var(--muted);" title="Hide lead from master list" onclick="toggleHideAdsLead('+lead.id+', true)">🚫 Hide</button>';
+
+    return '<article class="lead-row '+(isHidden?'is-hidden':'')+'">'
+      +'<div><input type="checkbox" id="adsLeadCheck-'+attr(lead.id)+'" class="lead-check" '+(checked?'checked ':'')+'onchange="toggleSelectAdsLead('+lead.id+', this.checked)"></div>'
+      +'<div>'
+      +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+      +'<h3 style="margin:0;">'+esc(lead.full_name||'Anonymous Applicant')+'</h3>'
+      +'<span style="font:700 10.5px/1 var(--mono);background:#e0e7ff;color:var(--accent);padding:2px 6px;border-radius:3px;">'+esc(lead.lead_id)+'</span>'
+      +recentPill
+      +propTag
+      +'</div>'
+      +'<div class="meta" style="margin-top:4px;">'+esc(lead.area||'Area not specified')+(lead.state?(', '+esc(lead.state)):'')+'</div>'
+      +'<div class="contact-pill" style="margin-top:6px;background:#ecfdf5;border-color:#a7f3d0;color:#065f46;">'
+      +billTag+systemTag+savingsTag+roofTag
+      +'</div>'
+      +(lead.tnb_account_no?('<div style="font:500 11px/1 var(--mono);color:var(--muted);margin-top:4px;">TNB Acc: <strong>'+esc(lead.tnb_account_no)+'</strong></div>'):'')
+      +'</div>'
+      +'<div class="company-contact">'
+      +'<div class="phone">'+(phone?('<a class="source-link" href="tel:'+attr(phone.replace(/[^+\d]/g,''))+'" style="font-size:13px;font-weight:600;">'+esc(phone)+'</a>'):'<span class="meta">No phone</span>')+'</div>'
+      +(lead.email?('<div style="margin-top:2px;"><a class="source-link" href="mailto:'+attr(lead.email)+'" style="font-size:11.5px;color:var(--muted);">'+esc(lead.email)+'</a></div>'):'')
+      +'<div class="actions" style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap;">'
+      +(phone?('<a class="contact-action-btn call-btn" href="tel:'+attr(phone.replace(/[^+\d]/g,''))+'">Call</a>'):'')
+      +(waHref?('<a class="contact-action-btn wa-btn" target="_blank" rel="noopener" href="'+attr(waHref)+'">WhatsApp</a>'):'')
+      +'<button class="filter" type="button" style="min-height:26px;padding:0 8px;font-size:8.5px;" onclick="viewAdsLeadRawData('+lead.id+')">🔍 Raw Payload</button>'
+      +'</div>'
+      +(utmText?('<div style="font:600 10px/1 var(--mono);color:var(--accent);margin-top:6px;">'+esc(utmText)+'</div>'):'')
+      +'<div style="font:500 10.5px/1 var(--mono);color:var(--faint);margin-top:2px;">Submitted: '+date(lead.created_at)+timeAgoText+'</div>'
+      +'</div>'
+      +'<div style="display:grid;gap:8px;">'
+      +'<div>'
+      +'<label style="display:block;font:700 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Assigned to</label>'
+      +'<select class="tele-select" onchange="updateAdsLeadAssignee('+lead.id+', this)">'+teleOpts+'</select>'
+      +'</div>'
+      +'<div>'
+      +'<label style="display:block;font:700 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Status</label>'
+      +'<select class="status-select '+attr(lead.lead_status||'unassigned')+'" onchange="updateAdsLeadStatus('+lead.id+', this)">'+statusOpts+'</select>'
+      +'</div>'
+      +'</div>'
+      +'<div style="display:grid;gap:6px;align-content:start;">'
+      +'<div style="display:flex;gap:6px;align-items:center;">'
+      +'<button class="filter" type="button" style="min-height:30px;padding:0 8px;font-size:9px;white-space:nowrap;" data-id="'+lead.id+'" data-notes="'+attr(lead.lead_notes||'')+'" onclick="promptAdsLeadNotes(this)">📝 '+(lead.lead_notes?'Notes':'+ Note')+'</button>'
+      +hideBtn
+      +'</div>'
+      +(lead.lead_notes?('<span style="font-size:11px;color:var(--muted);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+attr(lead.lead_notes)+'">'+notesSnippet+'</span>'):'')
+      +'</div>'
+      +'</article>';
+  }).join('');
+}
 async function loadLeads(){if(!state.token)return;var wrapper=el('leadTableWrapper');if(!wrapper)return;var q='/api/leads?limit='+leadState.limit+'&offset='+(leadState.page*leadState.limit);if(leadState.statusFilter!=='all')q+='&status='+encodeURIComponent(leadState.statusFilter);if(leadState.search)q+='&search='+encodeURIComponent(leadState.search);if(leadState.teleFilter!=='all')q+='&assignedTo='+encodeURIComponent(leadState.teleFilter);if(leadState.researchFilter!=='all')q+='&researchStatus='+encodeURIComponent(leadState.researchFilter);wrapper.innerHTML='<div class="empty">Loading company master list…</div>';try{var body=await api(q);leadState.leads=body.leads||[];leadState.total=body.total||0;renderLeadsSummary(body.stats||{});renderLeads(body.leads||[]);renderLeadsPagination(body.total||0)}catch(err){wrapper.innerHTML='<div class="empty error">'+esc(err.message)+'</div>';if(!authLost(err))showToast(err.message)}}
 function renderLeadsSummary(stats){var sTotal=el('statTotal');var sUnassigned=el('statUnassigned');var sAssigned=el('statAssigned');var sContacted=el('statContacted');var sContacts=el('statContacts');var sHidden=el('statHidden');if(sTotal)sTotal.textContent=stats.total||0;if(sUnassigned)sUnassigned.textContent=stats.unassigned||0;if(sAssigned)sAssigned.textContent=stats.assigned||0;if(sContacted)sContacted.textContent=(stats.contacted||0)+(stats.interested||0);if(sContacts)sContacts.textContent=stats.contacts_found||0;if(sHidden)sHidden.textContent=stats.hidden||0;var cAll=el('countAll');var cUn=el('countUnassigned');var cAss=el('countAssigned');var cCon=el('countContacted');var cInt=el('countInterested');var cNot=el('countNotInterested');var cDnc=el('countDnc');var cHid=el('countHidden');if(cAll)cAll.textContent=stats.total||0;if(cUn)cUn.textContent=stats.unassigned||0;if(cAss)cAss.textContent=stats.assigned||0;if(cCon)cCon.textContent=stats.contacted||0;if(cInt)cInt.textContent=stats.interested||0;if(cNot)cNot.textContent=stats.not_interested||0;if(cDnc)cDnc.textContent=stats.do_not_call||0;if(cHid)cHid.textContent=stats.hidden||0}
 function setLeadStatusFilter(status){leadState.statusFilter=status;leadState.page=0;document.querySelectorAll('[data-lead-status]').forEach(function(node){node.classList.toggle('active',node.getAttribute('data-lead-status')===status)});loadLeads()}
@@ -2166,10 +2833,16 @@ async function runDedupAction(){if(!window.confirm('Run deduplication pass acros
 function exportLeadsCsv(){var q='/api/leads/export?token='+encodeURIComponent(state.token);if(leadState.statusFilter!=='all')q+='&status='+encodeURIComponent(leadState.statusFilter);if(leadState.search)q+='&search='+encodeURIComponent(leadState.search);if(leadState.teleFilter!=='all')q+='&assignedTo='+encodeURIComponent(leadState.teleFilter);if(leadState.researchFilter!=='all')q+='&researchStatus='+encodeURIComponent(leadState.researchFilter);window.open(q,'_blank')}
 function renderLeads(leads){var wrapper=el('leadTableWrapper');if(!wrapper)return;if(!leads.length){wrapper.innerHTML='<div class="empty">No companies found matching the filter.</div>';return}wrapper.innerHTML=leads.map(function(lead){var checked=Boolean(leadState.selected[lead.id]);var phone=lead.phone||'';var website=safeUrl(lead.website);var maps=safeUrl(lead.maps_url);var rating=lead.rating?(' · ★ '+lead.rating+(lead.reviews?' / '+lead.reviews:'')):'';var branchBadge=lead.branch_count>0?(' <span class="branch-tag" title="'+lead.branch_count+' branches consolidated">'+lead.branch_count+' branch'+(lead.branch_count>1?'es':'')+'</span>'):'';var isHidden=Boolean(lead.is_hidden||leadState.statusFilter==='hidden');var hasContact=Boolean((lead.contact_public_id&&(lead.contact_status==='completed'||lead.contact_status==='partial'))||(lead.research_public_id&&(lead.research_status==='completed'||lead.research_status==='partial'))||Number(lead.contact_phones_count)>0||Number(lead.contact_decision_makers_count)>0);var isContactRunning=Boolean(lead.contact_status==='running'||lead.contact_status==='queued');var contactPhones=Number(lead.contact_phones_count)||0;var contactDMs=Number(lead.contact_decision_makers_count)||0;var contactPill='';if(hasContact){contactPill='<div class="contact-pill" title="'+contactPhones+' phone route'+(contactPhones===1?'':'s')+' and '+contactDMs+' decision maker'+(contactDMs===1?'':'s')+' identified">📞 <strong>'+contactPhones+' Contact Number'+(contactPhones===1?'':'s')+' Found</strong>'+(contactDMs>0?(' · 👤 '+contactDMs+' Leader'+(contactDMs===1?'':'s')):'')+'</div>'}else if(isContactRunning){contactPill='<div class="contact-pill running">⏳ Contact research in progress…</div>'}var contactControl='';if(lead.contact_public_id){contactControl='<a class="vip contact-vip" target="_blank" rel="noopener" href="/r/'+attr(lead.contact_public_id)+'">📞 Contacts ('+contactPhones+' phones) ↗</a>'}else{contactControl='<button class="research" style="background:#0a6b47;border-color:#0a6b47;min-height:36px;" data-company="'+attr(lead.id)+'" data-name="'+attr(lead.name)+'" onclick="startContact(this)">Contacts ⚡</button>'}var rerunActionLead=lead.contact_public_id&&(lead.contact_status==='completed'||lead.contact_status==='partial')?('<button class="research" data-company="'+attr(lead.id)+'" data-name="'+attr(lead.name)+'" data-previous-report="'+attr(lead.contact_public_id)+'" onclick="rerunOriginalContact(this)">Rerun original contacts ↻</button>'):'';var dossierControl='';if(lead.research_public_id){dossierControl='<a class="vip" target="_blank" rel="noopener" href="/r/'+attr(lead.research_public_id)+'">Dossier V'+(lead.research_version||1)+' ↗</a>'}else{dossierControl='<button class="research" data-company="'+attr(lead.id)+'" data-name="'+attr(lead.name)+'" onclick="startResearch(this)">Research →</button>'}var teleOpts='<option value="">(Unassigned)</option>';leadState.telemarketers.forEach(function(a){var value=agentValue(a);var sel=(a.uid?lead.telemarketer_uid===a.uid:lead.assigned_to===a.name)?' selected':'';teleOpts+='<option value="'+attr(value)+'"'+sel+'>'+esc(agentLabel(a))+'</option>'});var statuses=['unassigned','assigned','contacted','interested','not_interested','do_not_call'];var statusOpts=statuses.map(function(s){var sel=(lead.lead_status===s)?' selected':'';var lbl=s==='do_not_call'?'DNC':s.replace('_',' ');return '<option value="'+s+'"'+sel+'>'+lbl+'</option>'}).join('');var notesSnippet=lead.lead_notes?(esc(lead.lead_notes.slice(0,60))+(lead.lead_notes.length>60?'…':'')):'Add notes';var hideBtn=isHidden?'<button class="filter" type="button" style="min-height:30px;padding:0 8px;font-size:9px;white-space:nowrap;border-color:var(--ok);color:var(--ok);background:#ecfdf5;" title="Restore company to active list" onclick="toggleHideLead(\''+attr(lead.id)+'\', false)">👁️ Unhide</button>':'<button class="filter" type="button" style="min-height:30px;padding:0 8px;font-size:9px;white-space:nowrap;color:var(--muted);" title="Hide company from master list" onclick="toggleHideLead(\''+attr(lead.id)+'\', true)">🚫 Hide</button>';var rowClasses='lead-row'+(hasContact?' has-contact-research':'')+(isContactRunning?' contact-running':'')+(isHidden?' is-hidden':'');return '<article class="'+rowClasses+'">'+'<div><input type="checkbox" id="leadCheck-'+attr(lead.id)+'" class="lead-check" '+(checked?'checked ':'')+'onchange="toggleSelectLead(\''+attr(lead.id)+'\', this.checked)"></div>'+'<div>'+'<h3>'+esc(lead.name)+branchBadge+'</h3>'+'<div class="meta">'+esc(lead.category||'Business')+esc(rating)+'</div>'+'<div class="address" style="margin-top:4px;">'+esc(lead.address||'Address not published')+'</div>'+contactPill+'</div>'+'<div class="company-contact">'+'<div class="phone">'+(phone?('<a class="source-link" href="tel:'+attr(phone.replace(/[^+\d]/g,''))+'" style="font-size:13px;">'+esc(phone)+'</a>'):'<span class="meta">No phone</span>')+'</div>'+'<div class="actions" style="display:flex;gap:8px;margin-top:4px;">'+(website?('<a class="source-link" target="_blank" rel="noopener" href="'+attr(website)+'">Web</a>'):'')+(maps?('<a class="source-link" target="_blank" rel="noopener" href="'+attr(maps)+'">Maps</a>'):'')+'</div>'+'<div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;align-items:flex-start;">'+contactControl+rerunActionLead+'<button class="research" data-company="'+attr(lead.id)+'" data-name="'+attr(lead.name)+'" onclick="startParallelContact(this)">Parallel contacts ↗</button>'+dossierControl+'</div>'+'</div>'+'<div style="display:grid;gap:8px;">'+'<div>'+'<label style="display:block;font:700 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Assigned to</label>'+'<select class="tele-select" onchange="updateLeadAssignee(\''+attr(lead.id)+'\', this)">'+teleOpts+'</select>'+'</div>'+'<div>'+'<label style="display:block;font:700 8px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Status</label>'+'<select class="status-select '+attr(lead.lead_status||'unassigned')+'" onchange="updateLeadStatus(\''+attr(lead.id)+'\', this)">'+statusOpts+'</select>'+'</div>'+'</div>'+'<div style="display:grid;gap:6px;align-content:start;">'+'<div style="display:flex;gap:6px;align-items:center;">'+'<button class="filter" type="button" style="min-height:30px;padding:0 8px;font-size:9px;white-space:nowrap;" data-id="'+attr(lead.id)+'" data-notes="'+attr(lead.lead_notes||'')+'" onclick="promptLeadNotes(this)">📝 '+(lead.lead_notes?'Notes':'+ Note')+'</button>'+hideBtn+'</div>'+(lead.lead_notes?('<span style="font-size:11px;color:var(--muted);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+attr(lead.lead_notes)+'">'+notesSnippet+'</span>'):'')+'</div>'+'</article>'}).join('')}
 var teleState={data:null,expanded:{},filter:'',queueingTown:false};
+function onTeleStateChange(){
+  teleState.expanded={};
+  if(el('teleFilterInput'))el('teleFilterInput').value='';
+  teleState.filter='';
+  loadTelemarketingView();
+}
 async function loadTelemarketingView(){
   if(!state.token)return;
   var cont=el('teleTerritoryContainer');
-  if(cont&&!teleState.data)cont.innerHTML='<div class="empty">Loading Johor territory directory…</div>';
+  if(cont&&!teleState.data)cont.innerHTML='<div class="empty">Loading territory directory…</div>';
   var stateVal=el('teleStateSelect')?el('teleStateSelect').value:'johor';
   try{
     loadTelemarketers();
@@ -3208,5 +3881,5 @@ async function submitManualActivity(event){
 }
 (function boot(){var saved=eeKey.read();if(saved){el('accessKey').value=saved;connect()}else{setTimeout(function(){el('accessKey').focus()},80)}})();
 </script></body></html>`;
-  return kind === 'telemarketing' ? telemarketing(html) : html;
+  return kind === 'telemarketing' ? telemarketing(html) : kind === 'registrations' ? registrations(html) : html;
 }

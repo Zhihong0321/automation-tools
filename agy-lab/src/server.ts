@@ -101,6 +101,7 @@ function authorized(req: http.IncomingMessage, url: URL): boolean {
     || url.pathname.startsWith('/api/ads-market')
     || url.pathname.startsWith('/api/parallel-contact-research')
     || url.pathname.startsWith('/api/leads')
+    || url.pathname.startsWith('/api/ads-leads')
     || url.pathname.startsWith('/api/telemarketers')
     || url.pathname.startsWith('/api/telemarketer')
     || url.pathname.startsWith('/api/tm')
@@ -190,6 +191,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (method === 'GET' && (p === '/telemarketing' || p === '/telemarketing/')) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
     return void res.end(portalPage('telemarketing'));
+  }
+
+  if (method === 'GET' && (
+    p === '/registrations' || p === '/registrations/' ||
+    p === '/ads-leads' || p === '/ads-leads/' ||
+    p === '/atap-leads' || p === '/atap-leads/' ||
+    p === '/atap-registrations' || p === '/atap-registrations/'
+  )) {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
+    return void res.end(portalPage('registrations'));
   }
 
   if (method === 'GET' && (p === '/workers' || p === '/workers.html')) {

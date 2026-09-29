@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { JOHOR_TERRITORY, buildTerritoryResponse } from './territories.ts';
+import { JOHOR_TERRITORY, SELANGOR_TERRITORY, buildTerritoryResponse } from './territories.ts';
 import * as db from './reportdb.ts';
 import { page } from './portal.ts';
 import * as intel from './intel.ts';
@@ -31,6 +31,71 @@ test('Johor territory dataset contains all 10 districts, towns and tamans', () =
   assert.ok(rosMerah);
   assert.ok(rosMerah.queryPlace.includes('Ros Merah'));
   assert.ok(rosMerah.queryPlace.includes('Johor Jaya'));
+});
+
+test('Selangor territory dataset contains all 9 districts, towns and tamans', () => {
+  assert.equal(SELANGOR_TERRITORY.state, 'Selangor');
+  assert.equal(SELANGOR_TERRITORY.districts.length, 9);
+
+  const districtNames = SELANGOR_TERRITORY.districts.map((d) => d.name);
+  assert.ok(districtNames.includes('Petaling'));
+  assert.ok(districtNames.includes('Klang'));
+  assert.ok(districtNames.includes('Hulu Langat'));
+  assert.ok(districtNames.includes('Gombak'));
+  assert.ok(districtNames.includes('Sepang'));
+  assert.ok(districtNames.includes('Kuala Langat'));
+  assert.ok(districtNames.includes('Kuala Selangor'));
+  assert.ok(districtNames.includes('Hulu Selangor'));
+  assert.ok(districtNames.includes('Sabak Bernam'));
+
+  // Test Damansara & Bandar Utama
+  const petaling = SELANGOR_TERRITORY.districts.find((d) => d.name === 'Petaling');
+  assert.ok(petaling);
+  const damansara = petaling.towns.find((t) => t.name === 'Damansara');
+  assert.ok(damansara);
+  const bu = damansara.tamans.find((tm) => tm.name.includes('Bandar Utama'));
+  assert.ok(bu);
+  assert.ok(bu.queryPlace.includes('Damansara'));
+  assert.ok(bu.queryPlace.includes('Selangor'));
+
+  // Test Cyberjaya in Sepang
+  const sepang = SELANGOR_TERRITORY.districts.find((d) => d.name === 'Sepang');
+  assert.ok(sepang);
+  const cyber = sepang.towns.find((t) => t.name === 'Cyberjaya');
+  assert.ok(cyber);
+  const c10 = cyber.tamans.find((tm) => tm.name.includes('Cyber 10'));
+  assert.ok(c10);
+});
+
+test('buildTerritoryResponse supports Selangor state parameter', () => {
+  const dummyScans = [
+    {
+      public_id: 'report_bandar_utama_123',
+      status: 'completed',
+      place: 'bandar utama, damansara, selangor',
+      keyword: 'business',
+      company_count: 95,
+      contact_count: 60,
+      created_at: new Date().toISOString(),
+    },
+  ];
+
+  const res = buildTerritoryResponse('selangor', dummyScans);
+  assert.equal(res.state, 'Selangor');
+  assert.equal(res.stats.totalDistricts, 9);
+  assert.equal(res.stats.totalTowns, 55);
+  assert.equal(res.stats.totalTamans, 1060);
+  assert.equal(res.stats.scannedTamans, 1);
+  assert.equal(res.stats.totalLeads, 95);
+  assert.equal(res.stats.totalContacts, 60);
+
+  const petaling = res.districts.find((d) => d.name === 'Petaling');
+  const damansara = petaling?.towns.find((t) => t.name === 'Damansara');
+  const bu = damansara?.tamans.find((tm) => tm.name.includes('Bandar Utama'));
+  assert.ok(bu);
+  assert.equal(bu.scan?.status, 'completed');
+  assert.equal(bu.scan?.count, 95);
+  assert.equal(bu.scan?.contacts, 60);
 });
 
 test('buildTerritoryResponse aggregates stats and attaches scan metadata', () => {
@@ -93,6 +158,7 @@ test('telemarketing Lead-Map is integrated into portal navigation and UI', () =>
 
   // Controls
   assert.match(html, /id="teleStateSelect"/);
+  assert.match(html, /value="selangor"/);
   assert.match(html, /id="teleCategory"/);
   assert.match(html, /id="teleMaxResults"/);
   assert.match(html, /id="teleFilterInput"/);
@@ -100,6 +166,7 @@ test('telemarketing Lead-Map is integrated into portal navigation and UI', () =>
 
   // Client-side methods exist
   assert.match(html, /function loadTelemarketingView\(\)/);
+  assert.match(html, /function onTeleStateChange\(\)/);
   assert.match(html, /function renderTerritoryCards\(\)/);
   assert.match(html, /function queueTerritoryScan\(/);
   assert.match(html, /function queueTerritoryFromBtn\(/);

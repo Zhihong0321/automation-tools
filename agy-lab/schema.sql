@@ -54,6 +54,45 @@ create table if not exists telemarketer (
   created_at timestamptz not null default now()
 );
 
+-- Inbound solar customer registrations from Google Ads & landing page forms.
+create table if not exists atap_solar_registrations (
+  id                serial primary key,
+  lead_id           varchar(50) not null,
+  full_name         varchar(255),
+  phone_number      varchar(50),
+  tnb_account_no    varchar(50),
+  area              varchar(255) not null,
+  state             varchar(100) not null,
+  property_type     varchar(100) default 'Residential',
+  monthly_bill      numeric(10, 2),
+  email             varchar(255),
+  roof_type         varchar(100),
+  system_size       varchar(50),
+  estimated_savings varchar(100),
+  source            text,
+  utm_source        text,
+  utm_medium        text,
+  utm_campaign      text,
+  notes             text,
+  raw_data          jsonb,
+  created_at        timestamptz default current_timestamp,
+  lead_status       text not null default 'unassigned',
+  assigned_to       text,
+  telemarketer_uid  text,
+  assigned_at       timestamptz,
+  lead_notes        text,
+  lead_updated_at   timestamptz default now(),
+  is_hidden         boolean not null default false
+);
+create index if not exists atap_reg_lead_id_idx          on atap_solar_registrations (lead_id);
+create index if not exists atap_reg_lead_status_idx      on atap_solar_registrations (lead_status);
+create index if not exists atap_reg_assigned_to_idx      on atap_solar_registrations (assigned_to);
+create index if not exists atap_reg_telemarketer_uid_idx on atap_solar_registrations (telemarketer_uid);
+create index if not exists atap_reg_created_at_idx       on atap_solar_registrations (created_at desc);
+create index if not exists atap_reg_source_idx           on atap_solar_registrations (source);
+create index if not exists atap_reg_state_idx            on atap_solar_registrations (state);
+
+
 -- People attached to a company. Created and indexed now; the research chain
 -- (Phase 3) is what fills it. Nothing writes this table yet.
 create table if not exists person_data (
