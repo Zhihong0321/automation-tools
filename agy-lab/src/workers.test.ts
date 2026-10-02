@@ -73,6 +73,48 @@ test('the control room visibly shows quota reached and a live reset countdown', 
   assert.match(countdownNode.textContent, /1h 37m/);
 });
 
+test('saved contact keys are shown in full, survive polling while edited, and copy to the clipboard', async () => {
+  const script = /<script>([\s\S]*?)<\/script>/.exec(page())?.[1];
+  assert.ok(script);
+  const nodes = new Map<string, Record<string, any>>();
+  const node = (id: string) => {
+    if (!nodes.has(id)) nodes.set(id, { textContent: '', innerHTML: '', className: '', disabled: false, value: '' });
+    return nodes.get(id)!;
+  };
+  const intervals = new Map<number, () => void>();
+  let copied = '';
+  vm.runInNewContext(script, {
+    document: { getElementById: node, querySelectorAll: () => [] },
+    localStorage: { getItem: () => 'test-token', setItem: () => {} },
+    navigator: { clipboard: { writeText: async (text: string) => { copied = text; } } },
+    setTimeout: () => 0,
+    fetch: async (url: string) => ({
+      ok: true,
+      json: async () => url === '/api/gemini-contact-keys'
+        ? { official: [], tavilyKeys: ['tvly-aaaaaaaaaa', 'tvly-bbbbbbbbbb'], officialKeys: ['AIzaSyOfficialKey1'] }
+        : { workers: [], jobs: [] },
+    }),
+    setInterval: (callback: () => void, ms: number) => { intervals.set(ms, callback); return 1; },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(node('tavilyKeys').value, 'tvly-aaaaaaaaaa\ntvly-bbbbbbbbbb');
+  assert.equal(node('officialKeys').value, 'AIzaSyOfficialKey1');
+
+  // The 5s poll must not wipe a key the operator is in the middle of typing.
+  node('tavilyKeys').oninput();
+  node('tavilyKeys').value = 'tvly-aaaaaaaaaa\ntvly-new-being-typed';
+  intervals.get(5000)!();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(node('tavilyKeys').value, 'tvly-aaaaaaaaaa\ntvly-new-being-typed');
+  assert.equal(node('officialKeys').value, 'AIzaSyOfficialKey1');
+
+  const button = { textContent: 'Copy Tavily keys' };
+  node('copyTavily').onclick.call(button);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(copied, 'tvly-aaaaaaaaaa\ntvly-new-being-typed');
+  assert.equal(button.textContent, 'Copied');
+});
+
 test('every worker and job field is escaped before it reaches the page', () => {
   const html = page();
   // A worker name, an IP and a job type all come over the wire from something

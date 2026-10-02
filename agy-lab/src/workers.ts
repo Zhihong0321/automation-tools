@@ -13,7 +13,7 @@ export function page(): string {
 <h1>Worker control room</h1><p class="sub">Live lanes, claimed work, and queue pressure from the in-memory job broker.</p>
 <nav class="sitenav" aria-label="Site">${navHtml(OPERATOR_NAV, '/workers')}</nav>
 <div class="card"><div class="row"><input id="token" class="token" type="password" placeholder="LAB_TOKEN" autocomplete="current-password"><button class="primary" id="saveButton">Save and refresh</button><button id="refreshButton">Refresh</button><span id="authState" class="pill unknown">no token</span></div><p class="hint">The token stays in this browser and is sent only to the protected worker snapshot endpoint.</p></div>
-<div class="card"><div class="section-head"><h2>Contact research keys</h2><span id="keyStatus" class="updated">not loaded</span></div><p class="hint">Step 1 searches with Tavily (rotates across keys, up to 1,000 req/key/month). Step 2 extracts contacts with official Gemini keys (gemini-3.8-flash, two calls per key). Paste one key per line. Leave a box blank to keep the keys already saved.</p><label class="hint" for="tavilyKeys">Tavily Search API keys (tvly-..., rotates across keys, max 1,000 req/key/month)</label><textarea id="tavilyKeys" rows="3" style="width:100%;margin:6px 0 10px;background:#0f1115;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px ui-monospace,Consolas,monospace"></textarea><label class="hint" for="officialKeys">Official Gemini keys, gemini-3.8-flash</label><textarea id="officialKeys" rows="4" style="width:100%;margin:6px 0 10px;background:#0f1115;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px ui-monospace,Consolas,monospace"></textarea><div class="row"><button class="primary" id="saveKeys">Save keys</button><button id="clearTavily">Clear Tavily keys</button><button id="clearOfficial">Clear official keys</button></div></div>
+<div class="card"><div class="section-head"><h2>Contact research keys</h2><span id="keyStatus" class="updated">not loaded</span></div><p class="hint">Step 1 searches with Tavily (rotates across keys, up to 1,000 req/key/month). Step 2 extracts contacts with official Gemini keys (gemini-3.8-flash, two calls per key). Saved keys are shown below in full: edit them in place, one key per line, then press Save keys. Use Copy to put a box on your clipboard. An empty box is left unchanged; use Clear to remove its keys.</p><label class="hint" for="tavilyKeys">Tavily Search API keys (tvly-..., rotates across keys, max 1,000 req/key/month)</label><textarea id="tavilyKeys" rows="3" spellcheck="false" autocomplete="off" style="width:100%;margin:6px 0 10px;background:#0f1115;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px ui-monospace,Consolas,monospace"></textarea><label class="hint" for="officialKeys">Official Gemini keys, gemini-3.8-flash</label><textarea id="officialKeys" rows="4" spellcheck="false" autocomplete="off" style="width:100%;margin:6px 0 10px;background:#0f1115;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px ui-monospace,Consolas,monospace"></textarea><div class="row"><button class="primary" id="saveKeys">Save keys</button><button id="copyTavily">Copy Tavily keys</button><button id="copyOfficial">Copy official keys</button><button id="clearTavily">Clear Tavily keys</button><button id="clearOfficial">Clear official keys</button></div></div>
 <div id="error" class="error-box" role="alert"></div>
 <div class="summary" aria-live="polite"><div class="metric"><strong id="mWorkers">—</strong><span>Workers</span></div><div class="metric"><strong id="mOnline">—</strong><span>Online</span></div><div class="metric"><strong id="mBusy">—</strong><span>Busy</span></div><div class="metric"><strong id="mIdle">—</strong><span>Idle</span></div><div class="metric"><strong id="mCooldown">—</strong><span>Quota cooldown</span></div><div class="metric"><strong id="mQueue">—</strong><span>Pending jobs</span></div></div>
 <div class="card"><div class="section-head"><h2>Worker lanes</h2><span id="updated" class="updated">not loaded</span></div><div class="table-wrap"><table><thead><tr><th>Worker</th><th>Status</th><th>Current task</th><th>Last seen</th><th>Capabilities</th><th>Totals</th></tr></thead><tbody id="workers"><tr><td colspan="6" class="empty">Enter a LAB_TOKEN to load workers.</td></tr></tbody></table></div></div>
@@ -49,9 +49,21 @@ export function page(): string {
         };
         var tavList = (body.tavily && body.tavily.length) ? body.tavily : (body.grounding || []);
         $('keyStatus').textContent='tavily '+tails(tavList)+' · official '+tails(body.official)+' · step 1 slots '+(body.step1Slots||0)+' · step 2 slots '+(body.step2Slots||0);
+        fill('tavilyKeys',body.tavilyKeys);
+        fill('officialKeys',body.officialKeys);
       }).catch(function(){});
   };
+  var dirty={};
+  var fill=function(id,list){if(!dirty[id]&&Array.isArray(list))$(id).value=list.join('\n')};
   var lines=function(id){return $(id).value.split(/\n/).map(function(line){return line.trim()}).filter(Boolean)};
+  var copyKeys=function(id,button){
+    var label=button.textContent,text=lines(id).join('\n');
+    var done=function(note){button.textContent=note;setTimeout(function(){button.textContent=label},1500)};
+    var fallback=function(){$(id).select();done(document.execCommand('copy')?'Copied':'Press Ctrl+C')};
+    if(!text)return done('Nothing to copy');
+    if(typeof navigator!=='undefined'&&navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(text).then(function(){done('Copied')},fallback);
+    else fallback();
+  };
   var saveKeys=function(kind){
     if(!token())return;
     var body={};
@@ -65,13 +77,12 @@ export function page(): string {
       .then(function(response){return response.json().then(function(payload){return {response:response,payload:payload}})})
       .then(function(result){
         if(!result.response.ok)throw new Error(result.payload.error||'save failed');
-        $('tavilyKeys').value='';
-        $('officialKeys').value='';
+        dirty={};
         loadKeys();
       }).catch(function(error){$('error').textContent=error.message;$('error').className='error-box show'});
   };
   var refresh=function(){if(refresh.running)return;refresh.running=true;$('refreshButton').disabled=true;$('saveButton').disabled=true;$('error').className='error-box';fetch('/api/jobs',{headers:{authorization:'Bearer '+token()}}).then(function(response){return response.json().catch(function(){return {error:'invalid response'}}).then(function(body){return {response:response,body:body}})}).then(function(result){if(!result.response.ok){$('authState').className='pill '+(result.response.status===401?'error':'unknown');$('authState').textContent=result.response.status===401?'token rejected':'error';throw new Error(result.body.error||('request failed ('+result.response.status+')'))}$('authState').className='pill online';$('authState').textContent='token ok';render(result.body);loadKeys()}).catch(function(error){$('error').textContent=error.message;$('error').className='error-box show'}).finally(function(){refresh.running=false;$('refreshButton').disabled=false;$('saveButton').disabled=false})};
-  $('token').value=token();$('refreshButton').onclick=refresh;$('saveButton').onclick=function(){localStorage.setItem('labToken',$('token').value.trim());refresh()};$('saveKeys').onclick=function(){saveKeys('both')};$('clearTavily').onclick=function(){$('tavilyKeys').value='';saveKeys('tavily')};$('clearOfficial').onclick=function(){$('officialKeys').value='';saveKeys('official')};setInterval(refresh,5000);setInterval(tick,1000);if(token())refresh();
+  $('token').value=token();$('refreshButton').onclick=refresh;$('saveButton').onclick=function(){localStorage.setItem('labToken',$('token').value.trim());refresh()};$('saveKeys').onclick=function(){saveKeys('both')};$('tavilyKeys').oninput=function(){dirty.tavilyKeys=true};$('officialKeys').oninput=function(){dirty.officialKeys=true};$('copyTavily').onclick=function(){copyKeys('tavilyKeys',this)};$('copyOfficial').onclick=function(){copyKeys('officialKeys',this)};$('clearTavily').onclick=function(){$('tavilyKeys').value='';saveKeys('tavily')};$('clearOfficial').onclick=function(){$('officialKeys').value='';saveKeys('official')};setInterval(refresh,5000);setInterval(tick,1000);if(token())refresh();
 })();
 </script></body></html>`;
 }

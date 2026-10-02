@@ -413,11 +413,15 @@ export async function handleKeys(
   const method = req.method ?? 'GET';
   if (method === 'GET') {
     const keys = await db.listGeminiContactKeys();
+    const runtime = await loadRuntimeKeys();
     const tavilyStats = tavilyPool.stats();
     const officialStats = officialPool.stats();
     const view = (kind: 'tavily' | 'official' | 'grounding') =>
       keys.filter((row) => row.kind === kind).map((row) => ({ id: row.id, tail: maskKey(row.secret) }));
     ctx.json(res, 200, {
+      // Full secrets so the operator can read, edit and copy them. This route is behind LAB_TOKEN.
+      tavilyKeys: runtime.tavily,
+      officialKeys: runtime.official,
       tavily: tavilyStats.length ? tavilyStats : view('tavily'),
       official: officialStats.length ? officialStats : view('official'),
       grounding: tavilyStats.length ? tavilyStats : (view('tavily').length ? view('tavily') : view('grounding')),
