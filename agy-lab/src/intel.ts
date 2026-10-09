@@ -3599,6 +3599,35 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     return true;
   }
 
+  const keywordStatusStatuses = new Set(['unassigned', 'assigned', 'contacted', 'interested', 'not_interested', 'do_not_call']);
+  if (method === 'GET' && p === '/api/leads/keyword-status/preview') {
+    const keyword = str(url.searchParams.get('keyword')).trim();
+    if (keyword.length < 3) {
+      ctx.json(res, 400, { error: 'keyword must be at least 3 characters' });
+      return true;
+    }
+    const result = await db.previewLeadsByNameKeyword(keyword);
+    ctx.json(res, 200, { ok: true, keyword, ...result });
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/leads/keyword-status') {
+    const body = await ctx.readJson(req);
+    const keyword = str(body.keyword).trim();
+    const rawStatus = str(body.leadStatus || body.lead_status || body.status).trim();
+    if (keyword.length < 3) {
+      ctx.json(res, 400, { error: 'keyword must be at least 3 characters' });
+      return true;
+    }
+    if (!keywordStatusStatuses.has(rawStatus)) {
+      ctx.json(res, 400, { error: 'leadStatus is invalid' });
+      return true;
+    }
+    const result = await db.setLeadStatusByNameKeyword(keyword, rawStatus as db.LeadStatus);
+    ctx.json(res, 200, { ok: true, keyword, leadStatus: rawStatus, ...result });
+    return true;
+  }
+
   // ---- Ads & Form Submissions Leads (atap_solar_registrations) ------------
   if (method === 'GET' && p === '/api/ads-leads/stats') {
     const stats = await db.getAtapSolarRegistrationStats();

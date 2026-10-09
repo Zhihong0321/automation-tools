@@ -254,6 +254,30 @@ test('leads master UI supports hide/unhide and separate hidden list', () => {
   assert.match(capturedHtml, />👁️ Unhide<\/button>/);
 });
 
+test('leads master can blacklist every company whose name contains a keyword', () => {
+  const html = page();
+  const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1];
+  assert.ok(script);
+
+  assert.match(html, /id="keywordRuleInput"/);
+  assert.match(html, /id="keywordRuleStatus"/);
+  assert.match(html, /<option value="do_not_call" selected>Blacklist \(do not call\)<\/option>/);
+  assert.match(html, /onclick="previewKeywordRule\(\)"/);
+  assert.match(html, /id="btnApplyKeywordRule"[^>]*disabled/);
+  assert.match(html, /onclick="applyKeywordRule\(\)"/);
+
+  assert.match(script, /function previewKeywordRule\(/);
+  assert.match(script, /function applyKeywordRule\(/);
+  assert.match(script, /api\('\/api\/leads\/keyword-status\/preview\?keyword='/);
+  assert.match(script, /api\('\/api\/leads\/keyword-status',\{method:'POST'/);
+  assert.doesNotThrow(() => new Function(script));
+});
+
+test('reportdb exposes keyword-based lead status interfaces', () => {
+  assert.equal(typeof db.previewLeadsByNameKeyword, 'function');
+  assert.equal(typeof db.setLeadStatusByNameKeyword, 'function');
+});
+
 test('leads master can queue contact research for the whole page in one click', () => {
   const html = page();
   const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1];

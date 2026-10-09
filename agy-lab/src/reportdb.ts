@@ -2425,6 +2425,57 @@ export async function hideLeads(
   return { updated: res.rows.length };
 }
 
+function nameKeywordPattern(keyword: string): string {
+  return `%${keyword.replace(/[\\%_]/g, '\\$&')}%`;
+}
+
+export async function previewLeadsByNameKeyword(keyword: string): Promise<{ count: number; sample: string[] }> {
+  await migrate();
+  const pattern = nameKeywordPattern(keyword);
+  const [countRes, sampleRes] = await Promise.all([
+    sql<{ total: number }>(
+      `select count(*)::int as total from company_data where merged_into is null and name ilike $1`,
+      [pattern],
+    ),
+    sql<{ name: string }>(
+      `select name from company_data where merged_into is null and name ilike $1 order by lower(name) limit 10`,
+      [pattern],
+    ),
+  ]);
+  return {
+    count: Number(countRes.rows[0]?.total ?? 0),
+    sample: sampleRes.rows.map((row) => row.name),
+  };
+}
+
+export async function setLeadStatusByNameKeyword(
+  keyword: string,
+  leadStatus: LeadStatus,
+): Promise<{ updated: number }> {
+  await migrate();
+  const res = await sql<{ updated: number }>(
+    `with target as (
+       select id, assigned_to, telemarketer_uid, coalesce(lead_status, 'unassigned') as previous_status
+       from company_data
+       where merged_into is null and name ilike $1 and coalesce(lead_status, 'unassigned') <> $2
+     ),
+     changed as (
+       update company_data c set lead_status = $2, lead_updated_at = now()
+       from target t
+       where c.id = t.id
+       returning c.id, t.assigned_to, t.telemarketer_uid, t.previous_status
+     ),
+     logged as (
+       insert into lead_activity_log (company_id, telemarketer_name, telemarketer_uid, action, previous_status, new_status, notes, is_mock, created_at)
+       select id, assigned_to, telemarketer_uid, 'status_change', previous_status, $2, $3, false, now() from changed
+       returning 1
+     )
+     select count(*)::int as updated from changed`,
+    [nameKeywordPattern(keyword), leadStatus, `Keyword rule: company name contains "${keyword}"`],
+  );
+  return { updated: Number(res.rows[0]?.updated ?? 0) };
+}
+
 export async function updateLead(
   companyId: string | number,
   patch: {
