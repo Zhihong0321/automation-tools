@@ -3403,11 +3403,12 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
   // ---- Telemarketing territory / lead-map --------------------------------
   if (method === 'GET' && p === '/api/territories') {
     const state = url.searchParams.get('state') || 'johor';
-    const [scans, assignments] = await Promise.all([
+    const [scans, assignments, contactPending] = await Promise.all([
       db.getTerritoryScanStats().catch(() => []),
       db.getTamanAssignments(state).catch(() => ({})),
+      db.getTamanContactPending().catch(() => ({})),
     ]);
-    const result = territories.buildTerritoryResponse(state, scans, assignments);
+    const result = territories.buildTerritoryResponse(state, scans, assignments, contactPending);
     ctx.json(res, 200, result);
     return true;
   }
@@ -3441,6 +3442,39 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       notes: str(body.notes).trim() || null,
     });
     ctx.json(res, 200, result);
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/territories/contact-research') {
+    const body = await ctx.readJson(req);
+    const taman = str(body.taman || body.name).trim();
+    if (!taman) {
+      ctx.json(res, 400, { error: 'taman is required' });
+      return true;
+    }
+    const requesterId = str(body.requesterId || body.userId).trim() || 'telemarketing';
+    const ids = await db.tamanContactPendingCompanyIds({
+      taman,
+      queryPlace: str(body.queryPlace || body.query_place).trim() || undefined,
+    });
+    let queued = 0;
+    let alreadyRunning = 0;
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        const company = await db.getCompany(id);
+        if (!company) {
+          failed++;
+          continue;
+        }
+        const launched = await launchContactResearch(company, { provider: 'legacy', requesterId });
+        if (launched.alreadyRunning) alreadyRunning++;
+        else queued++;
+      } catch {
+        failed++;
+      }
+    }
+    ctx.json(res, 200, { ok: true, pending: ids.length, queued, alreadyRunning, failed });
     return true;
   }
 

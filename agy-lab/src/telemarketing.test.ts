@@ -1054,3 +1054,14 @@ test('taman scans are grouped by keyword so a factory scan does not hide the bus
   assert.equal(austin?.scanByKeyword?.factory?.publicId, 'austin-factory');
   assert.equal(austin?.scanByKeyword?.factory?.count, 9);
 });
+
+test('buildTerritoryResponse attaches the leads still waiting for contact research per taman', () => {
+  const austin = buildTerritoryResponse('johor').districts
+    .find((d) => d.name === 'Johor Bahru')?.towns.find((t) => t.name === 'Tebrau')?.tamans.find((tm) => tm.name === 'Taman Mount Austin');
+  assert.ok(austin);
+  const res = buildTerritoryResponse('johor', [], {}, { [austin.queryPlace.trim().toLowerCase()]: 5 });
+  const withCount = res.districts.find((d) => d.name === 'Johor Bahru')?.towns.find((t) => t.name === 'Tebrau')?.tamans.find((tm) => tm.name === 'Taman Mount Austin');
+  assert.equal(withCount?.contactPending, 5);
+  const other = res.districts.flatMap((d) => d.towns).flatMap((t) => t.tamans).find((tm) => tm.name !== 'Taman Mount Austin');
+  assert.equal(other?.contactPending, 0);
+});

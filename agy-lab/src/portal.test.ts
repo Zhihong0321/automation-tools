@@ -361,3 +361,41 @@ test('scan page has business, factory and all buttons on each taman and no town-
   assert.doesNotMatch(html, /queueWholeTownFromBtn/);
   assert.doesNotMatch(html, /town-scan/);
 });
+
+test('contact research button queues research for the pending leads of one taman after confirmation', async () => {
+  const html = page();
+  const start = html.indexOf('function findTaman');
+  const end = html.indexOf('async function openTamanAssignModal', start);
+  assert.ok(start > 0 && end > start);
+  const requests: { path: string; body: { taman: string; queryPlace: string } }[] = [];
+  const toasts: string[] = [];
+  const towns = [{ name: 'Example Town', tamans: [
+    { name: 'Pending', queryPlace: 'Pending, Example Town', contactPending: 3 },
+    { name: 'Done', queryPlace: 'Done, Example Town', contactPending: 0 },
+  ] }];
+  const context = {
+    teleState: { data: { districts: [{ towns }] }, queueingTown: false },
+    state: { token: 'test' },
+    window: { confirm: () => true },
+    el: () => ({ value: 'johor' }),
+    api: async (path: string, options: { body: string }) => {
+      requests.push({ path, body: JSON.parse(options.body) });
+      return { queued: 3, alreadyRunning: 0, failed: 0 };
+    },
+    authLost: () => false,
+    showToast: (message: string) => toasts.push(message),
+    loadTelemarketingView: async () => {},
+  };
+  const run = vm.runInNewContext(html.slice(start, end) + '; runTamanContactResearchFromBtn', context);
+  const button = { getAttribute: () => 'Pending, Example Town', disabled: false, textContent: 'Research 3 pending' };
+  await run(button);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].path, '/api/territories/contact-research');
+  assert.equal(requests[0].body.taman, 'Pending');
+  assert.equal(requests[0].body.queryPlace, 'Pending, Example Town');
+  assert.deepEqual(toasts, ['Queued 3 contact research for Pending']);
+
+  await run({ getAttribute: () => 'Done, Example Town', disabled: false, textContent: 'x' });
+  assert.equal(requests.length, 1);
+  assert.deepEqual(toasts.at(-1), 'Nothing to research at Done.');
+});

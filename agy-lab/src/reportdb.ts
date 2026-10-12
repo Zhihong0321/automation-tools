@@ -3049,6 +3049,51 @@ export async function findTamanCompanyIds(options: {
   return Array.from(ids);
 }
 
+// A lead still needs contact research when its latest contact report is not
+// completed or partial, and it is not already queued or running. Blacklisted
+// (do_not_call) leads are never queued.
+const CONTACT_PENDING_SQL = `
+  left join lateral (
+    select status from published_report
+    where company_id = c.id and report_type = 'contact_research'
+    order by version desc, created_at desc limit 1
+  ) crep on true
+  where c.merged_into is null
+    and coalesce(c.lead_status, 'unassigned') <> 'do_not_call'
+    and coalesce(crep.status, '') not in ('completed', 'partial', 'queued', 'running')`;
+
+// Pending contact research per taman, keyed by lower-cased query place.
+export async function getTamanContactPending(): Promise<Record<string, number>> {
+  if (!configured()) return {};
+  await migrate();
+  const out = await sql<{ place: string; pending: number }>(
+    `select lower(trim(r.request->>'place')) as place, count(distinct c.id)::int as pending
+     from published_report r
+     join search_report_company sc on (sc.report_id = r.source_search_report_id or sc.report_id = r.id)
+     join company_data c on c.id = sc.company_id
+     ${CONTACT_PENDING_SQL.replace('where c.merged_into', 'where r.report_type = \'business_search\' and c.merged_into')}
+     group by 1`,
+  );
+  return Object.fromEntries(out.rows.map((row) => [row.place, Number(row.pending)]));
+}
+
+// The company ids at one taman that still need contact research.
+export async function tamanContactPendingCompanyIds(options: {
+  taman: string;
+  queryPlace?: string;
+}): Promise<string[]> {
+  const ids = await findTamanCompanyIds(options);
+  if (!ids.length) return [];
+  const out = await sql<{ id: string }>(
+    `select c.id::text as id from company_data c
+     ${CONTACT_PENDING_SQL}
+     and c.id = any($1::bigint[])
+     order by c.id`,
+    [ids.map(Number)],
+  );
+  return out.rows.map((row) => row.id);
+}
+
 export async function assignTamanLeads(options: {
   state?: string;
   district?: string;

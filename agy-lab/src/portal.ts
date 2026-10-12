@@ -2970,6 +2970,9 @@ function renderTerritoryCards(){
         }else if(isScanning){
           html+='<span style="font-size:11px;color:var(--warn);">Scanning...</span>';
         }
+        var pendingResearch=tm.contactPending||0;
+        if(pendingResearch>0){html+='<button class="taman-scan-action taman-research-action" type="button" data-place="'+attr(tm.queryPlace)+'" onclick="runTamanContactResearchFromBtn(this)" title="Leads at this taman still waiting for contact research">&#128269; Research '+pendingResearch+' pending</button>'}
+        else if(isScanned){html+='<span class="taman-research-done">&#10003; All researched</span>'}
         html+='<div class="taman-scan-group">';
         html+='<button class="taman-scan-action" type="button" data-place="'+attr(tm.queryPlace)+'" data-keywords="business" onclick="queueTamanScanFromBtn(this)">&#9889; Business</button>';
         html+='<button class="taman-scan-action" type="button" data-place="'+attr(tm.queryPlace)+'" data-keywords="factory" onclick="queueTamanScanFromBtn(this)">&#9889; Factory</button>';
@@ -2992,6 +2995,25 @@ function findTaman(place){
 function tamanKeywordActive(tm,keyword){
   var scan=tm.scanByKeyword&&tm.scanByKeyword[keyword];
   return !!scan&&(scan.status==='queued'||scan.status==='running');
+}
+async function runTamanContactResearchFromBtn(btn){
+  if(teleState.queueingTown||!teleState.data)return;
+  var tm=findTaman(btn.getAttribute('data-place'));
+  if(!tm)return;
+  var n=tm.contactPending||0;
+  if(!n){showToast('Nothing to research at '+tm.name+'.');return}
+  if(!window.confirm('Run contact research for '+n+' leads in '+tm.name+'? They run through the queue one after another.'))return;
+  var origText=btn.textContent;
+  teleState.queueingTown=true;
+  btn.disabled=true;
+  btn.textContent='Queueing\u2026';
+  try{
+    var body=await api('/api/territories/contact-research',{method:'POST',body:JSON.stringify({state:el('teleStateSelect')?el('teleStateSelect').value:'johor',taman:tm.name,queryPlace:tm.queryPlace,requesterId:'telemarketing:'+tm.name})});
+    showToast('Queued '+body.queued+' contact research for '+tm.name+(body.alreadyRunning?' · '+body.alreadyRunning+' already running':'')+(body.failed?' · '+body.failed+' failed':''));
+    await loadTelemarketingView();
+  }catch(err){
+    if(!authLost(err))showToast('Failed to start research: '+err.message);
+  }finally{teleState.queueingTown=false;btn.disabled=false;btn.textContent=origText}
 }
 async function queueTamanScanFromBtn(btn){
   if(teleState.queueingTown||!teleState.data)return;

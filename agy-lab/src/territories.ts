@@ -15,6 +15,8 @@ export interface TamanLocation {
   // Best scan per search keyword ('business', 'factory', ...) at this taman,
   // so a bulk scan can tell which keywords still need running.
   scanByKeyword?: Record<string, ScanBadgeInfo>;
+  // Leads at this taman still waiting for contact research.
+  contactPending?: number;
   assignedTo?: string | null;
 }
 
@@ -8586,6 +8588,7 @@ export function buildTerritoryResponse(
   stateName = 'johor',
   scans: TerritoryScanStatInput[] = [],
   tamanAssignments: Record<string, { assigned_to: string; telemarketer_uid?: string | null; assigned_at?: string } | string> = {},
+  contactPending: Record<string, number> = {},
 ) {
   const base = ALL_TERRITORIES[stateName.toLowerCase()] ?? JOHOR_TERRITORY;
   const districts: DistrictLocation[] = JSON.parse(JSON.stringify(base.districts));
@@ -8661,6 +8664,7 @@ export function buildTerritoryResponse(
           }
         }
 
+        tm.contactPending = contactPending[tm.queryPlace.trim().toLowerCase()] ?? 0;
         const rawAssignment = tamanAssignments[tm.name]
           || tamanAssignments[cleanStr(tm.name)]
           || (tamanQueryNorm ? tamanAssignments[tamanQueryNorm] : undefined);
