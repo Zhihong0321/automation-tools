@@ -742,10 +742,10 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
           <div style="margin:16px 0;padding:14px;background:#fff5f5;border:1px solid #fecaca;border-radius:6px;font-size:12.5px;color:#991b1b;line-height:1.5;">
             <strong>⚠️ What will be reset:</strong>
             <ul style="margin:6px 0 0;padding-left:18px;">
-              <li>All lead statuses will reset to <code>unassigned</code></li>
+              <li>Call statuses will reset to <code>unassigned</code>, except do-not-call leads, which stay blacklisted</li>
               <li>All telemarketer assignments will be removed</li>
-              <li>All call notes and remarks will be cleared</li>
-              <li>All activity logs and audit records will be wiped</li>
+              <li>Call notes and remarks are kept</li>
+              <li>Activity entries without a remark will be wiped</li>
             </ul>
             <div style="margin-top:10px;font-weight:700;color:var(--ok);">
               ✓ Real company data, contacts, phones, and research dossiers remain 100% untouched.
@@ -3796,7 +3796,7 @@ async function submitResetProgress(){
   try{
     var res = await api('/api/lead-activity/reset-progress', { method: 'POST' });
     closeResetProgressModal();
-    showToast(res.message || 'All lead assignments and progress have been cleared. Contact details remain safe.');
+    showToast(res.message || 'Assignments and call statuses were reset. Do-not-call leads and remarks were kept.');
     await loadActivityView();
   }catch(err){
     if(!authLost(err)) showToast('Error resetting progress: ' + err.message);

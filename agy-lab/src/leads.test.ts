@@ -311,3 +311,22 @@ test('unassigning leads resets call status but keeps do-not-call leads blacklist
   const body = source.slice(start, source.indexOf('\n}\n', start));
   assert.match(body, /lead_status = case when coalesce\(lead_status, 'unassigned'\) = 'do_not_call' then 'do_not_call' else 'unassigned' end/);
 });
+
+test('blacklisted leads and remarks survive delete, merge and reset paths', async () => {
+  const source = (await import('node:fs')).readFileSync(new URL('./reportdb.ts', import.meta.url), 'utf8');
+  const fnBody = (name: string) => {
+    const start = source.indexOf(name);
+    assert.ok(start > 0, `${name} exists`);
+    return source.slice(start, source.indexOf('\n}\n', start));
+  };
+  const keep = /case when coalesce\(lead_status, 'unassigned'\) = 'do_not_call' then 'do_not_call' else 'unassigned' end/;
+  assert.match(fnBody('export async function deleteTelemarketer'), keep);
+  assert.match(fnBody('export async function clearMockLeadProgress'), keep);
+  assert.doesNotMatch(fnBody('export async function clearMockLeadProgress'), /lead_notes\s*=/);
+  assert.match(fnBody('export async function clearMockLeadProgress'), /delete from lead_activity_log where coalesce\(notes, ''\) = ''/);
+  assert.equal(source.split('await carryMergedLeadStateToKeepers();').length - 1, 2, 'called from migrate and dedupCompanies');
+  assert.match(fnBody('export async function dedupCompanies'), /await carryMergedLeadStateToKeepers\(\);/);
+  assert.match(fnBody('async function carryMergedLeadStateToKeepers'), /do_not_call/);
+  assert.match(fnBody('async function carryMergedLeadStateToKeepers'), /string_agg\(distinct note/);
+  assert.match(fnBody('export async function assignLeads'), /action = 'assignment' and coalesce\(notes, ''\) = ''/);
+});

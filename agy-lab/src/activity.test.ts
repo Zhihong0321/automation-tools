@@ -244,12 +244,12 @@ test('generateMockLeadData strictly preserves real company contact data and only
     const clearResult = await db.clearMockLeadProgress();
     assert.equal(clearResult.ok, true);
 
-    const resetSql = executedSql.find((item) => item.sql.includes('update company_data set') && item.sql.includes("lead_status = 'unassigned'"));
+    const resetSql = executedSql.find((item) => item.sql.includes('update company_data set') && item.sql.includes("'do_not_call'"));
     assert.ok(resetSql, 'Should have executed reset update on company_data');
-    assert.match(resetSql.sql, /lead_status = 'unassigned'/);
+    assert.match(resetSql.sql, /case when coalesce\(lead_status, 'unassigned'\) = 'do_not_call' then 'do_not_call' else 'unassigned' end/);
     assert.match(resetSql.sql, /assigned_to = null/);
     assert.match(resetSql.sql, /telemarketer_uid = null/);
-    assert.match(resetSql.sql, /lead_notes = null/);
+    assert.doesNotMatch(resetSql.sql, /lead_notes\s*=/);
     // Again confirm real data is never wiped
     assert.doesNotMatch(resetSql.sql, /\bphone\s*=/i);
     assert.doesNotMatch(resetSql.sql, /\baddress\s*=/i);

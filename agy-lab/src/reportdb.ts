@@ -370,6 +370,7 @@ export function migrate(): Promise<void> {
       update published_report p set company_id = c.merged_into
       from company_data c where p.company_id = c.id and c.merged_into is not null;
     `);
+    await carryMergedLeadStateToKeepers();
     // Collapse the scan links BEFORE remapping them, and collapse them against
     // where every row is ABOUT to point, not only against where rows already
     // point.
@@ -2365,11 +2366,12 @@ export async function assignLeads(
 
   const assignedIds = res.rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id));
   if (assignedIds.length) {
-    // Assignment history is not ownership: keep only the latest assignment record
-    // so a reassigned lead is not still associated with its previous agent.
+    // Assignment history is not ownership: drop older assignment records so a
+    // reassigned lead is not still associated with its previous agent. Records
+    // that carry a remark are kept, because remarks are never removed.
     await sql(
       `delete from lead_activity_log
-       where company_id = any($1::bigint[]) and action = 'assignment'`,
+       where company_id = any($1::bigint[]) and action = 'assignment' and coalesce(notes, '') = ''`,
       [assignedIds],
     );
   }
@@ -2782,7 +2784,8 @@ export async function deleteTelemarketer(id: number, unassignLeads: boolean = tr
   if (unassignLeads) {
     await sql(
       `update company_data set assigned_to = null, telemarketer_uid = null,
-         lead_status = 'unassigned', lead_updated_at = now()
+         lead_status = case when coalesce(lead_status, 'unassigned') = 'do_not_call' then 'do_not_call' else 'unassigned' end,
+         lead_updated_at = now()
        where telemarketer_uid = (select uid from telemarketer where id = $1)
           or (telemarketer_uid is null and lower(trim(assigned_to)) = lower(trim($2)))`,
       [id, agentName]
@@ -2797,6 +2800,37 @@ export async function deleteTelemarketer(id: number, unassignLeads: boolean = tr
 
   await sql(`delete from telemarketer where id = $1`, [id]);
   return true;
+}
+
+// A merged duplicate is hidden from every list, so its blacklist status and
+// remarks would disappear with it. Carry both onto the row that stays visible.
+// Safe to run again: a status already carried is a no-op, and a remark already
+// present in the kept row is not appended twice.
+async function carryMergedLeadStateToKeepers(): Promise<void> {
+  await sql(`
+    update company_data k set lead_status = 'do_not_call', lead_updated_at = now()
+    where k.merged_into is null
+      and coalesce(k.lead_status, 'unassigned') <> 'do_not_call'
+      and exists (select 1 from company_data d where d.merged_into = k.id and d.lead_status = 'do_not_call');
+  `);
+  await sql(`
+    with missing as (
+      select d.merged_into as keep, d.lead_notes as note
+      from company_data d
+      join company_data k on k.id = d.merged_into
+      where d.merged_into is not null
+        and coalesce(d.lead_notes, '') <> ''
+        and position(d.lead_notes in coalesce(k.lead_notes, '')) = 0
+    ),
+    agg as (
+      select keep, string_agg(distinct note, E'\n' order by note) as note from missing group by keep
+    )
+    update company_data k set
+      lead_notes = case when coalesce(k.lead_notes, '') = '' then agg.note else k.lead_notes || E'\n' || agg.note end,
+      lead_updated_at = now()
+    from agg
+    where k.id = agg.keep and k.merged_into is null;
+  `);
 }
 
 export async function dedupCompanies(): Promise<{ merged: number }> {
@@ -2856,6 +2890,8 @@ export async function dedupCompanies(): Promise<{ merged: number }> {
     update search_report_company a set company_id = c.merged_into
     from company_data c where a.company_id = c.id and c.merged_into is not null;
   `);
+
+  await carryMergedLeadStateToKeepers();
 
   const merged = (r1.rows?.length ?? 0) + (r2.rows?.length ?? 0);
   return { merged };
@@ -4092,28 +4128,28 @@ export async function clearMockLeadProgress(): Promise<{
   if (!configured()) return { ok: true, message: 'Database not configured', clearedLeads: 0, clearedActivities: 0 };
   await migrate();
 
-  // Reset lead status, assignments and notes back to clean default.
-  // Real company contact information & research reports are completely untouched.
+  // Reset assignments and call statuses. Blacklisted (do_not_call) leads keep their
+  // status, and remarks are never cleared. Contact & research data is untouched.
   const leadRes = await sql(
     `update company_data set
-       lead_status = 'unassigned',
+       lead_status = case when coalesce(lead_status, 'unassigned') = 'do_not_call' then 'do_not_call' else 'unassigned' end,
        assigned_to = null,
        telemarketer_uid = null,
        assigned_at = null,
-       lead_notes = null,
        lead_updated_at = now()
-     where merged_into is null and (assigned_to is not null or lead_status <> 'unassigned' or lead_notes is not null)
+     where merged_into is null
+       and (assigned_to is not null or coalesce(lead_status, 'unassigned') not in ('unassigned', 'do_not_call'))
      returning id`,
   );
 
-  // Clear activity log table
+  // Clear activity entries that carry no remark. Entries with a remark are kept.
   const actRes = await sql(
-    `delete from lead_activity_log returning id`,
+    `delete from lead_activity_log where coalesce(notes, '') = '' returning id`,
   );
 
   return {
     ok: true,
-    message: `All lead assignments, progress statuses, call notes, and activity history were cleared. ${leadRes.rows.length} leads reset to default. ${actRes.rows.length} activities wiped. Contact & research data remain 100% safe.`,
+    message: `Assignments and call statuses were reset. Do-not-call leads and all remarks were kept. ${leadRes.rows.length} leads reset. ${actRes.rows.length} activity entries without remarks cleared. Contact & research data remain safe.`,
     clearedLeads: leadRes.rows.length,
     clearedActivities: actRes.rows.length,
   };
