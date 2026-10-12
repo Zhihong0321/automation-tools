@@ -121,9 +121,7 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
 .town-block{margin-top:14px;padding:14px 16px;background:#fff;border:1px solid var(--line);border-radius:6px}
 .town-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px}
 .town-title{font-size:15px;font-weight:700;color:var(--ink)}
-.town-scan-btn{height:28px;padding:0 10px;font:700 9.5px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;background:var(--soft);color:var(--ink);border:1px solid var(--line);border-radius:4px;cursor:pointer}
-.town-scan-btn:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
-.town-scan-group{display:flex;flex-wrap:wrap;gap:6px}
+.taman-scan-group{display:flex;flex-wrap:wrap;gap:4px}
 .taman-grid{display:flex;flex-wrap:wrap;gap:8px}
 .taman-pill{display:inline-flex;align-items:center;gap:8px;padding:6px 11px;background:#f8f9fa;border:1px solid var(--line);border-radius:4px;font-size:12.5px;color:var(--ink)}
 .taman-pill.scanned{border-color:var(--ok);background:#f4fbf7}
@@ -341,10 +339,6 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
               <option value="johor" selected>Johor</option>
               <option value="selangor">Selangor</option>
             </select>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:3px;">
-            <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">Search Term / Category</span>
-            <input class="input" id="teleCategory" value="business" placeholder="e.g. business, cafe, clinic, contractor" style="height:38px;font-size:13.5px;max-width:240px;" title="Keyword prepended to search, e.g. 'business in Ros Merah, Johor Jaya'">
           </div>
           <div style="display:flex;flex-direction:column;gap:3px;">
             <span style="font:var(--micro);text-transform:uppercase;color:var(--muted);letter-spacing:var(--track)">Max Results</span>
@@ -2953,11 +2947,6 @@ function renderTerritoryCards(){
       if(tScanned){html+='<a class="taman-link" target="_blank" rel="noopener" href="/r/'+attr(tScan.publicId)+'">&#9679; '+esc(tScan.count)+(tScan.status==='partial'?' businesses · partial':' leads')+'<span title="Leads where a phone number was found"> · '+esc(tScan.contacts)+' contacts</span> &#8599;</a>'}
       else if(tScanning){html+='<span style="font-size:11px;color:var(--warn);">&#9679; Scanning...</span>'}
       html+='</div>';
-      html+='<div class="town-scan-group">';
-      html+='<button class="town-scan-btn" type="button" data-town="'+attr(t.id)+'" data-keywords="business" onclick="queueWholeTownFromBtn(this)">&#9889; Scan Business</button>';
-      html+='<button class="town-scan-btn" type="button" data-town="'+attr(t.id)+'" data-keywords="factory" onclick="queueWholeTownFromBtn(this)">&#9889; Scan Factory</button>';
-      html+='<button class="town-scan-btn" type="button" data-town="'+attr(t.id)+'" data-keywords="business,factory" onclick="queueWholeTownFromBtn(this)">&#9889; Scan All</button>';
-      html+='</div>';
       html+='</div>';
       html+='<div class="taman-grid">';
       filteredTamans.forEach(function(tm){
@@ -2978,12 +2967,14 @@ function renderTerritoryCards(){
         }
         if(isScanned){
           html+='<a class="taman-link" target="_blank" rel="noopener" href="/r/'+attr(scan.publicId)+'" title="Open search report">'+esc(scan.count)+(scan.status==='partial'?' businesses · partial':' leads')+'<span title="Leads where a phone number was found"> · '+esc(scan.contacts)+' contacts</span> &#8599;</a>';
-          html+='<button class="taman-scan-action" style="background:transparent;color:var(--muted);border:1px solid var(--line);" type="button" data-place="'+attr(tm.queryPlace)+'" data-name="'+attr(tm.name)+'" onclick="queueTerritoryFromBtn(this)" title="Re-scan market">&#8635;</button>';
         }else if(isScanning){
           html+='<span style="font-size:11px;color:var(--warn);">Scanning...</span>';
-        }else{
-          html+='<button class="taman-scan-action" type="button" data-place="'+attr(tm.queryPlace)+'" data-name="'+attr(tm.name)+'" onclick="queueTerritoryFromBtn(this)">&#9889; Scan</button>';
         }
+        html+='<div class="taman-scan-group">';
+        html+='<button class="taman-scan-action" type="button" data-place="'+attr(tm.queryPlace)+'" data-keywords="business" onclick="queueTamanScanFromBtn(this)">&#9889; Business</button>';
+        html+='<button class="taman-scan-action" type="button" data-place="'+attr(tm.queryPlace)+'" data-keywords="factory" onclick="queueTamanScanFromBtn(this)">&#9889; Factory</button>';
+        html+='<button class="taman-scan-action" type="button" data-place="'+attr(tm.queryPlace)+'" data-keywords="business,factory" onclick="queueTamanScanFromBtn(this)">&#9889; All</button>';
+        html+='</div>';
         html+='</div>';
       });
       html+='</div></div>';
@@ -2992,78 +2983,47 @@ function renderTerritoryCards(){
   });
   cont.innerHTML=html||'<div class="empty">No territories matching filter.</div>';
 }
-function queueTerritoryFromBtn(btn){
-  var p=btn.getAttribute('data-place');
-  var n=btn.getAttribute('data-name');
-  return queueTerritoryScan(btn,p,n);
+function findTaman(place){
+  var found=null;
+  (teleState.data&&teleState.data.districts||[]).some(function(d){return (d.towns||[]).some(function(t){found=(t.tamans||[]).find(function(tm){return tm.queryPlace===place})||null;return !!found})});
+  return found;
 }
-// A taman still needs a keyword's scan unless that keyword is running or has leads.
-function tamanNeedsScan(tm,keyword){
+// A keyword is skipped only while its own scan for this taman is queued or running.
+function tamanKeywordActive(tm,keyword){
   var scan=tm.scanByKeyword&&tm.scanByKeyword[keyword];
-  return !scan||((scan.status!=='queued'&&scan.status!=='running')&&(Number(scan.count)||0)===0);
+  return !!scan&&(scan.status==='queued'||scan.status==='running');
 }
-async function queueWholeTownFromBtn(btn){
+async function queueTamanScanFromBtn(btn){
   if(teleState.queueingTown||!teleState.data)return;
-  var townId=btn.getAttribute('data-town');
-  var town=null;
-  (teleState.data.districts||[]).some(function(d){town=(d.towns||[]).find(function(t){return t.id===townId})||null;return !!town});
-  if(!town)return;
-  var keywords=(btn.getAttribute('data-keywords')||'business').split(',');
-  var pending=[];
-  keywords.forEach(function(kw){town.tamans.forEach(function(tm){if(tamanNeedsScan(tm,kw))pending.push({tm:tm,keyword:kw})})});
-  if(!pending.length){showToast('Every taman in '+town.name+' already has leads or is scanning for '+keywords.join(' and ')+'.');return}
+  var tm=findTaman(btn.getAttribute('data-place'));
+  if(!tm)return;
+  var keywords=(btn.getAttribute('data-keywords')||'business').split(',').filter(function(kw){return !tamanKeywordActive(tm,kw)});
+  if(!keywords.length){showToast(tm.name+' is already scanning for that.');return}
   var maxInput=el('teleMaxResults');
   var maxCount=maxInput?Number(maxInput.value)||200:200;
-  var group=btn.parentNode&&btn.parentNode.querySelectorAll?btn.parentNode.querySelectorAll('.town-scan-btn'):[btn];
+  var group=btn.parentNode&&btn.parentNode.querySelectorAll?btn.parentNode.querySelectorAll('.taman-scan-action'):[btn];
+  var origText=btn.textContent;
   teleState.queueingTown=true;
   Array.prototype.forEach.call(group,function(b){b.disabled=true});
   var queued=0,failed=0;
   try{
-    for(var i=0;i<pending.length;i++){
+    for(var i=0;i<keywords.length;i++){
       if(!state.token)break;
-      btn.textContent='Queueing '+(i+1)+'/'+pending.length+'…';
-      var task=pending[i];
+      btn.textContent='Queueing…';
       try{
-        var body=await api('/api/business-search',{method:'POST',body:JSON.stringify({keyword:task.keyword,place:task.tm.queryPlace,max:maxCount,requesterId:'telemarketing:'+task.tm.name})});
+        var body=await api('/api/business-search',{method:'POST',body:JSON.stringify({keyword:keywords[i],place:tm.queryPlace,max:maxCount,requesterId:'telemarketing:'+tm.name})});
         queued++;
-        if(body.report)poll(body.report,'search');
+        upsertJob(body.report,'search');
+        poll(body.report,'search');
       }catch(err){
         failed++;
         if(authLost(err))break;
       }
     }
-    await loadTelemarketingView();
-    showToast(queued+' '+keywords.join(' + ')+' scans queued for '+town.name+(failed?' · '+failed+' failed to queue':'')+(state.token?'':' · access expired'));
-  }finally{teleState.queueingTown=false;Array.prototype.forEach.call(group,function(b){b.disabled=false})}
-}
-async function queueTerritoryScan(btn,targetPlace,label){
-  var catInput=el('teleCategory');
-  var keyword=catInput?catInput.value.trim():'business';
-  var maxInput=el('teleMaxResults');
-  var maxCount=maxInput?Number(maxInput.value)||200:200;
-  var origText=btn.textContent;
-  btn.disabled=true;
-  btn.textContent='Queueing\u2026';
-  try{
-    var body=await api('/api/business-search',{
-      method:'POST',
-      body:JSON.stringify({keyword:keyword||undefined,place:targetPlace,max:maxCount,requesterId:'telemarketing:'+label})
-    });
-    showToast('Queued search for '+keyword+' in '+label);
-    upsertJob(body.report,'search');
-    poll(body.report,'search');
-    btn.textContent='Scanning\u2026';
-    var pNode=btn.closest&&btn.closest('.taman-pill');
-    if(pNode){
-      pNode.className='taman-pill scanning';
-      var pip=pNode.querySelector('.taman-pip');
-      if(pip)pip.className='taman-pip scanning';
-    }
-  }catch(err){
-    btn.disabled=false;
     btn.textContent=origText;
-    if(!authLost(err))showToast('Failed to queue scan: '+err.message);
-  }
+    await loadTelemarketingView();
+    showToast('Queued '+keywords.join(' + ')+' scan for '+tm.name+(failed?' · '+failed+' failed to queue':'')+(state.token?'':' · access expired'));
+  }finally{teleState.queueingTown=false;btn.textContent=origText;Array.prototype.forEach.call(group,function(b){b.disabled=false})}
 }
 async function openTamanAssignModal(btn){
   var taman=btn.getAttribute('data-taman')||'';

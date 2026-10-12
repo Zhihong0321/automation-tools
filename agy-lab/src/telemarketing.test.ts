@@ -159,7 +159,7 @@ test('telemarketing Lead-Map is integrated into portal navigation and UI', () =>
   // Controls
   assert.match(html, /id="teleStateSelect"/);
   assert.match(html, /value="selangor"/);
-  assert.match(html, /id="teleCategory"/);
+  assert.doesNotMatch(html, /id="teleCategory"/);
   assert.match(html, /id="teleMaxResults"/);
   assert.match(html, /id="teleFilterInput"/);
   assert.match(html, /id="teleTerritoryContainer"/);
@@ -168,8 +168,8 @@ test('telemarketing Lead-Map is integrated into portal navigation and UI', () =>
   assert.match(html, /function loadTelemarketingView\(\)/);
   assert.match(html, /function onTeleStateChange\(\)/);
   assert.match(html, /function renderTerritoryCards\(\)/);
-  assert.match(html, /function queueTerritoryScan\(/);
-  assert.match(html, /function queueTerritoryFromBtn\(/);
+  assert.match(html, /function queueTamanScanFromBtn\(/);
+  assert.doesNotMatch(html, /function queueTerritoryFromBtn\(/);
   assert.match(html, /function promptLeadNotes\(/);
   assert.match(html, /data-place="/);
 });
