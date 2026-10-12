@@ -3515,13 +3515,14 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
 
   if (method === 'GET' && p === '/api/leads') {
     const search = url.searchParams.get('search');
+    const nameKeyword = url.searchParams.get('nameKeyword');
     const status = url.searchParams.get('status');
     const assignedTo = url.searchParams.get('assignedTo') || url.searchParams.get('assigned_to');
     const researchStatus = url.searchParams.get('researchStatus') || url.searchParams.get('research_status');
     const limit = Number(url.searchParams.get('limit') ?? 50);
     const offset = Number(url.searchParams.get('offset') ?? 0);
     const sort = url.searchParams.get('sort');
-    const result = await db.listLeads({ search, status, assignedTo, researchStatus, limit, offset, sort });
+    const result = await db.listLeads({ search, nameKeyword, status, assignedTo, researchStatus, limit, offset, sort });
     ctx.json(res, 200, result);
     return true;
   }

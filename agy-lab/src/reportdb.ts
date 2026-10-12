@@ -1824,6 +1824,7 @@ function applyAssignedToFilter(whereConditions: string[], params: unknown[], ass
 
 export async function listLeads(options: {
   search?: string | null;
+  nameKeyword?: string | null;
   status?: string | null;
   assignedTo?: string | null;
   researchStatus?: string | null;
@@ -1875,6 +1876,12 @@ export async function listLeads(options: {
     params.push(`%${options.search.trim()}%`);
     const pIdx = params.length;
     whereConditions.push(`(c.name ilike $${pIdx} or coalesce(c.phone,'') ilike $${pIdx} or coalesce(c.address,'') ilike $${pIdx} or coalesce(c.category,'') ilike $${pIdx})`);
+  }
+
+  // Same name match the keyword rule previews and applies, so the list shows exactly those rows.
+  if (options.nameKeyword && options.nameKeyword.trim()) {
+    params.push(nameKeywordPattern(options.nameKeyword.trim()));
+    whereConditions.push(`c.name ilike $${params.length}`);
   }
 
   if (options.assignedTo) {
