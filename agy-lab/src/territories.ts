@@ -12,6 +12,9 @@ export interface TamanLocation {
   name: string;
   queryPlace: string;
   scan?: ScanBadgeInfo | null;
+  // Best scan per search keyword ('business', 'factory', ...) at this taman,
+  // so a bulk scan can tell which keywords still need running.
+  scanByKeyword?: Record<string, ScanBadgeInfo>;
   assignedTo?: string | null;
 }
 
@@ -8563,6 +8566,22 @@ function hasUsableScan(scan: TerritoryScanStatInput): boolean {
   return scan.status === 'completed' || (scan.status === 'partial' && scan.company_count > 0);
 }
 
+function scanKeywordKey(keyword: string | null): string {
+  return (keyword ?? '').trim().toLowerCase();
+}
+
+function toScanBadge(scan: TerritoryScanStatInput): ScanBadgeInfo {
+  return {
+    publicId: scan.public_id,
+    status: scan.status,
+    count: scan.company_count,
+    contacts: Number(scan.contact_count) || 0,
+    createdAt: scan.created_at,
+    keyword: scan.keyword,
+    assignedTo: scan.assigned_to || null,
+  };
+}
+
 export function buildTerritoryResponse(
   stateName = 'johor',
   scans: TerritoryScanStatInput[] = [],
@@ -8618,16 +8637,19 @@ export function buildTerritoryResponse(
         });
         const matchingTamanScan = pickBestScan(tamanMatches);
 
+        const matchesByKeyword = new Map<string, TerritoryScanStatInput[]>();
+        for (const s of tamanMatches) {
+          const key = scanKeywordKey(s.keyword);
+          matchesByKeyword.set(key, [...(matchesByKeyword.get(key) ?? []), s]);
+        }
+        if (matchesByKeyword.size) {
+          tm.scanByKeyword = Object.fromEntries(
+            [...matchesByKeyword].map(([key, group]) => [key, toScanBadge(pickBestScan(group)!)]),
+          );
+        }
+
         if (matchingTamanScan) {
-          tm.scan = {
-            publicId: matchingTamanScan.public_id,
-            status: matchingTamanScan.status,
-            count: matchingTamanScan.company_count,
-            contacts: Number(matchingTamanScan.contact_count) || 0,
-            createdAt: matchingTamanScan.created_at,
-            keyword: matchingTamanScan.keyword,
-            assignedTo: matchingTamanScan.assigned_to || null,
-          };
+          tm.scan = toScanBadge(matchingTamanScan);
           if (hasUsableScan(matchingTamanScan)) {
             dScanned++;
             scannedTamans++;

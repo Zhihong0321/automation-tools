@@ -1039,3 +1039,18 @@ test('Telemarketer API endpoints handle auth by Telemarketer UID, lead reading, 
 });
 
 
+test('taman scans are grouped by keyword so a factory scan does not hide the business scan', () => {
+  const scans = [
+    { public_id: 'austin-business', status: 'completed', place: 'Taman Mount Austin, Tebrau, Johor', keyword: 'Business', company_count: 120, contact_count: 64, created_at: '2026-09-23T11:00:00Z' },
+    { public_id: 'austin-factory', status: 'partial', place: 'Taman Mount Austin, Tebrau, Johor', keyword: 'factory', company_count: 9, contact_count: 2, created_at: '2026-09-25T11:00:00Z' },
+  ];
+
+  const result = buildTerritoryResponse('johor', scans);
+  const austin = result.districts.find((d) => d.name === 'Johor Bahru')?.towns.find((t) => t.name === 'Tebrau')?.tamans.find((tm) => tm.name === 'Taman Mount Austin');
+
+  assert.deepEqual(Object.keys(austin?.scanByKeyword ?? {}).sort(), ['business', 'factory']);
+  assert.equal(austin?.scanByKeyword?.business?.publicId, 'austin-business');
+  assert.equal(austin?.scanByKeyword?.business?.count, 120);
+  assert.equal(austin?.scanByKeyword?.factory?.publicId, 'austin-factory');
+  assert.equal(austin?.scanByKeyword?.factory?.count, 9);
+});

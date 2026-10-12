@@ -278,38 +278,70 @@ test('a partial business list offers saved-data repair and displays its save err
   assert.match(html, /Save issue:/);
 });
 
-test('scan whole town queues only tamans with zero leads and no active scan', async () => {
-  const html = page();
-  const start = html.indexOf('async function queueWholeTownFromBtn');
-  const end = html.indexOf('async function queueTerritoryScan', start);
-  assert.ok(start > 0 && end > start);
-  const places: string[] = [];
-  const jobs: string[] = [];
-  const town = { id: 'town-1', name: 'Example Town', tamans: [
-    { name: 'Has leads', queryPlace: 'Has leads, Example Town', scan: { status: 'completed', count: 5 } },
-    { name: 'Running', queryPlace: 'Running, Example Town', scan: { status: 'running', count: 0 } },
-    { name: 'Zero leads', queryPlace: 'Zero leads, Example Town', scan: { status: 'completed', count: 0 } },
-    { name: 'Failed', queryPlace: 'Failed, Example Town', scan: { status: 'failed', count: 0 } },
-    { name: 'New', queryPlace: 'New, Example Town' },
-  ] };
-  const context = {
+function townScanContext(town: unknown, requests: { keyword: string; place: string }[]) {
+  return {
     teleState: { data: { districts: [{ towns: [town] }] }, queueingTown: false },
     state: { token: 'test' },
-    el: (id: string) => id === 'teleCategory' ? { value: 'business' } : { value: '200' },
+    el: () => ({ value: '200' }),
     api: async (_path: string, options: { body: string }) => {
       const body = JSON.parse(options.body);
-      places.push(body.place);
+      requests.push({ keyword: body.keyword, place: body.place });
       return { report: { id: body.place } };
     },
-    poll: (report: { id: string }) => jobs.push(report.id),
+    poll: () => {},
     authLost: () => false,
     showToast: () => {},
     loadTelemarketingView: async () => {},
   };
-  const run = vm.runInNewContext(html.slice(start, end) + '; queueWholeTownFromBtn', context);
-  const button = { getAttribute: () => 'town-1', disabled: false, textContent: 'Scan Whole Town' };
+}
+
+test('scan business queues only tamans with no business leads and no active business scan', async () => {
+  const html = page();
+  const start = html.indexOf('function tamanNeedsScan');
+  const end = html.indexOf('async function queueTerritoryScan', start);
+  assert.ok(start > 0 && end > start);
+  const requests: { keyword: string; place: string }[] = [];
+  const town = { id: 'town-1', name: 'Example Town', tamans: [
+    { name: 'Has leads', queryPlace: 'Has leads, Example Town', scanByKeyword: { business: { status: 'completed', count: 5 } } },
+    { name: 'Running', queryPlace: 'Running, Example Town', scanByKeyword: { business: { status: 'running', count: 0 } } },
+    { name: 'Zero leads', queryPlace: 'Zero leads, Example Town', scanByKeyword: { business: { status: 'completed', count: 0 } } },
+    { name: 'Failed', queryPlace: 'Failed, Example Town', scanByKeyword: { business: { status: 'failed', count: 0 } } },
+    { name: 'New', queryPlace: 'New, Example Town' },
+  ] };
+  const run = vm.runInNewContext(html.slice(start, end) + '; queueWholeTownFromBtn', townScanContext(town, requests));
+  const button = { getAttribute: (name: string) => name === 'data-town' ? 'town-1' : 'business', disabled: false, textContent: 'Scan Business' };
   await run(button);
-  assert.deepEqual(places, ['Zero leads, Example Town', 'Failed, Example Town', 'New, Example Town']);
-  assert.deepEqual(jobs, places);
+  assert.deepEqual(requests, [
+    { keyword: 'business', place: 'Zero leads, Example Town' },
+    { keyword: 'business', place: 'Failed, Example Town' },
+    { keyword: 'business', place: 'New, Example Town' },
+  ]);
   assert.equal(button.disabled, false);
+});
+
+test('scan all queues each keyword only where that keyword is still missing', async () => {
+  const html = page();
+  const start = html.indexOf('function tamanNeedsScan');
+  const end = html.indexOf('async function queueTerritoryScan', start);
+  const requests: { keyword: string; place: string }[] = [];
+  const town = { id: 'town-1', name: 'Example Town', tamans: [
+    { name: 'Business only', queryPlace: 'Business only, Example Town', scanByKeyword: { business: { status: 'completed', count: 5 } } },
+    { name: 'New', queryPlace: 'New, Example Town' },
+  ] };
+  const run = vm.runInNewContext(html.slice(start, end) + '; queueWholeTownFromBtn', townScanContext(town, requests));
+  const button = { getAttribute: (name: string) => name === 'data-town' ? 'town-1' : 'business,factory', disabled: false, textContent: 'Scan All' };
+  await run(button);
+  assert.deepEqual(requests, [
+    { keyword: 'business', place: 'New, Example Town' },
+    { keyword: 'factory', place: 'Business only, Example Town' },
+    { keyword: 'factory', place: 'New, Example Town' },
+  ]);
+});
+
+test('scan page offers business, factory and combined scan buttons per town', () => {
+  const html = page();
+  assert.match(html, /Scan Business/);
+  assert.match(html, /Scan Factory/);
+  assert.match(html, /Scan All/);
+  assert.match(html, /data-keywords="business,factory"/);
 });
