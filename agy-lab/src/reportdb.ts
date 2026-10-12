@@ -2395,7 +2395,8 @@ export async function unassignLeads(companyIds: (string | number)[]): Promise<{ 
         assigned_to = null,
         telemarketer_uid = null,
        assigned_at = null,
-       lead_status = 'unassigned',
+       -- Call outcome resets on unassign, but a do-not-call (blacklisted) lead stays blacklisted.
+       lead_status = case when coalesce(lead_status, 'unassigned') = 'do_not_call' then 'do_not_call' else 'unassigned' end,
        lead_updated_at = now()
      where id = any($1::bigint[]) and merged_into is null
      returning id`,

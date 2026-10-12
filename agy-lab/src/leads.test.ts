@@ -304,3 +304,10 @@ test('leads master can queue contact research for the whole page in one click', 
   assert.match(script, /async function startContact\(button,quiet\)/);
   assert.match(script, /if\(!quiet\)showToast\('Contact research started for /);
 });
+
+test('unassigning leads resets call status but keeps do-not-call leads blacklisted', async () => {
+  const source = (await import('node:fs')).readFileSync(new URL('./reportdb.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('export async function unassignLeads');
+  const body = source.slice(start, source.indexOf('\n}\n', start));
+  assert.match(body, /lead_status = case when coalesce\(lead_status, 'unassigned'\) = 'do_not_call' then 'do_not_call' else 'unassigned' end/);
+});
