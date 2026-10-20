@@ -66,7 +66,7 @@
       This daemon is the SCAN worker, and only that.
 
       A daemon has no GUI session, and ego lite will not start without one, so
-      the ChatGPT and agy lanes cannot run here — they run in a LaunchAgent that
+      the ChatGPT lanes cannot run here — they run in a LaunchAgent that
       starts with the desktop. But a claim with no types asks for ANY job, so
       without this line the daemon happily takes a chatgpt.ask off the queue and
       fails it with "no handler", stealing it from the wrapper worker that could

@@ -1,59 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as jobs from './jobs.ts';
+import * as pi from './pi.ts';
 import {
   JOB_TYPE,
   WORKER_NAME,
   createKeyPool,
   extractContactsPrompt,
-  findPagesPrompt,
   laneName,
   research,
   resolveConfig,
   targetFromPayload,
   tavilySearch,
   toResearchResult,
-  TAVILY_MONTHLY_LIMIT,
-} from './gemini-contact-worker.ts';
+} from './contact-worker.ts';
 
-const ENV = {
-  GEMINI37_API_KEY: 'test-key',
-  GEMINI37_BASE_URL: 'https://gemini.example',
-  GEMINI37_MODEL: 'gemini-3.7-flash',
-  GEMINI37_TIMEOUT_MS: '1000',
-  GEMINI37_LANES: '2',
-} as NodeJS.ProcessEnv;
-
-test('gemini contact lanes register under the hub worker name', () => {
-  assert.equal(JOB_TYPE, 'research.contact.gemini');
+test('pi contact lanes register under the hub worker name', () => {
+  assert.equal(JOB_TYPE, 'research.contact.pi');
   assert.equal(laneName(0), WORKER_NAME);
-  assert.equal(laneName(1), 'gemini37-contact-2');
-  assert.equal(resolveConfig(ENV).lanes, 2);
-  assert.equal(resolveConfig({}).apiKey, '');
+  assert.equal(laneName(1), 'pi-contact-2');
+  assert.equal(resolveConfig({ CONTACT_LANES: '2' }).lanes, 2);
+  assert.equal(resolveConfig({}).lanes, 4);
 });
 
-test('find prompt uses only the name and address', () => {
-  const prompt = findPagesPrompt(targetFromPayload({
-    name: 'Acme Bakery',
-    location: '12 Jalan Example, Johor Bahru',
-    website: 'https://acme-bakery.example/contact',
-  }));
-  assert.match(prompt, /shop, restaurant, clinic, factory, school/);
-  assert.doesNotMatch(prompt, /acme-bakery\.example/);
-  assert.doesNotMatch(prompt, /lawyer|advocate|solicitor/i);
-});
-
-test('extract prompt keeps a printed title for any business', () => {
+test('extract prompt keeps a printed title for any business and carries the page text', () => {
   const prompt = extractContactsPrompt(
     targetFromPayload({ name: 'Acme Bakery', location: 'Johor Bahru' }),
-    ['https://acme-bakery.example/about'],
+    [{ url: 'https://acme-bakery.example/about', text: 'Siti Aminah, Owner' }],
   );
   assert.match(prompt, /Head of Purchasing/);
-  assert.match(prompt, /https:\/\/acme-bakery\.example\/about/);
+  assert.match(prompt, /<page url="https:\/\/acme-bakery\.example\/about">\nSiti Aminah, Owner\n<\/page>/);
   assert.doesNotMatch(prompt, /lawyer|advocate|solicitor/i);
 });
 
-test('the hub gives a gemini contact job to the gemini worker', async () => {
+test('the hub gives a pi contact job to the pi worker', async () => {
   jobs.touch('local-research', '203.0.113.8', ['research.contact']);
   jobs.touch(WORKER_NAME, '127.0.0.1', [JOB_TYPE]);
   const job = jobs.create(JOB_TYPE, { name: 'Acme Bakery', reportId: 'report-1' }, 0);
@@ -65,9 +45,9 @@ test('the hub gives a gemini contact job to the gemini worker', async () => {
   jobs.finish(job.id, true, { ok: true }, null);
 });
 
-test('each gemini key runs at most two calls at once', async () => {
+test('each tavily key runs at most two calls at once', async () => {
   const pool = createKeyPool();
-  pool.setKeys(['ground-a', 'ground-b']);
+  pool.setKeys(['key-a', 'key-b']);
   let highest = 0;
   const active = new Map<string, number>();
   await Promise.all(Array.from({ length: 8 }, async () => {
@@ -82,58 +62,56 @@ test('each gemini key runs at most two calls at once', async () => {
   assert.equal(highest, 2);
 });
 
-test('research runs tavily find then gemini extract for one assigned company', async () => {
+test('research runs tavily find, reads the pages, then pi extracts with no tools', async () => {
   const tavilyQueries: string[] = [];
-  const calls: Array<{ url: string; tools?: unknown; auth: string; body: unknown }> = [];
+  const fetched: string[] = [];
   const fetchMock: typeof fetch = async (url, init) => {
     const href = String(url);
-    const headers = (init?.headers ?? {}) as Record<string, string>;
-    const body = JSON.parse(String(init?.body ?? '{}'));
     if (href.includes('api.tavily.com')) {
-      tavilyQueries.push(body.query);
-      calls.push({ url: href, auth: body.api_key, body });
+      tavilyQueries.push(JSON.parse(String(init?.body ?? '{}')).query);
       return new Response(JSON.stringify({
         results: [
-          {
-            title: 'Acme Bakery About Us',
-            url: 'https://acme-bakery.example/about',
-            content: 'Acme Bakery in Johor Bahru. Siti Aminah is Owner.',
-          },
-          {
-            title: 'Jobstreet',
-            url: 'https://www.jobstreet.com.my/job/9',
-            content: 'Ad',
-          },
+          { title: 'Acme Bakery About Us', url: 'https://acme-bakery.example/about', content: 'Acme Bakery in Johor Bahru. Siti Aminah is Owner.' },
+          { title: 'Jobstreet', url: 'https://www.jobstreet.com.my/job/9', content: 'Ad' },
         ],
       }), { status: 200, headers: { 'content-type': 'application/json' } });
     }
-    calls.push({ url: href, tools: body.tools, auth: headers['x-goog-api-key'] || '', body });
-    const text = '{"people":[{"name":"Siti Aminah","position":"Owner","evidence_url":"https://acme-bakery.example/about"}],"phones":[{"number":"07-555 0101","label":"Siti Aminah mobile","evidence_url":"https://acme-bakery.example/contact"}],"emails":[{"email":"hello@acme-bakery.example","label":"General","evidence_url":"https://acme-bakery.example/contact"}]}';
-    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    fetched.push(href);
+    return new Response('<html><body><h1>About</h1><p>Siti Aminah, Owner. Mobile 07-555 0101. hello@acme-bakery.example</p><script>x()</script></body></html>', {
+      status: 200, headers: { 'content-type': 'text/html' },
+    });
   };
-  const result = await research({
-    name: 'Acme Bakery',
-    location: '12 Jalan Example, Johor Bahru',
-    website: 'https://acme-bakery.example/contact',
-  }, { env: ENV, fetchImpl: fetchMock, tavilyKey: 'tvly-test-key', officialKey: 'official-key' });
+  const prompts: Array<{ prompt: string; tools: boolean }> = [];
+  pi.setRunnerForTests(async (prompt, opts) => {
+    prompts.push({ prompt, tools: opts.tools });
+    return '{"people":[{"name":"Siti Aminah","position":"Owner","evidence_url":"https://acme-bakery.example/about"}],"phones":[{"number":"07-555 0101","label":"Siti Aminah mobile","evidence_url":"https://acme-bakery.example/contact"}],"emails":[{"email":"hello@acme-bakery.example","label":"General","evidence_url":"https://acme-bakery.example/contact"}]}';
+  });
+  try {
+    const result = await research({
+      name: 'Acme Bakery',
+      location: '12 Jalan Example, Johor Bahru',
+      website: 'https://acme-bakery.example/contact',
+    }, { fetchImpl: fetchMock, tavilyKey: 'tvly-test-key' });
 
-  assert.equal(tavilyQueries.length, 2);
-  assert.match(tavilyQueries[0]!, /Acme Bakery.*Johor Bahru/);
-  assert.match(tavilyQueries[1]!, /official website contact/);
+    assert.equal(tavilyQueries.length, 2);
+    assert.match(tavilyQueries[0]!, /Acme Bakery.*Johor Bahru/);
+    assert.match(tavilyQueries[1]!, /official website contact/);
+    assert.deepEqual(fetched.sort(), ['https://acme-bakery.example/about', 'https://acme-bakery.example/contact']);
+    assert.equal(prompts.length, 1);
+    assert.equal(prompts[0]!.tools, false);
+    assert.match(prompts[0]!.prompt, /Siti Aminah, Owner\. Mobile 07-555 0101/);
+    assert.doesNotMatch(prompts[0]!.prompt, /x\(\)/);
 
-  const officialCall = calls.find((c) => c.url.includes('generativelanguage.googleapis.com'));
-  assert.ok(officialCall);
-  assert.equal(officialCall.auth, 'official-key');
-  assert.match(officialCall.url, /gemini-3\.8-flash/);
-  assert.equal(officialCall.tools && 'url_context' in ((officialCall.tools as unknown[])[0] as object), true);
-
-  const people = result.decision_makers as Array<Record<string, unknown>>;
-  assert.equal(people[0]?.name, 'Siti Aminah');
-  assert.equal(people[0]?.role, 'Owner');
-  assert.equal(people[0]?.direct_phone, '07-555 0101');
-  assert.equal((result.email_contacts as Array<Record<string, unknown>>)[0]?.email, 'hello@acme-bakery.example');
-  const meta = result.research_meta as Record<string, unknown>;
-  assert.match(String(meta.engine), /tavily/);
+    const people = result.decision_makers as Array<Record<string, unknown>>;
+    assert.equal(people[0]?.name, 'Siti Aminah');
+    assert.equal(people[0]?.role, 'Owner');
+    assert.equal(people[0]?.direct_phone, '07-555 0101');
+    assert.equal((result.email_contacts as Array<Record<string, unknown>>)[0]?.email, 'hello@acme-bakery.example');
+    const meta = result.research_meta as Record<string, unknown>;
+    assert.match(String(meta.engine), /tavily \+ pi\//);
+  } finally {
+    pi.setRunnerForTests(null);
+  }
 });
 
 test('tavily key pool rotates round-robin and enforces monthly limit', async () => {

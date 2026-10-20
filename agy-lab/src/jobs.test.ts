@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type http from 'node:http';
 import { activate, coolDown, create, finish, get, handle, liveTypes, quotaRetryAfterMs, snapshot, take, wait } from './jobs.ts';
 
-const ASK_TYPES = ['chatgpt.ask', 'meta.ask', 'agy.ask'];
+const ASK_TYPES = ['chatgpt.ask', 'meta.ask', 'fb.company'];
 
 /** POST /api/jobs/heartbeat exactly as worker/macmini.mjs sends it. */
 async function heartbeat(worker: string, types: string[]): Promise<unknown> {
@@ -19,24 +19,6 @@ async function heartbeat(worker: string, types: string[]): Promise<unknown> {
   return captured;
 }
 
-test('an agy.ask lease follows the payload budget instead of the five-minute default', () => {
-  const job = create('agy.ask', { prompt: 'research', timeoutMs: 1_200_000 }, 300_000);
-  assert.equal(job.timeoutMs, 1_200_000);
-});
-
-test('sweep keeps a running agy job when the stored lease is five minutes and the payload is twenty', () => {
-  const job = create('agy.ask', { prompt: 'research' }, 300_000);
-  job.payload = { prompt: 'research', timeoutMs: 1_200_000 };
-  job.status = 'running';
-  job.startedAt = new Date(Date.now() - 6 * 60_000).toISOString();
-  job.worker = 'pi';
-  job.attempts = 1;
-  const seen = get(job.id);
-  assert.equal(seen?.status, 'running');
-  assert.equal(seen?.timeoutMs, 1_200_000);
-  assert.equal(seen?.attempts, 1);
-});
-
 test('a browser ask keeps its short lease when the payload budget is longer', () => {
   const job = create('chatgpt.ask', { prompt: 'audit', timeoutMs: 300_000 }, 120_000);
   assert.equal(job.timeoutMs, 120_000);
@@ -46,7 +28,7 @@ test('a beat registers a worker the table has never seen, types and all', async 
   // The redeploy case. Railway restarting empties the worker table while the
   // mini is mid-job, so the beat has to be able to introduce the lane from
   // nothing — re-registering the name alone would read as "serving nothing".
-  assert.equal(liveTypes().includes('agy.ask'), false);
+  assert.equal(liveTypes().includes('fb.company'), false);
   await heartbeat('macmini-ask', ASK_TYPES);
   for (const type of ASK_TYPES) assert.equal(liveTypes().includes(type), true);
 });
@@ -55,7 +37,7 @@ test('a beat keeps a busy lane live past the window that dropped it', async () =
   await heartbeat('macmini-busy', ['gmap.scan']);
   await new Promise((r) => setTimeout(r, 25));
   // `withinMs` stands in for elapsed time: 10ms ago is the 90s cliff a lane used
-  // to fall off while it was three minutes into an agy.ask it had claimed.
+  // to fall off while it was three minutes into a research ask it had claimed.
   assert.equal(liveTypes(10).includes('gmap.scan'), false, 'silence must still age a lane out');
   await heartbeat('macmini-busy', ['gmap.scan']);
   assert.equal(liveTypes(10).includes('gmap.scan'), true, 'a beat must refresh it');
@@ -72,7 +54,7 @@ test('a beat without a worker name is refused', async () => {
 });
 
 test('a quota result cools down every lane sharing the account and stops claims', async () => {
-  const type = 'agy.quota-test';
+  const type = 'quota-test.ask';
   const group = 'quota-test:account';
   for (const worker of ['quota-test-1', 'quota-test-2']) {
     const req = { method: 'POST', headers: {}, socket: {} } as unknown as http.IncomingMessage;
@@ -165,7 +147,7 @@ test('a cooling worker heartbeat restores the visible deadline and blocks claims
   const req = { method: 'POST', headers: {}, socket: {} } as unknown as http.IncomingMessage;
   await handle(req, {} as http.ServerResponse, new URL('http://lab/api/jobs/heartbeat'), {
     json: (_res, _status, body) => { response = body as typeof response; },
-    readJson: async () => ({ worker, types: [type], cooldownGroup: 'quota-heartbeat:agy',
+    readJson: async () => ({ worker, types: [type], cooldownGroup: 'quota-heartbeat:account',
       cooldownUntil: until, cooldownReason: 'Individual quota reached' }),
   });
   assert.ok(Math.abs(Date.parse(response.worker?.cooldownUntil ?? '') - Date.parse(until)) < 50);
@@ -175,26 +157,6 @@ test('a cooling worker heartbeat restores the visible deadline and blocks claims
   assert.ok((visible?.cooldownRemainingMs ?? 0) > 5_800_000);
   assert.equal(liveTypes().includes(type), false);
   assert.equal(await take(worker, { types: [type], waitMs: 0 }), null);
-});
-
-test('the broker recognizes the actual older Windows worker quota stack and cools both lanes', async () => {
-  const error = 'Error: error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 4h22m51s.\n    at ask (file:///E:/000/local-worker/agy.mjs:115:25)';
-  assert.equal(quotaRetryAfterMs(error), 15_776_000);
-  const type = 'agy.legacy-quota-test';
-  await heartbeat('legacy-windows-agy1', [type]);
-  await heartbeat('legacy-windows-agy2', [type]);
-  const job = create(type, {});
-  assert.equal((await take('legacy-windows-agy1', { types: [type], waitMs: 0 }))?.id, job.id);
-  const req = { method: 'POST', headers: {}, socket: {} } as unknown as http.IncomingMessage;
-  await handle(req, {} as http.ServerResponse, new URL(`http://lab/api/jobs/${job.id}/result`), {
-    json: () => {},
-    readJson: async () => ({ worker: 'legacy-windows-agy1', ok: false, error }),
-  });
-  const lanes = snapshot().workers.filter((w) => w.name.startsWith('legacy-windows-agy'));
-  assert.equal(lanes.length, 2);
-  assert.ok(lanes.every((w) => w.status === 'cooldown'));
-  assert.ok(lanes.every((w) => (w.cooldownRemainingMs ?? 0) > 15_700_000));
-  assert.equal(liveTypes().includes(type), false);
 });
 
 test('the snapshot joins a running job to the worker that claimed it', async () => {

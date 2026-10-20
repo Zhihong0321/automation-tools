@@ -15,7 +15,7 @@ test('served docs explain the complete search-to-research handoff', () => {
   assert.match(html, /person_research_run/);
   assert.match(html, /fb\.person/);
   assert.match(html, /x\.subject/);
-  assert.match(html, /identical Gemini\/AGY, social-scout, audit, and validation flow/);
+  assert.match(html, /identical Pi, social-scout, audit, and validation flow/);
   assert.match(html, /research_run\.round01/);
   assert.match(html, /GET \/public\/reports\/:reportId/);
   assert.match(html, /Telemarketer API/);
@@ -72,7 +72,8 @@ test('OpenAPI contract exposes each research workflow and resolves local referen
   assert.ok(personRequest.properties.mobileNumber);
   assert.match(document.paths['/api/person-research'].post.description, /identifier-assisted discovery/);
   assert.match(document.components.schemas.CompanyResearchRequest.description, /identical current VIP pipeline/);
-  assert.deepEqual(resolveModel('gemini@container'), { engine: 'agy', model: 'agy', location: 'container' });
+  assert.deepEqual(resolveModel('gemini@container'), { engine: 'pi', model: 'pi', location: 'container' });
+  assert.deepEqual(resolveModel('pi'), { engine: 'pi', model: 'pi', location: 'container' });
 
   const root = document as unknown as Record<string, unknown>;
   const refs: string[] = [];

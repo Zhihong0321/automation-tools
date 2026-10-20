@@ -323,12 +323,13 @@ test('seniority ranks a chief executive above a manager above an engineer', () =
   assert.equal(seniorityScore('CEO & Founder; Director'), seniorityScore('CEO / Founder'));
 });
 
-test('round 01 forbids the shell, which is what denied it permission', () => {
-  // A launchd worker has nobody to approve a shell command, so agy must be told
-  // to use its own URL reader instead of choosing curl and killing the round.
+test('round 01 names the two tools the Pi worker has', () => {
+  // Pi runs with web_search and web_fetch and no shell, so the prompt names them
+  // rather than leaving the model to ask for a tool it does not have.
   const prompt = round01Prompt({ id: '1', name: 'Example Solar', website: 'https://example.com' });
-  assert.match(prompt, /read_url_content/);
-  assert.match(prompt, /Never use the shell, terminal, bash, curl or wget/);
+  assert.match(prompt, /web_search/);
+  assert.match(prompt, /web_fetch/);
+  assert.match(prompt, /no shell, terminal or file tools/);
 });
 
 test('a Markdown-wrapped URL is repaired, not rejected', () => {
@@ -410,8 +411,8 @@ test('the Chinese translation sends its batches at once, not one after another',
   const out = await translateChinese(finalReport, fake.ask);
 
   // 180 strings at the default batch of 60 is three calls, two of them in flight
-  // together at the default width of 2 -- which is the number of agy lanes on the
-  // mini. Wider here would not be faster; it would queue in the broker instead.
+  // together at the default width of 2. Wider here would not be faster; it would
+  // queue in the gateway's Pi lane instead.
   assert.equal(fake.calls(), 3, 'expected three batches of 60, saw ' + fake.calls());
   assert.equal(fake.peak(), 2, 'expected two batches in flight together, saw peak ' + fake.peak());
   assert.equal((out.translated.notes as Record<string, string>).field_0, 'ZH:text 0');
@@ -419,15 +420,14 @@ test('the Chinese translation sends its batches at once, not one after another',
 });
 
 test('a translation batch that comes back malformed is retried, not fatal', async () => {
-  // agy's print mode gives up on its own around five minutes, which loses a call
-  // rather than breaking an engine. One retry is what covers that; the four-try
+  // A run that hits its time limit loses a call rather than breaking an engine. One retry is what covers that; the four-try
   // backoff ladder this replaced existed for e-router's 503s and was spending
   // 232 seconds on the critical path to fail anyway.
   const finalReport = { contacts: [], people: [], signals: [], notes: { a: 'one', b: 'two' } };
   let attempt = 0;
   const ask = async (prompt: string): Promise<string> => {
     attempt++;
-    if (attempt === 1) return 'agy printed prose instead of JSON';
+    if (attempt === 1) return 'the model printed prose instead of JSON';
     const input = JSON.parse(prompt.split('INPUT: ')[1]!) as string[];
     return '```json\n' + JSON.stringify({ translations: input.map((t) => 'ZH:' + t) }) + '\n```';
   };
@@ -615,12 +615,12 @@ test('a run where no round produced output is failed, not partial', () => {
   // The Joe's Kitchen case: the ask lane was busy on another report, aged out of
   // the lab's live-worker table, and every round was refused before it queued.
   const offline = [
-    'No mini worker is claiming agy.ask right now.',
+    'No mini worker is claiming fb.company right now.',
     'No mini worker is claiming chatgpt.ask right now.',
     'No mini worker is claiming chatgpt.ask right now.',
     'No mini worker is claiming chatgpt.ask right now.',
     'No mini worker is claiming meta.ask right now.',
-    'No mini worker is claiming agy.ask right now.',
+    'No mini worker is claiming fb.company right now.',
   ];
   const out = publishOutcome(0, offline);
   assert.equal(out.status, 'failed');

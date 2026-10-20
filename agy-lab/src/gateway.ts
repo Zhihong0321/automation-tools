@@ -2,7 +2,7 @@
 //
 // Everything else in this service is a harness — install a CLI, watch a login,
 // dump a page. This is the part that exists to be CONSUMED: a tool that already
-// speaks to an LLM should be able to change a base URL and get agy or a signed-in
+// speaks to an LLM should be able to change a base URL and get Pi or a signed-in
 // ChatGPT session instead, without learning anything about profiles, pty sessions
 // or Chrome.
 //
@@ -14,14 +14,14 @@
 // form for anything written against this service directly.
 //
 // What the OpenAI shape promises and this cannot deliver:
-//   - sampling parameters. A browser session has no temperature knob, and agy's
-//     -p takes none. They are accepted and ignored, never silently approximated.
+//   - sampling parameters. A browser session has no temperature knob, and the Pi
+//     worker runs its own fixed settings. They are accepted and ignored, never silently approximated.
 //   - token counts. Reported as a character-based estimate and labelled as one.
 //   - many completions per call (n>1). Refused rather than faked.
 // Everything ignored is listed back in the response so a caller can see it was.
 import crypto from 'node:crypto';
 import type http from 'node:http';
-import * as agy from './agy.ts';
+import * as pi from './pi.ts';
 import * as sessions from './sessions.ts';
 import * as meta from './meta.ts';
 import * as queue from './queue.ts';
@@ -34,11 +34,11 @@ export interface Ctx {
 }
 
 /**
- * Timeouts are generous because both engines are slow by construction: agy is a
- * real model call, ChatGPT is a browser watching text appear. A caller that wants
+ * Timeouts are generous because both engines are slow by construction: Pi is a
+ * model that searches and reads pages before it answers, ChatGPT is a browser watching text appear. A caller that wants
  * to give up sooner passes timeoutMs; nothing here is faster for being hurried.
  */
-const AGY_TIMEOUT_MS = Number(process.env.AGY_ASK_TIMEOUT_MS ?? 300_000);
+const PI_TIMEOUT_MS = Number(process.env.PI_ASK_TIMEOUT_MS ?? 300_000);
 const CGPT_TIMEOUT_MS = Number(process.env.CGPT_ASK_TIMEOUT_MS ?? 180_000);
 /** Meta AI is the same shape of slow as ChatGPT - a browser watching text appear. */
 const META_TIMEOUT_MS = Number(process.env.META_ASK_TIMEOUT_MS ?? CGPT_TIMEOUT_MS);
@@ -62,7 +62,7 @@ function fail(status: number, message: string, type = 'invalid_request_error'): 
 type Location = queue.Location;
 
 type Route = { location: Location } & (
-  | { engine: 'agy'; model: string }
+  | { engine: 'pi'; model: string }
   // `pinnedSession` records whether the CALLER named the account, as in
   // `chatgpt:mini-2@mini`, or whether `session` is just the default this resolver
   // filled in. On the mini that difference decides who picks the account: a
@@ -96,7 +96,7 @@ function miniLive(engine: queue.Engine): boolean {
  * sending pooled traffic to the container first would leave the new capacity
  * idle and keep the old bottleneck. Falls back the moment the mini stops polling.
  */
-function defaultLocation(engine: 'agy' | 'chatgpt' | 'meta'): Location {
+function defaultLocation(engine: 'chatgpt' | 'meta'): Location {
   const pref = process.env.ROUTING_PREFER?.trim().toLowerCase();
   if (pref === 'container') return 'container';
   if (pref === 'mini') return miniLive(engine) ? 'mini' : 'container';
@@ -105,7 +105,7 @@ function defaultLocation(engine: 'agy' | 'chatgpt' | 'meta'): Location {
 
 /** The default timeout for a route, since two of the three engines are browsers. */
 const timeoutFor = (route: Route): number =>
-  route.engine === 'agy' ? AGY_TIMEOUT_MS : route.engine === 'meta' ? META_TIMEOUT_MS : CGPT_TIMEOUT_MS;
+  route.engine === 'pi' ? PI_TIMEOUT_MS : route.engine === 'meta' ? META_TIMEOUT_MS : CGPT_TIMEOUT_MS;
 
 /**
  * Which ChatGPT account a bare `chatgpt` means.
@@ -125,7 +125,7 @@ function defaultSession(kind: sessions.Kind): string {
       kind === 'meta'
         // The engine is retired, so pointing a caller at the import flow would be
         // sending them to set up something nothing routes to. Say what happened.
-        ? 'The Meta AI engine is retired: the container address is region-blocked and no mini worker claims meta.ask. Use agy or chatgpt, or fb.* for Facebook research.'
+        ? 'The Meta AI engine is retired: the container address is region-blocked and no mini worker claims meta.ask. Use pi or chatgpt, or fb.* for Facebook research.'
         : 'No ChatGPT session exists yet. Create one with POST /api/cgpt, then /login.',
       'no_session',
     );
@@ -139,14 +139,14 @@ function defaultSession(kind: sessions.Kind): string {
  * `gpt-*` maps to ChatGPT on purpose. Tools hard-code a model id far more often
  * than they expose one, and a request for gpt-4o against this gateway means "the
  * ChatGPT this box is signed in to" — the only honest reading available. What it
- * must never do is quietly answer it with agy, so every response names the model
+ * must never do is quietly answer it with Pi, so every response names the model
  * that actually ran.
  */
 export function resolveModel(raw: string): Route {
   let wanted = str(raw).trim();
   if (!wanted || wanted.toLowerCase() === 'auto') {
     const fallback = process.env.DEFAULT_MODEL?.trim();
-    return resolveModel(!fallback || fallback.toLowerCase() === 'auto' ? 'agy' : fallback);
+    return resolveModel(!fallback || fallback.toLowerCase() === 'auto' ? 'pi' : fallback);
   }
   // `@mini` / `@container` pins the location. Split before the session split so an
   // account id containing an @ is not mistaken for one.
@@ -160,16 +160,12 @@ export function resolveModel(raw: string): Route {
   }
   const [head, ...rest] = wanted.split(/[:/]/);
   const name = (head ?? '').toLowerCase();
-  // Gemini is served here through the AGY runtime.  Keeping `gemini` as a
-  // first-class alias lets feature-specific configuration say what it wants
-  // (for example VIP_GEMINI_MODEL=gemini) without inventing a second engine or
-  // accidentally routing that traffic to another provider.
-  if (name === 'agy' || name === 'antigravity' || name === 'gemini' || name === 'google') {
-    const location = pinned ?? defaultLocation('agy');
-    if (location === 'mini' && !miniLive('agy')) {
-      throw fail(503, 'No mini worker is claiming agy.ask right now.', 'engine_unavailable');
-    }
-    return { engine: 'agy', model: location === 'mini' ? 'agy@mini' : 'agy', location };
+  // Pi (MiniMax) runs in this process only. The agy and gemini names it replaced,
+  // after the Google accounts were banned, still route here so an old caller or
+  // setting lands on the engine that took over their work rather than a 404.
+  if (name === 'pi' || name === 'minimax' || name === 'agy' || name === 'antigravity' || name === 'gemini' || name === 'gamini' || name === 'google') {
+    if (pinned === 'mini') throw fail(404, 'Pi runs in the hub only; there is no pi@mini.', 'model_not_found');
+    return { engine: 'pi', model: 'pi', location: 'container' };
   }
   // Meta before ChatGPT: "meta" is checked by exact name, and llama-* is the
   // model family a caller pointing at Meta AI is most likely to hard-code.
@@ -177,7 +173,7 @@ export function resolveModel(raw: string): Route {
     const location = pinned ?? defaultLocation('meta');
     if (location === 'mini') {
       if (!miniLive('meta')) {
-        throw fail(503, 'The Meta AI engine is retired; no mini worker claims meta.ask. Use agy or chatgpt, or fb.* for Facebook research.', 'engine_unavailable');
+        throw fail(503, 'The Meta AI engine is retired; no mini worker claims meta.ask. Use pi or chatgpt, or fb.* for Facebook research.', 'engine_unavailable');
       }
       const session = rest.join(':').trim() || process.env.MINI_META_DEFAULT_SESSION?.trim() || 'meta-main';
       return { engine: 'meta', model: 'meta:' + session + '@mini', session, location };
@@ -254,7 +250,7 @@ function models(): Record<string, unknown> {
   return {
     object: 'list',
     data: [
-      entry('agy', { engine: 'agy', location: 'container' }),
+      entry('pi', { engine: 'pi', location: 'container', provider: pi.PROVIDER, model: pi.config().model, ready: pi.config().apiKey !== '' }),
       ...named('chatgpt', cgpt, 'chatgpt'),
       ...(cgpt.length ? [entry('chatgpt', { engine: 'chatgpt', alias_for: 'chatgpt:' + defaultSession('chatgpt') })] : []),
       ...named('meta', metaSessions, 'meta'),
@@ -269,7 +265,6 @@ function models(): Record<string, unknown> {
           : []),
       miniEntry('chatgpt'),
       miniEntry('meta'),
-      miniEntry('agy'),
     ],
   };
 }
@@ -292,7 +287,7 @@ async function miniAsk(
   opts: { timeoutMs?: number; onDelta?: (chunk: string) => void } = {},
 ): Promise<AskResult> {
   const timeoutMs = opts.timeoutMs ?? timeoutFor(route);
-  const session = route.engine === 'agy' ? undefined : (route as { session: string }).session;
+  const session = route.engine === 'pi' ? undefined : (route as { session: string }).session;
 
   // Give the worker its full budget, then wait slightly longer than the job's own
   // timeout: expiring here first would report a timeout for work still running.
@@ -301,7 +296,7 @@ async function miniAsk(
   // name `mini-main`: three lanes, three accounts, and every job addressed to the
   // same one. They fought over a single ego lite task space and two of three came
   // back `compose_failed`. Omitted, each lane answers as its own account.
-  const pinned = route.engine !== 'agy' && (route as { pinnedSession?: boolean }).pinnedSession === true;
+  const pinned = route.engine !== 'pi' && (route as { pinnedSession?: boolean }).pinnedSession === true;
   // THE LEASE IS NOT THE CALLER'S PATIENCE, and it used to be the same number.
   //
   // The broker re-hands a job whose lease expires, on the assumption the lane
@@ -320,12 +315,7 @@ async function miniAsk(
   // duration -- every chatgpt.ask measured on this fleet lands in 19-31s, and the
   // lease is 120.
   //
-  // agy keeps lease == timeoutMs, and that budget is the payload's, not the
-  // five-minute default. Contact research runs up to twenty minutes. A shorter
-  // lease reclaims a live run and starts it again.
-  const leaseMs = route.engine === 'agy'
-    ? timeoutMs
-    : Math.min(timeoutMs, Number(process.env.BROWSER_LEASE_MS ?? 120_000));
+  const leaseMs = Math.min(timeoutMs, Number(process.env.BROWSER_LEASE_MS ?? 120_000));
   const job = jobs.create(
     jobTypeFor(route.engine),
     { ...(pinned ? { id: session } : {}), prompt, timeoutMs, tools: true },
@@ -398,7 +388,7 @@ function contentText(content: unknown): string {
 /**
  * Flatten a conversation into one prompt.
  *
- * Neither engine takes a message array: agy's -p is a string, and a ChatGPT ask
+ * Neither engine takes a message array: a Pi run starts from one prompt, and a ChatGPT ask
  * opens a fresh temporary chat and types once. So multi-turn history has to be
  * rendered INTO the prompt, labelled, or the model reads a transcript as one
  * person talking. A single user message is passed through unlabelled, because
@@ -454,7 +444,7 @@ export interface AskResult {
   answer: string;
   ms: number;
   model: string;
-  engine: 'agy' | 'chatgpt' | 'meta';
+  engine: 'pi' | 'chatgpt' | 'meta';
   /** Browser engines only: false means the answer stopped growing because time ran out, not because it finished. */
   settled?: boolean;
   /** How long this call waited for its turn. Absent when it did not wait. */
@@ -505,21 +495,21 @@ async function engineAsk(
 ): Promise<AskResult> {
   if (route.location === 'mini') return miniAsk(route, prompt, opts);
 
-  if (route.engine === 'agy') {
-    // A dead session and a slow one are different problems with different fixes,
+  if (route.engine === 'pi') {
+    // A missing key and a slow run are different problems with different fixes,
     // and the status code is the only part of this most clients will read.
-    const out = await agy
-      .ask(prompt, { timeoutMs: opts.timeoutMs ?? AGY_TIMEOUT_MS, tools: true })
+    const out = await pi
+      .ask(prompt, { timeoutMs: opts.timeoutMs ?? PI_TIMEOUT_MS, tools: true })
       .catch((err: unknown) => {
         const e = err as { code?: string; message?: string };
-        if (e.code === 'logged_out') throw fail(503, 'agy is not signed in: ' + e.message, 'engine_unavailable');
-        if (e.code === 'not_installed') throw fail(503, e.message ?? 'agy is not installed.', 'engine_unavailable');
-        if (e.code === 'timeout') throw fail(504, e.message ?? 'agy timed out.', 'timeout');
-        throw fail(502, e.message ?? 'agy failed.', 'engine_error');
+        if (e.code === 'not_configured') throw fail(503, e.message ?? 'Pi is not configured.', 'engine_unavailable');
+        if (e.code === 'rate_limit') throw fail(503, e.message ?? 'MiniMax is rate limiting.', 'engine_unavailable');
+        if (e.code === 'timeout') throw fail(504, e.message ?? 'Pi timed out.', 'timeout');
+        throw fail(502, e.message ?? 'Pi failed.', 'engine_error');
       });
-    // agy's -p prints when it is done; there is no growing text to stream.
+    // The answer arrives whole when the run ends; there is no growing text to stream.
     opts.onDelta?.(out.answer);
-    return { answer: out.answer, ms: out.ms, model: route.model, engine: 'agy' };
+    return { answer: out.answer, ms: out.ms, model: route.model, engine: 'pi' };
   }
 
   // Two browser engines, one code path: they differ in which site they drive,

@@ -144,7 +144,7 @@ function cooldownFor(group: string | null): { until: number; reason: string } | 
 }
 
 export function isDurableContactJob(type: string): boolean {
-  return type === 'research.contact' || type === 'research.contact.cloud' || type === 'research.contact.gemini';
+  return type === 'research.contact' || type === 'research.contact.cloud' || type === 'research.contact.pi';
 }
 
 export function touch(name: string, ip: string | null, types?: string[] | null, group?: string | null): WorkerInfo {
@@ -158,8 +158,6 @@ export function touch(name: string, ip: string | null, types?: string[] | null, 
   // what the claim recorded — an empty list there would read as "serves nothing".
   if (types && types.length) info.types = types;
   if (group) info.cooldownGroup = group;
-  else if (!info.cooldownGroup && /-agy\d+$/.test(name) && (types ?? info.types ?? []).some((type) => type.startsWith('agy.')))
-    info.cooldownGroup = name.replace(/-agy\d+$/, '') + ':agy';
   const cooldown = cooldownFor(info.cooldownGroup);
   info.cooldownUntil = cooldown ? new Date(cooldown.until).toISOString() : null;
   info.cooldownReason = cooldown?.reason ?? null;
@@ -198,7 +196,7 @@ function sweep(): void {
     // declare their worker dead or invalidate a result that may still arrive.
     if (isDurableContactJob(job.type)) continue;
     // The field is what the hub shows and what this comparison uses. Raise it to
-    // the payload budget before deciding, or a 20-minute agy run stored with the
+    // the payload budget before deciding, or a 20-minute run stored with the
     // 5-minute default is taken back while the worker is still heartbeating.
     const holdMs = leaseMs(job.type, job.payload, job.timeoutMs);
     if (holdMs > job.timeoutMs) job.timeoutMs = holdMs;
@@ -257,23 +255,14 @@ function wake(job: Job): void {
 
 // ------------------------------------------------------------------- the API
 
-/** A caller's budget stuffed in the payload. Zero when it isn't a real duration. */
-function payloadTimeoutMs(payload: unknown): number {
-  if (!payload || typeof payload !== 'object') return 0;
-  const value = (payload as { timeoutMs?: unknown }).timeoutMs;
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
-}
-
 /**
  * How long the broker will let this job stay with one worker before taking it back.
  *
- * Browser asks keep the short lease the caller passed. agy asks use the larger
- * of the caller budget and payload budget. Contact research has no lease.
+ * Asks keep the lease the caller passed. Contact research has no lease.
  */
 function leaseMs(type: string, payload: unknown, timeoutMs: number): number {
   if (isDurableContactJob(type)) return 0;
-  const asked = type === 'agy.ask' ? Math.max(timeoutMs, payloadTimeoutMs(payload)) : timeoutMs;
-  return Math.min(Math.max(1_000, asked), MAX_TIMEOUT_MS);
+  return Math.min(Math.max(1_000, timeoutMs), MAX_TIMEOUT_MS);
 }
 
 export function create(type: string, payload: unknown, timeoutMs = DEFAULT_TIMEOUT_MS, ready = true): Job {
@@ -582,7 +571,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
   // Keep a BUSY worker visible.
   //
   // A lane only touches the registry when it claims or when it reports, and it
-  // does neither while a job is in its hands. An `agy.ask` round of deep research
+  // does neither while a job is in its hands. A round of deep research
   // runs two to four minutes — well past the 90s liveWorkers() waits before it
   // calls a worker gone — so a lane doing exactly what it was told to do ages out
   // of the table, and the gateway then refuses new work for engines this machine
@@ -653,8 +642,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       }
     }
     const job = finish(result[1]!, body.ok !== false, body.result ?? null, str(body.error) || null);
-    const quotaMs = job && (job.type.startsWith('agy.') || isDurableContactJob(job.type))
-      ? num(body.retryAfterMs, 0) || quotaRetryAfterMs(str(body.error)) : null;
+    const quotaMs = job ? num(body.retryAfterMs, 0) || quotaRetryAfterMs(str(body.error)) : null;
     const cooldownUntil = quotaMs && worker
       ? coolDown(worker, quotaMs, str(body.error).split(/\r?\n/)[0] || 'Individual quota reached') : null;
     if (!job) {

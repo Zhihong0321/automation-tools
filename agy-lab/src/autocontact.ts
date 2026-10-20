@@ -5,8 +5,6 @@ import * as db from './reportdb.ts';
 const INTERVAL_MS = 60_000;
 const BATCH = 3;
 
-const GEMINI_CONTACT_MODELS = new Set(['gemini-3.7-flash', 'gemini-3.7', 'gemini37']);
-
 function modelName(): string {
   const model = (process.env.CONTACT_RESEARCH_MODEL?.trim() || 'research.contact').toLowerCase();
   return model.split(/[:@/]/)[0] ?? model;
@@ -16,30 +14,24 @@ function chatgptModel(name: string): boolean {
   return name.startsWith('chatgpt') || name.startsWith('openai') || name.startsWith('gpt') || /^o[134]/.test(name);
 }
 
-/** Gemini model ids, including the gamini typo that the chat gateway used to reject. */
-function geminiContactModel(name: string): boolean {
-  return GEMINI_CONTACT_MODELS.has(name) || name.startsWith('gemini') || name.startsWith('gamini');
-}
-
 /**
  * Job type a live contact worker must claim.
  *
- * Gemini 3.7 is the in-hub worker. It runs two searches itself — find public
- * pages, then read those pages for people and contacts. A configured key owns
- * the contact queue, so a leftover CONTACT_RESEARCH_MODEL=agy-web cannot fall
- * through to the chat gateway.
+ * Pi is the in-hub worker: Tavily finds the pages, Pi (MiniMax) reads them for
+ * people and contacts. A MiniMax or Tavily key owns the contact queue. Gemini and
+ * agy names from before the Google ban route here too, so an old
+ * CONTACT_RESEARCH_MODEL value cannot strand the queue on a worker that is gone.
  */
 export function contactResearchJobType(): string {
   const name = modelName();
   if (chatgptModel(name)) return 'chatgpt.ask';
   if (
+    process.env.MINIMAX_API_KEY?.trim() ||
     process.env.TAVILY_API_KEY?.trim() ||
     process.env.TAVILY_API_KEYS?.trim() ||
-    process.env.GEMINI37_API_KEY?.trim() ||
-    geminiContactModel(name) ||
-    name.includes('tavily')
+    /^(pi|minimax|tavily|gemini|gamini|agy)/.test(name)
   ) {
-    return 'research.contact.gemini';
+    return 'research.contact.pi';
   }
   return 'research.contact';
 }
@@ -71,8 +63,6 @@ function workerLive(): boolean {
 
 /** Queue up to BATCH untouched leads when a matching worker is live. */
 export async function tick(): Promise<number> {
-  if (process.env.CONTACT_RESEARCH_MODEL?.trim().toLowerCase() === 'agy-web'
-    && process.env.AGY_WEB_AUTO_QUEUE?.trim().toLowerCase() !== 'true') return 0;
   if (ticking || !workerLive()) return 0;
   ticking = true;
   try {

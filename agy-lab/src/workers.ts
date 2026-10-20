@@ -13,7 +13,7 @@ export function page(): string {
 <h1>Worker control room</h1><p class="sub">Live lanes, claimed work, and queue pressure from the in-memory job broker.</p>
 <nav class="sitenav" aria-label="Site">${navHtml(OPERATOR_NAV, '/workers')}</nav>
 <div class="card"><div class="row"><input id="token" class="token" type="password" placeholder="LAB_TOKEN" autocomplete="current-password"><button class="primary" id="saveButton">Save and refresh</button><button id="refreshButton">Refresh</button><span id="authState" class="pill unknown">no token</span></div><p class="hint">The token stays in this browser and is sent only to the protected worker snapshot endpoint.</p></div>
-<div class="card"><div class="section-head"><h2>Contact research keys</h2><span id="keyStatus" class="updated">not loaded</span></div><p class="hint">Step 1 searches with Tavily (rotates across keys, up to 1,000 req/key/month). Step 2 extracts contacts with official Gemini keys (gemini-3.8-flash, two calls per key). Saved keys are shown below in full: edit them in place, one key per line, then press Save keys. Use Copy to put a box on your clipboard. An empty box is left unchanged; use Clear to remove its keys.</p><label class="hint" for="tavilyKeys">Tavily Search API keys (tvly-..., rotates across keys, max 1,000 req/key/month)</label><textarea id="tavilyKeys" rows="3" spellcheck="false" autocomplete="off" style="width:100%;margin:6px 0 10px;background:#0f1115;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px ui-monospace,Consolas,monospace"></textarea><label class="hint" for="officialKeys">Official Gemini keys, gemini-3.8-flash</label><textarea id="officialKeys" rows="4" spellcheck="false" autocomplete="off" style="width:100%;margin:6px 0 10px;background:#0f1115;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px ui-monospace,Consolas,monospace"></textarea><div class="row"><button class="primary" id="saveKeys">Save keys</button><button id="copyTavily">Copy Tavily keys</button><button id="copyOfficial">Copy official keys</button><button id="clearTavily">Clear Tavily keys</button><button id="clearOfficial">Clear official keys</button></div></div>
+<div class="card"><div class="section-head"><h2>Contact research keys</h2><span id="keyStatus" class="updated">not loaded</span></div><p class="hint">Step 1 searches with Tavily (rotates across keys, up to 1,000 credits per key per month). Step 2 reads the pages it found and asks the Pi worker (MiniMax) to pull out people, phones and emails. Saved keys are shown below in full: edit them in place, one key per line, then press Save keys. Use Copy to put them on your clipboard. An empty box is left unchanged; use Clear to remove the keys.</p><label class="hint" for="tavilyKeys">Tavily Search API keys (tvly-..., rotates across keys)</label><textarea id="tavilyKeys" rows="3" spellcheck="false" autocomplete="off" style="width:100%;margin:6px 0 10px;background:#0f1115;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px ui-monospace,Consolas,monospace"></textarea><div class="row"><button class="primary" id="saveKeys">Save keys</button><button id="copyTavily">Copy Tavily keys</button><button id="clearTavily">Clear Tavily keys</button></div></div>
 <div id="error" class="error-box" role="alert"></div>
 <div class="summary" aria-live="polite"><div class="metric"><strong id="mWorkers">—</strong><span>Workers</span></div><div class="metric"><strong id="mOnline">—</strong><span>Online</span></div><div class="metric"><strong id="mBusy">—</strong><span>Busy</span></div><div class="metric"><strong id="mIdle">—</strong><span>Idle</span></div><div class="metric"><strong id="mCooldown">—</strong><span>Quota cooldown</span></div><div class="metric"><strong id="mQueue">—</strong><span>Pending jobs</span></div></div>
 <div class="card"><div class="section-head"><h2>Worker lanes</h2><span id="updated" class="updated">not loaded</span></div><div class="table-wrap"><table><thead><tr><th>Worker</th><th>Status</th><th>Current task</th><th>Last seen</th><th>Capabilities</th><th>Totals</th></tr></thead><tbody id="workers"><tr><td colspan="6" class="empty">Enter a LAB_TOKEN to load workers.</td></tr></tbody></table></div></div>
@@ -37,20 +37,18 @@ export function page(): string {
   };
   var loadKeys=function(){
     if(!token())return;
-    fetch('/api/gemini-contact-keys',{headers:{authorization:'Bearer '+token()}})
+    fetch('/api/contact-keys',{headers:{authorization:'Bearer '+token()}})
       .then(function(response){return response.json()})
       .then(function(body){
-        if(!body||!body.official)return;
+        if(!body||!body.tavilyKeys)return;
         var tails=function(rows){
           return (rows||[]).map(function(row){
             var extra = row.usedThisMonth!=null ? ' ('+row.usedThisMonth+'/'+row.monthlyLimit+(row.cooling?' cooling':'')+')' : '';
             return row.tail + extra;
           }).join(', ')||'none';
         };
-        var tavList = (body.tavily && body.tavily.length) ? body.tavily : (body.grounding || []);
-        $('keyStatus').textContent='tavily '+tails(tavList)+' · official '+tails(body.official)+' · step 1 slots '+(body.step1Slots||0)+' · step 2 slots '+(body.step2Slots||0);
+        $('keyStatus').textContent='tavily '+tails(body.tavily)+' · search slots '+(body.step1Slots||0);
         fill('tavilyKeys',body.tavilyKeys);
-        fill('officialKeys',body.officialKeys);
       }).catch(function(){});
   };
   var dirty={};
@@ -67,13 +65,8 @@ export function page(): string {
   var saveKeys=function(kind){
     if(!token())return;
     var body={};
-    if(kind==='tavily')body.tavily=lines('tavilyKeys');
-    if(kind==='official')body.official=lines('officialKeys');
-    if(kind==='both'){
-      if($('tavilyKeys').value.trim())body.tavily=lines('tavilyKeys');
-      if($('officialKeys').value.trim())body.official=lines('officialKeys');
-    }
-    fetch('/api/gemini-contact-keys',{method:'POST',headers:{authorization:'Bearer '+token(),'content-type':'application/json'},body:JSON.stringify(body)})
+    if(kind==='clear'||$('tavilyKeys').value.trim())body.tavily=lines('tavilyKeys');
+    fetch('/api/contact-keys',{method:'POST',headers:{authorization:'Bearer '+token(),'content-type':'application/json'},body:JSON.stringify(body)})
       .then(function(response){return response.json().then(function(payload){return {response:response,payload:payload}})})
       .then(function(result){
         if(!result.response.ok)throw new Error(result.payload.error||'save failed');
@@ -82,7 +75,7 @@ export function page(): string {
       }).catch(function(error){$('error').textContent=error.message;$('error').className='error-box show'});
   };
   var refresh=function(){if(refresh.running)return;refresh.running=true;$('refreshButton').disabled=true;$('saveButton').disabled=true;$('error').className='error-box';fetch('/api/jobs',{headers:{authorization:'Bearer '+token()}}).then(function(response){return response.json().catch(function(){return {error:'invalid response'}}).then(function(body){return {response:response,body:body}})}).then(function(result){if(!result.response.ok){$('authState').className='pill '+(result.response.status===401?'error':'unknown');$('authState').textContent=result.response.status===401?'token rejected':'error';throw new Error(result.body.error||('request failed ('+result.response.status+')'))}$('authState').className='pill online';$('authState').textContent='token ok';render(result.body);loadKeys()}).catch(function(error){$('error').textContent=error.message;$('error').className='error-box show'}).finally(function(){refresh.running=false;$('refreshButton').disabled=false;$('saveButton').disabled=false})};
-  $('token').value=token();$('refreshButton').onclick=refresh;$('saveButton').onclick=function(){localStorage.setItem('labToken',$('token').value.trim());refresh()};$('saveKeys').onclick=function(){saveKeys('both')};$('tavilyKeys').oninput=function(){dirty.tavilyKeys=true};$('officialKeys').oninput=function(){dirty.officialKeys=true};$('copyTavily').onclick=function(){copyKeys('tavilyKeys',this)};$('copyOfficial').onclick=function(){copyKeys('officialKeys',this)};$('clearTavily').onclick=function(){$('tavilyKeys').value='';saveKeys('tavily')};$('clearOfficial').onclick=function(){$('officialKeys').value='';saveKeys('official')};setInterval(refresh,5000);setInterval(tick,1000);if(token())refresh();
+  $('token').value=token();$('refreshButton').onclick=refresh;$('saveButton').onclick=function(){localStorage.setItem('labToken',$('token').value.trim());refresh()};$('saveKeys').onclick=function(){saveKeys('save')};$('tavilyKeys').oninput=function(){dirty.tavilyKeys=true};$('copyTavily').onclick=function(){copyKeys('tavilyKeys',this)};$('clearTavily').onclick=function(){$('tavilyKeys').value='';saveKeys('clear')};setInterval(refresh,5000);setInterval(tick,1000);if(token())refresh();
 })();
 </script></body></html>`;
 }

@@ -1,5 +1,5 @@
-# agy-lab: install, authenticate and drive the Antigravity CLI and signed-in
-# ChatGPT browser sessions inside a container.
+# agy-lab: the research hub. Runs the Pi worker (MiniMax, through the Pi SDK in
+# package.json), contact research, and signed-in ChatGPT browser sessions.
 #
 # Lives at the repo root, not next to the app it builds. Railway's builder looks
 # for a Dockerfile at the root of the build context and falls back to language
@@ -7,22 +7,13 @@
 # gets silently ignored and the deploy fails claiming it cannot tell what the app
 # is. Keeping it here means the service needs no Root Directory setting to work.
 #
-# agy is NOT installed at build time. It installs at runtime into $HOME/.local/bin,
-# which is the Railway volume, for three reasons:
-#   1. the credential the login produces lands under the same $HOME, so binary and
-#      token share one persistence story instead of two;
-#   2. `agy update` self-modifies the binary — on an image layer that either fails
-#      or silently drifts from what the Dockerfile claims is installed;
-#   3. this is a research harness. Re-running the installer must not cost a rebuild.
-#
-# Chrome IS installed at build time, because the opposite reasoning applies: it is
-# 400MB nobody wants re-downloaded on every cold start, nothing here self-updates
-# it, and the browser profiles that matter live on the volume separately from it.
+# Chrome is installed at build time: it is 400MB nobody wants re-downloaded on
+# every cold start, nothing here self-updates it, and the browser profiles that
+# matter live on the volume separately from it.
 FROM node:24-slim
 
-# curl        - fetches the agy installer
-# util-linux  - provides `script`, which is how we give agy a real TTY (see src/pty.ts)
-# procps      - ps/kill, for looking at what agy actually spawns
+# curl        - fetches Chrome's signing key
+# procps      - ps/kill, for looking at what the browsers spawn
 # xvfb        - a display for headed Chrome. Headless is a different fingerprint and
 #               a worse one; ChatGPT sits behind bot detection that reads it.
 # fonts-*     - without CJK and emoji fonts a page renders as boxes, which makes
@@ -47,11 +38,9 @@ RUN curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor
     && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
-# HOME is the volume mount point. agy derives everything from it: the install path
-# (~/.local/bin/agy), the app data dir (~/.gemini/antigravity-cli) holding settings,
-# conversations and — with no D-Bus in a container — the credential store itself.
-# Browser profiles go under $HOME/profiles for the same reason: one volume, one
-# persistence story, and a redeploy that keeps every login it already had.
+# HOME is the volume mount point. Browser profiles go under $HOME/profiles and
+# Pi's working folder under $HOME/.pi-lab: one volume, one persistence story, and
+# a redeploy that keeps every login it already had.
 ENV HOME=/data \
     PATH=/data/.local/bin:/usr/local/bin:/usr/bin:/bin \
     NODE_ENV=production \

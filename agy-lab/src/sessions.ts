@@ -1,8 +1,7 @@
 // The ChatGPT session manager: many accounts, each a profile, each with a health
 // state and a way to get a login into it.
 //
-// The four health states are the same vocabulary agy's probe uses, for the same
-// reason: `ok | broken` collapses "could not tell" into "logged out", and with a
+// Four health states rather than two, because `ok | broken` collapses "could not tell" into "logged out", and with a
 // browser there are far more ways to not be able to tell. A Cloudflare challenge,
 // a profile another request is holding, and a genuinely signed-out account are
 // three different problems with three different fixes, and only one of them is

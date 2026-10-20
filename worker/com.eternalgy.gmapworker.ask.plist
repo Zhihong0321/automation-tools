@@ -6,10 +6,8 @@
   LaunchDaemon on purpose: it starts at boot with nobody logged in, which is the
   only way "always on" is true (see com.eternalgy.gmapworker.daemon.plist). The
   ask lane cannot follow it. ego lite will not start without a GUI session, and
-  the agy on this machine was signed in interactively and keeps its Google
-  session in the login keychain — a process in the system domain has neither, so
-  both engines would find themselves signed out in the one context where nobody
-  is watching the log.
+  a process in the system domain has none, so the ChatGPT lanes would find
+  themselves unable to start in the one context where nobody is watching the log.
 
   THE PRICE, AND THE SETTING THAT PAYS IT. An agent starts at login, not at boot.
   A mini that reboots at 3am and stops at the login window runs no agent, and the
@@ -29,7 +27,7 @@
   the two lanes from collapsing onto each other.
 
   PATH carries the nvm bin directory because this lane's wrappers are installed
-  beside node there, and ~/.local/bin because ego-browser and agy are installed
+  beside node there, and ~/.local/bin because ego-browser is installed
   there. A launchd job inherits neither.
 -->
 <plist version="1.0">
@@ -72,7 +70,7 @@
     <key>WORKER_NAME</key>
     <string>macmini-ask</string>
     <key>WORKER_TYPES</key>
-    <string>chatgpt.ask,chatgpt.probe,agy.ask,agy.probe</string>
+    <string>chatgpt.ask,chatgpt.probe</string>
 
     <!--
       meta.* and muse.* are gone from this list because macmini.mjs has no
@@ -88,16 +86,11 @@
         mini-main -> chatgpt-pro   / Profile 3 / Zhihong PRO
         mini-2    -> chatgpt-ask-2 / Profile 2 / ZhiHong 三专
         mini-3    -> chatgpt-ask-3 / Profile 5 / gan gemini
-      agy is NOT one of these. It used to ride the first lane, which meant a
-      three-to-five-minute agy round held a signed-in ChatGPT account idle for
-      its whole duration, and meant only one agy call could run at a time --
-      costing report 2rO7nzyANyjYDpfOf0mQ 306 seconds while Round 04 waited
-      behind the VIP brief the same report had just started. macmini.mjs now
-      gives agy AGY_LANES (default 2) lanes of its own, named `-agy1`/`-agy2`.
-      It needs no session: it is a CLI, not a browser profile.
+      agy.* is gone too: the Google accounts were banned and the Pi worker that
+      replaced agy runs in the hub.
 
       Keep the total in step with MINI_MAX_CONCURRENT in agy-lab's queue.ts --
-      that is sessions + AGY_LANES, so 3 + 2 = 5. A width wider than the lanes
+      that is the session count, so 3. A width wider than the lanes
       here just moves the queue one hop later, into the job broker, where the
       wait is invisible; narrower, and a lane sits idle.
     -->

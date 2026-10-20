@@ -34,7 +34,6 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { scan as gmapScan } from './gmap.mjs';
 import * as chatgpt from './chatgpt-ego.mjs';
-import * as agy from './agy.mjs';
 import * as fb from './fb.mjs';
 import * as x from './x.mjs';
 import * as ads from './ads.mjs';
@@ -81,7 +80,10 @@ const LANES = (() => {
   // those types. It predates lanes and is kept because it is the switch that
   // pins a machine to one kind of work — the reason to reach for it now is to
   // run the wrappers on one box and the scan on another.
-  const pinned = (process.env.WORKER_TYPES ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+  // agy.* is dropped even when an installed plist still names it: there is no
+  // handler for it any more, and a lane that claims a type it cannot run makes
+  // the gateway think the engine is here.
+  const pinned = (process.env.WORKER_TYPES ?? '').split(',').map((t) => t.trim()).filter((t) => t && !t.startsWith('agy.'));
   // WORKER_SESSIONS widens a pinned worker without unpinning it. A pin is one
   // lane by definition, and that is still right for `gmap.scan`; it stopped being
   // right for `chatgpt.ask` the moment the machine had three signed-in accounts.
@@ -89,56 +91,25 @@ const LANES = (() => {
   // daemon's WORKER_TYPES from ~/.gmap-worker.env, so unpinning it is not an
   // option -- it has to widen in place.
   //
-  // One lane per signed-in ChatGPT account, and AGY_LANES of agy's OWN beside
-  // them. agy does not ride an account's lane: a lane is serial, so an agy call
-  // sitting on one is an idle ChatGPT account for as long as it runs -- and an
-  // agy deep-research round runs for three to five minutes while a ChatGPT audit
-  // runs for twenty seconds. agy needs no session; it is a CLI, not a browser
-  // profile, which is exactly why it can have lanes of its own for free.
-  //
-  // agy used to be pinned to the first lane alone, on the reasoning that it is
-  // one CLI against one credential and three claim loops would just race the
-  // same binary. That was never measured, and the single lane is what made it
-  // unmeasurable: 96 agy runs in ~/.gemini/antigravity-cli/log, not one
-  // concurrent pair among them. Measured on 24 Aug: three `agy -p` at once
-  // answered in 7s/9s/12s against a 9s solo baseline, three correct distinct
-  // answers, ~170MB RSS each on a 16GB box. There is no race. agy is a Go
-  // binary spawned fresh per call, with a presence lock, a conversation
-  // directory and a log file PER INSTANCE and no global lock anywhere.
-  //
-  // What the one lane cost: Round 04 of a company report is an agy call, and so
-  // is the first act of the auto-VIP brief the same report kicks off ~30ms
-  // earlier. On one lane the parent's own synthesis queues behind its child,
-  // every time. Measured on report 2rO7nzyANyjYDpfOf0mQ: 306 seconds of a
-  // 13m38s run spent with nothing running at all.
-  //
-  // Two, not three. The ceiling here is not the binary, it is that all of them
-  // are one Google account -- three lanes is 3x the request rate against one
-  // personal Antigravity credential, and a rate-limit refusal is a FAILED round
-  // rather than a slow one. Two clears the parent/child collision, which is the
-  // one that was actually costing time. Raise it with AGY_LANES if the account
-  // proves it can take it.
+  // One lane per signed-in ChatGPT account. The agy lanes that ran beside them
+  // are gone: the Google accounts were banned, and the Pi worker that replaced
+  // agy runs in the hub, not here.
   const sessions = (process.env.WORKER_SESSIONS ?? '').split(',').map((t) => t.trim()).filter(Boolean);
-  const AGY_LANES = Math.max(1, Number(process.env.AGY_LANES ?? 2));
   if (pinned.length) {
     const chatgptOnly = pinned.filter((t) => t.startsWith('chatgpt.'));
-    const agyOnly = pinned.filter((t) => t.startsWith('agy.'));
     // A single-purpose pin stays one lane. This is the scan daemon
     // (WORKER_TYPES=ping,gmap.scan): nothing to split, and one scan at a time is
     // the point of it.
-    if (sessions.length < 2 && !agyOnly.length) return [{ suffix: '', types: pinned, session: sessions[0] }];
-    // Whatever the pin asked for that is neither chatgpt nor agy still has to be
+    if (sessions.length < 2) return [{ suffix: '', types: pinned, session: sessions[0] }];
+    // Whatever the pin asked for that is not chatgpt still has to be
     // claimed by somebody, or the pin silently stops serving it.
-    const rest = pinned.filter((t) => !chatgptOnly.includes(t) && !agyOnly.includes(t));
+    const rest = pinned.filter((t) => !chatgptOnly.includes(t));
     const accounts = sessions.length ? sessions : [undefined];
     const lanes = accounts.map((session, i) => ({
       suffix: i === 0 ? '' : '-' + (i + 1),
       types: i === 0 ? [...chatgptOnly, ...rest] : chatgptOnly,
       session,
     }));
-    for (let i = 0; agyOnly.length && i < AGY_LANES; i++) {
-      lanes.push({ suffix: '-agy' + (i + 1), types: agyOnly, session: undefined });
-    }
     return lanes.filter((l) => l.types.length);
   }
   return [
@@ -157,14 +128,6 @@ const LANES = (() => {
     { suffix: '-ask', types: ['chatgpt.ask', 'chatgpt.probe'], session: 'mini-main' },
     { suffix: '-ask2', types: ['chatgpt.ask', 'chatgpt.probe'], session: 'mini-2' },
     { suffix: '-ask3', types: ['chatgpt.ask', 'chatgpt.probe'], session: 'mini-3' },
-    // agy's own, AGY_LANES of them, for the reasons written out at the top of
-    // this block. Two by default: enough that a report's own Round 04 never
-    // queues behind the VIP brief it just started, not so many that one Google
-    // account is answering three deep-research calls at once. Separate from the
-    // ChatGPT lanes so a five-minute agy round never idles a ChatGPT account.
-    ...Array.from({ length: AGY_LANES }, (_, i) => ({
-      suffix: '-agy' + (i + 1), types: ['agy.ask', 'agy.probe'],
-    })),
     // Its own lane for the same reason `-ask` is not the scan lane, one step
     // further out: a lead takes 1-2 minutes of paced page loads, so it would sit
     // in front of every wrapper call if it shared theirs -- and it holds ego
@@ -237,9 +200,8 @@ async function ping(payload) {
 const handlers = {
   ping,
   'gmap.scan': gmapScan,
-  // The wrappers this machine now runs alongside the cloud's. Different account
-  // for ChatGPT, and the agy that is already signed in here — so these are a
-  // second lane rather than a copy of the container's one.
+  // The wrappers this machine runs alongside the cloud's. A different ChatGPT
+  // account, so these are a second lane rather than a copy of the container's.
   'chatgpt.ask': chatgpt.ask,
   'chatgpt.probe': chatgpt.probe,
   // No `meta.*` / `muse.*` here any more. Meta AI was never activated on this
@@ -248,8 +210,6 @@ const handlers = {
   // claims a type is how the gateway learns it is gone: `meta@mini` stops being
   // listed `ready` in GET /v1/models and a pinned call 503s up front instead of
   // queueing a job nothing will ever take.
-  'agy.ask': agy.ask,
-  'agy.probe': agy.probe,
   // Facebook lead enrichment through fb-recon: the Claude CLI picks which rung
   // of the search ladder to try, a read-only crawler drives ego lite. Same
   // reason as gmap.scan for living here -- the Facebook session is a login a
@@ -324,7 +284,7 @@ async function report(name, id, ok, result, error, quota = null) {
  * The claim loop is the check-in, and the claim loop does not come back around
  * until the job in hand is finished. That is fine for a job measured in seconds
  * and wrong for one measured in minutes: the lab drops a worker from its live
- * table after 90s of silence, so a lane grinding through a 149s `agy.ask` goes
+ * table after 90s of silence, so a lane grinding through a 149s ask goes
  * missing halfway through, and the gateway starts refusing every engine this
  * machine serves — instantly failing a second research run that was never given
  * a chance to queue. The beat only runs while a job does; an idle lane is
@@ -426,8 +386,6 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 
 const DEFAULT_CGPT_COOLDOWN_MIN = 2500;
 const DEFAULT_CGPT_COOLDOWN_MAX = 4500;
-const DEFAULT_AGY_COOLDOWN_MIN = 1500;
-const DEFAULT_AGY_COOLDOWN_MAX = 2500;
 
 function calculateCooldown(type) {
   if (process.env.WORKER_COOLDOWN_MS !== undefined) {
@@ -437,9 +395,6 @@ function calculateCooldown(type) {
   if (typeof type === 'string') {
     if (type.startsWith('chatgpt.')) {
       return DEFAULT_CGPT_COOLDOWN_MIN + Math.floor(Math.random() * (DEFAULT_CGPT_COOLDOWN_MAX - DEFAULT_CGPT_COOLDOWN_MIN));
-    }
-    if (type.startsWith('agy.')) {
-      return DEFAULT_AGY_COOLDOWN_MIN + Math.floor(Math.random() * (DEFAULT_AGY_COOLDOWN_MAX - DEFAULT_AGY_COOLDOWN_MIN));
     }
   }
   return 0;
@@ -498,7 +453,4 @@ async function lane(name, types, session, cooldownGroup) {
 say('worker "' + NAME + '" -> ' + LAB);
 // Promise.all rather than await in sequence: the lanes are the concurrency. If
 // one ever settles the process should end, which is what a rejection here does.
-await Promise.all(LANES.map((l) => lane(
-  NAME + l.suffix, l.types, l.session,
-  l.types.some((t) => t.startsWith('agy.')) ? NAME + ':agy' : NAME + l.suffix,
-)));
+await Promise.all(LANES.map((l) => lane(NAME + l.suffix, l.types, l.session, NAME + l.suffix)));

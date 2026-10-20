@@ -23,10 +23,10 @@
 // they share one lane. Gaps, caps and statistics are per ENGINE, because the
 // account that gets rate-limited is per engine.
 
-export type Engine = 'agy' | 'chatgpt' | 'meta';
+export type Engine = 'pi' | 'chatgpt' | 'meta';
 /** Where the work runs. The container is this process; the mini is a worker on the job queue. */
 export type Location = 'container' | 'mini';
-type Lane = 'agy' | 'browser' | 'mini';
+type Lane = 'pi' | 'browser' | 'mini';
 
 /**
  * The mini is its own lane, not extra width on `browser`.
@@ -38,7 +38,7 @@ type Lane = 'agy' | 'browser' | 'mini';
  * for. Separate lane, separate width, separate gap.
  */
 const laneOf = (engine: Engine, location: Location = 'container'): Lane =>
-  location === 'mini' ? 'mini' : engine === 'agy' ? 'agy' : 'browser';
+  location === 'mini' ? 'mini' : engine === 'pi' ? 'pi' : 'browser';
 
 const int = (name: string, fallback: number): number => {
   const raw = Number(process.env[name]);
@@ -51,7 +51,7 @@ const int = (name: string, fallback: number): number => {
  * The gap is the important one and the least obvious: it is not about capacity,
  * it is about not looking like a script. Two seconds between browser calls costs
  * nothing against a 12-second answer and keeps a burst from arriving as a burst.
- * Zero for agy, which is a CLI talking to an API that expects programs.
+ * Zero for Pi, which is an API client talking to an API that expects programs.
  *
  * Hourly caps default to off. A cap that nobody chose is a pipeline that stops
  * at 3am for a reason nobody remembers - but the account limits here are real, so
@@ -69,7 +69,7 @@ function policy(engine: Engine): {
   // Set QUEUE_REJECT=true to opt into legacy 429 load shedding.
   const neverReject = process.env.QUEUE_REJECT !== 'true';
   return {
-    minGapMs: int(prefix + '_MIN_GAP_MS', 2000),
+    minGapMs: int(prefix + '_MIN_GAP_MS', engine === 'pi' ? 0 : 2000),
     maxDepth: int(prefix + '_MAX_QUEUE', int('QUEUE_MAX_DEPTH', 10)),
     maxWaitMs: int(prefix + '_MAX_WAIT_MS', int('QUEUE_MAX_WAIT_MS', 300_000)),
     hourlyLimit: int(prefix + '_HOURLY_LIMIT', 0),
@@ -79,22 +79,20 @@ function policy(engine: Engine): {
 
 /** How many run at once in a lane. One browser is a hard limit of the container, not a policy. */
 const laneConcurrency = (lane: Lane): number =>
-  lane === 'agy'
-    ? Math.max(1, int('AGY_MAX_CONCURRENT', 2))
+  lane === 'pi'
+    ? Math.max(1, int('PI_MAX_CONCURRENT', 4))
     : lane === 'mini'
       // ego lite runs each account in its own task space, so the mini's ceiling is
       // accounts, not browsers — unlike the container, where it is literally one
-      // Chrome. Five is what the worker's LANES actually run: three ChatGPT lanes,
-      // one per signed-in account (Zhihong PRO, 三专, gan gemini), plus AGY_LANES=2
-      // of agy's own.
+      // Chrome. Three is what the worker's LANES actually run: one ChatGPT lane
+      // per signed-in account (Zhihong PRO, 三专, gan gemini).
       //
       // This number must equal the lane count and never exceed it, because a width
       // wider than the lanes behind it does not admit more work — it just moves the
       // queue one hop later, into the job broker, where the extra calls sit
-      // `pending` and nothing measures them. That is exactly what it was doing to
-      // agy at 3: two agy calls were admitted here in the same millisecond and the
-      // second then waited 306 seconds for the single lane that served agy.ask.
-      ? Math.max(1, int('MINI_MAX_CONCURRENT', 5))
+      // `pending` and nothing measures them: two calls admitted here in the same
+      // millisecond once waited 306 seconds for the single lane that served them.
+      ? Math.max(1, int('MINI_MAX_CONCURRENT', 3))
       : Math.max(1, int('MAX_OPEN_BROWSERS', 1));
 
 interface LaneState {
@@ -116,14 +114,14 @@ interface EngineState {
 }
 
 const lanes: Record<Lane, LaneState> = {
-  agy: { inflight: 0, waiting: [], emaMs: 20_000, samples: 0 },
+  pi: { inflight: 0, waiting: [], emaMs: 20_000, samples: 0 },
   browser: { inflight: 0, waiting: [], emaMs: 13_000, samples: 0 },
   // Seeded from measured mini round trips (~7.5s end to end including the job hop).
   mini: { inflight: 0, waiting: [], emaMs: 8_000, samples: 0 },
 };
 
 const engines: Record<Engine, EngineState> = {
-  agy: fresh(),
+  pi: fresh(),
   chatgpt: fresh(),
   meta: fresh(),
 };
@@ -220,7 +218,7 @@ export async function run<T>(
       const wait = estimateWaitMs(lane, engine);
       throw busy(
         'queue_full',
-        `System busy: ${l.waiting.length} calls are already waiting for ${lane === 'agy' ? 'agy' : lane === 'mini' ? 'the mini' : 'the browser'} and the queue is capped at ${p.maxDepth}. Retry in about ${Math.ceil(wait / 1000)}s.`,
+        `System busy: ${l.waiting.length} calls are already waiting for ${lane === 'pi' ? 'Pi' : lane === 'mini' ? 'the mini' : 'the browser'} and the queue is capped at ${p.maxDepth}. Retry in about ${Math.ceil(wait / 1000)}s.`,
         wait / 1000,
         engine,
       );
@@ -326,20 +324,20 @@ export function snapshot(engine?: Engine): Record<string, unknown> {
   };
   if (engine) return { engine, ...engineView(engine), lanes: { [laneOf(engine)]: laneView(laneOf(engine)) } };
   return {
-    lanes: { agy: laneView('agy'), browser: laneView('browser'), mini: laneView('mini') },
-    engines: { agy: engineView('agy'), chatgpt: engineView('chatgpt'), meta: engineView('meta') },
+    lanes: { pi: laneView('pi'), browser: laneView('browser'), mini: laneView('mini') },
+    engines: { pi: engineView('pi'), chatgpt: engineView('chatgpt'), meta: engineView('meta') },
   };
 }
 
 /** Reset in-memory queue and engine state for deterministic test suites. */
 export function resetForTests(): void {
-  for (const lane of ['agy', 'browser', 'mini'] as Lane[]) {
+  for (const lane of ['pi', 'browser', 'mini'] as Lane[]) {
     lanes[lane].inflight = 0;
     lanes[lane].waiting = [];
     lanes[lane].samples = 0;
     lanes[lane].emaMs = lane === 'mini' ? 8000 : lane === 'browser' ? 13000 : 20000;
   }
-  for (const eng of ['agy', 'chatgpt', 'meta'] as Engine[]) {
+  for (const eng of ['pi', 'chatgpt', 'meta'] as Engine[]) {
     engines[eng] = fresh();
   }
 }

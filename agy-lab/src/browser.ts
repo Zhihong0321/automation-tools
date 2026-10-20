@@ -9,8 +9,8 @@
 // gmap-recon's session-monitor learned: a probe that leaks a browser locks the
 // pipeline out of its own profile.
 //
-// Profiles live on the volume at $HOME/profiles/<id>, beside agy's credential, so
-// one volume carries every login this container has.
+// Profiles live on the volume at $HOME/profiles/<id>, so one volume carries every
+// login this container has.
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium, type BrowserContext, type Page } from 'patchright';
@@ -50,7 +50,7 @@ const ARGS = [
   '--no-default-browser-check',
   '--disable-blink-features=AutomationControlled',
   // Memory. A headed Chrome on a 4GB container is fine; two of them plus Xvfb
-  // plus agy's language server is not, and the way that failure presents is the
+  // plus Node and the Pi worker is not, and the way that failure presents is the
   // whole container restarting — which looks like every endpoint breaking at
   // once rather than like a browser using too much.
   '--disable-gpu',
@@ -65,7 +65,7 @@ const ARGS = [
  * How many profiles may be open at once.
  *
  * One by default. Chrome is ~400-700MB resident per profile and the container is
- * capped at 4GB shared with Xvfb, Node and agy — and there is no reason to hold
+ * capped at 4GB shared with Xvfb and Node — and there is no reason to hold
  * two, because a human drives one browser at a time and every automated operation
  * already serialises through the per-profile mutex. Opening a second evicts the
  * least recently used rather than refusing: refusing would strand someone whose

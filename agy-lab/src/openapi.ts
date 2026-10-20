@@ -223,7 +223,7 @@ export const document = {
         operationId: 'createPersonResearch',
         tags: ['Person research'],
         summary: 'Start a public-professional VIP brief',
-        description: 'Starts from a validated person in a completed company-research report. Optional email and mobile resolvers are used only during the live identifier-assisted discovery pass via Gemini/AGY, then discarded. They are not persisted in the report request, audit record, or published output. One brief per person per source report: if a brief already exists — including the automatic P01 one — the existing report is returned with 200 instead of a second run being started.',
+        description: 'Starts from a validated person in a completed company-research report. Optional email and mobile resolvers are used only during the live identifier-assisted discovery pass via Pi, then discarded. They are not persisted in the report request, audit record, or published output. One brief per person per source report: if a brief already exists — including the automatic P01 one — the existing report is returned with 200 instead of a second run being started.',
         requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PersonResearchRequest' } } } },
         responses: {
           '200': { description: 'A brief for this person already exists; the existing report is returned', content: { 'application/json': { schema: { $ref: '#/components/schemas/AcceptedReport' } } } },
@@ -483,7 +483,7 @@ export const document = {
       },
       CompanyResearchRequest: {
         type: 'object', required: ['companyId'], additionalProperties: false,
-        description: 'Researching a company that already has a dossier is allowed and produces the next version (V2, V3, ...) rather than returning the old one. A run still in flight is joined, not duplicated. Once the people audit identifies P01, a separate person_research report starts automatically in parallel with the remaining company rounds and translation. It uses the identical current VIP pipeline as POST /api/person-research: Gemini/AGY primary discovery, capability-gated Facebook/Instagram/Threads and xAI/X scouts, independent audit, and validated synthesis.',
+        description: 'Researching a company that already has a dossier is allowed and produces the next version (V2, V3, ...) rather than returning the old one. A run still in flight is joined, not duplicated. Once the people audit identifies P01, a separate person_research report starts automatically in parallel with the remaining company rounds and translation. It uses the identical current VIP pipeline as POST /api/person-research: Pi primary discovery, capability-gated Facebook/Instagram/Threads and xAI/X scouts, independent audit, and validated synthesis.',
         properties: {
           companyId: { type: 'string', pattern: '^\\d+$', description: 'Persisted company id from data.companies[].id. company_id is accepted as an alias.' },
           requesterId: { type: 'string', description: 'Optional caller-owned correlation id. userId is accepted as an alias.' },
@@ -566,7 +566,7 @@ export const document = {
           signals: { type: 'array', items: { type: 'object', additionalProperties: true } },
           outreach_angles: { type: 'array', items: { type: 'string' } }, conflicts_and_unknowns: { type: 'array', items: { type: 'object', additionalProperties: true } },
           auto_person_research: { type: ['object', 'null'], additionalProperties: true, description: 'Separate automatically triggered P01 VIP report reference. The child uses the same current VIP pipeline as POST /api/person-research.' },
-          synthesis_mode: { type: 'string', enum: ['gemini_validated', 'validated_ledger_fallback'] },
+          synthesis_mode: { type: 'string', enum: ['pi_validated', 'gemini_validated', 'validated_ledger_fallback'] },
         }, additionalProperties: true,
       },
       FinalPersonReport: {
@@ -582,10 +582,10 @@ export const document = {
         type: ['object', 'null'], description: 'Authenticated benchmark record. Round artifacts may be null until that round is saved.',
         properties: {
           report_id: { type: 'string' },
-          round01: { type: ['object', 'null'], additionalProperties: true, description: 'Gemini discovery.' },
+          round01: { type: ['object', 'null'], additionalProperties: true, description: 'Pi discovery.' },
           round02: { type: ['object', 'null'], additionalProperties: true, description: 'Three split ChatGPT audits: contacts, people, signals.' },
           round03: { type: ['object', 'null'], additionalProperties: true, description: 'Facebook evidence from the read-only fb-recon crawler on the home worker. access_mode is live_facebook_pages or no_live_access; rows carry the facebook.com URL each field was read from. Status is skipped when no worker is claiming fb.company.' },
-          round04: { type: ['object', 'null'], additionalProperties: true, description: 'Gemini synthesis, rejected and replaced by the ledger if it invents a row or a URL.' },
+          round04: { type: ['object', 'null'], additionalProperties: true, description: 'Pi synthesis, rejected and replaced by the ledger if it invents a row or a URL.' },
           validated_ledger: { type: ['object', 'null'], additionalProperties: true }, final_report: { oneOf: [{ $ref: '#/components/schemas/FinalCompanyReport' }, { type: 'null' }] },
           round_status: { type: 'object', additionalProperties: { type: 'string' } }, engine_metadata: { type: 'object', additionalProperties: true },
           started_at: { type: ['string', 'null'], format: 'date-time' }, completed_at: { type: ['string', 'null'], format: 'date-time' }, updated_at: { type: 'string', format: 'date-time' },

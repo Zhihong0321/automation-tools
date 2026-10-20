@@ -5,15 +5,30 @@ import * as autoContact from './autocontact.ts';
 const company = (id: string) => ({ id, name: 'Co ' + id });
 const live = () => ['research.contact', 'chatgpt.ask'];
 
-test('default contact reports require a dedicated research worker', () => {
-  const previous = process.env.GEMINI37_API_KEY;
-  delete process.env.GEMINI37_API_KEY;
-  try {
-    assert.equal(autoContact.contactResearchJobType(), 'research.contact');
-  } finally {
-    if (previous === undefined) delete process.env.GEMINI37_API_KEY; else process.env.GEMINI37_API_KEY = previous;
+const ROUTING_ENV = ['CONTACT_RESEARCH_MODEL', 'MINIMAX_API_KEY', 'TAVILY_API_KEY', 'TAVILY_API_KEYS'] as const;
+
+function withEnv(values: Partial<Record<typeof ROUTING_ENV[number], string>>, fn: () => Promise<void> | void) {
+  const saved = Object.fromEntries(ROUTING_ENV.map((key) => [key, process.env[key]]));
+  for (const key of ROUTING_ENV) {
+    if (values[key] === undefined) delete process.env[key]; else process.env[key] = values[key];
   }
-});
+  const restore = () => {
+    for (const key of ROUTING_ENV) {
+      if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
+    }
+  };
+  try {
+    const out = fn();
+    return out instanceof Promise ? out.finally(restore) : (restore(), out);
+  } catch (err) {
+    restore();
+    throw err;
+  }
+}
+
+test('default contact reports require a dedicated research worker', () => withEnv({}, () => {
+  assert.equal(autoContact.contactResearchJobType(), 'research.contact');
+}));
 
 test('no live worker claiming the job type queues nothing', async () => {
   let launched = 0;
@@ -26,103 +41,36 @@ test('no live worker claiming the job type queues nothing', async () => {
   assert.equal(launched, 0);
 });
 
-test('a leftover agy-web setting uses the normal research worker and ignores the removed cloud worker', async () => {
-  const previousModel = process.env.CONTACT_RESEARCH_MODEL;
-  const previousAutoQueue = process.env.AGY_WEB_AUTO_QUEUE;
-  const previousKey = process.env.GEMINI37_API_KEY;
-  delete process.env.GEMINI37_API_KEY;
+test('a MiniMax key makes the hub assign contact jobs to the pi worker', () => withEnv({ MINIMAX_API_KEY: 'test-key' }, async () => {
   let launched = 0;
-  process.env.CONTACT_RESEARCH_MODEL = 'agy-web';
-  delete process.env.AGY_WEB_AUTO_QUEUE;
-  try {
-    assert.equal(autoContact.contactResearchJobType(), 'research.contact');
-    autoContact.init({
-      liveTypes: () => ['research.contact.cloud'],
-      backlog: async () => [company('cloud')],
-      launch: async () => { launched++; },
+  assert.equal(autoContact.contactResearchJobType(), 'research.contact.pi');
+  autoContact.init({
+    liveTypes: () => ['research.contact'],
+    backlog: async () => [company('local')],
+    launch: async () => { launched++; },
+  });
+  assert.equal(await autoContact.tick(), 0);
+  autoContact.init({
+    liveTypes: () => ['research.contact.pi'],
+    backlog: async () => [company('pi')],
+    launch: async () => { launched++; },
+  });
+  assert.equal(await autoContact.tick(), 1);
+  assert.equal(launched, 1);
+}));
+
+test('a leftover gemini or agy model name routes to the pi worker, not a retired one', () => {
+  for (const model of ['gamini-3.7-flash', 'gemini-3.7-flash', 'agy-web', 'pi', 'minimax']) {
+    withEnv({ CONTACT_RESEARCH_MODEL: model }, () => {
+      assert.equal(autoContact.contactResearchJobType(), 'research.contact.pi', model);
     });
-    assert.equal(await autoContact.tick(), 0);
-    autoContact.init({
-      liveTypes: () => ['research.contact'],
-      backlog: async () => [company('cloud')],
-      launch: async () => { launched++; },
-    });
-    assert.equal(await autoContact.tick(), 0);
-    process.env.AGY_WEB_AUTO_QUEUE = 'true';
-    assert.equal(await autoContact.tick(), 1);
-    assert.equal(launched, 1);
-  } finally {
-    if (previousModel === undefined) delete process.env.CONTACT_RESEARCH_MODEL; else process.env.CONTACT_RESEARCH_MODEL = previousModel;
-    if (previousAutoQueue === undefined) delete process.env.AGY_WEB_AUTO_QUEUE; else process.env.AGY_WEB_AUTO_QUEUE = previousAutoQueue;
-    if (previousKey === undefined) delete process.env.GEMINI37_API_KEY; else process.env.GEMINI37_API_KEY = previousKey;
   }
+  withEnv({ CONTACT_RESEARCH_MODEL: 'chatgpt' }, () => {
+    assert.equal(autoContact.contactResearchJobType(), 'chatgpt.ask');
+  });
 });
 
-test('a gemini model id is the in-hub contact worker, not the chat gateway', async () => {
-  const previousModel = process.env.CONTACT_RESEARCH_MODEL;
-  const previousKey = process.env.GEMINI37_API_KEY;
-  const previousAutoQueue = process.env.AGY_WEB_AUTO_QUEUE;
-  let launched = 0;
-  process.env.CONTACT_RESEARCH_MODEL = 'gamini-3.7-flash';
-  process.env.GEMINI37_API_KEY = 'test-key';
-  process.env.AGY_WEB_AUTO_QUEUE = 'true';
-  try {
-    assert.equal(autoContact.contactResearchJobType(), 'research.contact.gemini');
-    process.env.CONTACT_RESEARCH_MODEL = 'gemini-3.7-flash';
-    assert.equal(autoContact.contactResearchJobType(), 'research.contact.gemini');
-    autoContact.init({
-      liveTypes: () => ['agy.ask', 'research.contact'],
-      backlog: async () => [company('gateway')],
-      launch: async () => { launched++; },
-    });
-    assert.equal(await autoContact.tick(), 0);
-    autoContact.init({
-      liveTypes: () => ['research.contact.gemini'],
-      backlog: async () => [company('gemini')],
-      launch: async () => { launched++; },
-    });
-    assert.equal(await autoContact.tick(), 1);
-    assert.equal(launched, 1);
-  } finally {
-    if (previousModel === undefined) delete process.env.CONTACT_RESEARCH_MODEL; else process.env.CONTACT_RESEARCH_MODEL = previousModel;
-    if (previousKey === undefined) delete process.env.GEMINI37_API_KEY; else process.env.GEMINI37_API_KEY = previousKey;
-    if (previousAutoQueue === undefined) delete process.env.AGY_WEB_AUTO_QUEUE; else process.env.AGY_WEB_AUTO_QUEUE = previousAutoQueue;
-  }
-});
-
-test('a configured Gemini key makes the hub assign contact jobs to the gemini worker', async () => {
-  const previousModel = process.env.CONTACT_RESEARCH_MODEL;
-  const previousKey = process.env.GEMINI37_API_KEY;
-  const previousAutoQueue = process.env.AGY_WEB_AUTO_QUEUE;
-  let launched = 0;
-  process.env.CONTACT_RESEARCH_MODEL = 'agy-web';
-  process.env.GEMINI37_API_KEY = 'test-key';
-  process.env.AGY_WEB_AUTO_QUEUE = 'true';
-  try {
-    assert.equal(autoContact.contactResearchJobType(), 'research.contact.gemini');
-    autoContact.init({
-      liveTypes: () => ['research.contact'],
-      backlog: async () => [company('local')],
-      launch: async () => { launched++; },
-    });
-    assert.equal(await autoContact.tick(), 0);
-    autoContact.init({
-      liveTypes: () => ['research.contact.gemini'],
-      backlog: async () => [company('gemini')],
-      launch: async () => { launched++; },
-    });
-    assert.equal(await autoContact.tick(), 1);
-    assert.equal(launched, 1);
-  } finally {
-    if (previousModel === undefined) delete process.env.CONTACT_RESEARCH_MODEL; else process.env.CONTACT_RESEARCH_MODEL = previousModel;
-    if (previousKey === undefined) delete process.env.GEMINI37_API_KEY; else process.env.GEMINI37_API_KEY = previousKey;
-    if (previousAutoQueue === undefined) delete process.env.AGY_WEB_AUTO_QUEUE; else process.env.AGY_WEB_AUTO_QUEUE = previousAutoQueue;
-  }
-});
-
-test('a live worker queues min(BATCH, backlog) and logs the count', async () => {
-  const previousKey = process.env.GEMINI37_API_KEY;
-  delete process.env.GEMINI37_API_KEY;
+test('a live worker queues min(BATCH, backlog) and logs the count', () => withEnv({}, async () => {
   const launched: string[] = [];
   const lines: string[] = [];
   const orig = console.log;
@@ -138,23 +86,16 @@ test('a live worker queues min(BATCH, backlog) and logs the count', async () => 
     assert.ok(lines.some((line) => line.includes('[auto-queue] queued 3 contact research job(s)')));
   } finally {
     console.log = orig;
-    if (previousKey === undefined) delete process.env.GEMINI37_API_KEY; else process.env.GEMINI37_API_KEY = previousKey;
   }
-});
+}));
 
-test('launch receives autoQueued true', async () => {
-  const previousKey = process.env.GEMINI37_API_KEY;
-  delete process.env.GEMINI37_API_KEY;
+test('launch receives autoQueued true', () => withEnv({}, async () => {
   let opts: { autoQueued?: boolean } | undefined;
   autoContact.init({
     liveTypes: live,
     backlog: async () => [company('9')],
     launch: async (_row, next) => { opts = next; },
   });
-  try {
-    await autoContact.tick();
-    assert.equal(opts?.autoQueued, true);
-  } finally {
-    if (previousKey === undefined) delete process.env.GEMINI37_API_KEY; else process.env.GEMINI37_API_KEY = previousKey;
-  }
-});
+  await autoContact.tick();
+  assert.equal(opts?.autoQueued, true);
+}));

@@ -6,8 +6,7 @@ back. Two things keep the work here rather than in the container:
 - **A home IP.** A Google Maps scan from a datacenter address comes back thin
   instead of coming back an error, so a scan run in Railway is quietly incomplete.
 - **Logins that already exist here.** The ChatGPT accounts are signed in inside
-  ego lite's profiles on this machine, this machine's `agy` was signed in
-  interactively, and Facebook was signed in by hand in the crawler's own task
+  ego lite's profiles on this machine, and Facebook was signed in by hand in the crawler's own task
   space — no OAuth-paste apparatus, no keyring the container does not have.
 
 It only ever makes outbound requests. Nothing needs to be opened on the router.
@@ -26,8 +25,6 @@ POST /api/jobs/<id>/result                          {ok, result, error}
 | `gmap.scan` | `{keyword, place?, max?, userId?}` | `gmap.mjs`, a Chrome on the home line, 12–60s |
 | `chatgpt.ask` | `{id, prompt, space?, timeoutMs?}` | `chatgpt-ego.mjs`, an ego lite task space, ~6s |
 | `chatgpt.probe` | `{id}` | whether that account is still signed in |
-| `agy.ask` | `{prompt, tools?, timeoutMs?}` | `agy.mjs` — `agy -p`, ~10s for a one-line answer |
-| `agy.probe` | none | one real model call, so "installed" is never mistaken for "signed in" |
 | `fb.company` | `{name, city?, phone?, website?, address?, category?, budget?}` | `fb.mjs` → `fbw`, an ego lite crawl, 16–55s — 16s and no model call when the deterministic scorer settles it |
 | `fb.person` | `{person, company, city?}` | that person's profile, if it is publicly linked to the company |
 | `fb.discover` | `{name, city?}` | named humans on a company's public surface, 60–120s |
@@ -45,8 +42,8 @@ left in the tree unused, with its test, as the record of the browser route.
 The Facebook work that Meta was originally wanted for is `fb.*` below — a
 read-only crawler with an evidence trail, not a model asked what it can see.
 
-The cloud gateway reaches these through the queue: `chatgpt@mini` and `agy@mini`
-in `GET /v1/models` are exactly `chatgpt.ask` and `agy.ask`, and an engine is
+The cloud gateway reaches these through the queue: `chatgpt@mini` in
+`GET /v1/models` is exactly `chatgpt.ask`, and an engine is
 listed `ready` there only while some lane here is claiming its type. A worker
 advertises the types it was **started** with, so a process older than the handler
 it is missing looks, from the cloud, exactly like a machine that is switched off.
@@ -67,7 +64,7 @@ engine:
 | Process | `WORKER_NAME` | `WORKER_TYPES` | Kept alive by |
 |---|---|---|---|
 | the scan | `$(hostname)` | `ping,gmap.scan` | the LaunchDaemon, at boot |
-| the ask lane | `macmini-ask` | `chatgpt.ask,chatgpt.probe,agy.ask,agy.probe` | the LaunchAgent, at login |
+| the ask lane | `macmini-ask` | `chatgpt.ask,chatgpt.probe` | the LaunchAgent, at login |
 | the fb lane | `macmini-fb` | `fb.company,fb.person,fb.discover,fb.probe` | the LaunchAgent, at login |
 | the x lane | `macmini-x` | `x.subject,x.company,x.probe` | the LaunchAgent, at login |
 
@@ -78,8 +75,7 @@ worker that could have answered.
 
 The split is by duration and by what the engine needs. A 15-second ChatGPT call
 queued behind a 60-second Maps scan is a person waiting on an HTTP request stuck
-behind work that holds the loop for minutes by design — and an `agy` call with a
-five-minute ceiling has no business in front of either.
+behind work that holds the loop for minutes by design.
 
 ## Accounts
 
@@ -94,8 +90,6 @@ human performed once, in a browser profile on this machine:
   adding an account means making its profile default in the GUI first. The wrapper
   asserts the expected profile before typing and fails `wrong_profile` rather than
   answering as the wrong account.
-- **agy** — signed in interactively, on this machine, once. `worker/agy.mjs` only
-  runs the binary at `~/.local/bin/agy`.
 - **Facebook** — signed in by hand once, in the `facebook read-only crawler` task
   space inside ego lite. `fb-recon` never types, stores or reads a password; when
   the session lapses the fix is `./fb login` on this machine, which hands you the
@@ -179,38 +173,21 @@ lines above after a `git pull` that changes the worker, or after any Node change
 only for a mini that is already set to log in automatically; on anything else it is the
 trap described above.
 
-### The agy lane — a LaunchAgent, and why it cannot ride the daemon
+### agy — removed
 
-agy on this machine was signed in interactively and keeps no OAuth token file
-under `~/.gemini/antigravity-cli` — unlike the container, where the entire
-paste-the-code apparatus in `agy-lab` exists precisely because there is no keyring
-to fall back on. A system-domain process has no login session and no unlocked
-login keychain, so an agy started there may find itself signed out in the one
-place nobody is reading. That has not been measured either way. What *has* been
-measured is the logged-in session: agy answers in ~10s from an Aqua session, which
-is where a LaunchAgent runs. So the agy lane is an agent, deliberately, and pays
-the price the daemon exists to avoid.
+The agy lane (`agy.ask`, `agy.probe`) is gone: the Google accounts it ran on were
+banned. Its replacement, the Pi worker on MiniMax, runs in the hub
+(`agy-lab/src/pi.ts`), not on this machine. If `com.eternalgy.gmapworker.agy` is
+still loaded here, remove it:
 
 ```bash
-sed -e "s|__HOME__|$HOME|g" -e "s|__NODE__|$(which node)|g" \
-    worker/com.eternalgy.gmapworker.agy.plist \
-    > ~/Library/LaunchAgents/com.eternalgy.gmapworker.agy.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.eternalgy.gmapworker.agy.plist
-tail -f ~/Library/Logs/gmap-worker-agy.log
+launchctl bootout gui/$(id -u)/com.eternalgy.gmapworker.agy
+rm ~/Library/LaunchAgents/com.eternalgy.gmapworker.agy.plist
 ```
 
-No `sudo`: it is a user job in the user's own domain. Stop it with
-`launchctl bootout gui/$(id -u)/com.eternalgy.gmapworker.agy`, and re-run both
-lines after a `git pull` that changes the worker or after any Node change — the
-plist bakes in an absolute Node path exactly like the daemon's.
-
-**An agent starts at login, not at boot.** Pay for that with automatic login:
-System Settings → Users & Groups → Automatic login, set to this account. It asks
-for the account password, so it is a human's job, not a script's. FileVault has to
-stay off for it to work at all — a FileVault boot stops for the disk password
-before any account logs in. Until automatic login is on, `agy@mini` lives exactly
-as long as the login session does, and the cloud's answer to a bare `agy` quietly
-goes back to the container.
+**The ask, fb and x lanes are LaunchAgents and start at login, not at boot.** Pay
+for that with automatic login: System Settings → Users & Groups → Automatic login,
+set to this account. FileVault has to stay off for it to work at all.
 
 `macmini-ego` has the same gap and no plist at all yet. The same agent shape fits
 it — ego lite is a GUI app and cannot run in the system domain either — with
@@ -325,11 +302,9 @@ sleeping does.
 | `fb.*` fails with a 403 mentioning `provider:11111` | `claude` read `~/.claude/settings.json`, which points at a proxy that does not serve `claude-sonnet-5`. `fbw` passes `--setting-sources project,local` to skip that file; a failure here means the flag was lost. |
 | every `fb.*` job fails only under launchd, never from your terminal | the desktop app exports variables a launchd job does not — the base-URL override above is the usual one. Reproduce with the `env -i` line in the install section. |
 | `chatgpt@mini` fails `task space not found: <n>` after a reboot | task space ids do not survive a browser restart. Register the space by NAME in `~/.gmap-worker/spaces.json` (`"space": "chatgpt-pro"`), not by number — `useOrCreateTaskSpace` then rebuilds it on demand, and the login lives in the profile's cookie jar, which does survive. The profile guard keeps the rebuild honest. |
-| `agy@mini` or `chatgpt@mini` is missing from `/v1/models` | no lane is claiming that type. Either the process is dead, or it is running code older than the handler — a worker only advertises the types it had when it started, so restart it after a `git pull`. |
-| a job fails with `logged_out: agy is not signed in` | agy's own Google session expired. Sign in again interactively on this machine; nothing in the worker stores a credential to refresh. |
-| `quota_reached: Individual quota reached. Resets in …` | The failed job records the quota error. The broker marks all AGY lanes sharing this account `cooldown` in `GET /api/jobs`, stops assigning them jobs, and exposes `cooldownUntil`. The worker sleeps until the reset time, then resumes polling automatically. |
+| `chatgpt@mini` is missing from `/v1/models` | no lane is claiming that type. Either the process is dead, or it is running code older than the handler — a worker only advertises the types it had when it started, so restart it after a `git pull`. |
+| `quota_reached: Individual quota reached. Resets in …` | The failed job records the quota error. The broker marks all lanes sharing this account `cooldown` in `GET /api/jobs`, stops assigning them jobs, and exposes `cooldownUntil`. The worker sleeps until the reset time, then resumes polling automatically. |
 | a `chatgpt.ask` fails `wrong_profile` | the task space in `spaces.json` is gone, and ego lite created a fresh one on whatever profile is default — which answers as the wrong account. Fix the space id, or make the right profile default in the GUI and rebuild it. |
-| every `agy` lane job stops at exactly 300s | `AGY_TIMEOUT_MS`, the default. A long agent run needs `timeoutMs` in the payload, and the caller's own timeout raised to match. |
 
 ## Configuration
 
@@ -340,11 +315,9 @@ sleeping does.
 | `WORKER_NAME` | `os.hostname()` | what `GET /api/jobs` reports |
 | `WORKER_TYPES` | empty | comma-separated. Empty gives the two default lanes; set, it pins the process to one lane taking exactly these types. See [Lanes](#lanes) |
 | `WORKER_ENV_FILE` | `~/.gmap-worker.env` | |
-| `AGY_BIN` | `~/.local/bin/agy` | |
 | `FBW_BIN` | `~/project/gmap-recon/fb-recon/worker/fbw` | the fb-recon worker; it lives in its own repo |
 | `FB_BIN` | `~/project/gmap-recon/fb-recon/fb` | the crawler itself, used only by `fb.probe` |
 | `FB_TIMEOUT_MS` | 300000 | ceiling for one lead; the payload's `timeoutMs` wins when set |
-| `AGY_TIMEOUT_MS` | 300000 | ceiling for one `agy.ask`; the payload's `timeoutMs` wins when it is set |
 | `CGPT_ASK_TIMEOUT_MS` | 180000 | how long to wait for a ChatGPT answer to stop growing |
 | `CGPT_TRACE` | off | `1` narrates the answer-wait, phase by phase |
 | `EGO_BROWSER_BIN` | `ego-browser` on `PATH` | the worker prepends `~/.local/bin`, which launchd does not inherit |

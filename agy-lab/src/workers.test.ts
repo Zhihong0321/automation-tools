@@ -57,7 +57,7 @@ test('the control room visibly shows quota reached and a live reset countdown', 
     localStorage: { getItem: () => 'test-token', setItem: () => {} },
     fetch: async () => ({ ok: true, json: async () => ({ workers: [{
       name: 'macmini-agy1', ip: '203.0.113.7', status: 'cooldown',
-      lastSeenAt: new Date().toISOString(), types: ['agy.ask'], taken: 4, done: 2, failed: 1,
+      lastSeenAt: new Date().toISOString(), types: ['research.contact.pi'], taken: 4, done: 2, failed: 1,
       cooldownUntil: until, cooldownReason: 'Individual quota reached',
     }], jobs: [] }) }),
     setInterval: (callback: () => void, ms: number) => { intervals.set(ms, callback); return 1; },
@@ -90,15 +90,14 @@ test('saved contact keys are shown in full, survive polling while edited, and co
     setTimeout: () => 0,
     fetch: async (url: string) => ({
       ok: true,
-      json: async () => url === '/api/gemini-contact-keys'
-        ? { official: [], tavilyKeys: ['tvly-aaaaaaaaaa', 'tvly-bbbbbbbbbb'], officialKeys: ['AIzaSyOfficialKey1'] }
+      json: async () => url === '/api/contact-keys'
+        ? { tavily: [], tavilyKeys: ['tvly-aaaaaaaaaa', 'tvly-bbbbbbbbbb'] }
         : { workers: [], jobs: [] },
     }),
     setInterval: (callback: () => void, ms: number) => { intervals.set(ms, callback); return 1; },
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(node('tavilyKeys').value, 'tvly-aaaaaaaaaa\ntvly-bbbbbbbbbb');
-  assert.equal(node('officialKeys').value, 'AIzaSyOfficialKey1');
 
   // The 5s poll must not wipe a key the operator is in the middle of typing.
   node('tavilyKeys').oninput();
@@ -106,7 +105,6 @@ test('saved contact keys are shown in full, survive polling while edited, and co
   intervals.get(5000)!();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(node('tavilyKeys').value, 'tvly-aaaaaaaaaa\ntvly-new-being-typed');
-  assert.equal(node('officialKeys').value, 'AIzaSyOfficialKey1');
 
   const button = { textContent: 'Copy Tavily keys' };
   node('copyTavily').onclick.call(button);

@@ -173,7 +173,7 @@ export function body(): string {
     <a href="#ask">Native ask</a>
     <a href="#queue">Queue &amp; backpressure</a>
     <span class="nav-label">Engines</span>
-    <a href="#agy">agy</a>
+    <a href="#pi">Pi</a>
     <a href="#chatgpt">ChatGPT</a>
     <a href="#meta">Meta AI &mdash; retired</a>
     <span class="nav-label">Home worker</span>
@@ -317,10 +317,10 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
       "entity": { "name":"SOLS Energy Sdn Bhd", "company_id":"69", "...":"..." },
       "summary":"...", "contacts":[...], "people":[...], "candidate_people":[...], "signals":[...],
       "outreach_angles":[...], "conflicts_and_unknowns":[],
-      "synthesis_mode":"gemini_validated"
+      "synthesis_mode":"pi_validated"
     },
     "final_cn": { "summary":"...", "contacts":[...], "people":[...], "candidate_people":[...], "signals":[...] },
-    "translation": { "language":"zh-CN", "model":"agy", "status":"completed" }
+    "translation": { "language":"zh-CN", "model":"pi", "status":"completed" }
   },
   "research_run": {
     "round01": {...}, "round02": {...}, "round03": {...}, "round04": {...},
@@ -332,11 +332,11 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
   <code>data.final</code>; the matching Simplified Chinese rendering is at <code>data.final_cn</code>.
   Chinese translation preserves evidence IDs, source URLs, email addresses, phone numbers and published contact values exactly.
   Raw rounds are at <code>research_run.round01</code> through <code>round04</code>:
-  Gemini discovery, three split ChatGPT audits, the <a href="#social">Facebook crawl</a>,
-  then Gemini synthesis with fidelity validation. Contacts, people and signals need direct HTTPS
+  Pi discovery, three split ChatGPT audits, the <a href="#social">Facebook crawl</a>,
+  then Pi synthesis with fidelity validation. Contacts, people and signals need direct HTTPS
   evidence to enter the validated ledger; <code>candidate_people</code> retains named public-source
   leads separately and never qualifies for VIP research until verified.
-  If final Gemini synthesis changes a validated contact/person set or introduces a new URL,
+  If final Pi synthesis changes a validated contact/person set or introduces a new URL,
   it is rejected and <code>synthesis_mode</code> becomes <code>validated_ledger_fallback</code>.</p>
   <p>As soon as the Round 02 people audit identifies the report's P01 person, the service
   creates a separate <code>person_research</code> report and starts it immediately. It runs
@@ -365,13 +365,13 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
   person as soon as the people audit identifies one. The child reference appears at
   <code>data.final.auto_person_research</code>; poll its <code>report_id</code> with
   <code>GET /api/person-research/:reportId</code>. A caller-created VIP brief and an automatic P01
-  brief share the identical Gemini/AGY, social-scout, audit, and validation flow.</p>
+  brief share the identical Pi, social-scout, audit, and validation flow.</p>
   <p>Poll <code>GET /api/person-research/:reportId</code>. The authenticated response includes
   <code>research_run</code> from <code>person_research_run</code>, containing validated
   public-professional evidence, the final brief, and discovery/audit/synthesis metadata. It never
   retains caller-supplied identity resolvers or raw model text.</p>
-  <p>VIP discovery combines the primary Gemini/AGY web pass (set <code>VIP_GEMINI_MODEL=gemini</code>
-  or leave its default <code>agy</code>), an optional Facebook/Instagram/Threads
+  <p>VIP discovery combines the primary Pi web pass (<code>VIP_RESEARCH_MODEL</code>, default
+  <code>pi</code>), an optional Facebook/Instagram/Threads
   scout, and an optional xAI/X scout. A social lane runs only when a live worker claims its job type:
   <code>fb.person</code> and <code>x.subject</code> by default. Set
   <code>VIP_FB_SCOUT_JOB_TYPE</code> or <code>VIP_XAI_SCOUT_JOB_TYPE</code> to match a worker that
@@ -579,12 +579,12 @@ const companyId = search.data.companies[0].id;</code></pre>
 
 <section id="engines">
   <h2>The three engines</h2>
-  <p>None of them is a hosted model API. Each call is a real process doing what a person
-  would do, and every limit further down follows from that.</p>
+  <p>One is a hosted model with two web tools; the browser engines are a real Chrome doing
+  what a person would do, and the limits further down follow from that.</p>
   <div class="tbl"><table>
     <thead><tr><th>Model</th><th>What actually runs</th><th>Short answer</th><th>Streams</th></tr></thead>
     <tbody>
-      <tr><td><code>agy</code></td><td>the Antigravity CLI in print mode (<code>agy -p</code>), signed in with a Google account</td><td class="num">11–25 s</td><td><span class="pill">one chunk</span></td></tr>
+      <tr><td><code>pi</code></td><td>the Pi agent SDK in this process, on MiniMax (<code>MiniMax-M3.1-Flash-Preview</code>), with two tools: <code>web_search</code> (Tavily) and <code>web_fetch</code> (reads a public page). No shell, no files.</td><td class="num">2–15 s</td><td><span class="pill">one chunk</span></td></tr>
       <tr><td><code>chatgpt</code></td><td>a signed-in chatgpt.com session in a real Chrome, typed into and read back</td><td class="num">13–15 s</td><td><span class="pill ok">incremental</span></td></tr>
     </tbody>
   </table></div>
@@ -604,19 +604,17 @@ const companyId = search.data.companies[0].id;</code></pre>
       <tr><td><code>model</code> <span class="req">required</span></td><td>string</td><td>Routed as in <a href="#models">Models</a>. Empty or <code>auto</code> resolves to <code>DEFAULT_MODEL</code>.</td></tr>
       <tr><td><code>messages</code> <span class="req">required</span></td><td>array</td><td>Flattened into one prompt. <code>system</code> and <code>developer</code> parts come first verbatim, then <code>User:</code> / <code>Assistant:</code> / <code>Tool:</code> turns. A lone user message is passed through unlabelled.</td></tr>
       <tr><td><code>stream</code></td><td>boolean</td><td>Server-sent events. See <a href="#stream">Streaming</a>.</td></tr>
-      <tr><td><code>timeoutMs</code></td><td>number</td><td>Per-call deadline. Defaults to 300000 for <code>agy</code>, 180000 for the browser engines. <code>timeout_ms</code> is accepted too.</td></tr>
-      <tr><td><code>tools</code></td><td><code>true</code></td><td><strong>Not OpenAI function calling.</strong> Literal <code>true</code> runs agy with <code>--dangerously-skip-permissions</code>, letting it touch the container's filesystem. An OpenAI tools <em>array</em> is not <code>true</code>, so it does nothing — see the note below.</td></tr>
+      <tr><td><code>timeoutMs</code></td><td>number</td><td>Per-call deadline. Defaults to 300000 for <code>pi</code>, 180000 for the browser engines. <code>timeout_ms</code> is accepted too.</td></tr>
+      <tr><td><code>tools</code></td><td><code>true</code></td><td><strong>Not OpenAI function calling.</strong> Ignored: <code>pi</code> always runs with its two web tools and nothing else. An OpenAI tools <em>array</em> does nothing — see the note below.</td></tr>
       <tr><td><code>n</code></td><td>number</td><td>Must be 1. Anything else is a 400: each call is one real model run, not a sample.</td></tr>
       <tr><td colspan="3" style="color:var(--faint)">Accepted, ignored, and listed back in <code>agy_lab.ignored</code>: <code>temperature</code>, <code>top_p</code>, <code>max_tokens</code>, <code>max_completion_tokens</code>, <code>presence_penalty</code>, <code>frequency_penalty</code>, <code>logprobs</code>, <code>logit_bias</code>, <code>seed</code>, <code>stop</code>, <code>tool_choice</code>, <code>response_format</code>.</td></tr>
     </tbody>
   </table></div>
 
   <div class="call stop"><span class="h">tools means something else here</span>
-  <p>A browser session has no temperature knob and agy's <code>-p</code> takes none, so
+  <p>A browser session has no temperature knob and the Pi worker runs fixed settings, so
   sampling parameters cannot be honoured and are never approximated. They come back in
-  <code>agy_lab.ignored</code> so a caller can see they had no effect. <code>tools: true</code> is
-  this service's own flag for agy's permission gate — off by default, per call, never
-  inherited. No function calling, no logprobs, no image input: an image part in a message
+  <code>agy_lab.ignored</code> so a caller can see they had no effect. No function calling, no logprobs, no image input: an image part in a message
   is replaced with <code>[unsupported content part: image_url]</code> rather than dropped, so a
   prompt that depended on it fails visibly instead of quietly.</p></div>
 
@@ -637,7 +635,7 @@ const companyId = search.data.companies[0].id;</code></pre>
 <section id="stream">
   <h2>Streaming</h2>
   <p>Real for the browser engines: the answer is polled as it renders, so chunks arrive at
-  roughly 1.5-second granularity. agy prints only when it is finished, so its answer arrives
+  roughly 1.5-second granularity. Pi answers when its run is finished, so its answer arrives
   as a single content chunk. Both end the same way.</p>
 <pre><code>data: {"object":"chat.completion.chunk","choices":[{"delta":{"role":"assistant","content":""},...}]}
 data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"one\ntwo\nthree"},...}]}
@@ -662,18 +660,19 @@ data: [DONE]</code></pre>
   <div class="tbl"><table>
     <thead><tr><th>Name</th><th>Routes to</th></tr></thead>
     <tbody>
-      <tr><td><code>agy</code>, <code>antigravity</code></td><td>the agy CLI</td></tr>
+      <tr><td><code>pi</code>, <code>minimax</code></td><td>the Pi worker (MiniMax). <code>agy</code>, <code>gemini</code> and <code>google</code> still route here, for callers set up before the Gemini engine was removed.</td></tr>
       <tr><td><code>chatgpt</code>, <code>openai</code></td><td>the default ChatGPT session</td></tr>
       <tr><td><code>chatgpt:&lt;id&gt;</code></td><td>that ChatGPT session — one per account</td></tr>
       <tr><td><code>gpt-4o</code>, <code>gpt-*</code>, <code>o1*</code>, <code>o3*</code>, <code>o4*</code></td><td>the default ChatGPT session</td></tr>
-      <tr><td><em>empty</em>, <code>auto</code></td><td><code>DEFAULT_MODEL</code>, which is <code>agy</code> unless set</td></tr>
+      <tr><td><em>empty</em>, <code>auto</code></td><td><code>DEFAULT_MODEL</code>, which is <code>pi</code> unless set</td></tr>
     </tbody>
   </table></div>
   <p><code>gpt-*</code> maps to the signed-in ChatGPT account because tools hard-code a model
   id far more often than they let you choose one. A bare <code>chatgpt</code> resolves to
   <code>CGPT_DEFAULT_SESSION</code>, otherwise the first session whose last probe said
-  <code>ready</code>. <code>@mini</code> and <code>@container</code> pin a location; a bare
-  engine prefers a live mini worker and falls back to the container. <code>meta</code> and
+  <code>ready</code>. <code>@mini</code> and <code>@container</code> pin a location for ChatGPT; a bare
+  <code>chatgpt</code> prefers a live mini worker and falls back to the container. Pi runs in the
+  container only. <code>meta</code> and
   <code>llama-*</code> still parse, for callers that have not been updated, but nothing
   claims them &mdash; see <a href="#meta">Meta AI &mdash; retired</a>.</p>
 </section>
@@ -708,7 +707,7 @@ data: [DONE]</code></pre>
     <thead><tr><th>Lane</th><th>Runs at once</th><th>Engines</th><th>Spacing</th></tr></thead>
     <tbody>
       <tr><td><code>browser</code></td><td class="num">1</td><td><code>chatgpt</code> — the container has one Chrome</td><td class="num">2 s between calls</td></tr>
-      <tr><td><code>agy</code></td><td class="num">2</td><td><code>agy</code></td><td class="num">none</td></tr>
+      <tr><td><code>pi</code></td><td class="num">4</td><td><code>pi</code></td><td class="num">none</td></tr>
     </tbody>
   </table></div>
   <p>Slots are per lane; spacing, caps and counters are per engine — because the lane
@@ -758,44 +757,27 @@ data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"..."}}]}
   one call that gets the account limited.</p>
 </section>
 
-<section id="agy">
-  <h2>agy</h2>
-  <p>The Antigravity CLI, installed on the volume at <code>/data/.local/bin/agy</code> and signed
-  in with a consumer Google account. The credential survives a redeploy — the access token
-  lasts an hour, the refresh token is what carries it — so a login is a one-time act, not a
-  per-deploy chore.</p>
-  <p>The gateway runs it with <code>-p</code> and reads stdout. Up to
-  <code>AGY_MAX_CONCURRENT</code> (2) run at once; the rest queue rather than race the browser
-  for a 4 GB container. If a run exits 0 having printed nothing — a known non-TTY behaviour —
-  the same command is retried through a real pty before the call is called a failure.</p>
-
-  <div class="ep"><span class="m post">POST</span><code class="path">/api/probe</code></div>
-  <p>One real, tool-free model call: the only thing that proves the credential still works.
-  Answers <code>ready</code>, <code>logged_out</code>, <code>not_installed</code> or <code>unknown</code> —
-  four states rather than two, because "could not tell" and "signed out" send you to
-  different places. Typically 11–14 s.</p>
-
-  <div class="ep"><span class="m post">POST</span><code class="path">/api/install</code><span class="tag">202, returns a pty session</span></div>
-  <div class="ep"><span class="m post">POST</span><code class="path">/api/login</code><span class="tag">202, returns a pty session</span></div>
-  <div class="ep"><span class="m post">POST</span><code class="path">/api/run</code><span class="tag">202, returns a pty session</span></div>
-  <p>The asynchronous side. Each starts a command in a pseudo-terminal and hands back a
-  session id to poll — <code>/api/run</code> takes <code>prompt</code>, <code>timeoutMs</code>,
-  <code>format</code> and <code>tools</code>, and is the streaming-transcript form of what
-  <code>/api/ask</code> does in one call. Use <code>/api/ask</code> unless you need to watch.</p>
+<section id="pi">
+  <h2>Pi</h2>
+  <p>The Pi agent (<code>@earendil-works/pi-coding-agent</code>) embedded in this process through
+  its SDK, running on MiniMax with <code>MINIMAX_API_KEY</code>. It replaced agy, the Antigravity
+  CLI, after the Google accounts it ran on were banned. There is nothing to install or sign in:
+  a missing key is the only way it is unavailable, and <code>GET /api/status</code> says so.</p>
+  <p>Each call is a fresh in-memory session with exactly two tools: <code>web_search</code>
+  (Tavily, the same rotating keys contact research uses) and <code>web_fetch</code> (a GET of a
+  public page, reduced to text; private addresses are refused). No shell, no files, no project
+  resources. Up to <code>PI_MAX_CONCURRENT</code> (4) run at once; the rest queue.</p>
   <div class="tbl"><table>
-    <thead><tr><th>Route</th><th>Does</th></tr></thead>
+    <thead><tr><th>Variable</th><th class="num">Default</th><th>Means</th></tr></thead>
     <tbody>
-      <tr><td><code>GET /api/session/:id?offset=</code></td><td>output from a byte offset, plus whether it is still running</td></tr>
-      <tr><td><code>POST /api/session/:id/input</code></td><td>write a line into the terminal — this is how an OAuth code is pasted</td></tr>
-      <tr><td><code>POST /api/session/:id/kill</code></td><td>SIGHUP, then SIGKILL after 3 s</td></tr>
-      <tr><td><code>POST /api/session</code></td><td>start an arbitrary command in a pty</td></tr>
-      <tr><td><code>POST /api/settings/provider</code></td><td>switch agy between the Google login and <code>GEMINI_API_KEY</code></td></tr>
+      <tr><td><code>MINIMAX_API_KEY</code></td><td class="num">&mdash;</td><td>MiniMax token-plan key. Required.</td></tr>
+      <tr><td><code>PI_MODEL</code></td><td class="num">MiniMax-M3.1-Flash-Preview</td><td>MiniMax model id</td></tr>
+      <tr><td><code>PI_THINKING</code></td><td class="num">low</td><td>thinking level; MiniMax-M3.1 refuses <code>off</code></td></tr>
+      <tr><td><code>PI_MAX_CONCURRENT</code></td><td class="num">4</td><td>Pi runs in flight at once</td></tr>
     </tbody>
   </table></div>
-  <div class="call warn"><span class="h">Why a terminal</span>
-  <p>agy reads its authorization code from the controlling terminal, so a plain pipe can
-  never complete a login. The pty comes from util-linux's <code>script</code> rather than a
-  native module — nothing to rebuild when Node's ABI moves.</p></div>
+  <p>Errors map to status codes the way a caller can act on: no key or a rejected key is 503
+  <code>engine_unavailable</code>, a MiniMax rate limit is 503, a run past its deadline is 504.</p>
 </section>
 
 <section id="chatgpt">
@@ -1143,16 +1125,14 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
     <thead><tr><th>Route</th><th>Does</th></tr></thead>
     <tbody>
       <tr><td><code>GET /healthz</code></td><td>unauthenticated liveness</td></tr>
-      <tr><td><code>GET /api/status</code></td><td>agy version, container memory, open browsers, uptime, and the last crash it survived</td></tr>
+      <tr><td><code>GET /api/status</code></td><td>Pi worker status, container memory, open browsers, uptime, and the last crash it survived</td></tr>
       <tr><td><code>GET /api/net</code></td><td>egress IP and what Cloudflare says to a bare fetch. A 403 here is the expected answer to something that is obviously not a browser — read it for the address and the mitigation, not as a verdict.</td></tr>
       <tr><td><code>POST /api/exec</code></td><td>run a shell command in the container</td></tr>
-      <tr><td><code>GET /api/file?path=</code></td><td>inspect a file; secrets redacted unless <code>reveal=1</code></td></tr>
-      <tr><td><code>POST /api/snapshot</code> &middot; <code>GET /api/snapshot/diff</code></td><td>what a login wrote, and where</td></tr>
       <tr><td><code>GET /</code></td><td>the operator console</td></tr>
     </tbody>
   </table></div>
   <div class="call stop"><span class="h">This token is a root shell</span>
-  <p><code>/api/exec</code> runs arbitrary commands in a container holding live Google and
+  <p><code>/api/exec</code> runs arbitrary commands in a container holding API keys and live
   ChatGPT sessions, and <code>/api/cgpt/:id/export</code> hands out the cookies.
   <code>LAB_TOKEN</code> is not an API key in the ordinary sense — treat it as SSH access.
   The service refuses to start if it is shorter than 16 characters.</p></div>
@@ -1168,7 +1148,7 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
       <tr><td class="num">400</td><td><code>invalid_request_error</code></td><td>a request the gateway will not fake — <code>n&gt;1</code>, empty messages, a prompt with no text</td></tr>
       <tr><td class="num">404</td><td><code>model_not_found</code></td><td>unknown model name, or a session that does not exist</td></tr>
       <tr><td class="num">429</td><td><code>queue_full</code> &middot; <code>queue_too_slow</code> &middot; <code>rate_limit_exceeded</code></td><td>system busy — see <a href="#queue">Queue</a>. Carries <code>Retry-After</code> and a queue snapshot.</td></tr>
-      <tr><td class="num">503</td><td><code>engine_unavailable</code></td><td>the engine exists but is signed out or not installed</td></tr>
+      <tr><td class="num">503</td><td><code>engine_unavailable</code></td><td>the engine exists but is signed out or has no key</td></tr>
       <tr><td class="num">503</td><td><code>no_session</code></td><td>no session of that kind exists yet</td></tr>
       <tr><td class="num">504</td><td><code>timeout</code></td><td>the engine ran past <code>timeoutMs</code></td></tr>
       <tr><td class="num">502</td><td><code>engine_error</code></td><td>it ran and failed — the message says how</td></tr>
@@ -1185,7 +1165,7 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
   minutes. Every ChatGPT account competes for that one slot: calls serialise, and
   alternating between accounts evicts the other profile — measured at about a second,
   9.6 s for a warm call against 10.4 s for the same one straight after a different
-  account. agy is a CLI and runs alongside. This is a pipeline back-end, not a fan-out one — send work at it
+  account. Pi is an API client and runs alongside. This is a pipeline back-end, not a fan-out one — send work at it
   as fast as you like and the <a href="#queue">queue</a> will hold it, but the throughput
   ceiling is roughly one browser answer every fifteen seconds.</p>
 
@@ -1216,20 +1196,21 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
       <tr><td><code>PORTAL_TOKEN</code></td><td class="num">unset</td><td>optional 16+ character end-user key; authorizes only report listing, business search, and company research routes</td></tr>
       <tr><td><code>DATABASE_URL</code></td><td class="num">&mdash;</td><td>preferred durable Postgres connection for published reports; link the Railway database service</td></tr>
       <tr><td><code>PG_PROXY_URL</code> &middot; <code>PG_DB_NAME</code> &middot; <code>PG_PROXY_TOKEN</code></td><td class="num">unset</td><td>HTTP database fallback; the token expires and is not preferred for production</td></tr>
-      <tr><td><code>TRANSLATION_MODEL</code></td><td class="num">agy</td><td>engine for the Simplified Chinese company-report copy; any model this gateway serves. No separate endpoint or key any more &mdash; the translation goes through the same admission queue as every other call</td></tr>
+      <tr><td><code>TRANSLATION_MODEL</code></td><td class="num">pi</td><td>engine for the Simplified Chinese company-report copy; any model this gateway serves. No separate endpoint or key any more &mdash; the translation goes through the same admission queue as every other call</td></tr>
       <tr><td><code>TRANSLATION_BATCH</code></td><td class="num">60</td><td>strings per translation call</td></tr>
       <tr><td><code>TRANSLATION_CONCURRENCY</code></td><td class="num">2</td><td>translation calls in flight; match it to the lanes serving <code>TRANSLATION_MODEL</code>, since wider only queues them one hop later</td></tr>
-      <tr><td><code>DEFAULT_MODEL</code></td><td class="num">agy</td><td>what an empty or <code>auto</code> model resolves to</td></tr>
+      <tr><td><code>DEFAULT_MODEL</code></td><td class="num">pi</td><td>what an empty or <code>auto</code> model resolves to</td></tr>
       <tr><td><code>CGPT_DEFAULT_SESSION</code></td><td class="num">first ready</td><td>which account a bare <code>chatgpt</code> means</td></tr>
-      <tr><td><code>AGY_ASK_TIMEOUT_MS</code></td><td class="num">300000</td><td></td></tr>
+      <tr><td><code>MINIMAX_API_KEY</code></td><td class="num">&mdash;</td><td>the Pi worker's MiniMax key; see <a href="#pi">Pi</a> for the other <code>PI_*</code> settings</td></tr>
+      <tr><td><code>PI_ASK_TIMEOUT_MS</code></td><td class="num">300000</td><td></td></tr>
       <tr><td><code>CGPT_ASK_TIMEOUT_MS</code></td><td class="num">180000</td><td></td></tr>
-      <tr><td><code>AGY_MAX_CONCURRENT</code></td><td class="num">2</td><td>agy runs in flight at once</td></tr>
+      <tr><td><code>PI_MAX_CONCURRENT</code></td><td class="num">4</td><td>Pi runs in flight at once</td></tr>
       <tr><td><code>MAX_OPEN_BROWSERS</code></td><td class="num">1</td><td>Chrome profiles open at once — the browser lane's width</td></tr>
       <tr><td><code>CGPT_MIN_GAP_MS</code></td><td class="num">2000</td><td>spacing between calls to that account</td></tr>
-      <tr><td><code>AGY_MIN_GAP_MS</code></td><td class="num">0</td><td></td></tr>
+      <tr><td><code>PI_MIN_GAP_MS</code></td><td class="num">0</td><td></td></tr>
       <tr><td><code>QUEUE_MAX_DEPTH</code></td><td class="num">10</td><td>waiting calls before 429; <code>CGPT_MAX_QUEUE</code> etc. override per engine</td></tr>
       <tr><td><code>QUEUE_MAX_WAIT_MS</code></td><td class="num">300000</td><td>longest wait the gateway will promise; past it, 429</td></tr>
-      <tr><td><code>CGPT_HOURLY_LIMIT</code> &middot; <code>AGY_HOURLY_LIMIT</code></td><td class="num">off</td><td>calls per rolling hour, per engine</td></tr>
+      <tr><td><code>CGPT_HOURLY_LIMIT</code> &middot; <code>PI_HOURLY_LIMIT</code></td><td class="num">off</td><td>calls per rolling hour, per engine</td></tr>
       <tr><td><code>LOG_MEMORY</code></td><td class="num">1000</td><td>records kept in memory for <code>/api/logs</code></td></tr>
       <tr><td><code>LOG_PROMPTS</code></td><td class="num">on</td><td><code>0</code> drops prompt previews from the log</td></tr>
       <tr><td><code>BROWSER_IDLE_MS</code></td><td class="num">300000</td><td>close a profile nobody has touched</td></tr>

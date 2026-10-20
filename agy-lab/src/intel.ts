@@ -824,35 +824,26 @@ function companyBaseline(company: Record<string, unknown>): string {
 }
 
 /**
- * How a research round is allowed to fetch a page.
+ * How a research round finds and reads pages.
  *
- * `agy` can read a URL two ways: its built-in `read_url_content` tool, which needs
- * no approval, or a shell command, which does. A worker started by launchd has
- * nobody at the keyboard, so a shell request is auto-denied and the whole round
- * dies with "user denied permission to run command" -- that single line accounted
- * for most of the failed Round 01s in the report history.
- *
- * The prompt used to leave the method open, so the model picked one at random and
- * lost the coin flip more often than not. Naming the tool is what makes the round
- * deterministic. The alternative fix, --dangerously-skip-permissions, hands an
- * unrestricted shell to a model on a home network and is not worth it to read a
- * company's About page.
+ * The Pi worker has exactly two tools, web_search (Tavily) and web_fetch (a plain
+ * GET reduced to text), and no shell. Naming them keeps a round from spending its
+ * budget asking for a tool it does not have.
  */
-const FETCH_POLICY = 'Fetch every page with your built-in URL reading tool (read_url_content). '
-  + 'Never use the shell, terminal, bash, curl or wget to fetch a page: a shell command here requires '
-  + 'an interactive approval that nobody can give, so the attempt is denied and this entire round fails.';
+const FETCH_POLICY = 'Find pages with the web_search tool and read each page with the web_fetch tool '
+  + 'before you cite it. Cite only URLs you actually fetched or that web_search returned. You have no '
+  + 'shell, terminal or file tools.';
 
 /**
  * Company and person rounds still land inside four minutes. Contact research does
- * not: a large company can take up to twenty, and that path passes
- * `--print-timeout` so the CLI does not quit at five. This budget is only for
- * the shorter rounds.
+ * not: a large company can take up to twenty, and that path asks with a twenty
+ * minute budget. This budget is only for the shorter rounds.
  *
  * A model that knows the deadline can land before it. This does not lower any
  * cap -- a round that finishes early still returns everything it found.
  */
-const TIME_BUDGET = 'HARD TIME BUDGET: you have about four minutes of wall clock. The tool you are '
-  + 'running in stops printing at five and everything you have done is then lost, so treat four minutes '
+const TIME_BUDGET = 'HARD TIME BUDGET: you have about four minutes of wall clock. The run is '
+  + 'stopped at seven and everything you have done is then lost, so treat four minutes '
   + 'as a deadline, not a target. Track it. When you reach it, stop researching immediately and emit the '
   + 'JSON with what you already have, even if sections are thin or empty -- a short answer is a result '
   + 'and a missed deadline is not. Do not narrate the deadline; just meet it.';
@@ -1132,7 +1123,7 @@ function round02Prompt(kind: 'contacts' | 'people' | 'signals', company: Record<
     people: 'people: name,current_role,relevance,evidence_class,role_evidence_url,personal_profile_url,source_date; candidate_people: name,current_role,source_name,source_url,relevance,verification_note',
     signals: 'signals: date,fact,evidence_class,evidence_url,outreach_use',
   };
-  return `You are ChatGPT Round 02 auditing Gemini Round 01 for ${str(company.name)}. Do fresh web research; Round 01 is untrusted.
+  return `You are ChatGPT Round 02 auditing Round 01 for ${str(company.name)}. Do fresh web research; Round 01 is untrusted.
 COMPANY BASELINE: ${companyBaseline(company)}
 ROUND 01 PARSED LEADS: ${JSON.stringify(r1).slice(0, 28_000)}
 Focus only on ${kind}. Confirm, correct, reject and add missed evidence. For contacts inspect subscription/campaign/careers/vendor pages. For people inspect SSM/e-Info, CTOS/CreditScan, MyHIJAU, SEDA, CIDB, job boards, LinkedIn people/company pages, official team pages, awards and associations. Prioritize CEO, commercial, partnerships, procurement, operations and HR, but retain directors, registry contacts, team members and employees as candidate_people when the named source is public but the current role lacks direct evidence. For signals use direct issuer or specific company pages.
@@ -1342,7 +1333,7 @@ async function round03Facebook(company: Record<string, unknown>): Promise<{
 }
 
 function round04Prompt(ledger: Record<string, unknown>): string {
-  return `You are Gemini Round 04. Write a concise final business-intelligence synthesis using only this validated ledger: ${JSON.stringify(ledger)}
+  return `You are Round 04. Write a concise final business-intelligence synthesis using only this validated ledger: ${JSON.stringify(ledger)}
 Candidate people are leads to verify, not confirmed roles: do not present their role or affiliation as fact in summary or outreach_angles. Return exactly one JSON object in a fenced code block with keys summary (max 120 words), outreach_angles (max 5 short strings), entity, contacts, people, candidate_people, signals, conflicts_and_unknowns. Copy entity/contacts/people/candidate_people/signals/conflicts arrays exactly, including every id and URL.Copy every URL as a literal raw https:// string exactly as it appears in the ledger, never as a Markdown link and never wrapped in brackets. Do not browse, add, remove, rename, infer, resolve conflicts or introduce any number/name/URL not present in the ledger. No prose outside JSON.`;
 }
 
@@ -1378,12 +1369,11 @@ function putTranslation(target: Record<string, unknown>, path: string[], text: s
  * what turned a dead translation service into 232 seconds of a company report.
  * The gateway's own admission queue is now the thing that paces this, and an
  * engine that is genuinely unavailable is refused there in milliseconds rather
- * than slept on here. A second try is still worth having: agy's print mode
- * gives up on its own around the five-minute mark, and that is a lost call
- * rather than a broken engine.
+ * than slept on here. A second try is still worth having: a run that hits its
+ * time limit is a lost call rather than a broken engine.
  */
 async function translationAsk(prompt: string, timeoutMs: number): Promise<string> {
-  const model = process.env.TRANSLATION_MODEL?.trim() || 'agy';
+  const model = process.env.TRANSLATION_MODEL?.trim() || 'pi';
   const out = await gateway.askModel(model, prompt, { timeoutMs });
   return out.answer;
 }
@@ -1626,16 +1616,15 @@ async function ask(model: string, prompt: string, timeoutMs: number): Promise<{
 }
 
 /**
- * The Chinese edition, translated by agy.
+ * The Chinese edition, translated by Pi.
  *
  * It used to be an OpenAI-compatible call to e-router's `step-3.7-flash`, held
  * deliberately outside the research gateway. That was the wrong side of the
  * fence: e-router answered 503 on run 2rO7nzyANyjYDpfOf0mQ and the bespoke
  * four-attempt backoff spent 232 seconds riding it out before failing anyway --
  * on the critical path, after the English dossier was already finished and
- * saved. agy is a model this pipeline already depends on for Rounds 01 and 04,
- * it has two lanes on the mini and a container fallback under it, and routing
- * through the gateway means the admission queue governs it like everything else
+ * saved. Pi is the model this pipeline already depends on for Rounds 01 and 04,
+ * and routing through the gateway means the admission queue governs it like everything else
  * instead of it being a private HTTP client with private retry rules.
  *
  * `askEngine` is injected so this is testable without a gateway, a queue or a
@@ -1647,12 +1636,12 @@ export async function translateChinese(
 ): Promise<{
   translated: Record<string, unknown>; model: string; ms: number; validation_errors: string[];
 }> {
-  const model = process.env.TRANSLATION_MODEL?.trim() || 'agy';
+  const model = process.env.TRANSLATION_MODEL?.trim() || 'pi';
   const started = Date.now();
   const translated = structuredClone(finalReport);
   const entries = translationEntries(finalReport);
   // Batches were 30 because e-router 503'd on anything larger. That constraint
-  // left with e-router: agy already takes the Round 01 and Round 04 prompts,
+  // left with e-router: Pi already takes the Round 01 and Round 04 prompts,
   // which are the whole ledger in one message. Bigger batches mean fewer round
   // trips, and a round trip is the expensive part.
   const size = Math.max(1, Number(process.env.TRANSLATION_BATCH) || 60);
@@ -1663,10 +1652,8 @@ export async function translateChinese(
   // The batches are independent: each carries its own texts and writes to its own
   // paths, and each ask is a stateless completion.
   //
-  // Two, matching the agy lanes on the mini. Wider does not go faster -- it just
-  // moves the queue one hop later, into the broker, where the extra calls sit
-  // pending exactly as long. That is the same mistake MINI_MAX_CONCURRENT=3 was
-  // making for agy before the lanes were widened.
+  // Two. Wider does not go faster -- it just moves the queue into the gateway's
+  // Pi lane, where the extra calls wait exactly as long.
   const width = Math.max(1, Number(process.env.TRANSLATION_CONCURRENCY) || 2);
   let next = 0;
   const worker = async (): Promise<void> => {
@@ -1788,7 +1775,7 @@ type PersonResearchLaunch = {
 /**
  * The sole launcher for both POST /api/person-research and the P01 child that
  * company research creates. Keeping this shared is deliberate: the automatic
- * brief must always enter the current VIP pipeline (Gemini/AGY + available
+ * brief must always enter the current VIP pipeline (Pi + available
  * social scouts + independent audit), rather than preserving an older fork.
  */
 async function launchPersonResearch(input: PersonResearchLaunch): Promise<db.PublishedReport> {
@@ -1821,7 +1808,7 @@ async function launchPersonResearch(input: PersonResearchLaunch): Promise<db.Pub
     mobileProvided: Boolean(identityHints.mobile),
     autoTriggered,
     ...(input.selectionRule ? { selectionRule: input.selectionRule } : {}),
-    pipelineVersion: 'vip-gemini-fb-xai-v1',
+    pipelineVersion: 'vip-pi-fb-xai-v1',
     personSnapshot,
   };
   let report: db.PublishedReport;
@@ -1913,7 +1900,7 @@ async function runCompanyResearch(
     // produce, and it runs on a different machine down a different lane -- so
     // awaiting it in file order was buying nothing and costing its whole duration
     // (159s on the run this was measured against). Started here, it overlaps the
-    // Gemini and ChatGPT rounds and is collected below, before the ledger is
+    // Pi and ChatGPT rounds and is collected below, before the ledger is
     // built. `catch` is attached immediately so a rejection while nobody is
     // awaiting it cannot become an unhandled rejection.
     // Stamped inside the chain, not at collection: the round finishes while
@@ -1927,7 +1914,7 @@ async function runCompanyResearch(
     try {
       // Do not pin to the mini: it is opportunistic capacity and can be offline.
       // The gateway chooses a live mini when present and otherwise a ready container.
-      const r1 = await ask('agy', round01Prompt(company), 420_000);
+      const r1 = await ask('pi', round01Prompt(company), 420_000);
       if (r1.parsed) {
         for (const row of [...rows(r1.parsed.contacts), ...rows(r1.parsed.people), ...rows(r1.parsed.candidate_people), ...rows(r1.parsed.signals)]) row._round = 'round01';
         parsedForLedger.push(r1.parsed);
@@ -1936,7 +1923,7 @@ async function runCompanyResearch(
       await db.saveRound(reportId, 'round01', r1, r1.parsed ? 'completed' : 'invalid_output', { model: r1.model, engine: r1.engine, ms: r1.ms, queued_ms: r1.queued_ms, wall_ms: r1.wall_ms });
     } catch (err) {
       failures.push((err as Error).message ?? String(err));
-      await db.saveRound(reportId, 'round01', { error: (err as Error).message }, 'failed', { model: 'agy' });
+      await db.saveRound(reportId, 'round01', { error: (err as Error).message }, 'failed', { model: 'pi' });
     }
 
     const r1Context = parsedForLedger[0] ?? { contacts: [], people: [], signals: [] };
@@ -2015,13 +2002,13 @@ async function runCompanyResearch(
     let finalReport: Record<string, unknown> = { ...ledger, summary: null, outreach_angles: [], synthesis_mode: 'validated_ledger_fallback' };
     let r4Artifact: Record<string, unknown>;
     try {
-      const r4 = await ask('agy', round04Prompt(ledger), 420_000);
+      const r4 = await ask('pi', round04Prompt(ledger), 420_000);
       // Repair formatting, then judge integrity, then publish the repaired
       // object -- not the raw one, and not nothing.
       const r4Final = r4.parsed ? normaliseUrls(r4.parsed) : null;
       const fidelityErrors = r4Final ? validateFinal(r4Final, ledger) : [r4.parse_error ?? 'invalid final output'];
       if (r4Final && !fidelityErrors.length) {
-        finalReport = { ...r4Final, synthesis_mode: 'gemini_validated' };
+        finalReport = { ...r4Final, synthesis_mode: 'pi_validated' };
         produced += 1;
       } else {
         // The rows stay canonical -- an integrity failure means the model altered
@@ -2047,7 +2034,7 @@ async function runCompanyResearch(
     } catch (err) {
       failures.push((err as Error).message ?? String(err));
       r4Artifact = { error: (err as Error).message, fallback_used: true };
-      await db.saveRound(reportId, 'round04', r4Artifact, 'failed_fallback_used', { model: 'agy' });
+      await db.saveRound(reportId, 'round04', r4Artifact, 'failed_fallback_used', { model: 'pi' });
     }
     if (autoPersonResearch) finalReport = { ...finalReport, auto_person_research: autoPersonResearch };
     await db.saveFinal(reportId, ledger, finalReport);
@@ -2089,7 +2076,7 @@ async function runCompanyResearch(
       // reason for `partial`, and only "no round produced anything" is `failed`.
       failures.push('Chinese translation failed: ' + ((err as Error).message ?? String(err)));
       await db.saveTranslation(reportId, {}, {
-        language: 'zh-CN', model: process.env.TRANSLATION_MODEL?.trim() || 'agy',
+        language: 'zh-CN', model: process.env.TRANSLATION_MODEL?.trim() || 'pi',
         status: 'failed', error: (err as Error).message ?? String(err),
       });
     }
@@ -2379,9 +2366,9 @@ async function runPersonResearch(
   try {
     await db.updateReport(publicId, { status: 'running', error: null });
     await db.initPersonResearchRun(reportId);
-    let discoveryMetadata: Record<string, unknown> = { status: 'failed', model: process.env.VIP_GEMINI_MODEL?.trim() || 'agy' };
+    let discoveryMetadata: Record<string, unknown> = { status: 'failed', model: process.env.VIP_RESEARCH_MODEL?.trim() || 'pi' };
     try {
-      const discovery = await ask(process.env.VIP_GEMINI_MODEL?.trim() || 'agy', personDiscoveryPrompt(company, person, identityHints), 420_000);
+      const discovery = await ask(process.env.VIP_RESEARCH_MODEL?.trim() || 'pi', personDiscoveryPrompt(company, person, identityHints), 420_000);
       if (discovery.parsed) {
         const redacted = redactIdentityHintsFromDiscovery(discovery.parsed, identityHints);
         for (const row of [...rows(redacted.contacts), ...rows(redacted.facts), ...rows(redacted.signals)]) row._round = 'person_discovery';
@@ -2391,7 +2378,7 @@ async function runPersonResearch(
       if (!discovery.parsed) discoveryMetadata = { status: 'invalid_output', model: discovery.model, engine: discovery.engine, ms: discovery.ms };
     } catch (err) {
       hadFailure = true;
-      discoveryMetadata = { status: 'failed', model: process.env.VIP_GEMINI_MODEL?.trim() || 'agy', error: (err as Error).message ?? String(err) };
+      discoveryMetadata = { status: 'failed', model: process.env.VIP_RESEARCH_MODEL?.trim() || 'pi', error: (err as Error).message ?? String(err) };
     }
 
     const [facebookScout, xScout] = await Promise.all([

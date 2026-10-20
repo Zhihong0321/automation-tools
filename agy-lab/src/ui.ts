@@ -61,7 +61,7 @@ export function page(): string {
 <body>
 <div class="wrap">
   <h1>agy-lab</h1>
-  <p class="sub">Install, authenticate and drive the Antigravity CLI inside this container.</p>
+  <p class="sub">The research hub: the Pi worker (MiniMax), contact research, and signed-in ChatGPT browser sessions.</p>
   <nav class="sitenav" aria-label="Site">${navHtml(OPERATOR_NAV, '/')}</nav>
 
   <div class="card">
@@ -79,51 +79,26 @@ export function page(): string {
     <div class="kv" id="status"><b>loading</b><span>...</span></div>
     <div class="row" style="margin-top:14px">
       <button onclick="refresh()">Refresh</button>
-      <button onclick="post('/api/install',{},'Installing agy')">1. Install agy</button>
-      <button class="primary" onclick="login()">2. Log in</button>
-      <button onclick="probe()">3. Probe auth</button>
     </div>
-    <div id="probe"></div>
-  </div>
-
-  <div class="card">
-    <h2>Terminal <span id="sessionLabel" style="color:var(--muted);text-transform:none;letter-spacing:0"></span></h2>
-    <div class="row">
-      <input id="stdin" placeholder="Paste the authorization code here, then press Send" onkeydown="if(event.key==='Enter')send()">
-      <button class="primary" onclick="send()">Send</button>
-      <button onclick="post('/api/session/'+cur+'/kill',{},'Killing')">Kill</button>
-    </div>
-    <pre id="term">No session yet. Install or Log in to start one.</pre>
   </div>
 
   <div class="grid2">
     <div class="card">
-      <h2>Run a prompt</h2>
+      <h2>Ask Pi</h2>
       <textarea id="prompt" rows="3">Reply with exactly: OK</textarea>
       <div class="row" style="margin-top:8px">
-        <button class="primary" onclick="run()">Run</button>
-        <label class="hint"><input type="checkbox" id="tools" style="width:auto"> allow tools (--dangerously-skip-permissions)</label>
+        <button class="primary" onclick="run()">Ask</button>
+        <span class="hint">Pi runs with web_search and web_fetch.</span>
       </div>
+      <pre id="runOut" style="display:none"></pre>
     </div>
 
     <div class="card">
       <h2>Shell</h2>
-      <textarea id="cmd" rows="3">ls -la $HOME; ls -la $HOME/.gemini/antigravity-cli 2>&1 | head -40</textarea>
+      <textarea id="cmd" rows="3">ls -la $HOME</textarea>
       <div class="row" style="margin-top:8px"><button onclick="execCmd()">Exec</button></div>
       <pre id="execOut" style="display:none"></pre>
     </div>
-  </div>
-
-  <div class="card">
-    <h2>Where does the credential land?</h2>
-    <p class="hint" style="margin:0 0 10px">Snapshot every file under HOME, log in, then diff. Whatever appeared is the credential store — the one thing agy's docs never say.</p>
-    <div class="row">
-      <button onclick="post('/api/snapshot',{label:'pre-login'},'Snapshot taken')">Snapshot now</button>
-      <button onclick="diff()">Diff vs pre-login</button>
-      <input id="inspect" placeholder="/data/.gemini/... path to inspect" style="flex:1;min-width:200px">
-      <button onclick="inspectFile()">Inspect</button>
-    </div>
-    <pre id="research" style="display:none"></pre>
   </div>
 
   <div class="card">
@@ -187,7 +162,6 @@ export function page(): string {
 </div>
 
 <script>
-let cur = null, offset = 0, poller = null;
 const $ = (id) => document.getElementById(id);
 const tok = () => localStorage.getItem('labToken') || '';
 
@@ -220,117 +194,49 @@ function ago(iso) {
   return Math.round(s / 3600) + 'h ago';
 }
 
-// Strip the escape sequences a pty emits. agy in print mode is close to linear
-// text, but it still colours and repositions; left raw the page fills with
-// mojibake and the URL you need is buried in it.
-function clean(s) {
-  return s
-    .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
-    .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
-    .replace(/\x1b[()][A-B0-2]/g, '')
-    .replace(/\r(?!\n)/g, '\n');
-}
-
-// Any https://... in the output is the thing to click. Linkifying it is the
-// difference between a login you can complete and a URL you have to hand-copy
-// out of a scrolling terminal.
-function linkify(s) {
-  const esc = s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-  return esc.replace(/(https?:\/\/[^\s"'<>)]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
-}
-
 async function refresh() {
   const { status, body } = await api('/api/status');
   if (status !== 200) { $('status').innerHTML = '<b>error</b><span>' + (body.error || status) + '</span>'; return; }
   $('authState').className = 'pill ok';
   $('authState').textContent = 'token ok';
+  const p = body.pi || {};
   const rows = [
-    ['agy installed', body.installed ? 'yes - ' + body.bin : 'NO - press Install'],
-    ['version', body.version || '(unknown)'],
+    ['Pi worker', p.configured ? 'ready - ' + p.provider + '/' + p.model : 'NOT CONFIGURED - set MINIMAX_API_KEY'],
+    ['Pi calls', (p.inFlight || 0) + ' running, ' + (p.waiting || 0) + ' waiting, max ' + (p.max || '?')],
     ['HOME', body.home],
-    ['app data', body.appData],
-    ['D-Bus present', body.dbus ? 'yes' : 'no (keyring bypassed - file store expected)'],
-    ['volume mounted', body.volume.mounted ? 'yes' : 'NO - a redeploy will wipe the login'],
-    ['GEMINI_API_KEY', body.configured.geminiApiKey ? 'set' : 'not set'],
-    ['modelProvider', body.configured.modelProvider || '(unset)'],
-    ['GOOGLE_APPLICATION_CREDENTIALS', body.configured.adc ? 'set' : 'not set'],
     ['memory', body.memory
       ? body.memory.containerUsedMb + ' / ' + body.memory.containerLimitMb + ' MB, node ' +
         body.memory.rssMb + ' MB, browsers ' + body.memory.openBrowsers + '/' + body.memory.maxOpenBrowsers
       : '(unknown)'],
     ['uptime', body.uptimeSec != null ? Math.round(body.uptimeSec / 60) + 'm (since ' + body.startedAt + ')' : '(unknown)'],
   ];
-  // A restart wipes every open browser and every in-memory snapshot, so a recent
-  // one explains far more symptoms than it looks like it should.
+  // A restart wipes every open browser, so a recent one explains far more
+  // symptoms than it looks like it should.
   if (body.lastCrash) {
     rows.push(['LAST CRASH', body.lastCrash.kind + ' at ' + body.lastCrash.at + ' - ' +
-      String(body.lastCrash.message).split('\n')[0]]);
+      String(body.lastCrash.message).split('
+')[0]]);
   }
-  $('status').innerHTML = rows.map(([k, v]) => '<b>' + k + '</b><span>' + v + '</span>').join('');
-  if (body.sessions && body.sessions.length && !cur) attach(body.sessions[body.sessions.length - 1].id);
+  $('status').innerHTML = rows.map(([k, v]) => '<b>' + k + '</b><span>' + esc(v) + '</span>').join('');
 }
 
-function attach(id) {
-  cur = id; offset = 0;
-  $('term').textContent = '';
-  $('sessionLabel').textContent = '- ' + id;
-  if (poller) clearInterval(poller);
-  poller = setInterval(pump, 800);
-  pump();
-}
+async function run() {
+  $('runOut').style.display = 'block';
+  $('runOut').textContent = 'Asking Pi...';
+  const { body } = await api('/api/ask', { method: 'POST', body: JSON.stringify({ model: 'pi', prompt: $('prompt').value }) });
+  $('runOut').textContent = body.answer != null
+    ? body.answer + '
 
-async function pump() {
-  if (!cur) return;
-  const { status, body } = await api('/api/session/' + cur + '?offset=' + offset);
-  if (status !== 200) return;
-  offset = body.offset;
-  if (body.data) $('term').innerHTML += linkify(clean(body.data));
-  $('term').scrollTop = $('term').scrollHeight;
-  $('sessionLabel').textContent = '- ' + cur + (body.running ? ' (running)' : ' (exit ' + body.exitCode + ')');
-  if (!body.running) { clearInterval(poller); poller = null; refresh(); }
-}
-
-async function post(path, payload, label) {
-  $('term').textContent = label + '...\n';
-  const { body } = await api(path, { method: 'POST', body: JSON.stringify(payload) });
-  if (body.id) attach(body.id); else $('term').textContent = JSON.stringify(body, null, 2);
-}
-
-const login = () => post('/api/login', {}, 'Starting login - watch for a URL below');
-const run = () => post('/api/run', { prompt: $('prompt').value, tools: $('tools').checked }, 'Running');
-
-async function send() {
-  if (!cur) return;
-  const text = $('stdin').value;
-  $('stdin').value = '';
-  await api('/api/session/' + cur + '/input', { method: 'POST', body: JSON.stringify({ text }) });
-  pump();
-}
-
-async function probe() {
-  $('probe').innerHTML = '<p class="hint">Probing - this makes one real model call...</p>';
-  const { body } = await api('/api/probe', { method: 'POST', body: '{}' });
-  $('probe').innerHTML =
-    '<p style="margin:12px 0 0"><span class="pill ' + body.status + '">' + body.status + '</span> ' +
-    (body.detail || '') + '</p>';
+(' + body.model + ', ' + Math.round((body.ms || 0) / 1000) + 's)'
+    : JSON.stringify(body, null, 2);
 }
 
 async function execCmd() {
   const { body } = await api('/api/exec', { method: 'POST', body: JSON.stringify({ cmd: $('cmd').value }) });
   $('execOut').style.display = 'block';
-  $('execOut').textContent = 'exit ' + body.code + '\n\n' + (body.stdout || '') + (body.stderr || '');
-}
+  $('execOut').textContent = 'exit ' + body.code + '
 
-async function diff() {
-  const { body } = await api('/api/snapshot/diff?from=pre-login');
-  $('research').style.display = 'block';
-  $('research').textContent = JSON.stringify(body, null, 2);
-}
-
-async function inspectFile() {
-  const { body } = await api('/api/file?path=' + encodeURIComponent($('inspect').value));
-  $('research').style.display = 'block';
-  $('research').textContent = JSON.stringify(body, null, 2);
+' + (body.stdout || '') + (body.stderr || '');
 }
 
 // ---- ChatGPT sessions ------------------------------------------------------
@@ -491,7 +397,7 @@ async function ask() {
 $('token').value = tok();
 refresh();
 loadSessions();
-setInterval(() => { if (!poller) refresh(); }, 15000);
+setInterval(refresh, 15000);
 </script>
 </body>
 </html>`;

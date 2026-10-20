@@ -5,14 +5,12 @@
 // a fixed API. Those two facts together are why LAB_TOKEN is mandatory and the
 // process refuses to start without it. There is no "dev mode" that skips it: an
 // open /api/exec on a public hostname is a root shell for whoever scans the port
-// first, and this container will be holding a live Google session.
+// first, and this container holds signed-in ChatGPT sessions and API keys.
 import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { exec } from 'node:child_process';
-import * as agy from './agy.ts';
-import * as pty from './pty.ts';
-import * as snap from './snapshot.ts';
+import * as pi from './pi.ts';
 import * as browser from './browser.ts';
 import * as cgpt from './cgptroutes.ts';
 import * as gateway from './gateway.ts';
@@ -22,7 +20,8 @@ import * as log from './logstore.ts';
 import * as intel from './intel.ts';
 import * as reportdb from './reportdb.ts';
 import * as autoContact from './autocontact.ts';
-import * as geminiContact from './gemini-contact-worker.ts';
+import * as contactWorker from './contact-worker.ts';
+import * as tavily from './tavily.ts';
 import { page } from './ui.ts';
 import { page as docsPage } from './docs.ts';
 import { document as openApiDocument } from './openapi.ts';
@@ -32,6 +31,7 @@ import { page as workersPage } from './workers.ts';
 import { missingPage } from './nav.ts';
 
 const PORT = Number(process.env.PORT ?? 8080);
+const HOME = process.env.HOME ?? '/data';
 const TOKEN = process.env.LAB_TOKEN ?? '';
 const PORTAL_TOKEN = process.env.PORTAL_TOKEN?.trim() ?? '';
 
@@ -40,9 +40,6 @@ if (TOKEN.length < 16) {
   console.error('Set it in the Railway service variables, then redeploy.');
   process.exit(1);
 }
-
-/** Snapshots by label, so a login can be diffed against the state before it. */
-const snapshots = new Map<string, snap.Snapshot>();
 
 const STARTED_AT = new Date().toISOString();
 /** Survives only until the next restart, which is exactly the window it describes. */
@@ -281,7 +278,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 
   // ---- ChatGPT sessions --------------------------------------------------
   // Delegated wholesale. These routes own a browser process each and have their
-  // own locking discipline; interleaving them with the agy routes here would put
+  // own locking discipline; interleaving them with the routes here would put
   // that discipline somewhere it is easy to miss.
   if (p.startsWith('/api/cgpt') || p === '/api/net') {
     if (await cgpt.handle(req, res, url, { json, readJson })) return;
@@ -295,8 +292,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (await jobs.handle(req, res, url, { json, readJson })) return;
   }
 
-  if (p === '/api/gemini-contact-keys') {
-    if (await geminiContact.handleKeys(req, res, url, { json, readJson })) return;
+  if (p === '/api/contact-keys' || p === '/api/gemini-contact-keys') {
+    if (await tavily.handleKeys(req, res, url, { json, readJson })) return;
   }
 
   // ---- logs ---------------------------------------------------------------
@@ -326,95 +323,15 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // ---- state -------------------------------------------------------------
   if (method === 'GET' && p === '/api/status') {
     return json(res, 200, {
-      ...(await agy.status()),
+      home: HOME,
+      pi: pi.status(),
       memory: browser.memory(),
       startedAt: STARTED_AT,
       uptimeSec: Math.round(process.uptime()),
       lastCrash,
       queue: queue.snapshot(),
       logs: log.stats(),
-      sessions: pty.list(),
-      snapshots: [...snapshots.keys()],
     });
-  }
-
-  if (method === 'POST' && p === '/api/probe') {
-    const body = await readJson(req);
-    return json(res, 200, await agy.probe(num(body.timeoutMs, 120_000)));
-  }
-
-  // ---- install -----------------------------------------------------------
-  // Run through the pty like everything else: the installer prints progress and a
-  // PATH warning worth seeing, and one streaming mechanism is easier to trust
-  // than two.
-  if (method === 'POST' && p === '/api/install') {
-    const cmd = agy.INSTALL_CMD + ' 2>&1; echo "[exit $?]"; ls -la ' + pty.sh(agy.BIN_DIR) + ' 2>&1';
-    return json(res, 202, pty.start(cmd, { fakeSsh: false }).view());
-  }
-
-  // ---- terminal sessions -------------------------------------------------
-  if (method === 'POST' && p === '/api/session') {
-    const body = await readJson(req);
-    const command = str(body.command).trim();
-    if (!command) return json(res, 400, { error: 'command is required' });
-    const env = (body.env && typeof body.env === 'object' ? body.env : {}) as Record<string, string>;
-    return json(res, 202, pty.start(command, { fakeSsh: body.fakeSsh !== false, env }).view());
-  }
-
-  // The login. Snapshot first, then start the run that triggers it.
-  //
-  // Print mode rather than the TUI on purpose: agy's changelog documents the
-  // authorization code being read from the controlling terminal specifically in
-  // `-p` runs, and a linear prompt-and-answer is legible in a browser in a way a
-  // full-screen TUI redrawing over itself is not.
-  if (method === 'POST' && p === '/api/login') {
-    const body = await readJson(req);
-    snapshots.set('pre-login', snap.take(agy.HOME));
-    const timeout = num(body.timeoutMs, 900_000);
-    const command =
-      pty.sh(agy.BIN) + ' -p ' + pty.sh(str(body.prompt, 'Reply with exactly: OK')) +
-      ' --print-timeout ' + Math.round(timeout / 1000) + 's --output-format text 2>&1';
-    const s = pty.start(command, { fakeSsh: body.fakeSsh !== false });
-    return json(res, 202, { ...s.view(), snapshot: 'pre-login' });
-  }
-
-  const sessionMatch = /^\/api\/session\/([a-z0-9]+)(\/input|\/kill)?$/.exec(p);
-  if (sessionMatch) {
-    const s = pty.get(sessionMatch[1]!);
-    if (!s) return json(res, 404, { error: 'no such session' });
-
-    if (method === 'GET' && !sessionMatch[2]) {
-      const out = s.since(num(Number(url.searchParams.get('offset')), 0));
-      return json(res, 200, { ...s.view(), ...out });
-    }
-    // Writing the OAuth code into a live terminal is the entire login flow.
-    if (method === 'POST' && sessionMatch[2] === '/input') {
-      const body = await readJson(req);
-      const ok = s.write(str(body.text), body.newline !== false);
-      return json(res, ok ? 200 : 409, { ...s.view(), written: ok });
-    }
-    if (method === 'POST' && sessionMatch[2] === '/kill') {
-      s.kill();
-      return json(res, 200, s.view());
-    }
-  }
-
-  // ---- run a prompt ------------------------------------------------------
-  if (method === 'POST' && p === '/api/run') {
-    const body = await readJson(req);
-    const prompt = str(body.prompt).trim();
-    if (!prompt) return json(res, 400, { error: 'prompt is required' });
-    const timeout = num(body.timeoutMs, 300_000);
-    // Tools are opt-in per run. There is no narrower per-tool allow flag on the
-    // command line, so --dangerously-skip-permissions is all-or-nothing: it must
-    // be a deliberate choice each time, not a default that quietly auto-approves
-    // whatever an agent decides to run inside a container holding a live session.
-    const args =
-      '-p ' + pty.sh(prompt) +
-      ' --print-timeout ' + Math.round(timeout / 1000) + 's' +
-      ' --output-format ' + str(body.format, 'text') +
-      ' --dangerously-skip-permissions';
-    return json(res, 202, pty.start(pty.sh(agy.BIN) + ' ' + args + ' 2>&1', { fakeSsh: true }).view());
   }
 
   // ---- research ----------------------------------------------------------
@@ -424,7 +341,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (!cmd) return json(res, 400, { error: 'cmd is required' });
     const timeout = num(body.timeoutMs, 60_000);
     return await new Promise<void>((resolve) => {
-      exec(cmd, { timeout, maxBuffer: 8 << 20, cwd: agy.HOME, env: process.env }, (err, stdout, stderr) => {
+      exec(cmd, { timeout, maxBuffer: 8 << 20, cwd: HOME, env: process.env }, (err, stdout, stderr) => {
         json(res, 200, {
           cmd,
           code: err ? ((err as { code?: number | string }).code ?? 1) : 0,
@@ -437,53 +354,18 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     });
   }
 
-  if (method === 'POST' && p === '/api/snapshot') {
-    const body = await readJson(req);
-    const label = str(body.label, 'now');
-    const s = snap.take(str(body.root, agy.HOME));
-    snapshots.set(label, s);
-    return json(res, 200, { label, files: Object.keys(s).length });
-  }
-
-  if (method === 'GET' && p === '/api/snapshot/diff') {
-    const from = snapshots.get(url.searchParams.get('from') ?? 'pre-login');
-    if (!from) return json(res, 404, { error: 'no such snapshot', have: [...snapshots.keys()] });
-    const toLabel = url.searchParams.get('to');
-    const to = toLabel ? snapshots.get(toLabel) : snap.take(agy.HOME);
-    if (!to) return json(res, 404, { error: 'no such snapshot', have: [...snapshots.keys()] });
-    return json(res, 200, snap.diff(from, to));
-  }
-
-  if (method === 'GET' && p === '/api/file') {
-    const file = url.searchParams.get('path');
-    if (!file) return json(res, 400, { error: 'path is required' });
-    try {
-      // reveal=1 prints secrets verbatim. Off by default: the file we are hunting
-      // for is a live token, and a browser tab is not a vault.
-      return json(res, 200, snap.inspect(file, url.searchParams.get('reveal') === '1'));
-    } catch (err) {
-      return json(res, 404, { error: (err as Error).message });
-    }
-  }
-
-  if (method === 'POST' && p === '/api/settings/provider') {
-    const body = await readJson(req);
-    const provider = body.provider === null ? null : str(body.provider, 'gemini');
-    return json(res, 200, agy.setModelProvider(provider));
-  }
-
   json(res, 404, { error: 'not found', path: p });
 }
 
 // A cwd that does not exist makes every exec fail with a bare ENOENT that reads
 // like a missing binary. Cheap to rule out at boot rather than debug later.
-fs.mkdirSync(agy.HOME, { recursive: true });
+fs.mkdirSync(HOME, { recursive: true });
 
 // Run outside the container and HOME is a real person's home directory, where
-// this process will happily rewrite the settings.json of an agy they use daily.
+// browser profiles and Pi's working folder would land beside their own files.
 // Loud, because it is not obvious until something has already been overwritten.
-if (agy.HOME !== '/data') {
-  console.warn('WARNING: HOME is ' + agy.HOME + ', not /data.');
+if (HOME !== '/data') {
+  console.warn('WARNING: HOME is ' + HOME + ', not /data.');
   console.warn('This writes to a real home directory. Set HOME=/data unless you mean it.');
 }
 
@@ -512,16 +394,15 @@ server.listen(PORT, '0.0.0.0', () => {
     .then((count) => { if (count) console.log(`[contact] requeued ${count} interrupted cloud report(s) onto the normal queue`); })
     .catch((error) => console.error('[contact] could not requeue interrupted cloud reports: ' + String(error)));
   console.log('agy-lab listening on :' + PORT);
-  console.log('  HOME     ' + agy.HOME);
-  console.log('  agy      ' + (fs.existsSync(agy.BIN) ? agy.BIN : 'not installed yet - POST /api/install'));
-  console.log('  appData  ' + agy.APP_DATA);
+  console.log('  HOME     ' + HOME);
+  console.log('  pi       ' + (pi.config().apiKey ? pi.PROVIDER + '/' + pi.config().model : 'NOT CONFIGURED - set MINIMAX_API_KEY'));
   console.log('  reports  ' + (process.env.DATABASE_URL?.trim() ? 'direct Postgres' : reportdb.configured() ? 'pg-proxy fallback (token can expire)' : 'NOT CONFIGURED'));
   // Age 0 at boot: this process owns no run yet, so anything non-terminal was
   // stranded by the restart that just happened.
   reapAbandonedRuns(0);
   autoContact.init({ launch: intel.launchContactResearch });
   autoContact.start();
-  geminiContact.start();
+  contactWorker.start();
   // Broker jobs live only in memory. Refill it from saved contact reports after
   // a restart, with no more concurrent jobs than the research lanes can run.
   setInterval(() => {
