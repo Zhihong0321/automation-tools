@@ -178,10 +178,31 @@ test('tavily search handles rate limits and quota exceeded error', async () => {
   await assert.rejects(
     () => tavilySearch({ name: 'Acme', location: '', website: '', extraUrls: [] }, 'test-key', fetch429),
     (err: unknown) => {
-      assert.match(String(err), /rate_limit/);
+      assert.match(String(err), /quota/);
+      assert.equal((err as { code?: string }).code, 'quota');
       return true;
     },
   );
+  const fetchRate: typeof fetch = async () => new Response('{"detail":"too many requests"}', { status: 429 });
+  await assert.rejects(
+    () => tavilySearch({ name: 'Acme', location: '', website: '', extraUrls: [] }, 'test-key', fetchRate),
+    (err: unknown) => (err as { code?: string }).code === 'rate_limit',
+  );
+  const fetch432: typeof fetch = async () => new Response('{"detail":{"error":"This request exceeds your plan\'s set usage limit."}}', { status: 432 });
+  await assert.rejects(
+    () => tavilySearch({ name: 'Acme', location: '', website: '', extraUrls: [] }, 'test-key', fetch432),
+    (err: unknown) => (err as { code?: string }).code === 'quota',
+  );
+});
+
+test('tavily search results that mention credit or quota are not a quota error', async () => {
+  const fetchOk: typeof fetch = async () => new Response(JSON.stringify({
+    query: 'Acme',
+    results: [{ url: 'https://www.ctoscredit.com.my/acme', title: 'Acme credit report', content: 'Import quota and credit terms for Acme Sdn Bhd' }],
+  }), { status: 200 });
+  const out = await tavilySearch({ name: 'Acme', location: '', website: '', extraUrls: [] }, 'test-key', fetchOk);
+  assert.equal(out.sources.length, 1);
+  assert.equal(out.sources[0]?.url, 'https://www.ctoscredit.com.my/acme');
 });
 
 

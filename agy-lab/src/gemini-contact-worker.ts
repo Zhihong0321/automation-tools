@@ -499,8 +499,13 @@ export async function tavilySearch(
         );
       }
       const raw = await res.text();
-      if (res.status === 429 || /usage_limit|quota|credit|rate_limit/i.test(raw)) {
-        throw fail(`429 rate_limit_error: tavily quota or rate limit: ${raw.slice(0, 200)}`, 'rate_limit');
+      // Only an error response counts: a 200 body is search results, and their text can say "credit" or "quota".
+      // Tavily answers 432 when the plan's monthly credits are spent and 433 when the pay-as-you-go cap is hit.
+      if (res.status === 432 || res.status === 433 || (!res.ok && /usage_limit|quota|credit|plan limit/i.test(raw))) {
+        throw fail(`tavily monthly quota exceeded (${res.status}): ${raw.slice(0, 200)}`, 'quota');
+      }
+      if (res.status === 429) {
+        throw fail(`429 rate_limit_error: tavily rate limit: ${raw.slice(0, 200)}`, 'rate_limit');
       }
       if (!res.ok) {
         throw fail(`upstream error: tavily answered ${res.status}: ${raw.slice(0, 200)}`, 'timeout');
@@ -853,8 +858,8 @@ async function execute(name: string, job: jobs.Job, env: NodeJS.ProcessEnv): Pro
       searchResult = await tavilySearch(target, search.secret, fetch, config.timeoutMs);
       search.release();
     } catch (cause) {
-      const isRate = /429|rate_limit|quota|credit/i.test(errorText(cause));
-      search.release(isRate ? 60_000 : 0, isRate);
+      const code = (cause as { code?: string }).code;
+      search.release(code === 'rate_limit' || code === 'quota' ? 60_000 : 0, code === 'quota');
       throw cause;
     }
     const urls = await collectPageUrls(target, searchResult.sources, fetch, config);
