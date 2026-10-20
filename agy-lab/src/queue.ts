@@ -80,7 +80,7 @@ function policy(engine: Engine): {
 /** How many run at once in a lane. One browser is a hard limit of the container, not a policy. */
 const laneConcurrency = (lane: Lane): number =>
   lane === 'pi'
-    ? Math.max(1, int('PI_MAX_CONCURRENT', 4))
+    ? Math.max(1, int('PI_MAX_CONCURRENT', 6))
     : lane === 'mini'
       // ego lite runs each account in its own task space, so the mini's ceiling is
       // accounts, not browsers — unlike the container, where it is literally one

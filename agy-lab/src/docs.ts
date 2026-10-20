@@ -707,7 +707,7 @@ data: [DONE]</code></pre>
     <thead><tr><th>Lane</th><th>Runs at once</th><th>Engines</th><th>Spacing</th></tr></thead>
     <tbody>
       <tr><td><code>browser</code></td><td class="num">1</td><td><code>chatgpt</code> — the container has one Chrome</td><td class="num">2 s between calls</td></tr>
-      <tr><td><code>pi</code></td><td class="num">4</td><td><code>pi</code></td><td class="num">none</td></tr>
+      <tr><td><code>pi</code></td><td class="num">6</td><td><code>pi</code></td><td class="num">none</td></tr>
     </tbody>
   </table></div>
   <p>Slots are per lane; spacing, caps and counters are per engine — because the lane
@@ -766,14 +766,15 @@ data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"..."}}]}
   <p>Each call is a fresh in-memory session with exactly two tools: <code>web_search</code>
   (Tavily, the same rotating keys contact research uses) and <code>web_fetch</code> (a GET of a
   public page, reduced to text; private addresses are refused). No shell, no files, no project
-  resources. Up to <code>PI_MAX_CONCURRENT</code> (4) run at once; the rest queue.</p>
+  resources. Up to <code>PI_MAX_CONCURRENT</code> (6) run at once; contact research holds at most
+  <code>CONTACT_LANES</code> (3) of them, so report rounds are not stuck behind its backlog. The rest queue.</p>
   <div class="tbl"><table>
     <thead><tr><th>Variable</th><th class="num">Default</th><th>Means</th></tr></thead>
     <tbody>
       <tr><td><code>MINIMAX_API_KEY</code></td><td class="num">&mdash;</td><td>MiniMax token-plan key. Required.</td></tr>
       <tr><td><code>PI_MODEL</code></td><td class="num">MiniMax-M3.1-Flash-Preview</td><td>MiniMax model id</td></tr>
       <tr><td><code>PI_THINKING</code></td><td class="num">low</td><td>thinking level; MiniMax-M3.1 refuses <code>off</code></td></tr>
-      <tr><td><code>PI_MAX_CONCURRENT</code></td><td class="num">4</td><td>Pi runs in flight at once</td></tr>
+      <tr><td><code>PI_MAX_CONCURRENT</code></td><td class="num">6</td><td>Pi runs in flight at once</td></tr>
     </tbody>
   </table></div>
   <p>Errors map to status codes the way a caller can act on: no key or a rejected key is 503
@@ -1204,7 +1205,7 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
       <tr><td><code>MINIMAX_API_KEY</code></td><td class="num">&mdash;</td><td>the Pi worker's MiniMax key; see <a href="#pi">Pi</a> for the other <code>PI_*</code> settings</td></tr>
       <tr><td><code>PI_ASK_TIMEOUT_MS</code></td><td class="num">300000</td><td></td></tr>
       <tr><td><code>CGPT_ASK_TIMEOUT_MS</code></td><td class="num">180000</td><td></td></tr>
-      <tr><td><code>PI_MAX_CONCURRENT</code></td><td class="num">4</td><td>Pi runs in flight at once</td></tr>
+      <tr><td><code>PI_MAX_CONCURRENT</code></td><td class="num">6</td><td>Pi runs in flight at once</td></tr>
       <tr><td><code>MAX_OPEN_BROWSERS</code></td><td class="num">1</td><td>Chrome profiles open at once — the browser lane's width</td></tr>
       <tr><td><code>CGPT_MIN_GAP_MS</code></td><td class="num">2000</td><td>spacing between calls to that account</td></tr>
       <tr><td><code>PI_MIN_GAP_MS</code></td><td class="num">0</td><td></td></tr>

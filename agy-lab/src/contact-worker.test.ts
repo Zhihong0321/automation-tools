@@ -20,7 +20,7 @@ test('pi contact lanes register under the hub worker name', () => {
   assert.equal(laneName(0), WORKER_NAME);
   assert.equal(laneName(1), 'pi-contact-2');
   assert.equal(resolveConfig({ CONTACT_LANES: '2' }).lanes, 2);
-  assert.equal(resolveConfig({}).lanes, 4);
+  assert.equal(resolveConfig({}).lanes, 3);
 });
 
 test('extract prompt keeps a printed title for any business and carries the page text', () => {

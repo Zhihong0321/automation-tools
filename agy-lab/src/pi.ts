@@ -30,7 +30,9 @@ export function config(env: NodeJS.ProcessEnv = process.env) {
     // MiniMax-M3.1 refuses thinking "off" ("requires adaptive thinking").
     thinking: (env.PI_THINKING?.trim() || 'low') as 'minimal' | 'low' | 'medium' | 'high',
     apiKey: env.MINIMAX_API_KEY?.trim() ?? '',
-    maxConcurrent: Math.max(1, Number(env.PI_MAX_CONCURRENT ?? 4) || 4),
+    // Contact research takes CONTACT_LANES (3) of these; the rest stay free for
+    // report rounds and translation, so a report never queues behind the backlog.
+    maxConcurrent: Math.max(1, Number(env.PI_MAX_CONCURRENT ?? 6) || 6),
   };
 }
 
@@ -225,17 +227,29 @@ async function runSdk(prompt: string, opts: Required<AskOptions>): Promise<strin
         reject(fail('timeout', `Pi gave no answer within ${Math.round(opts.timeoutMs / 1000)}s.`));
       }, opts.timeoutMs);
     });
-    await Promise.race([session.prompt(prompt), timedOut]);
-    const last = [...session.messages].reverse().find((m) => (m as { role?: string }).role === 'assistant') as
+    const lastAssistant = () => [...session.messages].reverse().find((m) => (m as { role?: string }).role === 'assistant') as
       | { stopReason?: string; errorMessage?: string }
       | undefined;
-    if (last?.stopReason === 'error') {
+    const checkError = () => {
+      const last = lastAssistant();
+      if (last?.stopReason !== 'error') return;
       const message = String(last.errorMessage ?? 'unknown error');
       if (/\b429\b|rate.?limit|too many requests|usage limit|quota/i.test(message)) throw fail('rate_limit', 'MiniMax rate limit: ' + message.slice(0, 300));
       if (/\b401\b|\b403\b|invalid.*(api.?key|token)|unauthori[sz]ed/i.test(message)) throw fail('not_configured', 'MiniMax rejected the key: ' + message.slice(0, 300));
       throw fail('failed', 'MiniMax error: ' + message.slice(0, 300));
+    };
+    await Promise.race([session.prompt(prompt), timedOut]);
+    checkError();
+    let answer = (session.getLastAssistantText() ?? '').trim();
+    // MiniMax sometimes ends a tool run on a turn that holds only thinking. One
+    // nudge in the same session gets the answer it already worked out.
+    if (!answer) {
+      await Promise.race([session.prompt('Give your final answer now, in exactly the format asked for.'), timedOut]);
+      checkError();
+      answer = (session.getLastAssistantText() ?? '').trim();
     }
-    return (session.getLastAssistantText() ?? '').trim();
+    if (!answer) throw fail('empty', `Pi finished without an answer (stop reason: ${lastAssistant()?.stopReason ?? 'none'}).`);
+    return answer;
   } finally {
     clearTimeout(timer);
     session.dispose();
