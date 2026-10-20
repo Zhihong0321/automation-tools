@@ -28,7 +28,7 @@ export function config(env: NodeJS.ProcessEnv = process.env) {
   return {
     model: env.PI_MODEL?.trim() || DEFAULT_MODEL,
     // MiniMax-M3.1 refuses thinking "off" ("requires adaptive thinking").
-    thinking: (env.PI_THINKING?.trim() || 'low') as 'minimal' | 'low' | 'medium' | 'high',
+    thinking: (env.PI_THINKING?.trim() || 'low') as ThinkingLevel,
     apiKey: env.MINIMAX_API_KEY?.trim() ?? '',
     // Contact research takes CONTACT_LANES (3) of these; the rest stay free for
     // report rounds and translation, so a report never queues behind the backlog.
@@ -36,10 +36,20 @@ export function config(env: NodeJS.ProcessEnv = process.env) {
   };
 }
 
+export type ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high';
+
 export interface AskOptions {
   timeoutMs?: number;
   /** web_search and web_fetch. On unless a caller turns them off. */
   tools?: boolean;
+  /**
+   * Output cap (thinking plus answer) for one model turn; 0 leaves the model's own.
+   * MiniMax ignores the thinking budget, so this is the only thing that stops a
+   * run that keeps reasoning and never answers.
+   */
+  maxTokens?: number;
+  /** Overrides PI_THINKING for this call. */
+  thinking?: ThinkingLevel;
 }
 
 export interface AskOutcome {
@@ -49,7 +59,7 @@ export interface AskOutcome {
 }
 
 export interface AskError extends Error {
-  /** `not_configured` | `timeout` | `rate_limit` | `empty` | `failed` — what the caller should do about it. */
+  /** `not_configured` | `timeout` | `rate_limit` | `length` | `empty` | `failed` — what the caller should do about it. */
   code?: string;
 }
 
@@ -206,12 +216,13 @@ async function runSdk(prompt: string, opts: Required<AskOptions>): Promise<strin
   const known = rt.getModel(PROVIDER, cfg.model);
   const base = known ?? rt.getModel(PROVIDER, 'MiniMax-M3');
   if (!base) throw fail('not_configured', `Pi has no ${PROVIDER} model catalog.`);
-  const model = known ?? { ...base, id: cfg.model, name: cfg.model };
+  const named = known ?? { ...base, id: cfg.model, name: cfg.model };
+  const model = opts.maxTokens > 0 ? { ...named, maxTokens: opts.maxTokens } : named;
   const { session } = await createAgentSession({
     cwd: AGENT_DIR,
     agentDir: AGENT_DIR,
     model,
-    thinkingLevel: cfg.thinking,
+    thinkingLevel: opts.thinking,
     modelRuntime: rt,
     resourceLoader: loader(opts.tools),
     tools: opts.tools ? ['web_search', 'web_fetch'] : [],
@@ -241,6 +252,11 @@ async function runSdk(prompt: string, opts: Required<AskOptions>): Promise<strin
     await Promise.race([session.prompt(prompt), timedOut]);
     checkError();
     let answer = (session.getLastAssistantText() ?? '').trim();
+    // The output cap ran out mid-thought. A nudge would think again under the same
+    // cap; the caller decides whether a smaller prompt is worth another run.
+    if (!answer && lastAssistant()?.stopReason === 'length') {
+      throw fail('length', `Pi used its ${opts.maxTokens || 'full'} output tokens thinking and gave no answer.`);
+    }
     // MiniMax sometimes ends a tool run on a turn that holds only thinking. One
     // nudge in the same session gets the answer it already worked out.
     if (!answer) {
@@ -282,7 +298,12 @@ export function busy(): { inFlight: number; waiting: number; max: number } {
 }
 
 export async function ask(prompt: string, opts: AskOptions = {}): Promise<AskOutcome> {
-  const full = { timeoutMs: opts.timeoutMs ?? 300_000, tools: opts.tools !== false };
+  const full: Required<AskOptions> = {
+    timeoutMs: opts.timeoutMs ?? 300_000,
+    tools: opts.tools !== false,
+    maxTokens: Math.max(0, Math.floor(opts.maxTokens ?? 0)),
+    thinking: opts.thinking ?? config().thinking,
+  };
   const started = Date.now();
   return withSlot(async () => {
     const answer = await runner(prompt, full);

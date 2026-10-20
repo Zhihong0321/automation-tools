@@ -5,9 +5,11 @@ import * as pi from './pi.ts';
 import {
   JOB_TYPE,
   WORKER_NAME,
+  contactText,
   createKeyPool,
   extractContactsPrompt,
   laneName,
+  preparePages,
   research,
   resolveConfig,
   targetFromPayload,
@@ -201,4 +203,113 @@ test('a returned name, phone, and email are kept even when the citation is not a
   assert.deepEqual(people.map((person) => person.name).sort(), ['Ali bin Abu', '黄文福'].sort());
   assert.equal((result.phone_contacts as Array<Record<string, unknown>>)[0]?.number_raw, '012-3456789');
   assert.equal((result.email_contacts as Array<Record<string, unknown>>)[0]?.email, 'ali@shop.example');
+});
+
+const boilerplate = Array.from({ length: 40 }, (_, i) => `Clause ${i + 1}. The user agrees that the content of this directory is provided as it is, without warranty of any kind.`);
+
+test('a long page keeps its contact lines and a short page goes whole', () => {
+  const long = ['Acme Bakery | Contact', ...boilerplate.slice(0, 20), 'Siti Aminah', 'Owner', 'Tel: 07-555 0101', ...boilerplate.slice(20)].join('\n');
+  const cut = contactText(long);
+  assert.match(cut, /^Acme Bakery \| Contact/);
+  assert.match(cut, /Siti Aminah\nOwner\nTel: 07-555 0101/);
+  assert.ok(cut.length < long.length / 3, `cut to ${cut.length} of ${long.length}`);
+  assert.equal(contactText('Siti Aminah, Owner. 07-555 0101'), 'Siti Aminah, Owner. 07-555 0101');
+});
+
+test('pages sent to pi drop repeated lines, unreadable charsets and pages with nothing new', () => {
+  const pages = preparePages([
+    { url: 'https://acme.example/', text: 'Acme Bakery home\nCall us on 07-555 0101 today' },
+    { url: 'https://www.acme.example/', text: 'Acme Bakery home\nCall us on 07-555 0101 today' },
+    { url: 'https://acme.example/contact', text: '������ menu\nCall us on 07-555 0101 today\nhello@acme.example sales desk' },
+  ]);
+  assert.deepEqual(pages.map((page) => page.url), ['https://acme.example/', 'https://acme.example/contact']);
+  assert.equal(pages[1]!.text, 'hello@acme.example sales desk');
+});
+
+test('the smaller page set puts pages that print a phone or email first', () => {
+  const pages = preparePages([
+    { url: 'https://news.example/a', text: 'Acme Bakery wins a local award for its bread' },
+    { url: 'https://dir.example/acme', text: 'Acme Bakery listing, telephone 07-555 0101' },
+    { url: 'https://acme.example/contact', text: 'Write to hello@acme.example' },
+  ], { maxPages: 2 });
+  assert.deepEqual(pages.map((page) => page.url), ['https://dir.example/acme', 'https://acme.example/contact']);
+});
+
+function extractFixture() {
+  const fetchMock: typeof fetch = async (url) => {
+    const href = String(url);
+    if (href.includes('api.tavily.com')) {
+      return new Response(JSON.stringify({
+        results: Array.from({ length: 6 }, (_, i) => ({
+          title: `Page ${i}`, url: `https://dir${i}.example/acme`, content: `Acme Bakery listing ${i}`,
+        })),
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    const n = /dir(\d)/.exec(href)?.[1] ?? 'x';
+    const body = n === '0' ? 'Acme Bakery, telephone 07-555 0101' : `Acme Bakery review number ${n}, lovely bread`;
+    return new Response(`<html><body><p>${body}</p></body></html>`, { status: 200, headers: { 'content-type': 'text/html' } });
+  };
+  return { fetchMock, payload: { name: 'Acme Bakery', location: 'Johor Bahru' } };
+}
+
+const answerJson = '{"people":[],"phones":[{"number":"07-555 0101","label":"","evidence_url":"https://dir0.example/acme"}],"emails":[]}';
+
+test('an extract that thinks past its output cap is retried once on fewer pages with minimal thinking', async () => {
+  const { fetchMock, payload } = extractFixture();
+  const calls: Array<{ prompt: string; opts: Required<pi.AskOptions> }> = [];
+  pi.setRunnerForTests(async (prompt, opts) => {
+    calls.push({ prompt, opts });
+    if (calls.length === 1) throw Object.assign(new Error('Pi used its 8192 output tokens thinking and gave no answer.'), { code: 'length' });
+    return answerJson;
+  });
+  try {
+    const result = await research(payload, { fetchImpl: fetchMock, tavilyKey: 'tvly-test-key', env: { CONTACT_TIMEOUT_MS: '100000' } });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]!.opts.tools, false);
+    assert.equal(calls[0]!.opts.maxTokens, 8192);
+    assert.equal(calls[0]!.opts.timeoutMs, 50_000);
+    assert.equal(calls[1]!.opts.thinking, 'minimal');
+    assert.ok(calls[1]!.opts.timeoutMs >= 30_000);
+    const pagesIn = (prompt: string) => prompt.match(/<page url=/g)?.length ?? 0;
+    assert.equal(pagesIn(calls[0]!.prompt), 6);
+    assert.equal(pagesIn(calls[1]!.prompt), 4);
+    assert.match(calls[1]!.prompt, /<page url="https:\/\/dir0\.example\/acme">\nAcme Bakery, telephone 07-555 0101/);
+    assert.equal((result.phone_contacts as Array<Record<string, unknown>>)[0]?.number_raw, '07-555 0101');
+    assert.equal((result.research_meta as { sources: string[] }).sources.length, 4);
+  } finally {
+    pi.setRunnerForTests(null);
+  }
+});
+
+test('an extract that fails twice reports both, and a rate limit is not retried', async () => {
+  const { fetchMock, payload } = extractFixture();
+  let calls = 0;
+  pi.setRunnerForTests(async () => {
+    calls++;
+    throw Object.assign(new Error('Pi gave no answer within 90s.'), { code: 'timeout' });
+  });
+  try {
+    await assert.rejects(
+      () => research(payload, { fetchImpl: fetchMock, tavilyKey: 'tvly-test-key' }),
+      (err: unknown) => {
+        assert.equal((err as { code?: string }).code, 'timeout');
+        assert.match(String(err), /retry after: pi extract step failed/);
+        return true;
+      },
+    );
+    assert.equal(calls, 2);
+
+    calls = 0;
+    pi.setRunnerForTests(async () => {
+      calls++;
+      throw Object.assign(new Error('MiniMax rate limit: 429'), { code: 'rate_limit' });
+    });
+    await assert.rejects(
+      () => research(payload, { fetchImpl: fetchMock, tavilyKey: 'tvly-test-key' }),
+      (err: unknown) => (err as { code?: string }).code === 'rate_limit',
+    );
+    assert.equal(calls, 1);
+  } finally {
+    pi.setRunnerForTests(null);
+  }
 });

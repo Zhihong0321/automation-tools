@@ -19,6 +19,15 @@ const DEFAULT_TIMEOUT_MS = 180_000;
 const MAX_SOURCES = 12;
 const MAX_PAGES_READ = 8;
 const PAGE_CHARS = 6_000;
+// About one run in ten, MiniMax argues with itself over the rules and thinks past
+// any timeout (112k characters of reasoning in 300s, no answer). A good run uses
+// under 5k output tokens, and 8k takes about 85s, so a stuck run ends in time for
+// a second, smaller try inside DEFAULT_TIMEOUT_MS.
+const EXTRACT_MAX_TOKENS = 8_192;
+// A page this short goes to Pi whole; a longer one keeps only its contact lines.
+const SHORT_PAGE_CHARS = 1_500;
+const RETRY_PAGES = 4;
+const RETRY_PAGE_CHARS = 2_500;
 const JOB_HOSTS = [
   'jobstreet.com', 'jobstreet.com.my', 'my.jobstreet.com', 'maukerja.my', 'hiredly.com',
   'ricebowl.my', 'jora.com', 'indeed.com', 'glassdoor.com', 'fastjobs.my', 'careerjet.com',
@@ -189,11 +198,13 @@ export function extractContactsPrompt(target: Target, pages: Page[]): string {
     '{"people":[{"name":"","position":"","evidence_url":""}],"phones":[{"number":"","label":"","evidence_url":""}],"emails":[{"email":"","label":"","evidence_url":""}]}',
     '',
     'Rules:',
+    '- Decide each row once. When a rule below is unclear for a row, take the simpler reading and move on.',
     '- One row per person. position is the job title printed on the page.',
     '- Keep a department or function when it is part of that title, such as Owner, Store Manager, Head of Purchasing, Principal Dentist, or Partner.',
     '- Do not add a title the page does not print. Do not copy a practice area, product line, or biography sentence into position when a shorter title is printed with the name.',
     '- Include every person whose name is printed as someone who currently works at this organisation, on a current page of its own site, a current social profile, or a current registry filing.',
-    '- Include every phone and email printed for this organisation. Label each with the office, branch, department, or person printed beside it. Include a fax only with the label "fax".',
+    '- Include every phone and email printed for this organisation. Label each with the office, branch, department, or person printed beside it, or leave the label empty when none is printed. Include a fax only with the label "fax".',
+    '- The same digits written another way are one phone: list it once, as first printed.',
     '- evidence_url must be the url of the <page> the fact is printed on.',
     '- Do not invent a mobile number, a personal email, a WhatsApp number, or a title.',
     '- Do not include a journalist, reviewer, customer, or a person who is only quoted in a news story.',
@@ -292,6 +303,110 @@ export async function readPages(urls: string[], sources: Source[], fetchImpl: Fe
     return snippet ? { url, text: `[search snippet; the page itself did not load] ${snippet}` } : null;
   }));
   return pages.filter((page): page is Page => page !== null);
+}
+
+const EMAIL_RE = /[^\s@<>()]+(?:@|\s?\[at\]\s?)[^\s@<>()]+\.[a-z]{2,}/i;
+const CONTACT_WORDS = new RegExp([
+  String.raw`\b(?:tel|telephone|phone|fax|mobile|h\/?p|whatsapp|call|e-?mail|contact|hubungi|address`,
+  String.raw`director|manager|owner|founder|proprietor|partner|ceo|cfo|coo|cto|chairman|chairperson|president`,
+  String.raw`principal|head|chief|executive|officer|supervisor|pengarah|pengurus|pemilik`,
+  String.raw`mr|mrs|ms|mdm|madam|dr|encik|puan|datuk|dato|tan sri)\b|经理|董事|总监|老板|东主|电话|联系`,
+].join('|'), 'i');
+
+function hasPhone(line: string): boolean {
+  for (const match of line.matchAll(/\+?\(?\d[\d\s().-]{6,}\d/g)) {
+    const digits = match[0].replace(/\D/g, '').length;
+    if (digits >= 8 && digits <= 15) return true;
+  }
+  return false;
+}
+
+function hasContactDetail(line: string): boolean {
+  return hasPhone(line) || EMAIL_RE.test(line);
+}
+
+function isContactLine(line: string): boolean {
+  return hasContactDetail(line) || CONTACT_WORDS.test(line);
+}
+
+/** Page text as lines of at most 400 characters, split at sentence ends where it can. */
+function pageLines(text: string): string[] {
+  const lines: string[] = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.length <= 400) { lines.push(line); continue; }
+    for (const piece of line.split(/(?<=[.!?|•·])\s+/)) {
+      for (let i = 0; i < piece.length; i += 400) lines.push(piece.slice(i, i + 400));
+    }
+  }
+  return lines;
+}
+
+/**
+ * The part of a page Pi needs: a short page whole, a long one cut to the lines
+ * that print a phone, an email, a title or a contact word, with `context` lines
+ * either side (a name often sits on the line above its title) and the first line,
+ * which is usually the page title. Lines are copied, never rewritten, so every
+ * contact Pi returns is still printed on the page.
+ */
+export function contactText(text: string, opts: { maxChars?: number; context?: number } = {}): string {
+  const maxChars = opts.maxChars ?? PAGE_CHARS;
+  const context = opts.context ?? 2;
+  let out = text.trim();
+  if (out.length > SHORT_PAGE_CHARS) {
+    const lines = pageLines(out);
+    const keep = new Set<number>([0]);
+    lines.forEach((line, i) => {
+      if (!isContactLine(line)) return;
+      for (let j = Math.max(0, i - context); j <= Math.min(lines.length - 1, i + context); j++) keep.add(j);
+    });
+    const kept: string[] = [];
+    let last = -1;
+    for (const i of [...keep].sort((a, b) => a - b)) {
+      if (i > last + 1) kept.push('…');
+      kept.push(lines[i]!);
+      last = i;
+    }
+    if (last < lines.length - 1) kept.push('…');
+    out = kept.join('\n');
+  }
+  return out.length > maxChars ? out.slice(0, maxChars) + '\n[cut]' : out;
+}
+
+function lineKey(line: string): string {
+  return line.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * The pages as Pi reads them: each cut to its contact text, a line already shown
+ * on an earlier page dropped (www and bare host, mobile and desktop copies of one
+ * page), and a page with nothing new left out. Fewer repeats leave Pi less to
+ * weigh. With `maxPages`, pages that print a phone or an email go first.
+ */
+export function preparePages(pages: Page[], opts: { maxChars?: number; context?: number; maxPages?: number } = {}): Page[] {
+  const seen = new Set<string>();
+  const out: Page[] = [];
+  for (const page of pages) {
+    let fresh = false;
+    const lines = contactText(page.text, opts).split('\n').filter((line) => {
+      const key = lineKey(line);
+      // A page in a charset fetch did not decode (GBK, Big5) is mostly U+FFFD.
+      if ((key.match(/�/g)?.length ?? 0) * 3 >= key.length && key.length) return false;
+      if (key.length < 8) return true;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      fresh = true;
+      return true;
+    });
+    if (!fresh) continue;
+    const text = lines.join('\n').replace(/^(?:…\n)+|(?:\n…)+$/g, '').replace(/(?:\n…){2,}/g, '\n…').trim();
+    out.push({ url: page.url, text });
+  }
+  if (!opts.maxPages) return out;
+  const withDetail = out.filter((page) => pageLines(page.text).some(hasContactDetail));
+  const rest = out.filter((page) => !withDetail.includes(page));
+  return [...withDetail, ...rest].slice(0, opts.maxPages);
 }
 
 function seniority(role: string): number {
@@ -428,20 +543,48 @@ export function toResearchResult(target: Target, extracted: Record<string, unkno
   };
 }
 
-/** Step 2: Pi reads the fetched pages and returns the contact JSON. */
-async function extract(target: Target, pages: Page[], timeoutMs: number): Promise<Record<string, unknown>> {
+async function extractOnce(target: Target, pages: Page[], opts: pi.AskOptions): Promise<Record<string, unknown>> {
   let answer: string;
   try {
-    answer = (await pi.ask(extractContactsPrompt(target, pages), { tools: false, timeoutMs })).answer;
+    answer = (await pi.ask(extractContactsPrompt(target, pages), { ...opts, tools: false, maxTokens: EXTRACT_MAX_TOKENS })).answer;
   } catch (cause) {
     const code = (cause as { code?: string }).code;
-    throw fail(`pi extract step failed: ${(cause as Error).message}`, code === 'rate_limit' ? 'rate_limit' : code === 'timeout' ? 'timeout' : 'engine_error');
+    throw Object.assign(
+      fail(`pi extract step failed: ${(cause as Error).message}`, code === 'rate_limit' ? 'rate_limit' : code === 'timeout' || code === 'length' ? 'timeout' : 'engine_error'),
+      { retry: code === 'timeout' || code === 'length' || code === 'empty' || code === 'failed' },
+    );
   }
   const extracted = extractLastJson(answer);
   if (!extracted || !Array.isArray(extracted.people) || !Array.isArray(extracted.phones) || !Array.isArray(extracted.emails)) {
-    throw fail('pi extract step returned no contact JSON', 'engine_error');
+    throw Object.assign(fail('pi extract step returned no contact JSON', 'engine_error'), { retry: true });
   }
   return extracted;
+}
+
+/**
+ * Step 2: Pi reads the fetched pages and returns the contact JSON. A run that
+ * thinks to its output cap or its half of the time, or ends with no JSON, gets
+ * one more try on the pages that print a phone or email, cut shorter, with
+ * minimal thinking. Both tries read only pages we fetched.
+ */
+async function extract(target: Target, pages: Page[], timeoutMs: number): Promise<{ extracted: Record<string, unknown>; pages: Page[] }> {
+  const started = Date.now();
+  const first = preparePages(pages);
+  if (!first.length) return { extracted: { people: [], phones: [], emails: [] }, pages };
+  try {
+    return { extracted: await extractOnce(target, first, { timeoutMs: Math.round(timeoutMs / 2) }), pages: first };
+  } catch (cause) {
+    if (!(cause as { retry?: boolean }).retry) throw cause;
+    const second = preparePages(pages, { maxPages: RETRY_PAGES, maxChars: RETRY_PAGE_CHARS, context: 1 });
+    const left = Math.max(30_000, timeoutMs - (Date.now() - started));
+    console.warn(`[contact] ${target.name}: ${(cause as Error).message} Retrying on ${second.length} page(s).`);
+    try {
+      return { extracted: await extractOnce(target, second, { timeoutMs: left, thinking: 'minimal' }), pages: second };
+    } catch (retryCause) {
+      const retryCode = (retryCause as { code?: string }).code;
+      throw fail(`${(retryCause as Error).message} (retry after: ${(cause as Error).message})`, retryCode ?? 'engine_error');
+    }
+  }
 }
 
 /** Both steps for one company with a given Tavily key. Used directly by tests. */
@@ -472,8 +615,8 @@ async function finish(
   if (!pages.length) {
     return toResearchResult(target, { people: [], phones: [], emails: [] }, urls, { queries: searchResult.queries });
   }
-  const extracted = await extract(target, pages, config.timeoutMs);
-  return toResearchResult(target, extracted, pages.map((page) => page.url), { queries: searchResult.queries });
+  const { extracted, pages: read } = await extract(target, pages, config.timeoutMs);
+  return toResearchResult(target, extracted, read.map((page) => page.url), { queries: searchResult.queries });
 }
 
 function errorText(cause: unknown): string {
