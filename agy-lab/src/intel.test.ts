@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLedger, classifyEvidence, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, keepDiscoveryEvidenceFromHosts, normaliseUrls, normalizeMobileHint, personDiscoveryPrompt, publishOutcome, redactIdentityHintsFromDiscovery, round01Prompt, scoutParsed, seniorityScore, translateChinese, unwrapUrl, validateChineseTranslation, validateFinal, validatePersonFinal, normalizePhoneNumber, contactResearchPrompt, cloudContactResearchPrompt, buildContactLedger } from './intel.ts';
+import { buildLedger, classifyEvidence, buildPersonLedger, extractJson, facebookLedgerRows, highestRankedPerson, keepDiscoveryEvidenceFromHosts, normaliseUrls, normalizeMobileHint, personDiscoveryPrompt, publishOutcome, redactIdentityHintsFromDiscovery, round01Prompt, scoutParsed, seniorityScore, translateChinese, unwrapUrl, validateChineseTranslation, validateFinal, validatePersonFinal, normalizePhoneNumber, contactResearchPrompt, cloudContactResearchPrompt, buildContactLedger, orphanedContactReports } from './intel.ts';
 import { companyPage, personPage, searchPage, contactPage } from './reportui.ts';
 import type { PublishedReport } from './reportdb.ts';
 
@@ -969,4 +969,23 @@ test('contactPage renders telemarketer cheat sheet, 1-click actions, and decisio
   const compared = contactPage({ ...report, request: { compareToReportId: 'done0000000000000000' } });
   assert.match(compared, /Compare contact research/);
   assert.match(compared, /href="\/r\/done0000000000000000"/);
+});
+
+test('a contact report whose broker job is gone is orphaned; one with a live job is not', () => {
+  // A hub restart empties the in-memory broker and left these at `running`
+  // forever, where the auto-queue counted them as work in flight.
+  const jobs: Record<string, { status: string }> = {
+    live: { status: 'running' }, waiting: { status: 'pending' }, finished: { status: 'done' },
+  };
+  const open = [
+    { public_id: 'lost', job_id: 'gone', status: 'running' },
+    { public_id: 'finished', job_id: 'finished', status: 'running' },
+    { public_id: 'live', job_id: 'live', status: 'running' },
+    { public_id: 'waiting', job_id: 'waiting', status: 'queued' },
+    { public_id: 'owned', job_id: 'gone', status: 'running' },
+    { public_id: 'requeued', job_id: null, status: 'queued' },
+    { public_id: 'no-job', job_id: null, status: 'running' },
+  ];
+  const orphans = orphanedContactReports(open, new Set(['owned']), (id) => jobs[id] ?? null);
+  assert.deepEqual(orphans, ['lost', 'finished', 'no-job']);
 });

@@ -1033,6 +1033,33 @@ export async function requeueInterruptedCloudContactReports(): Promise<number> {
   return out.rowCount ?? 0;
 }
 
+/** Open contact reports untouched for staleMinutes, with the broker job each one is waiting on. */
+export async function openContactReports(staleMinutes: number): Promise<Array<{ public_id: string; job_id: string | null; status: string }>> {
+  await migrate();
+  const out = await sql<{ public_id: string; job_id: string | null; status: string }>(
+    `select public_id, job_id, status from published_report
+     where report_type = 'contact_research'
+       and status in ('queued', 'running')
+       and coalesce(request->>'provider', 'legacy') <> 'parallel'
+       and updated_at < now() - make_interval(mins => $1::int)`,
+    [Math.max(0, Math.floor(staleMinutes))],
+  );
+  return out.rows;
+}
+
+/** Put contact reports back in the durable queue with no job, so recovery runs them again. */
+export async function requeueContactReports(publicIds: string[]): Promise<number> {
+  if (!publicIds.length) return 0;
+  await migrate();
+  const out = await sql(
+    `update published_report set status = 'queued', job_id = null, error = null, completed_at = null, updated_at = now()
+     where report_type = 'contact_research' and status in ('queued', 'running')
+       and public_id = any($1::text[])`,
+    [publicIds],
+  );
+  return out.rowCount ?? 0;
+}
+
 export async function pendingContactReportCount(): Promise<number> {
   await migrate();
   const out = await sql<{ total: string }>(

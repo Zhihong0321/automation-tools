@@ -2624,12 +2624,45 @@ export async function acceptContactResult(
 }
 
 /** Reattach saved contact reports to the live broker, at worker capacity. */
-export async function resumeContactResearch(maxConcurrent = 2): Promise<number> {
+/**
+ * Open contact reports whose broker job is gone.
+ *
+ * Broker jobs live in memory, so a hub restart erases every job a `running`
+ * report was waiting on. Recovery only re-runs `queued` reports, and the
+ * auto-queue counts `queued` and `running` reports as work in flight, so before
+ * this, 27 orphans sat at `running` for two days and kept the auto-queue at zero
+ * while 10,938 leads waited. A report is orphaned when no run in this process
+ * owns it and its job is missing or finished; a `queued` report with no job is
+ * already waiting for recovery and is left alone.
+ */
+export function orphanedContactReports(
+  open: Array<{ public_id: string; job_id: string | null; status: string }>,
+  active: Set<string>,
+  getJob: (id: string) => { status: string } | null,
+): string[] {
+  return open.filter((report) => {
+    if (active.has(report.public_id)) return false;
+    if (report.status === 'queued' && !report.job_id) return false;
+    const job = report.job_id ? getJob(report.job_id) : null;
+    return !job || (job.status !== 'pending' && job.status !== 'running');
+  }).map((report) => report.public_id);
+}
+
+/** Recovery runs as many reports at once as the contact worker has lanes. */
+const CONTACT_RECOVERY_WIDTH = Math.max(1, Number(process.env.CONTACT_LANES) || 3);
+
+export async function resumeContactResearch(maxConcurrent = CONTACT_RECOVERY_WIDTH): Promise<number> {
   if (recoveringContact || !jobs.liveTypes().includes(autoContact.contactResearchJobType())) return 0;
-  const slots = Math.max(0, maxConcurrent - activeContact.size);
-  if (!slots) return 0;
   recoveringContact = true;
   try {
+    // Two minutes of grace: a report links its job id a moment after the job is created.
+    const orphans = orphanedContactReports(await db.openContactReports(2), activeContact, jobs.get);
+    if (orphans.length) {
+      const requeued = await db.requeueContactReports(orphans);
+      console.log(`[contact] requeued ${requeued} report(s) whose job was lost`);
+    }
+    const slots = Math.max(0, maxConcurrent - activeContact.size);
+    if (!slots) return 0;
     const pending = await db.recoverableContactReports(slots, [...activeContact]);
     for (const report of pending) {
       const company = (report.company_id ? await db.getCompany(report.company_id) : null)
