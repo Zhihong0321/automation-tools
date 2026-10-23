@@ -116,43 +116,39 @@ test('research runs tavily find, reads the pages, then pi extracts with no tools
   }
 });
 
-test('tavily key pool rotates round-robin and enforces monthly limit', async () => {
-  const pool = createKeyPool({ monthlyLimit: 3, concurrency: 1 });
+test('a key rests below one job of credits and wakes when Tavily reports credits again', async () => {
+  const pool = createKeyPool({ concurrency: 1 });
   pool.setKeys(['key-a', 'key-b']);
+  pool.setUsage('key-a', 990, 1000);
+  pool.setUsage('key-b', 0, 1000);
+  assert.equal(pool.slots(), 2);
 
-  // key-a, then key-b, then key-a, then key-b, etc.
-  const lease1 = await pool.acquire();
-  assert.equal(lease1.secret, 'key-a');
-  lease1.release();
+  // key-a spends to 997: three credits left, less than one contact job.
+  pool.spend('key-a', 7);
+  assert.equal(pool.slots(), 1);
+  const lease = await pool.acquire();
+  assert.equal(lease.secret, 'key-b');
+  lease.release();
 
-  const lease2 = await pool.acquire();
-  assert.equal(lease2.secret, 'key-b');
-  lease2.release();
-
-  const lease3 = await pool.acquire();
-  assert.equal(lease3.secret, 'key-a');
-  lease3.release();
-
-  const lease4 = await pool.acquire();
-  assert.equal(lease4.secret, 'key-b');
-  lease4.release();
-
-  const lease5 = await pool.acquire();
-  assert.equal(lease5.secret, 'key-a'); // key-a has now hit 3 uses (monthly limit: 3)
-  lease5.release();
-
-  // key-a should now be exhausted for this month
-  const lease6 = await pool.acquire();
-  assert.equal(lease6.secret, 'key-b'); // key-b has now hit 3 uses
-  lease6.release();
-
-  // Both key-a and key-b have hit 3 uses -> slots() is 0
+  // A 432 rests key-b too: nothing is left to hand out.
+  const quota = await pool.acquire();
+  quota.release(0, true);
   assert.equal(pool.slots(), 0);
-  const stats = pool.stats();
-  assert.equal(stats[0]?.usedThisMonth, 3);
-  assert.equal(stats[1]?.usedThisMonth, 3);
+  assert.deepEqual(pool.stats().map((s) => s.resting), [true, true]);
+
+  // A later /usage read after Tavily's reset wakes the key.
+  pool.setUsage('key-b', 0, 1000);
+  assert.equal(pool.slots(), 1);
+  assert.equal((await pool.acquire()).secret, 'key-b');
 });
 
+test('a key with no limit on its plan never rests', () => {
+  const pool = createKeyPool({ concurrency: 1 });
+  pool.setKeys(['paid']);
+  pool.setUsage('paid', 50_000, null);
+  pool.spend('paid', 1_000);
+  assert.equal(pool.slots(), 1);
+});
 test('tavily search handles rate limits and quota exceeded error', async () => {
   const fetch429: typeof fetch = async () => new Response('{"error":"usage_limit_reached"}', { status: 429 });
   await assert.rejects(

@@ -1,11 +1,19 @@
 // Tavily web search, shared by the Pi worker's web_search tool and the contact
 // worker's first step. Keys live in the gemini_contact_key table (kind 'tavily')
-// and rotate round-robin; a key that Tavily reports out of monthly credits is
-// cooled until the month turns.
+// and rotate round-robin.
+//
+// Each key's quota is Tavily's own number, read from GET /usage every ten
+// minutes, plus what this process spent since that read. A key with less than
+// one contact job's worth of credits left rests: it gets no work until a later
+// /usage read shows credits again, which is how it wakes when Tavily resets the
+// month. When every key rests, slots() is 0, the contact lanes stop taking jobs
+// and the auto-queue stops creating them.
 import * as db from './reportdb.ts';
 
 export const KEY_CONCURRENCY = 2;
-export const TAVILY_MONTHLY_LIMIT = 1000;
+/** One contact job is two advanced searches at two credits each. */
+export const RESERVE_CREDITS = 4;
+const USAGE_REFRESH_MS = 10 * 60_000;
 
 type FetchImpl = typeof fetch;
 
@@ -13,49 +21,35 @@ export type Lease = { secret: string; release: (coolMs?: number, quotaExceeded?:
 
 export type KeyPoolOptions = {
   concurrency?: number;
-  monthlyLimit?: number;
 };
+
+type Usage = { used: number; limit: number | null; spent: number; checkedAt: number };
 
 export function createKeyPool(options: KeyPoolOptions = {}) {
   const concurrency = options.concurrency ?? KEY_CONCURRENCY;
-  const monthlyLimit = options.monthlyLimit ?? 0;
   const state = {
     keys: [] as string[],
     inflight: new Map<string, number>(),
     coolUntil: new Map<string, number>(),
-    usage: new Map<string, { month: string; count: number }>(),
+    usage: new Map<string, Usage>(),
     rrIndex: 0,
     waiters: [] as Array<(lease: Lease) => void>,
   };
 
-  function currentMonth(): string {
-    const d = new Date();
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  function remaining(key: string): number | null {
+    const u = state.usage.get(key);
+    if (!u || u.limit === null) return null;
+    return u.limit - u.used - u.spent;
   }
 
-  function getMonthUsage(key: string): number {
-    const cur = state.usage.get(key);
-    if (!cur || cur.month !== currentMonth()) return 0;
-    return cur.count;
-  }
-
-  function incrementUsage(key: string): void {
-    const m = currentMonth();
-    const cur = state.usage.get(key);
-    if (!cur || cur.month !== m) state.usage.set(key, { month: m, count: 1 });
-    else cur.count += 1;
-  }
-
-  function endOfMonthMs(): number {
-    const d = new Date();
-    const nextMonth = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
-    return Math.max(60_000, nextMonth.getTime() - Date.now());
+  function resting(key: string): boolean {
+    const left = remaining(key);
+    return left !== null && left < RESERVE_CREDITS;
   }
 
   function usable(key: string): boolean {
     if ((state.coolUntil.get(key) ?? 0) > Date.now()) return false;
-    if (monthlyLimit > 0 && getMonthUsage(key) >= monthlyLimit) return false;
-    return true;
+    return !resting(key);
   }
 
   function wake(): void {
@@ -69,18 +63,18 @@ export function createKeyPool(options: KeyPoolOptions = {}) {
         state.rrIndex = (idx + 1) % len;
         const resolve = state.waiters.shift()!;
         state.inflight.set(key, (state.inflight.get(key) ?? 0) + 1);
-        incrementUsage(key);
         let released = false;
         resolve({
           secret: key,
           release(coolMs = 0, quotaExceeded = false) {
             if (released) return;
             released = true;
+            // Out of credits: rest until a /usage read shows credits again.
             if (quotaExceeded) {
-              state.coolUntil.set(key, Date.now() + Math.max(coolMs, endOfMonthMs()));
-            } else if (coolMs > 0) {
-              state.coolUntil.set(key, Date.now() + coolMs);
+              const limit = state.usage.get(key)?.limit ?? 1;
+              state.usage.set(key, { used: limit, limit, spent: 0, checkedAt: Date.now() });
             }
+            if (coolMs > 0) state.coolUntil.set(key, Date.now() + coolMs);
             state.inflight.set(key, Math.max(0, (state.inflight.get(key) ?? 1) - 1));
             wake();
           },
@@ -100,14 +94,32 @@ export function createKeyPool(options: KeyPoolOptions = {}) {
         wake();
       });
     },
+    /** Tavily's own count for a key, from GET /usage. */
+    setUsage(key: string, used: number, limit: number | null) {
+      state.usage.set(key, { used, limit, spent: 0, checkedAt: Date.now() });
+      wake();
+    },
+    /** Credits this process spent since the last /usage read. */
+    spend(key: string, credits: number) {
+      const u = state.usage.get(key);
+      if (u) u.spent += credits;
+    },
+    /** Keys with no /usage read, or one older than maxAgeMs. */
+    staleUsage(maxAgeMs: number): string[] {
+      return state.keys.filter((key) => Date.now() - (state.usage.get(key)?.checkedAt ?? 0) > maxAgeMs);
+    },
     stats() {
-      return state.keys.map((secret) => ({
-        secret,
-        tail: maskKey(secret),
-        usedThisMonth: getMonthUsage(secret),
-        monthlyLimit: monthlyLimit > 0 ? monthlyLimit : null,
-        cooling: (state.coolUntil.get(secret) ?? 0) > Date.now(),
-      }));
+      return state.keys.map((secret) => {
+        const u = state.usage.get(secret);
+        return {
+          secret,
+          tail: maskKey(secret),
+          usedThisMonth: u ? u.used + u.spent : null,
+          monthlyLimit: u?.limit ?? null,
+          cooling: !usable(secret),
+          resting: resting(secret),
+        };
+      });
     },
     slots() {
       return state.keys.filter(usable).length * concurrency;
@@ -115,7 +127,47 @@ export function createKeyPool(options: KeyPoolOptions = {}) {
   };
 }
 
-export const pool = createKeyPool({ monthlyLimit: TAVILY_MONTHLY_LIMIT, concurrency: KEY_CONCURRENCY });
+export const pool = createKeyPool({ concurrency: KEY_CONCURRENCY });
+
+/** True while at least one key has credits left. */
+export function available(): boolean {
+  return pool.slots() > 0;
+}
+
+/** Tavily's own usage for one key, as credits used against a limit. Null limit means unlimited. */
+export async function fetchUsage(apiKey: string, fetchImpl: FetchImpl = fetch): Promise<{ used: number; limit: number | null }> {
+  const res = await fetchImpl('https://api.tavily.com/usage', {
+    headers: { authorization: 'Bearer ' + apiKey },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(`tavily /usage answered ${res.status}`);
+  const body = await res.json() as {
+    key?: { usage?: number; limit?: number | null };
+    account?: { plan_usage?: number; plan_limit?: number | null };
+  };
+  const plan = body.account ?? {};
+  const planLeft = typeof plan.plan_limit === 'number' ? plan.plan_limit - (plan.plan_usage ?? 0) : null;
+  const keyLeft = typeof body.key?.limit === 'number' ? body.key.limit - (body.key.usage ?? 0) : null;
+  if (planLeft === null && keyLeft === null) return { used: 0, limit: null };
+  const left = Math.min(planLeft ?? Infinity, keyLeft ?? Infinity);
+  const limit = typeof plan.plan_limit === 'number' ? plan.plan_limit : (body.key?.limit ?? 0);
+  return { used: Math.max(0, limit - left), limit };
+}
+
+let usageRun: Promise<void> | null = null;
+
+/** Re-read /usage for keys whose number is older than ten minutes. A failed read keeps the old number. */
+export function refreshUsage(fetchImpl: FetchImpl = fetch): Promise<void> {
+  usageRun ??= (async () => {
+    for (const key of pool.staleUsage(USAGE_REFRESH_MS)) {
+      try {
+        const { used, limit } = await fetchUsage(key, fetchImpl);
+        pool.setUsage(key, used, limit);
+      } catch { /* try again on the next refresh */ }
+    }
+  })().finally(() => { usageRun = null; });
+  return usageRun;
+}
 
 function maskKey(secret: string): string {
   return secret.length <= 4 ? '••••' : `••••${secret.slice(-4)}`;
@@ -134,10 +186,11 @@ export async function loadKeys(env: NodeJS.ProcessEnv = process.env): Promise<st
   return keys;
 }
 
-/** Reload the keys into the shared pool and return them. */
+/** Reload the keys into the shared pool, refresh their quota, and return them. */
 export async function refresh(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
   const keys = await loadKeys(env);
   pool.setKeys(keys);
+  await refreshUsage();
   return keys;
 }
 
@@ -188,6 +241,7 @@ export async function searchWithKey(
   }
   if (res.status === 429) throw fail(`429 rate_limit_error: tavily rate limit: ${raw.slice(0, 200)}`, 'rate_limit');
   if (!res.ok) throw fail(`upstream error: tavily answered ${res.status}: ${raw.slice(0, 200)}`, 'timeout');
+  pool.spend(apiKey, (opts.depth ?? 'advanced') === 'advanced' ? 2 : 1);
   let body: unknown;
   try { body = JSON.parse(raw); } catch { return []; }
   const results = (body as { results?: unknown })?.results;
@@ -201,16 +255,17 @@ export async function searchWithKey(
   });
 }
 
-/** Release a lease the way the error asks: a month for quota, a minute for a rate limit. */
+/** Release a lease the way the error asks: rest the key for quota, a minute off for a rate limit. */
 export function releaseFor(lease: Lease, cause: unknown): void {
   const code = (cause as { code?: string } | null)?.code;
-  lease.release(code === 'rate_limit' || code === 'quota' ? 60_000 : 0, code === 'quota');
+  lease.release(code === 'rate_limit' ? 60_000 : 0, code === 'quota');
 }
 
 /** One search through the shared pool. */
 export async function search(query: string, opts: { maxResults?: number; depth?: 'basic' | 'advanced'; timeoutMs?: number } = {}): Promise<SearchHit[]> {
   await refresh();
   if (!pool.stats().length) throw fail('no Tavily key is configured', 'not_installed');
+  if (!available()) throw fail('every Tavily key is out of credits until its quota resets', 'quota');
   const lease = await pool.acquire();
   try {
     const hits = await searchWithKey(query, lease.secret, opts);

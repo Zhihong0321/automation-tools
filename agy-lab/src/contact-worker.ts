@@ -13,7 +13,7 @@ import * as tavily from './tavily.ts';
 export const JOB_TYPE = 'research.contact.pi';
 export const WORKER_NAME = 'pi-contact';
 export const KEY_CONCURRENCY = tavily.KEY_CONCURRENCY;
-export { createKeyPool, TAVILY_MONTHLY_LIMIT } from './tavily.ts';
+export { createKeyPool } from './tavily.ts';
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 const MAX_SOURCES = 12;
@@ -679,6 +679,11 @@ async function lane(name: string, env: NodeJS.ProcessEnv): Promise<void> {
       const keys = await tavily.refresh(env);
       if (!keys.length || !pi.config(env).apiKey) {
         await new Promise((resolve) => setTimeout(resolve, 3_000));
+        continue;
+      }
+      // Every key is resting: leave jobs pending rather than take one and wait on it.
+      if (!tavily.available()) {
+        await new Promise((resolve) => setTimeout(resolve, 60_000));
         continue;
       }
       const job = await jobs.take(name, { types: [JOB_TYPE], waitMs: 5_000 });

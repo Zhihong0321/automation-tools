@@ -1,6 +1,7 @@
 // Queues contact research for untouched leads while a matching worker is live.
 import * as jobs from './jobs.ts';
 import * as db from './reportdb.ts';
+import * as tavily from './tavily.ts';
 
 const INTERVAL_MS = 60_000;
 const BATCH = 3;
@@ -45,6 +46,7 @@ type Deps = {
   launch: Launch;
   liveTypes?: () => string[];
   backlog?: (limit: number) => Promise<Record<string, unknown>[]>;
+  tavilyAvailable?: () => boolean;
 };
 
 let deps: Deps = {
@@ -62,8 +64,20 @@ function workerLive(): boolean {
 }
 
 /** Queue up to BATCH untouched leads when a matching worker is live. */
+let pausedForQuota = false;
+
+/** The pi worker searches with Tavily, so it has no work to give while every key rests. */
+function outOfCredits(): boolean {
+  const paused = contactResearchJobType() === 'research.contact.pi' && !(deps.tavilyAvailable ?? tavily.available)();
+  if (paused !== pausedForQuota) {
+    console.log(paused ? '[auto-queue] paused: every Tavily key is out of credits' : '[auto-queue] resumed: a Tavily key has credits again');
+    pausedForQuota = paused;
+  }
+  return paused;
+}
+
 export async function tick(): Promise<number> {
-  if (ticking || !workerLive()) return 0;
+  if (ticking || !workerLive() || outOfCredits()) return 0;
   ticking = true;
   try {
     // Saved reports are the durable queue. Do not mint new reports while older
@@ -89,10 +103,12 @@ export function start(): void {
 
 export async function status(): Promise<{
   workerAvailable: boolean;
+  pausedForQuota: boolean;
   totals: { queued: number; running: number; completed: number; failed: number };
 }> {
   return {
     workerAvailable: workerLive(),
+    pausedForQuota: outOfCredits(),
     totals: await db.autoContactQueueTotals(),
   };
 }

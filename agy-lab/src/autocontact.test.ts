@@ -54,7 +54,24 @@ test('a MiniMax key makes the hub assign contact jobs to the pi worker', () => w
     liveTypes: () => ['research.contact.pi'],
     backlog: async () => [company('pi')],
     launch: async () => { launched++; },
+    tavilyAvailable: () => true,
   });
+  assert.equal(await autoContact.tick(), 1);
+  assert.equal(launched, 1);
+}));
+
+test('the auto-queue stops while every Tavily key is out of credits, and resumes after', () => withEnv({ MINIMAX_API_KEY: 'test-key' }, async () => {
+  let launched = 0;
+  let credits = false;
+  autoContact.init({
+    liveTypes: () => ['research.contact.pi'],
+    backlog: async () => [company('pi')],
+    launch: async () => { launched++; },
+    tavilyAvailable: () => credits,
+  });
+  assert.equal(await autoContact.tick(), 0);
+  assert.equal(launched, 0);
+  credits = true;
   assert.equal(await autoContact.tick(), 1);
   assert.equal(launched, 1);
 }));
