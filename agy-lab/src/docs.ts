@@ -257,7 +257,7 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
     <tr><td><code>place</code></td><td>string</td><td>conditional</td><td>City, district, state or country. May be omitted when a keyword is supplied; <code>location</code> is an alias.</td></tr>
     <tr><td><code>max</code></td><td>integer</td><td>no</td><td>1–2000; defaults to 200.</td></tr>
     <tr><td><code>requesterId</code></td><td>string</td><td>no</td><td>Your CRM/user/job correlation id. <code>userId</code> is accepted as an alias.</td></tr>
-    <tr><td><code>timeoutMs</code></td><td>integer</td><td>no</td><td>Worker deadline; defaults to 600000. It does not make the POST synchronous.</td></tr>
+    <tr><td><code>timeoutMs</code></td><td>integer</td><td>no</td><td>Worker deadline; defaults to 1200000 (20 minutes, also the ceiling). It does not make the POST synchronous.</td></tr>
   </tbody></table></div>
 <pre><code>curl -s https://ee-auto.up.railway.app/api/business-search \
   -H "Authorization: Bearer $EE_AUTO_TOKEN" -H 'content-type: application/json' \

@@ -10,6 +10,12 @@
 // keyword's family until `max` places are in hand. Any other keyword (a company
 // name, "solar installer") is still one call.
 //
+// A Business sweep then searches street by street. Measured on six Taman Daya
+// streets, the 48-word sweep had found 204 of the 257 businesses on them (79%);
+// the rest are niche shops no common keyword reaches. "shop in <street>" found
+// the most new ones and "company in <street>" most of the remainder, so each
+// street the sweep turned up costs two calls.
+//
 // The API never fails a search: an empty query is `status: ok` with no rows, a
 // nonsense one returns the nearest business. So zero rows is a real answer
 // (found: 0), and only a transport error or a non-ok status fails the job. The
@@ -25,6 +31,10 @@ const DEFAULT_MAX = 200;
 const MAX_LIMIT = 500;
 const CALL_TIMEOUT_MS = 90_000;
 const SWEEP_CONCURRENCY = 6;
+const STREET_CONCURRENCY = 10;
+const STREET_FORMS = ['shop', 'company'];
+/** Stop starting street calls this long before the job's lease runs out. */
+const DEADLINE_MARGIN_MS = 60_000;
 /** Below this share of rows naming the place, the place is not how Google writes addresses there: keep everything. */
 const AREA_MATCH_FLOOR = 0.3;
 
@@ -57,6 +67,27 @@ export function familyFor(keyword: string): string[] | null {
 }
 
 const squash = (v: string): string => v.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
+ * The streets named in these addresses, most businesses first: the comma
+ * segment that starts "Jalan" or "Jln" ("2-10, Jln Sagu 29, Taman Daya" gives
+ * "Jalan Sagu 29"). Whole segments, so "Jalan Sagu 1" never stands in for 18.
+ */
+export function streetsOf(businesses: Business[]): string[] {
+  const counts = new Map<string, { street: string; n: number }>();
+  for (const b of businesses) {
+    for (const part of String(b.address ?? '').split(',')) {
+      const m = /^\s*(?:jalan|jln\.?)\s+(.+?)\s*$/i.exec(part);
+      if (!m) continue;
+      const street = 'Jalan ' + m[1]!.replace(/\s+/g, ' ');
+      const key = squash(street);
+      const hit = counts.get(key) ?? { street, n: 0 };
+      hit.n++;
+      counts.set(key, hit);
+    }
+  }
+  return [...counts.values()].sort((a, b) => b.n - a.n).map((c) => c.street);
+}
 
 /**
  * The names a row's address must carry to be in this place: the first comma
@@ -181,6 +212,7 @@ export async function searchMaps(
  */
 export async function scan(
   payload: Record<string, unknown> | null, config: MapsConfig, fetchImpl: FetchImpl = fetch,
+  opts: { deadline?: number } = {},
 ): Promise<Record<string, unknown>> {
   const startedAt = Date.now();
   const locationOnly = payload?.searchMode === 'location_only';
@@ -213,6 +245,7 @@ export async function scan(
   let outsideArea = 0;
   let businesses: Business[];
   const sweep: Array<{ keyword: string; rows: number; added: number }> = [];
+  let streets: { total: number; searched: number; added: number } | null = null;
   // A place name alone returns that one place, not the businesses in it, so a
   // location-only search sweeps too. A family keyword with no place is one call:
   // there is no area to sweep.
@@ -225,6 +258,20 @@ export async function scan(
       requests += batch.length;
       answers.forEach((rows, j) => sweep.push({ keyword: batch[j]!, rows: rows.length, added: add(rows) }));
       if (inArea([...found.values()], place).kept.length >= max) break;
+    }
+    if (family === FAMILIES.business && inArea([...found.values()], place).kept.length < max) {
+      const list = streetsOf(inArea([...found.values()], place).kept);
+      streets = { total: list.length, searched: 0, added: 0 };
+      const deadline = opts.deadline ?? Infinity;
+      for (let i = 0; i < list.length && Date.now() < deadline; i += STREET_CONCURRENCY) {
+        const batch = list.slice(i, i + STREET_CONCURRENCY);
+        const queries = batch.flatMap((street) => STREET_FORMS.map((form) => `${form} in ${street}, ${place}`));
+        const answers = await Promise.all(queries.map((q) => searchMaps(config, q, MAX_LIMIT, fetchImpl)));
+        requests += queries.length;
+        streets.searched += batch.length;
+        for (const rows of answers) streets.added += add(rows);
+        if (inArea([...found.values()], place).kept.length >= max) break;
+      }
     }
     const area = inArea([...found.values()], place);
     businesses = area.kept.slice(0, max);
@@ -248,6 +295,7 @@ export async function scan(
     limitedView: false,
     categories: sweep.length ? sweep : null,
     outsideArea,
+    streets,
     scrolls: 0,
     provider: 'scraper.tech',
     requests,
@@ -273,7 +321,8 @@ async function lane(name: string, env: NodeJS.ProcessEnv): Promise<void> {
       const beat = setInterval(() => { jobs.touch(name, '127.0.0.1', [JOB_TYPE]); }, 20_000);
       beat.unref();
       try {
-        const result = await scan(job.payload as Record<string, unknown> | null, config);
+        const deadline = Date.parse(job.startedAt ?? new Date().toISOString()) + job.timeoutMs - DEADLINE_MARGIN_MS;
+        const result = await scan(job.payload as Record<string, unknown> | null, config, fetch, { deadline });
         jobs.finish(job.id, true, result, null);
       } catch (cause) {
         const message = (cause as Error).message ?? String(cause);

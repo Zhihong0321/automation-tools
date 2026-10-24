@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { areaNames, FAMILIES, familyFor, inArea, resolveConfig, scan, searchMaps, toBusiness } from './maps-worker.ts';
+import { areaNames, FAMILIES, familyFor, inArea, resolveConfig, scan, searchMaps, streetsOf, toBusiness } from './maps-worker.ts';
 import { scanPlaceKey } from './reportdb.ts';
 
 const config = { key: 'k123', baseUrl: 'https://mcp.example', lanes: 1 };
@@ -142,4 +142,47 @@ test('the area filter matches without spaces and backs off when the name is not 
   const loose = inArea([at('Taman Daya'), at('Jalan A'), at('Jalan B'), at('Jalan C')], 'Taman Daya, Johor');
   assert.equal(loose.kept.length, 4);
   assert.equal(loose.outside, 0);
+});
+
+test('streets come from whole address segments, busiest first', () => {
+  const at = (address: string) => toBusiness(row(1, { full_address: address, name: 'X' }));
+  assert.deepEqual(streetsOf([
+    at('2-10, Jln Sagu 29, Taman Daya, 81100 Johor Bahru'),
+    at('6, Jalan Sagu 18, Taman Daya, 81100 Johor Bahru'),
+    at('7, Jalan  Sagu 18, Taman Daya'),
+    at('No 1, Taman Daya'),
+  ]), ['Jalan Sagu 18', 'Jalan Sagu 29']);
+});
+
+test('a business scan searches each street it found, twice, and only business does', async () => {
+  const calls: Array<Record<string, string>> = [];
+  let next = 0;
+  const answer = (query: string) => {
+    if (/^(shop|company) in Jalan /.test(query)) return { status: 'ok', data: [row(1000 + next++, { full_address: `9, ${query.split(' in ')[1]!.split(',')[0]}, Taman Daya, Johor` })] };
+    return { status: 'ok', data: [row(1), row(2, { full_address: '2, Jln Sagu 29, Taman Daya, Johor' })] };
+  };
+  const result = await scan({ keyword: 'business', place: 'Taman Daya, Tebrau, Johor', max: 2000 }, config, fakeFetch(answer, calls));
+  const streetCalls = calls.filter((c) => / in Jalan /.test(c.query!));
+  // row(1) is on Jalan Sagu 18 and row(2) on Jalan Sagu 29: two streets, two forms each.
+  assert.deepEqual(streetCalls.map((c) => c.query).sort(), [
+    'company in Jalan Sagu 18, Taman Daya, Tebrau, Johor', 'company in Jalan Sagu 29, Taman Daya, Tebrau, Johor',
+    'shop in Jalan Sagu 18, Taman Daya, Tebrau, Johor', 'shop in Jalan Sagu 29, Taman Daya, Tebrau, Johor',
+  ]);
+  assert.deepEqual(result.streets, { total: 2, searched: 2, added: 4 });
+  assert.equal(result.found, 6);
+  assert.equal(result.requests, FAMILIES.business!.length + 4);
+
+  const factoryCalls: Array<Record<string, string>> = [];
+  const factory = await scan({ keyword: 'factory', place: 'Taman Daya, Tebrau, Johor', max: 2000 }, config, fakeFetch(answer, factoryCalls));
+  assert.equal(factory.streets, null);
+  assert.equal(factoryCalls.length, FAMILIES.factory!.length);
+});
+
+test('the street pass stops at the deadline and keeps what it has', async () => {
+  const calls: Array<Record<string, string>> = [];
+  const result = await scan({ keyword: 'business', place: 'Taman Daya, Tebrau, Johor', max: 2000 }, config,
+    fakeFetch(() => ({ status: 'ok', data: [row(1)] }), calls), { deadline: Date.now() - 1 });
+  assert.equal(calls.length, FAMILIES.business!.length);
+  assert.deepEqual(result.streets, { total: 1, searched: 0, added: 0 });
+  assert.equal(result.found, 1);
 });

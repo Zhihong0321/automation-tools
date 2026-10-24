@@ -189,7 +189,7 @@ request such as `{"place":"Petaling Jaya","max":25}` is valid.
 | `place` | conditional | city, district, state, or country; omit when searching only by keyword; `location` is an alias |
 | `max` | no | 1–2000, default 200. `business`, `factory` and `shop` with a place, and a location-only search, sweep a family of keywords (up to 45 Maps requests) and keep the places whose address names the place |
 | `requesterId` | no | caller-owned correlation id; `userId` is an alias |
-| `timeoutMs` | no | worker deadline, default 600000; the POST remains asynchronous |
+| `timeoutMs` | no | worker deadline, default 1200000 (20 min, also the ceiling); a Business scan uses it for its street-by-street pass. The POST remains asynchronous |
 
 ```json
 {
