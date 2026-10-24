@@ -5,8 +5,10 @@
 // One call per query, limit up to 500. A single call is stable run to run;
 // paging in steps of 100 is not, and offset past the first call adds almost
 // nothing. One query tops out around 150-190 places, which is Google's ceiling,
-// so a location-only search becomes a keyword sweep: "<keyword> in <place>" for
-// each keyword in SWEEP until `max` places are in hand.
+// so the three territory keywords (business, factory, shop) and a location-only
+// search become a keyword sweep: "<word> in <place>" for each word of the
+// keyword's family until `max` places are in hand. Any other keyword (a company
+// name, "solar installer") is still one call.
 //
 // The API never fails a search: an empty query is `status: ok` with no rows, a
 // nonsense one returns the nearest business. So zero rows is a real answer
@@ -22,19 +24,62 @@ const DEFAULT_BASE_URL = 'https://mcp.scraper.tech';
 const DEFAULT_MAX = 200;
 const MAX_LIMIT = 500;
 const CALL_TIMEOUT_MS = 90_000;
-const SWEEP_CONCURRENCY = 4;
+const SWEEP_CONCURRENCY = 6;
+/** Below this share of rows naming the place, the place is not how Google writes addresses there: keep everything. */
+const AREA_MATCH_FLOOR = 0.3;
 
 /**
- * Location-only keywords, ordered by how many new in-area places each added in
- * the 2026-10-24 Taman Daya sweep (restaurant +136 down to hardware +9).
- * "supplier" (+4) and "store" style near-duplicates of earlier words are left out
- * or late: they mostly return places an earlier keyword already found.
+ * Keyword families, each ordered by how many new in-area places a word added in
+ * the 2026-10-24 sweeps of Kawasan Perindustrian Tebrau (industrial) and Taman
+ * Daya (mixed). Near-synonyms that added almost nothing are left out:
+ * "industrial" (+0/+4), "pharmacy" (+0).
  */
-export const SWEEP = [
-  'restaurant', 'salon', 'factory', 'company', 'business', 'sdn bhd', 'shop', 'trading',
-  'services', 'wholesale', 'manufacturer', 'office', 'logistics', 'workshop', 'store',
-  'clinic', 'kedai', 'hardware',
+const FACTORY = [
+  'factory', 'sdn bhd', 'food', 'company', 'manufacturer', 'manufacturing', 'construction',
+  'engineering', 'warehouse', 'trading', 'furniture', 'wholesale', 'logistics', 'plastic',
+  'machinery', 'steel', 'printing', 'packaging', 'supplier',
 ];
+const SHOP = [
+  'shop', 'restaurant', 'salon', 'car', 'store', 'laundry', 'clinic', 'bakery', 'kedai',
+  'electronics', 'hardware', 'cafe', 'retail', 'mart', 'tyre', 'spa',
+];
+/** Every kind of business: the categories that each added most in Taman Daya, then both families. */
+const BUSINESS = [...new Set([
+  'restaurant', 'salon', 'factory', 'company', 'business', 'sdn bhd', 'construction', 'tuition',
+  'car', 'shop', 'property', 'trading', 'services', 'wholesale', 'manufacturer', 'office',
+  'workshop', 'agency', 'laundry', 'hotel', 'contractor', 'kindergarten', ...FACTORY, ...SHOP,
+])];
+export const FAMILIES: Record<string, string[]> = { business: BUSINESS, factory: FACTORY, shop: SHOP };
+
+/** The words a search sweeps, or null for one plain call. */
+export function familyFor(keyword: string): string[] | null {
+  return keyword ? FAMILIES[keyword.trim().toLowerCase()] ?? null : BUSINESS;
+}
+
+const squash = (v: string): string => v.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
+ * The names a row's address must carry to be in this place: the first comma
+ * segment, split on "/" ("Wadi Hana / Bukit Chagar / Tanjung Puteri, Johor Bahru").
+ * Compared without spaces, so "SS5" matches "Jalan SS 5B/4".
+ */
+export function areaNames(place: string): string[] {
+  return (place.split(',')[0] ?? '').split('/').map(squash).filter((n) => n.length >= 3);
+}
+
+/**
+ * A sweep pulls in the neighbourhood: half of a Taman Daya sweep was other
+ * tamans under the same postcode. Keep the rows whose address names the place,
+ * unless too few do for the name to be how addresses are written there. The
+ * neighbours are found again when their own taman is scanned.
+ */
+export function inArea(businesses: Business[], place: string): { kept: Business[]; outside: number } {
+  const names = areaNames(place);
+  if (!names.length) return { kept: businesses, outside: 0 };
+  const kept = businesses.filter((b) => { const a = squash(b.address ?? ''); return names.some((n) => a.includes(n)); });
+  if (kept.length < businesses.length * AREA_MATCH_FLOOR) return { kept: businesses, outside: 0 };
+  return { kept, outside: businesses.length - kept.length };
+}
 
 type FetchImpl = typeof fetch;
 export type MapsConfig = { key: string; baseUrl: string; lanes: number };
@@ -165,23 +210,32 @@ export async function scan(
 
   let query: string;
   let requests = 0;
+  let outsideArea = 0;
+  let businesses: Business[];
   const sweep: Array<{ keyword: string; rows: number; added: number }> = [];
-  if (locationOnly || !keyword) {
-    query = place;
-    // A place name alone returns that one place, not the businesses in it.
-    for (let i = 0; i < SWEEP.length && found.size < max; i += SWEEP_CONCURRENCY) {
-      const batch = SWEEP.slice(i, i + SWEEP_CONCURRENCY);
+  // A place name alone returns that one place, not the businesses in it, so a
+  // location-only search sweeps too. A family keyword with no place is one call:
+  // there is no area to sweep.
+  const family = place ? familyFor(keyword) : null;
+  if (family) {
+    query = keyword ? `${keyword} in ${place}` : place;
+    for (let i = 0; i < family.length; i += SWEEP_CONCURRENCY) {
+      const batch = family.slice(i, i + SWEEP_CONCURRENCY);
       const answers = await Promise.all(batch.map((word) => searchMaps(config, `${word} in ${place}`, MAX_LIMIT, fetchImpl)));
       requests += batch.length;
       answers.forEach((rows, j) => sweep.push({ keyword: batch[j]!, rows: rows.length, added: add(rows) }));
+      if (inArea([...found.values()], place).kept.length >= max) break;
     }
+    const area = inArea([...found.values()], place);
+    businesses = area.kept.slice(0, max);
+    outsideArea = area.outside;
   } else {
     query = place ? `${keyword} in ${place}` : keyword;
     add(await searchMaps(config, query, limit, fetchImpl));
     requests = 1;
+    businesses = [...found.values()].slice(0, max);
   }
 
-  const businesses = [...found.values()].slice(0, max);
   return {
     query,
     keyword,
@@ -193,6 +247,7 @@ export async function scan(
     blockedReason: null,
     limitedView: false,
     categories: sweep.length ? sweep : null,
+    outsideArea,
     scrolls: 0,
     provider: 'scraper.tech',
     requests,

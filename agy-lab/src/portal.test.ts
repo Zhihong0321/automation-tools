@@ -352,11 +352,13 @@ test('scan all on a taman queues each keyword that is not already active there',
   ]);
 });
 
-test('scan page has business, factory and all buttons on each taman and no town-level scan', () => {
+test('scan page has business, factory and shop buttons on each taman and no town-level scan', () => {
   const html = page();
   assert.match(html, /data-keywords="business"/);
   assert.match(html, /data-keywords="factory"/);
-  assert.match(html, /data-keywords="business,factory"/);
+  assert.match(html, /data-keywords="shop"/);
+  // Business already sweeps every factory and shop word, so a combined button would only pay twice.
+  assert.doesNotMatch(html, /data-keywords="business,factory"/);
   assert.match(html, /onclick="queueTamanScanFromBtn\(this\)"/);
   assert.doesNotMatch(html, /queueWholeTownFromBtn/);
   assert.doesNotMatch(html, /town-scan/);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveConfig, scan, searchMaps, SWEEP, toBusiness } from './maps-worker.ts';
+import { areaNames, FAMILIES, familyFor, inArea, resolveConfig, scan, searchMaps, toBusiness } from './maps-worker.ts';
 import { scanPlaceKey } from './reportdb.ts';
 
 const config = { key: 'k123', baseUrl: 'https://mcp.example', lanes: 1 };
@@ -44,10 +44,10 @@ test('a row maps onto the gmap.mjs business shape and keys on place_id', () => {
 
 test('a keyword search is one call with the limit capped at 500', async () => {
   const calls: Array<Record<string, string>> = [];
-  const result = await scan({ keyword: 'factory', place: 'Taman Daya, Tebrau, Johor', max: 900 }, config,
+  const result = await scan({ keyword: 'solar installer', place: 'Taman Daya, Tebrau, Johor', max: 900 }, config,
     fakeFetch(() => ({ status: 'ok', data: [row(1), row(2), row(2), row(3, { is_permanently_closed: true })] }), calls));
   assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.query, 'factory in Taman Daya, Tebrau, Johor');
+  assert.equal(calls[0]!.query, 'solar installer in Taman Daya, Tebrau, Johor');
   assert.equal(calls[0]!.limit, '500');
   assert.equal(calls[0]!.country, 'my');
   assert.equal(result.found, 2, 'duplicates and closed places are dropped');
@@ -57,7 +57,7 @@ test('a keyword search is one call with the limit capped at 500', async () => {
 });
 
 test('no rows is found 0, not a block', async () => {
-  const result = await scan({ keyword: 'factory', place: 'Eco Business Park II' }, config,
+  const result = await scan({ keyword: 'solar installer', place: 'Eco Business Park II' }, config,
     fakeFetch(() => ({ status: 'ok', data: [] })));
   assert.equal(result.found, 0);
   assert.equal(result.blocked, false);
@@ -73,15 +73,15 @@ test('a location-only search sweeps keywords until max is reached', async () => 
       const rows = Array.from({ length: 50 }, () => row(next++));
       return { status: 'ok', data: [...rows, ...Array.from({ length: 10 }, (_, i) => row(i))] };
     }, calls));
-  assert.equal(calls[0]!.query, `${SWEEP[0]} in Taman Daya, Tebrau, Johor`);
+  assert.equal(calls[0]!.query, `${FAMILIES.business![0]} in Taman Daya, Tebrau, Johor`);
   assert.ok(calls.every((c) => c.limit === '500'));
-  // 4 keywords per batch, 50 new each: the second batch crosses 300.
-  assert.equal(calls.length, 8);
+  // 6 keywords per batch, 50 new each: the first batch reaches 300.
+  assert.equal(calls.length, 6);
   assert.equal(result.found, 300);
   assert.equal(result.capped, true);
   assert.equal(result.place, 'Taman Daya, Tebrau, Johor');
   assert.equal(result.keyword, '');
-  assert.equal((result.categories as unknown[]).length, 8);
+  assert.equal((result.categories as unknown[]).length, 6);
 });
 
 test('a non-ok answer fails the scan instead of reading as zero', async () => {
@@ -104,4 +104,42 @@ test('a dropped connection is retried once', async () => {
 test('an address that repeats the business name loses the prefix', () => {
   const b = toBusiness(row(3, { name: 'KULAI RS HARDWARE', full_address: 'KULAI RS HARDWARE, No.292, Jln Lagenda 20, 81000 Kulai, Johor' }));
   assert.equal(b.address, 'No.292, Jln Lagenda 20, 81000 Kulai, Johor');
+});
+
+test('business, factory and shop sweep their family; other keywords do not', () => {
+  assert.equal(familyFor('Factory'), FAMILIES.factory);
+  assert.equal(familyFor(' shop '), FAMILIES.shop);
+  assert.equal(familyFor('business'), FAMILIES.business);
+  assert.equal(familyFor(''), FAMILIES.business);
+  assert.equal(familyFor('Zhin Heng Hardware Sdn Bhd'), null);
+  for (const word of [...FAMILIES.factory!, ...FAMILIES.shop!]) assert.ok(FAMILIES.business!.includes(word), word);
+  assert.equal(new Set(FAMILIES.business).size, FAMILIES.business!.length);
+});
+
+test('a factory scan runs the whole family and keeps only rows in the place', async () => {
+  const calls: Array<Record<string, string>> = [];
+  let next = 0;
+  const result = await scan({ keyword: 'factory', place: 'Taman Daya, Tebrau, Johor', max: 2000 }, config,
+    fakeFetch(() => ({ status: 'ok', data: [
+      row(next++), row(next++),
+      row(next++, { full_address: 'No 3, Jalan Molek 1, Taman Molek, 81100 Johor Bahru, Johor' }),
+    ] }), calls));
+  assert.equal(calls.length, FAMILIES.factory!.length);
+  assert.deepEqual(calls.map((c) => c.query), FAMILIES.factory!.map((w) => `${w} in Taman Daya, Tebrau, Johor`));
+  assert.equal(result.found, FAMILIES.factory!.length * 2);
+  assert.equal(result.outsideArea, FAMILIES.factory!.length);
+  assert.equal(result.requests, FAMILIES.factory!.length);
+  assert.equal(result.query, 'factory in Taman Daya, Tebrau, Johor');
+});
+
+test('the area filter matches without spaces and backs off when the name is not used', () => {
+  assert.deepEqual(areaNames('Wadi Hana / Bukit Chagar / Tanjung Puteri, Johor Bahru, Johor'), ['wadihana', 'bukitchagar', 'tanjungputeri']);
+  const at = (address: string) => toBusiness(row(1, { full_address: address, name: 'X' }));
+  const ss5 = inArea([at('14A, Jalan SS 5B/4, Petaling Jaya'), at('1, Jalan SS 7/26, Petaling Jaya')], 'SS5, Petaling Jaya Central, Selangor');
+  assert.equal(ss5.kept.length, 1);
+  assert.equal(ss5.outside, 1);
+  // Only 1 of 4 names the place: Google does not write addresses with that name, keep all.
+  const loose = inArea([at('Taman Daya'), at('Jalan A'), at('Jalan B'), at('Jalan C')], 'Taman Daya, Johor');
+  assert.equal(loose.kept.length, 4);
+  assert.equal(loose.outside, 0);
 });
