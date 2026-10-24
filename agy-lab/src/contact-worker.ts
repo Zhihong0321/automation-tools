@@ -14,6 +14,7 @@
 import * as db from './reportdb.ts';
 import * as jobs from './jobs.ts';
 import * as pi from './pi.ts';
+import * as extractLlm from './extract-llm.ts';
 import * as tavily from './tavily.ts';
 import * as exa from './exa.ts';
 
@@ -727,7 +728,8 @@ function emailType(email: string): string {
 
 function engineName(search: SearchLog[] = []): string {
   const providers = [...new Set(search.map((row) => row.purpose === 'linkedin' ? `${row.provider} linkedin` : row.provider))];
-  return (providers.length ? providers.join(' + ') : 'tavily') + ' + pi/' + pi.config().model;
+  const reader = extractLlm.config();
+  return (providers.length ? providers.join(' + ') : 'tavily') + (reader ? ' + ' + reader.model : ' + pi/' + pi.config().model);
 }
 
 export function toResearchResult(target: Target, extracted: Record<string, unknown>, urls: string[], meta: Record<string, unknown> = {}): Record<string, unknown> {
@@ -821,7 +823,11 @@ export function toResearchResult(target: Target, extracted: Record<string, unkno
 async function extractOnce(target: Target, pages: Page[], results: Source[], opts: pi.AskOptions): Promise<Record<string, unknown>> {
   let answer: string;
   try {
-    answer = (await pi.ask(extractContactsPrompt(target, pages, results), { ...opts, tools: false, maxTokens: EXTRACT_MAX_TOKENS })).answer;
+    const prompt = extractContactsPrompt(target, pages, results);
+    // CONTACT_LLM_* names this step's own model; without it, Pi.
+    answer = extractLlm.config()
+      ? (await extractLlm.ask(prompt, { timeoutMs: opts.timeoutMs, maxTokens: EXTRACT_MAX_TOKENS })).answer
+      : (await pi.ask(prompt, { ...opts, tools: false, maxTokens: EXTRACT_MAX_TOKENS })).answer;
   } catch (cause) {
     const code = (cause as { code?: string }).code;
     throw Object.assign(
@@ -999,7 +1005,7 @@ async function lane(name: string, env: NodeJS.ProcessEnv): Promise<void> {
     jobs.touch(name, '127.0.0.1', [JOB_TYPE]);
     try {
       const [tavilyKeys, exaKeys] = await Promise.all([tavily.refresh(env), exa.refresh(env)]);
-      if ((!tavilyKeys.length && !exaKeys.length) || !pi.config(env).apiKey) {
+      if ((!tavilyKeys.length && !exaKeys.length) || (!extractLlm.config(env) && !pi.config(env).apiKey)) {
         await new Promise((resolve) => setTimeout(resolve, 3_000));
         continue;
       }
