@@ -40,8 +40,8 @@ const JOB_HOSTS = [
 const KIND_ORDER = ['official', 'social', 'maps', 'news', 'registry', 'directory', 'other', 'jobs'];
 
 type FetchImpl = typeof fetch;
-type Source = { url: string; kind: string; why: string; title?: string; provider?: 'tavily' | 'exa' };
-type Target = { name: string; website: string; extraUrls: string[]; location: string };
+export type Source = { url: string; kind: string; why: string; title?: string; provider?: 'tavily' | 'exa' };
+export type Target = { name: string; website: string; extraUrls: string[]; location: string };
 export type Page = { url: string; text: string };
 
 export type ContactConfig = {
@@ -92,7 +92,7 @@ export function publicUrl(value: unknown): string {
   }
 }
 
-function hostOf(url: string): string {
+export function hostOf(url: string): string {
   try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ''); } catch { return ''; }
 }
 
@@ -274,7 +274,15 @@ export function groundExtracted(extracted: Record<string, unknown>, pages: Page[
 
 export type Provider = 'tavily' | 'exa';
 /** One search as the report records it: who ran it, what was asked, how many pages came back. */
-export type SearchLog = { provider: Provider; purpose: 'general' | 'linkedin'; query: string; results: number };
+export type SearchLog = {
+  provider: Provider;
+  purpose: 'general' | 'linkedin' | 'people' | 'site' | 'extract';
+  query: string;
+  results: number;
+  /** What the call cost, when the provider says: Tavily credits or Exa dollars. */
+  credits?: number;
+  dollars?: number;
+};
 export type Searched = { sources: Source[]; queries: string[]; log: SearchLog[] };
 
 function generalQueries(target: Target): string[] {
@@ -283,7 +291,7 @@ function generalQueries(target: Target): string[] {
   return [location ? `"${name}" ${location}` : `"${name}"`, `"${name}" phone email contact`];
 }
 
-function kindOf(url: string, targetHost: string): string {
+export function kindOf(url: string, targetHost: string): string {
   const host = hostOf(url);
   if (targetHost && (host === targetHost || host.endsWith('.' + targetHost))) return 'official';
   if (/(facebook|instagram|linkedin|twitter|tiktok)\.com$/i.test(host)) return 'social';
@@ -294,7 +302,7 @@ function kindOf(url: string, targetHost: string): string {
   return 'other';
 }
 
-function toSources(target: Target, hits: tavily.SearchHit[], provider: Provider): Source[] {
+export function toSources(target: Target, hits: tavily.SearchHit[], provider: Provider): Source[] {
   const targetHost = target.website ? hostOf(target.website) : '';
   const seen = new Set<string>();
   const sources: Source[] = [];
@@ -407,7 +415,7 @@ async function searchAll(target: Target, provider: Provider): Promise<Searched> 
   return combine(general, await linkedin);
 }
 
-function combine(...parts: Searched[]): Searched {
+export function combine(...parts: Searched[]): Searched {
   return {
     sources: mergeSources(...parts.map((part) => part.sources)),
     queries: parts.flatMap((part) => part.queries),
@@ -426,12 +434,95 @@ function mergeSources(...lists: Source[][]): Source[] {
   });
 }
 
+const NAME_FILLER = new Set(['sdn', 'bhd', 'berhad', 'enterprise', 'trading', 'service', 'services', 'company', 'the', 'and', 'plt', 'ltd', 'limited', 'group', 'holding', 'holdings', 'restaurant', 'restoran', 'kedai', 'cafe', 'coffee', 'shop', 'store', 'centre', 'center', 'malaysia']);
+
+const MALAYSIA = /malaysia|\+60[\s-]?\d|\b(?:johor|selangor|kuala lumpur|penang|pulau pinang|negeri sembilan|perak|kedah|melaka|malacca|pahang|sabah|sarawak|kelantan|terengganu|perlis|putrajaya|labuan)\b/i;
+const NOT_OFFICIAL =/(?:^|\.)(?:facebook|instagram|linkedin|twitter|x|tiktok|youtube|wikipedia|google|waze|tripadvisor|yelp|foursquare|foodpanda|grab|shopee|lazada|mudah|propertyguru|iproperty|yellowpages|kompass|emis|ctoscredit|sme100|panjiva|thestar|nst|malaymail|theedgemarkets)\./;
+
+/**
+ * The company's own site: the website on the lead, or else the first search hit
+ * whose host spells a distinctive word of the name (kimsflorist.com.my for
+ * "Kim's Florist") and is not a social, map, directory, registry, news or job site.
+ */
+export function officialSite(target: Target, sources: Source[]): string {
+  const given = publicUrl(target.website);
+  if (given && !isSearchPage(given)) return given;
+  // The name's distinctive words in order: "Lidsoon Machinery" is lidsoon, machinery.
+  const words = target.name.toLowerCase().replace(/[^a-z0-9 ]+/g, '').split(/\s+/)
+    .filter((word) => word.length >= 3 && !NAME_FILLER.has(word));
+  if (!words.length) return '';
+  const squashed = words.join('');
+  const placeWords = target.location.toLowerCase().split(/[^a-z]+/).filter((word) => word.length >= 5 && !/^(?:jalan|taman|lorong|floor|level|block)$/.test(word));
+  for (const source of sources) {
+    const host = hostOf(source.url);
+    if (isJobAdvertisement(source.url) || /\.(?:gov|edu)\.my$/.test(host) || NOT_OFFICIAL.test(host)) continue;
+    // The registered name, not a subdomain: my123-acme.directory.com is the directory's.
+    const label = siteLabel(host);
+    if (label.length < 3) continue;
+    // The first word must be there (a word like "machinery" alone names other firms), and the
+    // second too unless the host is little more than the first word.
+    const first = label.includes(words[0]!);
+    const second = words.length < 2 || label.includes(words[1]!) || label.length <= words[0]!.length + 4;
+    // A .com that shares the name may be a firm abroad (multec.co.uk for Multec Machinery in Johor):
+    // off .my, the hit itself must say Malaysia, a state, a word of the address or a +60 number.
+    const snippet = `${source.title ?? ''} ${source.why}`;
+    const local = /\.my$/.test(host) || MALAYSIA.test(snippet) || placeWords.some((word) => snippet.toLowerCase().includes(word));
+    if (local && ((first && second) || (label.length >= 6 && squashed.startsWith(label)))) {
+      try { return new URL(source.url).origin + '/'; } catch { /* next */ }
+    }
+  }
+  return '';
+}
+
+/** The brand without its branch: "Thai Odyssey @ Komtar JBCC" is "Thai Odyssey", for people searches. */
+export function coreName(name: string): string {
+  const core = name.split(/\s+(?:@|\||-|–)\s+|\s*\(/)[0]!.trim();
+  return core.length >= 3 ? core : name.trim();
+}
+
+/** The registered label of a host: kimsflorist for www.kimsflorist.com.my. */
+function siteLabel(host: string): string {
+  const parts = host.split('.');
+  const suffix = parts.length > 2 && /^(?:com|net|org|edu|gov|co|biz|name)$/.test(parts[parts.length - 2]!) ? 2 : 1;
+  const registered = parts[parts.length - 1 - suffix] ?? '';
+  // A free site builder's subdomain is the company's own: lidsoon.blogspot.com.
+  const own = /^(?:blogspot|wixsite|wordpress|weebly|business|webnode|squarespace)$/.test(registered) && parts.length > 2 ? parts[0]! : registered;
+  return own.replace(/-/g, '');
+}
+
+const SITE_PAGES = 6;
+const SITE_PATH = /contact|hubungi|about|tentang|team|management|leadership|board|director|people|profile|corporate|company|kami|founder|owner/i;
+
+/** From a site's own links: the home page first, then the paths that name contact, about, team or management, shortest first. */
+export function pickSitePages(home: string, urls: string[]): string[] {
+  const homeHost = hostOf(home);
+  const origin = (url: string) => { try { return new URL(url).origin; } catch { return ''; } };
+  // www and bare host, with and without a trailing slash, are one page.
+  const pageKey = (url: string) => { try { return hostOf(url) + new URL(url).pathname.replace(/\/+$/, ''); } catch { return url; } };
+  const homeKey = pageKey(home);
+  const wanted = urls
+    .map(publicUrl)
+    .filter((url) => url && hostOf(url) === homeHost && pageKey(url) !== homeKey && !/\.(?:jpe?g|png|gif|webp|svg|zip|docx?|xlsx?)$/i.test(url))
+    .filter((url) => { try { return SITE_PATH.test(new URL(url).pathname); } catch { return false; } })
+    .sort((a, b) => Number(origin(a) !== origin(home)) - Number(origin(b) !== origin(home)) || a.length - b.length);
+  const seen = new Set<string>([homeKey]);
+  const out = [home];
+  for (const url of wanted) {
+    const key = pageKey(url);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(url);
+    if (out.length >= SITE_PAGES) break;
+  }
+  return out;
+}
+
 /** A LinkedIn person page asks for a sign-in; its search snippet is all there is. */
-function isLinkedinPerson(url: string): boolean {
+export function isLinkedinPerson(url: string): boolean {
   return /linkedin\.com\/(?:in|pub|posts)\//i.test(url);
 }
 
-function dedupeKey(url: string): string {
+export function dedupeKey(url: string): string {
   try {
     const parsed = new URL(url);
     return parsed.origin.toLowerCase() + parsed.pathname.replace(/\/+$/, '') + parsed.search;
@@ -801,12 +892,30 @@ async function finish(
 ): Promise<Record<string, unknown>> {
   const urls = collectPageUrls(target, searched.sources, now);
   const pages = urls.length ? await readPages(urls, searched.sources, fetchImpl) : [];
+  return extractResult(target, searched, pages, config.timeoutMs, urls);
+}
+
+/**
+ * Step 2 on pages already read: Pi extracts, names are grounded, and the result
+ * takes the report's shape. Pages a provider read for us (Tavily Extract, Exa
+ * contents) come in here the same way as pages this process fetched.
+ */
+export async function extractResult(
+  target: Target,
+  searched: Searched,
+  pages: Page[],
+  timeoutMs: number,
+  urls: string[] = pages.map((page) => page.url),
+  pageFoundBy: Map<string, string> = new Map(),
+): Promise<Record<string, unknown>> {
   const results = searched.sources;
-  const meta = { queries: searched.queries, search: searched.log, foundBy: foundByMap(results) };
+  const foundBy = foundByMap(results);
+  for (const [key, provider] of pageFoundBy) if (!foundBy.has(key)) foundBy.set(key, provider);
+  const meta = { queries: searched.queries, search: searched.log, foundBy };
   if (!pages.length && !results.length) {
     return toResearchResult(target, { people: [], phones: [], emails: [] }, urls, meta);
   }
-  const { extracted, pages: read } = await extract(target, pages, results, config.timeoutMs);
+  const { extracted, pages: read } = await extract(target, pages, results, timeoutMs);
   const grounded = groundExtracted(extracted, read, results);
   return toResearchResult(target, grounded, read.map((page) => page.url), meta);
 }
