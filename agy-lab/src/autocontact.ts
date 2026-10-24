@@ -77,8 +77,17 @@ function outOfCredits(): boolean {
   return paused;
 }
 
+/**
+ * Held by hand while the lead blacklist (docs/lead-blacklist.md) is reviewed:
+ * without it the backlog includes banks, chains and competitors. Railway env, so
+ * it survives a redeploy and lifts without one.
+ */
+export function pausedByHand(env: NodeJS.ProcessEnv = process.env): boolean {
+  return /^(1|true|yes|on)$/i.test(env.AUTO_CONTACT_PAUSED?.trim() ?? '');
+}
+
 export async function tick(): Promise<number> {
-  if (ticking || !workerLive() || outOfCredits()) return 0;
+  if (ticking || pausedByHand() || !workerLive() || outOfCredits()) return 0;
   ticking = true;
   try {
     // Saved reports are the durable queue. Do not mint new reports while older
@@ -105,11 +114,13 @@ export function start(): void {
 export async function status(): Promise<{
   workerAvailable: boolean;
   pausedForQuota: boolean;
+  paused: boolean;
   totals: { queued: number; running: number; completed: number; failed: number };
 }> {
   return {
     workerAvailable: workerLive(),
     pausedForQuota: outOfCredits(),
+    paused: pausedByHand(),
     totals: await db.autoContactQueueTotals(),
   };
 }

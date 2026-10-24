@@ -116,3 +116,19 @@ test('launch receives autoQueued true', () => withEnv({}, async () => {
   await autoContact.tick();
   assert.equal(opts?.autoQueued, true);
 }));
+
+test('AUTO_CONTACT_PAUSED holds the queue with a live worker and backlog, and lifts when unset', () => withEnv({}, async () => {
+  let launched = 0;
+  autoContact.init({ liveTypes: live, backlog: async () => [company('held')], launch: async () => { launched++; } });
+  process.env.AUTO_CONTACT_PAUSED = '1';
+  try {
+    assert.equal(autoContact.pausedByHand(), true);
+    assert.equal(await autoContact.tick(), 0);
+    assert.equal(launched, 0);
+  } finally {
+    delete process.env.AUTO_CONTACT_PAUSED;
+  }
+  assert.equal(autoContact.pausedByHand({ AUTO_CONTACT_PAUSED: 'no' }), false);
+  assert.equal(await autoContact.tick(), 1);
+  assert.equal(launched, 1);
+}));
