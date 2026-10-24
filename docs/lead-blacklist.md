@@ -1,8 +1,11 @@
-# Lead blacklist — draft, not wired in
+# Lead blacklist
 
 These are the leads to keep out of contact research, because a solar EPC cannot sell to them.
 It was drafted on 2026-10-24 from the whole master list (12,307 leads from `GET /api/leads`).
-Nothing reads this file yet. It is for review before step 3, the deep contact research.
+Approved on 2026-10-24 and live in [lead-blacklist.ts](../agy-lab/src/lead-blacklist.ts). Each lead stores
+its group in `company_data.blacklist_reason`. All leads are re-checked at boot, and new leads are checked after
+each scan and before every auto-queue cycle. The auto-queue and the taman "Research N pending" button skip
+blacklisted leads. Starting research on a single company by hand still works.
 
 A lead is excluded when **its Google category is on a list, or its name matches a pattern**.
 Name patterns are whole words, case-insensitive, and allow one optional space (`99 ?speed ?mart`).
@@ -141,8 +144,7 @@ but they are the next group to consider dropping:
 
 ## Known misses
 
-- **A brand named as a landmark.** "HS TYRES AND SERVICE CENTRE (beside burger king)" matches
-  burger king. Stripping "beside / near / opposite / sebelah …" from names before matching fixes
-  this. It only affects a handful of leads.
+- **A brand named as a landmark** ("HS TYRES (beside burger king)") is fixed in the code: "beside / near /
+  opposite / sebelah / depan …" is stripped from names before matching. That frees 3 of the 2,651 above.
 - **Uncategorised leads.** 539 leads have no category and no matching name. They are kept, and
   the name rules are the only check on them.

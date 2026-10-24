@@ -1754,6 +1754,8 @@ async function runBusinessSearch(publicId: string, reportId: string, request: Re
       result, error: null,
       completed: true,
     });
+    // Mark the new leads before anything can queue research on them.
+    void db.applyLeadBlacklist().catch((e: Error) => console.warn('[blacklist] could not check new leads: ' + e.message));
   } catch (err) {
     console.error(`[business_search.failed] report=${publicId}: ${(err as Error).stack ?? String(err)}`);
     await db.updateReport(publicId, { status: 'failed', error: (err as Error).message ?? String(err), completed: true }).catch(() => {});
@@ -3473,6 +3475,7 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       return true;
     }
     const requesterId = str(body.requesterId || body.userId).trim() || 'telemarketing';
+    await db.applyLeadBlacklist();
     const ids = await db.tamanContactPendingCompanyIds({
       taman,
       queryPlace: str(body.queryPlace || body.query_place).trim() || undefined,

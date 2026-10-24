@@ -401,6 +401,12 @@ server.listen(PORT, '0.0.0.0', () => {
   // Age 0 at boot: this process owns no run yet, so anything non-terminal was
   // stranded by the restart that just happened.
   reapAbandonedRuns(0);
+  // Every lead, so a rule changed in this deploy reaches the ones already saved.
+  if (reportdb.configured()) {
+    void reportdb.applyLeadBlacklist({ all: true })
+      .then((r) => console.log(`[blacklist] checked ${r.checked} leads, ${r.blacklisted} kept out of contact research`))
+      .catch((err: Error) => console.warn('[blacklist] could not check leads: ' + err.message));
+  }
   autoContact.init({ launch: intel.launchContactResearch });
   autoContact.start();
   contactWorker.start();

@@ -5,6 +5,7 @@
 // bearer is short-lived and therefore not the preferred production path.
 import crypto from 'node:crypto';
 import pg from 'pg';
+import { blacklistReason } from './lead-blacklist.ts';
 
 const { Pool } = pg;
 
@@ -520,6 +521,9 @@ export function migrate(): Promise<void> {
       alter table company_data add column if not exists lead_notes text;
       alter table company_data add column if not exists is_hidden boolean not null default false;
       alter table company_data add column if not exists lead_updated_at timestamptz default now();
+      alter table company_data add column if not exists blacklist_reason text;
+      alter table company_data add column if not exists blacklist_checked_at timestamptz;
+      comment on column company_data.blacklist_reason is 'lead-blacklist.ts group that keeps this lead out of contact research; null when it may be researched';
       create index if not exists company_data_lead_status_idx on company_data (lead_status);
       create index if not exists company_data_assigned_to_idx on company_data (assigned_to);
       create index if not exists company_data_is_hidden_idx on company_data (is_hidden);
@@ -1138,7 +1142,34 @@ export async function requeueAbandonedContactReports(since: string): Promise<num
 }
 
 /**
- * Active, visible, non-DNC companies the auto-queue may research.
+ * Classify leads against lead-blacklist.ts. `all` re-checks every lead (at boot,
+ * so a changed rule reaches old leads); otherwise only leads never checked,
+ * which is every lead a scan or lookup added since. The backlog only takes
+ * checked leads, so an unchecked one cannot slip into research first.
+ */
+export async function applyLeadBlacklist(opts: { all?: boolean } = {}): Promise<{ checked: number; blacklisted: number }> {
+  await migrate();
+  const rows = await sql<{ id: string; name: string | null; category: string | null }>(
+    `select id::text, name, category from company_data
+     where merged_into is null${opts.all ? '' : ' and blacklist_checked_at is null'}`,
+  );
+  let blacklisted = 0;
+  for (let start = 0; start < rows.rows.length; start += 1000) {
+    const batch = rows.rows.slice(start, start + 1000);
+    const reasons = batch.map((r) => blacklistReason(r.name, r.category));
+    blacklisted += reasons.filter(Boolean).length;
+    await sql(
+      `update company_data c set blacklist_reason = v.reason, blacklist_checked_at = now()
+       from unnest($1::bigint[], $2::text[]) as v(id, reason)
+       where c.id = v.id`,
+      [batch.map((r) => Number(r.id)), reasons],
+    );
+  }
+  return { checked: rows.rows.length, blacklisted };
+}
+
+/**
+ * Active, visible, non-DNC, non-blacklisted companies the auto-queue may research.
  * A lead qualifies when it has never had a legacy contact report, or when its
  * legacy contact reports are all failed. A queued, running, completed, or
  * partial report keeps the company out of the backlog.
@@ -1151,6 +1182,8 @@ export async function contactResearchBacklog(limit: number): Promise<Record<stri
      where c.merged_into is null
        and coalesce(c.is_hidden, false) = false
        and coalesce(c.lead_status, 'unassigned') <> 'do_not_call'
+       and c.blacklist_checked_at is not null
+       and c.blacklist_reason is null
        and not exists (
          select 1 from published_report p
          where p.company_id = c.id
@@ -3126,7 +3159,7 @@ export async function findTamanCompanyIds(options: {
 
 // A lead still needs contact research when its latest contact report is not
 // completed or partial, and it is not already queued or running. Blacklisted
-// (do_not_call) leads are never queued.
+// (do_not_call, or a lead-blacklist.ts group) leads are never queued.
 const CONTACT_PENDING_SQL = `
   left join lateral (
     select status from published_report
@@ -3135,6 +3168,7 @@ const CONTACT_PENDING_SQL = `
   ) crep on true
   where c.merged_into is null
     and coalesce(c.lead_status, 'unassigned') <> 'do_not_call'
+    and c.blacklist_reason is null
     and coalesce(crep.status, '') not in ('completed', 'partial', 'queued', 'running')`;
 
 // Pending contact research per taman, keyed by lower-cased query place.

@@ -94,6 +94,8 @@ export async function tick(): Promise<number> {
     // ones are waiting for the research lanes.
     const free = deps.backlog ? BATCH : Math.max(0, BATCH - await db.pendingContactReportCount());
     if (!free) return 0;
+    // The backlog only offers leads checked against the blacklist; check new ones first.
+    if (!deps.backlog) await db.applyLeadBlacklist();
     const rows = deps.backlog
       ? await deps.backlog(free)
       : await db.contactResearchBacklog(free);
