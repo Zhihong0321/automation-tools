@@ -185,3 +185,23 @@ test('the snapshot joins a running job to the worker that claimed it', async () 
   assert.equal(finished.jobs.find((item) => item.id === job.id)?.status, 'done');
   assert.equal(finished.workers.find((item) => item.name === worker)?.done, 1);
 });
+
+test('m4-mini is retired from gmap.scan: never handed one, never counted live for it', async () => {
+  const job = create('gmap.scan', { keyword: 'factory', place: 'Taman Daya' }, 60_000);
+  const claim = async (worker: string): Promise<string | null> => {
+    let sent: Record<string, unknown> | null = null;
+    const req = { method: 'GET', headers: {}, socket: { remoteAddress: '203.0.113.7' } } as unknown as http.IncomingMessage;
+    const res = { writableEnded: false, on: () => {}, writeHead: () => {},
+      end: () => { res.writableEnded = true; } } as unknown as http.ServerResponse;
+    const url = new URL(`http://lab/api/jobs/next?worker=${worker}&types=ping,gmap.scan&wait=0`);
+    await handle(req, res, url, { json: (_res, _status, body) => { sent = body as Record<string, unknown>; }, readJson: async () => ({}) });
+    return (sent?.job as { id: string } | undefined)?.id ?? null;
+  };
+  assert.equal(await claim('m4-mini'), null);
+  assert.equal(job.status, 'pending');
+  await heartbeat('m4-mini', ['ping', 'gmap.scan']);
+  assert.deepEqual(snapshot().workers.find((w) => w.name === 'm4-mini')?.types, ['ping']);
+  // Any other machine still takes the scan.
+  assert.equal(await claim('scan-host'), job.id);
+  finish(job.id, true, {}, null);
+});

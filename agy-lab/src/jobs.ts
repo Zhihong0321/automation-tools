@@ -147,6 +147,22 @@ export function isDurableContactJob(type: string): boolean {
   return type === 'research.contact' || type === 'research.contact.cloud' || type === 'research.contact.pi';
 }
 
+/**
+ * Job types a machine has been retired from, keyed by worker-name prefix so every
+ * lane of that machine is covered. The mini's Maps daemon could not be stopped
+ * from here, so the broker stops listening to it instead: its offer of
+ * `gmap.scan` is dropped at the door, it is never handed one, and it no longer
+ * counts toward liveTypes() — a business search then fails fast with "worker
+ * is offline" rather than queueing a scan for a machine that should not run it.
+ */
+const RETIRED_TYPES: Array<{ prefix: string; types: string[] }> = [
+  { prefix: 'm4-mini', types: ['gmap.scan'] },
+];
+
+export function isRetired(worker: string, type: string): boolean {
+  return RETIRED_TYPES.some((r) => worker.startsWith(r.prefix) && r.types.includes(type));
+}
+
 export function touch(name: string, ip: string | null, types?: string[] | null, group?: string | null): WorkerInfo {
   const existing = workers.get(name);
   const info: WorkerInfo =
@@ -509,8 +525,9 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     const offeredTypes = (q.get('types') ?? '').split(',').map((t) => t.trim()).filter(Boolean);
     // Older workers still impose a Pi deadline and can discard completed
     // research. They may report work already claimed, but cannot claim more.
-    const types = q.get('contactProtocol') === 'durable-v1'
-      ? offeredTypes : offeredTypes.filter((type) => !isDurableContactJob(type));
+    const types = (q.get('contactProtocol') === 'durable-v1'
+      ? offeredTypes : offeredTypes.filter((type) => !isDurableContactJob(type)))
+      .filter((type) => !isRetired(worker, type));
     touch(worker, callerIp(req), types, (q.get('cooldownGroup') ?? '').trim());
     const waitSec = Number(q.get('wait'));
     const controller = new AbortController();
@@ -588,8 +605,9 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     // beat that re-registered the name alone would read as "here, serving
     // nothing", which the gateway treats the same as absent.
     const offeredTypes = Array.isArray(body.types) ? body.types.map((t) => str(t).trim()).filter(Boolean) : [];
-    const types = body.contactProtocol === 'durable-v1'
-      ? offeredTypes : offeredTypes.filter((type) => !isDurableContactJob(type));
+    const types = (body.contactProtocol === 'durable-v1'
+      ? offeredTypes : offeredTypes.filter((type) => !isDurableContactJob(type)))
+      .filter((type) => !isRetired(worker, type));
     const group = str(body.cooldownGroup).trim();
     touch(worker, callerIp(req), types, group);
     // A cooling worker keeps beating. Restore its deadline after a broker
