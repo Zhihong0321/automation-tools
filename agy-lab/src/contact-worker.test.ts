@@ -15,6 +15,12 @@ import {
   targetFromPayload,
   tavilySearch,
   toResearchResult,
+  linkedinSearch,
+  unusablePhone,
+  unusableEmail,
+  printedName,
+  groundExtracted,
+  extractContactsPrompt as promptFor,
 } from './contact-worker.ts';
 
 test('pi contact lanes register under the hub worker name', () => {
@@ -97,7 +103,7 @@ test('research runs tavily find, reads the pages, then pi extracts with no tools
 
     assert.equal(tavilyQueries.length, 2);
     assert.match(tavilyQueries[0]!, /Acme Bakery.*Johor Bahru/);
-    assert.match(tavilyQueries[1]!, /official website contact/);
+    assert.match(tavilyQueries[1]!, /phone email contact/);
     assert.deepEqual(fetched.sort(), ['https://acme-bakery.example/about', 'https://acme-bakery.example/contact']);
     assert.equal(prompts.length, 1);
     assert.equal(prompts[0]!.tools, false);
@@ -308,4 +314,69 @@ test('an extract that fails twice reports both, and a rate limit is not retried'
   } finally {
     pi.setRunnerForTests(null);
   }
+});
+
+test('the LinkedIn search asks Exa for linkedin.com only and keeps title and snippet', async () => {
+  let sent: Record<string, unknown> = {};
+  const fetchMock: typeof fetch = async (url, init) => {
+    assert.equal(String(url), 'https://api.exa.ai/search');
+    assert.equal((init?.headers as Record<string, string>)['x-api-key'], 'exa-key');
+    sent = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ results: [
+      { url: 'https://my.linkedin.com/in/tan-ah-kow', title: 'Tan Ah Kow - Managing Director - Acme Sdn Bhd', highlights: ['Managing Director at Acme Sdn Bhd'] },
+    ] }), { status: 200 });
+  };
+  const target = targetFromPayload({ name: 'Acme Sdn Bhd' });
+  const out = await linkedinSearch(target, 'exa-key', fetchMock);
+  assert.deepEqual(sent.includeDomains, ['linkedin.com']);
+  assert.match(String(sent.query), /^Acme Sdn Bhd director manager owner$/);
+  assert.equal(out.sources[0]?.title, 'Tan Ah Kow - Managing Director - Acme Sdn Bhd');
+  assert.equal(out.sources[0]?.kind, 'social');
+  // No key or a failed call costs nothing and stops nothing.
+  assert.deepEqual((await linkedinSearch(target, '', fetchMock)).sources, []);
+  const down: typeof fetch = async () => new Response('busy', { status: 503 });
+  assert.deepEqual((await linkedinSearch(target, 'exa-key', down)).sources, []);
+});
+
+test('the prompt hands Pi the search snippets beside the pages', () => {
+  const prompt = promptFor(
+    targetFromPayload({ name: 'Acme Sdn Bhd' }),
+    [{ url: 'https://acme.example/contact', text: 'Tel 07-355 1234' }],
+    [{ url: 'https://my.linkedin.com/in/tan-ah-kow', kind: 'social', title: 'Tan Ah Kow - Managing Director - Acme Sdn Bhd', why: 'Managing Director at Acme' }],
+  );
+  assert.match(prompt, /<result url="https:\/\/my\.linkedin\.com\/in\/tan-ah-kow">Tan Ah Kow - Managing Director - Acme Sdn Bhd — Managing Director at Acme<\/result>/);
+  assert.match(prompt, /Copy each name exactly as printed/);
+  assert.match(prompt, /Never write "Key Contact"/);
+});
+
+test('masked, cut and placeholder numbers and emails are dropped', () => {
+  for (const bad of ['016-709 82**', '07-356 2\XX', '07-356 2XXX', '+60370000000', '+60 3-7000 0000', '012-1111111', '1234567']) {
+    assert.equal(unusablePhone(bad), true, bad);
+  }
+  for (const good of ['07-288 2888', '+6012-3197772', '012 - 701 9192', '1300-88-1234', '72882999']) {
+    assert.equal(unusablePhone(good), false, good);
+  }
+  assert.equal(unusableEmail('s*****@ksl.net.my'), true);
+  assert.equal(unusableEmail('info@ksl.my'), false);
+});
+
+test('a name is kept only as printed in what Pi read', () => {
+  const text = 'Board: KHOO CHENG HAI @ KU CHENG HAI, Director. Tan  Swee Geok, Director.';
+  assert.equal(printedName('Khoo Cheng Hai @ Ku Cheng Hai', text), 'KHOO CHENG HAI @ KU CHENG HAI');
+  assert.equal(printedName('Tan Swee Geok', text), 'Tan Swee Geok');
+  assert.equal(printedName('Khao Cheng Hai', text), null);
+  assert.equal(printedName('Tan', 'Tank Engineering'), null);
+
+  const grounded = groundExtracted(
+    {
+      people: [{ name: 'Khoo Cheng Hai @ Ku Cheng Hai', position: 'Director' }, { name: 'Khao Lee Feng', position: 'Director' }],
+      phones: [{ number: '07-288 2888' }, { number: '016-709 82**' }],
+      emails: [{ email: 'info@ksl.my' }, { email: 's*****@ksl.net.my' }],
+    },
+    [{ url: 'https://ksl.my/board', text }],
+    [],
+  );
+  assert.deepEqual((grounded.people as Array<{ name: string }>).map((p) => p.name), ['KHOO CHENG HAI @ KU CHENG HAI']);
+  assert.deepEqual((grounded.phones as Array<{ number: string }>).map((p) => p.number), ['07-288 2888']);
+  assert.deepEqual((grounded.emails as Array<{ email: string }>).map((e) => e.email), ['info@ksl.my']);
 });
