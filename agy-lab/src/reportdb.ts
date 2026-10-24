@@ -104,14 +104,14 @@ export const NAME_KEY_SQL = nameKeySql();
 export const REGISTERED_SQL =
   "~* '(^|[[:space:]])(sdn[[:space:]]*bhd|sendirian[[:space:]]+berhad|berhad|bhd|plt|llp|pte[[:space:]]*ltd|ltd|limited|inc|incorporated|corp|corporation|gmbh|pty)$'";
 
-export type GeminiKeyKind = 'grounding' | 'official' | 'tavily';
+export type GeminiKeyKind = 'grounding' | 'official' | 'tavily' | 'exa';
 
 export async function listGeminiContactKeys(): Promise<Array<{ id: number; kind: GeminiKeyKind; secret: string }>> {
   await migrate();
   const out = await sql(`select id, kind, secret from gemini_contact_key order by kind, id`);
   return out.rows.map((row) => ({
     id: Number(row.id),
-    kind: row.kind === 'official' ? 'official' : row.kind === 'tavily' ? 'tavily' : 'grounding',
+    kind: row.kind === 'official' ? 'official' : row.kind === 'tavily' ? 'tavily' : row.kind === 'exa' ? 'exa' : 'grounding',
     secret: String(row.secret ?? ''),
   }));
 }
@@ -123,6 +123,54 @@ export async function replaceGeminiContactKeys(kind: GeminiKeyKind, secrets: str
   for (const secret of clean) {
     await sql(`insert into gemini_contact_key (kind, secret) values ($1, $2) on conflict (kind, secret) do nothing`, [kind, secret]);
   }
+}
+
+export type ProviderStats = {
+  provider: string; jobs: number; withPhone: number; withPerson: number; withEmail: number;
+  phones: number; people: number; emails: number;
+};
+
+/**
+ * How much each search provider dug up, over the last `days`. A job counts under
+ * the provider that ran its general searches; found_by says whose search page
+ * each contact came from ('page' for the website or map pin we opened ourselves).
+ */
+export async function contactProviderStats(days: number): Promise<{
+  providers: ProviderStats[];
+  foundBy: Array<{ kind: string; foundBy: string; count: number }>;
+}> {
+  await migrate();
+  const recent = `with r as (
+      select r.discovery d from contact_research_run r join published_report p on p.id = r.report_id
+      where p.report_type = 'contact_research' and r.updated_at > now() - make_interval(days => $1::int)
+        and r.discovery->'research_meta'->>'general_provider' is not null)`;
+  const providers = await sql(`${recent}
+    select d->'research_meta'->>'general_provider' as provider,
+      count(*)::int as jobs,
+      count(*) filter (where exists (select 1 from jsonb_array_elements(coalesce(d->'phone_contacts', '[]')) e
+        where coalesce(e->>'label', '') !~* 'google maps'))::int as with_phone,
+      count(*) filter (where jsonb_array_length(coalesce(d->'decision_makers', '[]')) > 0)::int as with_person,
+      count(*) filter (where jsonb_array_length(coalesce(d->'email_contacts', '[]')) > 0)::int as with_email,
+      coalesce(sum(jsonb_array_length(coalesce(d->'phone_contacts', '[]'))), 0)::int as phones,
+      coalesce(sum(jsonb_array_length(coalesce(d->'decision_makers', '[]'))), 0)::int as people,
+      coalesce(sum(jsonb_array_length(coalesce(d->'email_contacts', '[]'))), 0)::int as emails
+    from r group by 1 order by 1`, [Math.max(1, Math.floor(days))]);
+  const foundBy = await sql(`${recent}
+    select x.kind, coalesce(x.e->>'found_by', 'page') as found_by, count(*)::int as n
+    from r cross join lateral (
+      select 'phone' as kind, e from jsonb_array_elements(coalesce(r.d->'phone_contacts', '[]')) e
+      union all select 'email', e from jsonb_array_elements(coalesce(r.d->'email_contacts', '[]')) e
+      union all select 'person', e from jsonb_array_elements(coalesce(r.d->'decision_makers', '[]')) e
+    ) x
+    group by 1, 2 order by 1, 2`, [Math.max(1, Math.floor(days))]);
+  return {
+    providers: providers.rows.map((row) => ({
+      provider: String(row.provider), jobs: Number(row.jobs), withPhone: Number(row.with_phone),
+      withPerson: Number(row.with_person), withEmail: Number(row.with_email),
+      phones: Number(row.phones), people: Number(row.people), emails: Number(row.emails),
+    })),
+    foundBy: foundBy.rows.map((row) => ({ kind: String(row.kind), foundBy: String(row.found_by), count: Number(row.n) })),
+  };
 }
 
 /** Apply only the report-owned schema. The historical core schema remains in schema.sql. */
@@ -139,7 +187,7 @@ export function migrate(): Promise<void> {
       );
     `);
     await sql(`alter table gemini_contact_key drop constraint if exists gemini_contact_key_kind_check;`).catch(() => {});
-    await sql(`alter table gemini_contact_key add constraint gemini_contact_key_kind_check check (kind in ('grounding', 'official', 'tavily'));`).catch(() => {});
+    await sql(`alter table gemini_contact_key add constraint gemini_contact_key_kind_check check (kind in ('grounding', 'official', 'tavily', 'exa'));`).catch(() => {});
     await sql(`
       create table if not exists published_report (
         id bigserial primary key,

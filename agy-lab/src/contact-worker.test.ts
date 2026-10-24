@@ -21,7 +21,9 @@ import {
   printedName,
   groundExtracted,
   extractContactsPrompt as promptFor,
+  pickGeneral,
 } from './contact-worker.ts';
+import * as exaApi from './exa.ts';
 
 test('pi contact lanes register under the hub worker name', () => {
   assert.equal(JOB_TYPE, 'research.contact.pi');
@@ -379,4 +381,54 @@ test('a name is kept only as printed in what Pi read', () => {
   assert.deepEqual((grounded.people as Array<{ name: string }>).map((p) => p.name), ['KHOO CHENG HAI @ KU CHENG HAI']);
   assert.deepEqual((grounded.phones as Array<{ number: string }>).map((p) => p.number), ['07-288 2888']);
   assert.deepEqual((grounded.emails as Array<{ email: string }>).map((e) => e.email), ['info@ksl.my']);
+});
+
+test('general searches take turns between Tavily and Exa while both have credits', () => {
+  const both = [pickGeneral(true, true), pickGeneral(true, true), pickGeneral(true, true), pickGeneral(true, true)];
+  assert.deepEqual(new Set(both), new Set(['tavily', 'exa']));
+  assert.equal(pickGeneral(true, false), 'tavily');
+  assert.equal(pickGeneral(false, true), 'exa');
+  assert.equal(pickGeneral(false, false), null);
+});
+
+test('an Exa job records who searched and which provider found each contact', async () => {
+  const exaBodies: Array<Record<string, unknown>> = [];
+  const fetchMock: typeof fetch = async (url, init) => {
+    const href = String(url);
+    if (href === 'https://api.exa.ai/search') {
+      const body = JSON.parse(String(init?.body));
+      exaBodies.push(body);
+      const results = body.includeDomains
+        ? [{ url: 'https://my.linkedin.com/in/siti', title: 'Siti Aminah - Owner - Acme Bakery', highlights: ['Owner at Acme Bakery'] }]
+        : [{ url: 'https://acme-bakery.example/about', title: 'About Acme Bakery', highlights: ['Call 07-555 0101'] }];
+      return new Response(JSON.stringify({ results }), { status: 200 });
+    }
+    return new Response('<p>Acme Bakery. Call 07-555 0101.</p>', { status: 200, headers: { 'content-type': 'text/html' } });
+  };
+  pi.setRunnerForTests(async () => '{"people":[{"name":"Siti Aminah","position":"Owner","evidence_url":"https://my.linkedin.com/in/siti"}],"phones":[{"number":"07-555 0101","label":"office","evidence_url":"https://acme-bakery.example/about"}],"emails":[]}');
+  try {
+    const result = await research({ name: 'Acme Bakery', location: 'Johor Bahru' }, { fetchImpl: fetchMock, provider: 'exa', exaKey: 'exa-key' });
+    assert.equal(exaBodies.length, 3, 'two general searches and one LinkedIn search');
+    const meta = result.research_meta as Record<string, unknown>;
+    assert.equal(meta.general_provider, 'exa');
+    assert.deepEqual((meta.search as Array<Record<string, unknown>>).map((row) => `${row.provider}:${row.purpose}`).sort(), ['exa:general', 'exa:general', 'exa:linkedin']);
+    assert.equal((result.decision_makers as Array<Record<string, unknown>>)[0]?.found_by, 'exa');
+    assert.equal((result.phone_contacts as Array<Record<string, unknown>>)[0]?.found_by, 'exa');
+    assert.match(String(meta.engine), /^exa \+ exa linkedin \+ pi\//);
+  } finally {
+    pi.setRunnerForTests(null);
+  }
+});
+
+test('an Exa key rests a day when Exa refuses it and a minute on a rate limit', async () => {
+  const refused: typeof fetch = async () => new Response('{"error":"insufficient credits"}', { status: 402 });
+  await assert.rejects(() => exaApi.searchWithKey('q', 'k', { fetchImpl: refused }), (err: unknown) => (err as { code?: string }).code === 'quota');
+  const limited: typeof fetch = async () => new Response('slow down', { status: 429 });
+  await assert.rejects(() => exaApi.searchWithKey('q', 'k', { fetchImpl: limited }), (err: unknown) => (err as { code?: string }).code === 'rate_limit');
+  const pool = createKeyPool({ concurrency: 1 });
+  pool.setKeys(['exa-a']);
+  const cools: number[] = [];
+  exaApi.releaseFor({ secret: 'exa-a', release: (ms = 0) => { cools.push(ms); } }, { code: 'quota' });
+  exaApi.releaseFor({ secret: 'exa-a', release: (ms = 0) => { cools.push(ms); } }, { code: 'rate_limit' });
+  assert.deepEqual(cools, [24 * 60 * 60_000, 60_000]);
 });

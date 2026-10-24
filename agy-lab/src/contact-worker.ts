@@ -11,6 +11,7 @@ import * as db from './reportdb.ts';
 import * as jobs from './jobs.ts';
 import * as pi from './pi.ts';
 import * as tavily from './tavily.ts';
+import * as exa from './exa.ts';
 
 export const JOB_TYPE = 'research.contact.pi';
 export const WORKER_NAME = 'pi-contact';
@@ -39,7 +40,7 @@ const JOB_HOSTS = [
 const KIND_ORDER = ['official', 'social', 'maps', 'news', 'registry', 'directory', 'other', 'jobs'];
 
 type FetchImpl = typeof fetch;
-type Source = { url: string; kind: string; why: string; title?: string };
+type Source = { url: string; kind: string; why: string; title?: string; provider?: 'tavily' | 'exa' };
 type Target = { name: string; website: string; extraUrls: string[]; location: string };
 export type Page = { url: string; text: string };
 
@@ -271,92 +272,147 @@ export function groundExtracted(extracted: Record<string, unknown>, pages: Page[
   };
 }
 
+export type Provider = 'tavily' | 'exa';
+/** One search as the report records it: who ran it, what was asked, how many pages came back. */
+export type SearchLog = { provider: Provider; purpose: 'general' | 'linkedin'; query: string; results: number };
+export type Searched = { sources: Source[]; queries: string[]; log: SearchLog[] };
+
+function generalQueries(target: Target): string[] {
+  const name = target.name.trim();
+  const location = target.location.trim();
+  return [location ? `"${name}" ${location}` : `"${name}"`, `"${name}" phone email contact`];
+}
+
+function kindOf(url: string, targetHost: string): string {
+  const host = hostOf(url);
+  if (targetHost && (host === targetHost || host.endsWith('.' + targetHost))) return 'official';
+  if (/(facebook|instagram|linkedin|twitter|tiktok)\.com$/i.test(host)) return 'social';
+  if (/(maps\.google\.|waze\.com|tripadvisor\.com|yelp\.com|foursquare\.com)/i.test(host)) return 'maps';
+  if (/(emis\.com|sme100\.asia|panjiva\.com|ctoscredit\.com|yellowpages\.my|kompass\.com|cidb\.gov\.my|ssm\.com\.my)/i.test(host)) return 'registry';
+  if (/(thestar\.com\.my|nst\.com\.my|theedgemarkets\.com|optionstheedge\.com|bloomberg\.com|malaymail\.com)/i.test(host)) return 'news';
+  if (/(directory|yellowpages|find|info)/i.test(host)) return 'directory';
+  return 'other';
+}
+
+function toSources(target: Target, hits: tavily.SearchHit[], provider: Provider): Source[] {
+  const targetHost = target.website ? hostOf(target.website) : '';
+  const seen = new Set<string>();
+  const sources: Source[] = [];
+  for (const item of hits) {
+    const url = publicUrl(item.url);
+    if (!url || isSearchPage(url)) continue;
+    const key = dedupeKey(url);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    sources.push({ url, kind: kindOf(url, targetHost), why: item.content || item.title || `${provider} search result`, title: item.title, provider });
+  }
+  return sources;
+}
+
+/** The two general searches (name and address; name and "phone email contact") with one provider's key. */
+export async function generalSearch(
+  target: Target,
+  provider: Provider,
+  apiKey: string,
+  fetchImpl: FetchImpl = fetch,
+  timeoutMs = 30_000,
+): Promise<Searched> {
+  const queries = generalQueries(target);
+  const lists = await Promise.all(queries.map((query) => provider === 'tavily'
+    ? tavily.searchWithKey(query, apiKey, { maxResults: 8, depth: 'advanced', timeoutMs, fetchImpl })
+    : exa.searchWithKey(query, apiKey, { numResults: 8, timeoutMs, fetchImpl })));
+  return {
+    sources: toSources(target, lists.flat(), provider),
+    queries,
+    log: queries.map((query, i) => ({ provider, purpose: 'general' as const, query, results: lists[i]!.length })),
+  };
+}
+
 export async function tavilySearch(
   target: Target,
   apiKey: string,
   fetchImpl: FetchImpl = fetch,
   timeoutMs = 30_000,
 ): Promise<{ sources: Source[]; queries: string[] }> {
-  const cleanName = target.name.trim();
-  const cleanLocation = target.location.trim();
-  const queries = [
-    cleanLocation ? `"${cleanName}" ${cleanLocation}` : `"${cleanName}"`,
-    `"${cleanName}" phone email contact`,
-  ];
-  const results = (await Promise.all(
-    queries.map((query) => tavily.searchWithKey(query, apiKey, { maxResults: 8, depth: 'advanced', timeoutMs, fetchImpl })),
-  )).flat().filter((item) => publicUrl(item.url) && !isSearchPage(item.url));
-
-  const targetHost = target.website ? hostOf(target.website) : '';
-  const seenUrls = new Set<string>();
-  const sources: Source[] = [];
-  for (const item of results) {
-    const url = publicUrl(item.url);
-    const key = dedupeKey(url);
-    if (seenUrls.has(key)) continue;
-    seenUrls.add(key);
-
-    const host = hostOf(url);
-    let kind = 'other';
-    if (targetHost && (host === targetHost || host.endsWith('.' + targetHost))) {
-      kind = 'official';
-    } else if (/\b(facebook|instagram|linkedin|twitter|tiktok)\.com$/i.test(host)) {
-      kind = 'social';
-    } else if (/\b(maps\.google\.|waze\.com|tripadvisor\.com|yelp\.com|foursquare\.com)/i.test(host)) {
-      kind = 'maps';
-    } else if (/\b(emis\.com|sme100\.asia|panjiva\.com|ctoscredit\.com|yellowpages\.my|kompass\.com|cidb\.gov\.my|ssm\.com\.my)/i.test(host)) {
-      kind = 'registry';
-    } else if (/\b(thestar\.com\.my|nst\.com\.my|theedgemarkets\.com|optionstheedge\.com|bloomberg\.com|malaymail\.com)/i.test(host)) {
-      kind = 'news';
-    } else if (/\b(directory|yellowpages|find|info)/i.test(host)) {
-      kind = 'directory';
-    }
-    sources.push({ url, kind, why: item.content || item.title || 'tavily search result', title: item.title });
-  }
+  const { sources, queries } = await generalSearch(target, 'tavily', apiKey, fetchImpl, timeoutMs);
   return { sources, queries };
+}
+
+function linkedinQuery(target: Target): string {
+  return `${target.name.trim()} director manager owner`;
 }
 
 /**
  * One Exa search limited to linkedin.com, for people who work at the company.
  * LinkedIn profiles cannot be opened without signing in, but their search
- * snippet ("Tan Ah Kow - Managing Director - ABC Sdn Bhd") can be read. Without
- * EXA_API_KEY, or when Exa fails, this returns nothing and the job goes on.
+ * snippet ("Tan Ah Kow - Managing Director - ABC Sdn Bhd") can be read.
  */
+async function exaLinkedin(target: Target, apiKey: string, fetchImpl: FetchImpl = fetch, timeoutMs = 30_000): Promise<Searched> {
+  const query = linkedinQuery(target);
+  const hits = await exa.searchWithKey(query, apiKey, { numResults: 8, includeDomains: ['linkedin.com'], timeoutMs, fetchImpl });
+  const sources = toSources(target, hits, 'exa').map((source) => ({ ...source, kind: 'social' }));
+  return { sources, queries: ['linkedin: ' + query], log: [{ provider: 'exa', purpose: 'linkedin', query, results: hits.length }] };
+}
+
+/** The LinkedIn search with one key; with no key, or when Exa fails, nothing, and the job goes on. */
 export async function linkedinSearch(
   target: Target,
   apiKey: string,
   fetchImpl: FetchImpl = fetch,
   timeoutMs = 30_000,
 ): Promise<{ sources: Source[]; query: string }> {
-  const query = `${target.name.trim()} director manager owner`;
+  const query = linkedinQuery(target);
   if (!apiKey) return { sources: [], query };
   try {
-    const res = await fetchImpl('https://api.exa.ai/search', {
-      method: 'POST',
-      headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        query,
-        numResults: 8,
-        type: 'auto',
-        includeDomains: ['linkedin.com'],
-        contents: { highlights: { numSentences: 3, highlightsPerUrl: 2 } },
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!res.ok) throw new Error(`exa answered ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    const body = await res.json() as { results?: Array<{ url?: string; title?: string; highlights?: string[] }> };
-    const sources = (body.results ?? []).flatMap((item): Source[] => {
-      const url = publicUrl(item.url);
-      if (!url) return [];
-      const title = cleanCell(item.title, 200);
-      const why = cleanCell((item.highlights ?? []).join(' '), 600) || title;
-      return [{ url, kind: 'social', why, title }];
-    });
-    return { sources, query };
+    return { sources: (await exaLinkedin(target, apiKey, fetchImpl, timeoutMs)).sources, query };
   } catch (cause) {
     console.warn(`[contact] ${target.name}: LinkedIn search skipped: ${(cause as Error).message}`);
     return { sources: [], query };
   }
+}
+
+const NO_SEARCH: Searched = { sources: [], queries: [], log: [] };
+
+let generalTurn = 0;
+
+/** Alternate the general searches between the providers that have credits, so the two can be compared. */
+export function pickGeneral(tavilyReady: boolean, exaReady: boolean): Provider | null {
+  if (tavilyReady && exaReady) return generalTurn++ % 2 === 0 ? 'tavily' : 'exa';
+  return tavilyReady ? 'tavily' : exaReady ? 'exa' : null;
+}
+
+/** Run one search on a key from the provider's pool, resting the key the way its error asks. */
+async function withKey<T>(provider: Provider, run: (key: string) => Promise<T>): Promise<T> {
+  const pool = provider === 'tavily' ? tavily.pool : exa.pool;
+  const lease = await pool.acquire();
+  try {
+    const out = await run(lease.secret);
+    lease.release();
+    return out;
+  } catch (cause) {
+    if (provider === 'tavily') tavily.releaseFor(lease, cause); else exa.releaseFor(lease, cause);
+    throw cause;
+  }
+}
+
+/** Both searches for one job: the general pair on one provider, LinkedIn on Exa when an Exa key has credits. */
+async function searchAll(target: Target, provider: Provider): Promise<Searched> {
+  const linkedin = exa.available()
+    ? withKey('exa', (key) => exaLinkedin(target, key)).catch((cause: Error) => {
+      console.warn(`[contact] ${target.name}: LinkedIn search skipped: ${cause.message}`);
+      return NO_SEARCH;
+    })
+    : Promise.resolve(NO_SEARCH);
+  const general = await withKey(provider, (key) => generalSearch(target, provider, key));
+  return combine(general, await linkedin);
+}
+
+function combine(...parts: Searched[]): Searched {
+  return {
+    sources: mergeSources(...parts.map((part) => part.sources)),
+    queries: parts.flatMap((part) => part.queries),
+    log: parts.flatMap((part) => part.log),
+  };
 }
 
 /** Tavily's results then LinkedIn's, one row per page. */
@@ -574,11 +630,15 @@ function emailType(email: string): string {
   return /^(info|sales|enquiry|enquiries|support|contact|admin|hello|office|hr|accounts)@/i.test(email) ? 'general' : 'direct';
 }
 
-function engineName(): string {
-  return 'tavily + pi/' + pi.config().model;
+function engineName(search: SearchLog[] = []): string {
+  const providers = [...new Set(search.map((row) => row.purpose === 'linkedin' ? `${row.provider} linkedin` : row.provider))];
+  return (providers.length ? providers.join(' + ') : 'tavily') + ' + pi/' + pi.config().model;
 }
 
 export function toResearchResult(target: Target, extracted: Record<string, unknown>, urls: string[], meta: Record<string, unknown> = {}): Record<string, unknown> {
+  const foundByUrl = meta.foundBy instanceof Map ? meta.foundBy as Map<string, string> : new Map<string, string>();
+  const foundBy = (evidence: string): string => (evidence && foundByUrl.get(dedupeKey(evidence))) || 'page';
+  const search = Array.isArray(meta.search) ? meta.search as SearchLog[] : [];
   const people: Record<string, unknown>[] = [];
   const seenPeople = new Set<string>();
   for (const row of Array.isArray(extracted.people) ? extracted.people : []) {
@@ -593,6 +653,7 @@ export function toResearchResult(target: Target, extracted: Record<string, unkno
       name, role, seniority: seniority(role), direct_phone: null, direct_email: null,
       profile_url: /linkedin\.com\/in\//i.test(evidence) ? evidence : null,
       role_evidence_url: evidence || null,
+      found_by: foundBy(evidence),
     });
   }
   people.sort((a, b) => Number(b.seniority) - Number(a.seniority) || String(a.name).localeCompare(String(b.name)));
@@ -607,7 +668,7 @@ export function toResearchResult(target: Target, extracted: Record<string, unkno
     seenPhones.add(digits);
     const evidence = publicUrl(record.evidence_url) || cleanCell(record.evidence_url, 500);
     const label = cleanCell(record.label, 120) || 'Office';
-    phones.push({ type: phoneType(label), number_raw: number, label, evidence_url: evidence || null });
+    phones.push({ type: phoneType(label), number_raw: number, label, evidence_url: evidence || null, found_by: foundBy(evidence) });
   }
 
   const emails: Record<string, unknown>[] = [];
@@ -619,7 +680,7 @@ export function toResearchResult(target: Target, extracted: Record<string, unkno
     seenEmails.add(email);
     const evidence = publicUrl(record.evidence_url) || cleanCell(record.evidence_url, 500);
     const label = cleanCell(record.label, 120) || (emailType(email) === 'general' ? 'General' : 'Work email');
-    emails.push({ type: emailType(email), email, label, evidence_url: evidence || null });
+    emails.push({ type: emailType(email), email, label, evidence_url: evidence || null, found_by: foundBy(evidence) });
   }
 
   for (const person of people) {
@@ -652,9 +713,12 @@ export function toResearchResult(target: Target, extracted: Record<string, unkno
     phone_contacts: phones,
     email_contacts: emails,
     research_meta: {
-      engine: String(meta.engine || engineName()),
+      engine: String(meta.engine || engineName(search)),
       queries: Array.isArray(meta.queries) ? meta.queries.map((query) => cleanCell(query, 200)).filter(Boolean) : [],
       sources: urls,
+      // Who ran each search and how many pages it returned; found_by on each contact says whose page it came from.
+      search,
+      general_provider: search.find((row) => row.purpose === 'general')?.provider ?? null,
     },
   };
 }
@@ -704,51 +768,52 @@ async function extract(target: Target, pages: Page[], results: Source[], timeout
 }
 
 /** Both steps for one company with a given Tavily key. Used directly by tests. */
+/** Both steps for one company with given keys. Used directly by tests and benchmarks. */
 export async function research(raw: unknown, deps: {
   env?: NodeJS.ProcessEnv;
   fetchImpl?: FetchImpl;
   now?: Date;
   tavilyKey?: string;
+  exaKey?: string;
+  provider?: Provider;
 } = {}): Promise<Record<string, unknown>> {
   const target = targetFromPayload(raw);
-  const config = resolveConfig(deps.env ?? process.env);
-  const tavilyKey = deps.tavilyKey ?? (await tavily.loadKeys(deps.env ?? process.env))[0] ?? '';
-  if (!tavilyKey) throw fail('no Tavily key is configured', 'not_installed');
-  const fetchImpl = deps.fetchImpl ?? fetch;
   const env = deps.env ?? process.env;
-  const [searchResult, linkedin] = await Promise.all([
-    tavilySearch(target, tavilyKey, fetchImpl),
-    linkedinSearch(target, env.EXA_API_KEY?.trim() ?? '', fetchImpl),
+  const config = resolveConfig(env);
+  const provider = deps.provider ?? 'tavily';
+  const exaKey = deps.exaKey ?? env.EXA_API_KEY?.trim() ?? '';
+  const generalKey = provider === 'exa' ? exaKey : deps.tavilyKey ?? (await tavily.loadKeys(env))[0] ?? '';
+  if (!generalKey) throw fail(`no ${provider} key is configured`, 'not_installed');
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const [general, linkedin] = await Promise.all([
+    generalSearch(target, provider, generalKey, fetchImpl),
+    exaKey ? exaLinkedin(target, exaKey, fetchImpl).catch(() => NO_SEARCH) : Promise.resolve(NO_SEARCH),
   ]);
-  return finish(target, withLinkedin(searchResult, linkedin), fetchImpl, config, deps.now);
-}
-
-function withLinkedin(
-  searchResult: { sources: Source[]; queries: string[] },
-  linkedin: { sources: Source[]; query: string },
-): { sources: Source[]; queries: string[] } {
-  return {
-    sources: mergeSources(searchResult.sources, linkedin.sources),
-    queries: [...searchResult.queries, ...(linkedin.sources.length ? ['linkedin: ' + linkedin.query] : [])],
-  };
+  return finish(target, combine(general, linkedin), fetchImpl, config, deps.now);
 }
 
 async function finish(
   target: Target,
-  searchResult: { sources: Source[]; queries: string[] },
+  searched: Searched,
   fetchImpl: FetchImpl,
   config: ContactConfig,
   now?: Date,
 ): Promise<Record<string, unknown>> {
-  const urls = collectPageUrls(target, searchResult.sources, now);
-  const pages = urls.length ? await readPages(urls, searchResult.sources, fetchImpl) : [];
-  const results = searchResult.sources;
+  const urls = collectPageUrls(target, searched.sources, now);
+  const pages = urls.length ? await readPages(urls, searched.sources, fetchImpl) : [];
+  const results = searched.sources;
+  const meta = { queries: searched.queries, search: searched.log, foundBy: foundByMap(results) };
   if (!pages.length && !results.length) {
-    return toResearchResult(target, { people: [], phones: [], emails: [] }, urls, { queries: searchResult.queries });
+    return toResearchResult(target, { people: [], phones: [], emails: [] }, urls, meta);
   }
   const { extracted, pages: read } = await extract(target, pages, results, config.timeoutMs);
   const grounded = groundExtracted(extracted, read, results);
-  return toResearchResult(target, grounded, read.map((page) => page.url), { queries: searchResult.queries });
+  return toResearchResult(target, grounded, read.map((page) => page.url), meta);
+}
+
+/** Which provider's search turned up each url. A url no search returned (the website, the map pin) is 'page'. */
+function foundByMap(sources: Source[]): Map<string, string> {
+  return new Map(sources.filter((source) => source.provider).map((source) => [dedupeKey(source.url), source.provider!]));
 }
 
 function errorText(cause: unknown): string {
@@ -768,20 +833,12 @@ async function execute(name: string, job: jobs.Job, env: NodeJS.ProcessEnv): Pro
       jobs.finish(job.id, false, null, 'contact report was closed before this job could be claimed');
       return;
     }
-    await tavily.refresh(env);
+    await Promise.all([tavily.refresh(env), exa.refresh(env)]);
     const target = targetFromPayload(job.payload);
     const config = resolveConfig(env);
-    const lease = await tavily.pool.acquire();
-    const linkedin = linkedinSearch(target, env.EXA_API_KEY?.trim() ?? '');
-    let searchResult: { sources: Source[]; queries: string[] };
-    try {
-      searchResult = await tavilySearch(target, lease.secret, fetch);
-      lease.release();
-    } catch (cause) {
-      tavily.releaseFor(lease, cause);
-      throw cause;
-    }
-    const result = await finish(target, withLinkedin(searchResult, await linkedin), fetch, config);
+    const provider = pickGeneral(tavily.available(), exa.available());
+    if (!provider) throw fail('every Tavily and Exa key is resting', 'quota');
+    const result = await finish(target, await searchAll(target, provider), fetch, config);
     if (reportId) {
       const intel = await import('./intel.ts');
       await intel.acceptContactResult(reportId, job.id, true, result, null, name);
@@ -809,13 +866,13 @@ async function lane(name: string, env: NodeJS.ProcessEnv): Promise<void> {
   for (;;) {
     jobs.touch(name, '127.0.0.1', [JOB_TYPE]);
     try {
-      const keys = await tavily.refresh(env);
-      if (!keys.length || !pi.config(env).apiKey) {
+      const [tavilyKeys, exaKeys] = await Promise.all([tavily.refresh(env), exa.refresh(env)]);
+      if ((!tavilyKeys.length && !exaKeys.length) || !pi.config(env).apiKey) {
         await new Promise((resolve) => setTimeout(resolve, 3_000));
         continue;
       }
-      // Every key is resting: leave jobs pending rather than take one and wait on it.
-      if (!tavily.available()) {
+      // Every search key is resting: leave jobs pending rather than take one and wait on it.
+      if (!tavily.available() && !exa.available()) {
         await new Promise((resolve) => setTimeout(resolve, 60_000));
         continue;
       }

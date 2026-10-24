@@ -276,34 +276,3 @@ export async function search(query: string, opts: { maxResults?: number; depth?:
     throw cause;
   }
 }
-
-export async function handleKeys(
-  req: { method?: string },
-  res: unknown,
-  url: URL,
-  ctx: { json: (res: unknown, status: number, body: unknown) => void; readJson: (req: unknown) => Promise<Record<string, unknown>> },
-): Promise<boolean> {
-  if (url.pathname !== '/api/contact-keys' && url.pathname !== '/api/gemini-contact-keys') return false;
-  const method = req.method ?? 'GET';
-  if (method === 'GET') {
-    const rows = await db.listGeminiContactKeys();
-    const keys = await loadKeys();
-    const stats = pool.stats();
-    ctx.json(res, 200, {
-      // Full secrets so the operator can read, edit and copy them. This route is behind LAB_TOKEN.
-      tavilyKeys: keys,
-      tavily: stats.length ? stats : rows.filter((row) => row.kind === 'tavily').map((row) => ({ id: row.id, tail: maskKey(row.secret) })),
-      step1Slots: pool.slots() || keys.length * KEY_CONCURRENCY,
-    });
-    return true;
-  }
-  if (method === 'POST') {
-    const body = await ctx.readJson(req);
-    if (Array.isArray(body.tavily)) await db.replaceGeminiContactKeys('tavily', body.tavily.map(String));
-    await refresh();
-    ctx.json(res, 200, { ok: true, step1Slots: pool.slots() });
-    return true;
-  }
-  ctx.json(res, 405, { error: 'method not allowed' });
-  return true;
-}

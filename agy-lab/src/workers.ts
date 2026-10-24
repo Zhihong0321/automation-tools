@@ -13,7 +13,7 @@ export function page(): string {
 <h1>Worker control room</h1><p class="sub">Live lanes, claimed work, and queue pressure from the in-memory job broker.</p>
 <nav class="sitenav" aria-label="Site">${navHtml(OPERATOR_NAV, '/workers')}</nav>
 <div class="card"><div class="row"><input id="token" class="token" type="password" placeholder="LAB_TOKEN" autocomplete="current-password"><button class="primary" id="saveButton">Save and refresh</button><button id="refreshButton">Refresh</button><span id="authState" class="pill unknown">no token</span></div><p class="hint">The token stays in this browser and is sent only to the protected worker snapshot endpoint.</p></div>
-<div class="card"><div class="section-head"><h2>Contact research keys</h2><span id="keyStatus" class="updated">not loaded</span></div><p class="hint">Step 1 searches with Tavily (rotates across keys, up to 1,000 credits per key per month). Step 2 reads the pages it found and asks the Pi worker (MiniMax) to pull out people, phones and emails. Saved keys are shown below in full: edit them in place, one key per line, then press Save keys. Use Copy to put them on your clipboard. An empty box is left unchanged; use Clear to remove the keys.</p><label class="hint" for="tavilyKeys">Tavily Search API keys (tvly-..., rotates across keys)</label><textarea id="tavilyKeys" rows="3" spellcheck="false" autocomplete="off" style="width:100%;margin:6px 0 10px;background:#0f1115;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px ui-monospace,Consolas,monospace"></textarea><div class="row"><button class="primary" id="saveKeys">Save keys</button><button id="copyTavily">Copy Tavily keys</button><button id="clearTavily">Clear Tavily keys</button></div></div>
+<div class="card"><div class="section-head"><h2>Contact research keys</h2><span id="keyStatus" class="updated">not loaded</span></div><p class="hint">Step 1 searches the web. Each job runs its two general searches on Tavily or Exa, taking turns while both have credits, and one LinkedIn search on Exa. Step 2 reads the pages found and asks the Pi worker (MiniMax) to pull out people, phones and emails. Keys rotate; a Tavily key rests at its monthly limit, an Exa key rests for a day when Exa refuses it. Saved keys are shown in full: edit them in place, one key per line, then press Save keys. An empty box is left unchanged; use Clear to remove its keys.</p><label class="hint" for="tavilyKeys">Tavily Search API keys (tvly-...)</label><textarea id="tavilyKeys" rows="3" spellcheck="false" autocomplete="off" style="width:100%;margin:6px 0 10px;background:#0f1115;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px ui-monospace,Consolas,monospace"></textarea><label class="hint" for="exaKeys">Exa API keys</label><textarea id="exaKeys" rows="3" spellcheck="false" autocomplete="off" style="width:100%;margin:6px 0 10px;background:#0f1115;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px ui-monospace,Consolas,monospace"></textarea><div class="row"><button class="primary" id="saveKeys">Save keys</button><button id="copyTavily">Copy Tavily keys</button><button id="copyExa">Copy Exa keys</button><button id="clearTavily">Clear Tavily keys</button><button id="clearExa">Clear Exa keys</button></div></div><div class="card"><div class="section-head"><h2>Search providers, last 7 days</h2><span id="statsStatus" class="updated">not loaded</span></div><p class="hint">Jobs count under the provider that ran their two general searches. Found by says whose search turned up the page each contact came from; page means the website or map pin we opened ourselves.</p><div id="providerStats"></div></div>
 <div id="error" class="error-box" role="alert"></div>
 <div class="summary" aria-live="polite"><div class="metric"><strong id="mWorkers">—</strong><span>Workers</span></div><div class="metric"><strong id="mOnline">—</strong><span>Online</span></div><div class="metric"><strong id="mBusy">—</strong><span>Busy</span></div><div class="metric"><strong id="mIdle">—</strong><span>Idle</span></div><div class="metric"><strong id="mCooldown">—</strong><span>Quota cooldown</span></div><div class="metric"><strong id="mQueue">—</strong><span>Pending jobs</span></div></div>
 <div class="card"><div class="section-head"><h2>Worker lanes</h2><span id="updated" class="updated">not loaded</span></div><div class="table-wrap"><table><thead><tr><th>Worker</th><th>Status</th><th>Current task</th><th>Last seen</th><th>Capabilities</th><th>Totals</th></tr></thead><tbody id="workers"><tr><td colspan="6" class="empty">Enter a LAB_TOKEN to load workers.</td></tr></tbody></table></div></div>
@@ -47,8 +47,10 @@ export function page(): string {
             return row.tail + extra;
           }).join(', ')||'none';
         };
-        $('keyStatus').textContent='tavily '+tails(body.tavily)+' · search slots '+(body.step1Slots||0);
+        var resting=function(rows){return (rows||[]).filter(function(row){return row.cooling}).length};
+        $('keyStatus').textContent='tavily '+(body.tavily||[]).length+' keys, '+resting(body.tavily)+' resting · exa '+(body.exa||[]).length+' keys, '+resting(body.exa)+' resting';
         fill('tavilyKeys',body.tavilyKeys);
+        fill('exaKeys',body.exaKeys);
       }).catch(function(){});
   };
   var dirty={};
@@ -66,6 +68,7 @@ export function page(): string {
     if(!token())return;
     var body={};
     if(kind==='clear'||$('tavilyKeys').value.trim())body.tavily=lines('tavilyKeys');
+    if(kind==='clearExa'||$('exaKeys').value.trim())body.exa=lines('exaKeys');
     fetch('/api/contact-keys',{method:'POST',headers:{authorization:'Bearer '+token(),'content-type':'application/json'},body:JSON.stringify(body)})
       .then(function(response){return response.json().then(function(payload){return {response:response,payload:payload}})})
       .then(function(result){
@@ -74,8 +77,25 @@ export function page(): string {
         loadKeys();
       }).catch(function(error){$('error').textContent=error.message;$('error').className='error-box show'});
   };
-  var refresh=function(){if(refresh.running)return;refresh.running=true;$('refreshButton').disabled=true;$('saveButton').disabled=true;$('error').className='error-box';fetch('/api/jobs',{headers:{authorization:'Bearer '+token()}}).then(function(response){return response.json().catch(function(){return {error:'invalid response'}}).then(function(body){return {response:response,body:body}})}).then(function(result){if(!result.response.ok){$('authState').className='pill '+(result.response.status===401?'error':'unknown');$('authState').textContent=result.response.status===401?'token rejected':'error';throw new Error(result.body.error||('request failed ('+result.response.status+')'))}$('authState').className='pill online';$('authState').textContent='token ok';render(result.body);loadKeys()}).catch(function(error){$('error').textContent=error.message;$('error').className='error-box show'}).finally(function(){refresh.running=false;$('refreshButton').disabled=false;$('saveButton').disabled=false})};
-  $('token').value=token();$('refreshButton').onclick=refresh;$('saveButton').onclick=function(){localStorage.setItem('labToken',$('token').value.trim());refresh()};$('saveKeys').onclick=function(){saveKeys('save')};$('tavilyKeys').oninput=function(){dirty.tavilyKeys=true};$('copyTavily').onclick=function(){copyKeys('tavilyKeys',this)};$('clearTavily').onclick=function(){$('tavilyKeys').value='';saveKeys('clear')};setInterval(refresh,5000);setInterval(tick,1000);if(token())refresh();
+  var loadStats=function(){
+    if(!token())return;
+    fetch('/api/contact-stats?days=7',{headers:{authorization:'Bearer '+token()}})
+      .then(function(response){return response.json()})
+      .then(function(body){
+        if(!body||!Array.isArray(body.providers))return;
+        var pct=function(n,d){return d?Math.round(100*n/d)+'%':'-'};
+        var rows=body.providers.map(function(p){
+          return '<tr><td>'+esc(p.provider)+'</td><td>'+esc(p.jobs)+'</td><td>'+pct(p.withPhone,p.jobs)+'</td><td>'+pct(p.withPerson,p.jobs)+'</td><td>'+pct(p.withEmail,p.jobs)+'</td><td>'+esc(p.phones)+' / '+esc(p.people)+' / '+esc(p.emails)+'</td></tr>';
+        }).join('');
+        var by={};(body.foundBy||[]).forEach(function(f){(by[f.foundBy]=by[f.foundBy]||{})[f.kind]=f.count});
+        var found=Object.keys(by).map(function(k){var b=by[k];return '<tr><td>'+esc(k)+'</td><td>'+(b.phone||0)+'</td><td>'+(b.person||0)+'</td><td>'+(b.email||0)+'</td></tr>'}).join('');
+        $('providerStats').innerHTML=(rows?'<table><thead><tr><th>General searches by</th><th>Jobs</th><th>New phone</th><th>Person</th><th>Email</th><th>Phones / people / emails</th></tr></thead><tbody>'+rows+'</tbody></table>':'<p class="hint">No v2 jobs yet.</p>')
+          +(found?'<table style="margin-top:10px"><thead><tr><th>Found by</th><th>Phones</th><th>People</th><th>Emails</th></tr></thead><tbody>'+found+'</tbody></table>':'');
+        $('statsStatus').textContent='updated';
+      }).catch(function(){});
+  };
+  var refresh=function(){if(refresh.running)return;refresh.running=true;$('refreshButton').disabled=true;$('saveButton').disabled=true;$('error').className='error-box';fetch('/api/jobs',{headers:{authorization:'Bearer '+token()}}).then(function(response){return response.json().catch(function(){return {error:'invalid response'}}).then(function(body){return {response:response,body:body}})}).then(function(result){if(!result.response.ok){$('authState').className='pill '+(result.response.status===401?'error':'unknown');$('authState').textContent=result.response.status===401?'token rejected':'error';throw new Error(result.body.error||('request failed ('+result.response.status+')'))}$('authState').className='pill online';$('authState').textContent='token ok';render(result.body);loadKeys();loadStats()}).catch(function(error){$('error').textContent=error.message;$('error').className='error-box show'}).finally(function(){refresh.running=false;$('refreshButton').disabled=false;$('saveButton').disabled=false})};
+  $('token').value=token();$('refreshButton').onclick=refresh;$('saveButton').onclick=function(){localStorage.setItem('labToken',$('token').value.trim());refresh()};$('saveKeys').onclick=function(){saveKeys('save')};$('tavilyKeys').oninput=function(){dirty.tavilyKeys=true};$('copyTavily').onclick=function(){copyKeys('tavilyKeys',this)};$('copyExa').onclick=function(){copyKeys('exaKeys',this)};$('exaKeys').oninput=function(){dirty.exaKeys=true};$('clearExa').onclick=function(){$('exaKeys').value='';saveKeys('clearExa')};$('clearTavily').onclick=function(){$('tavilyKeys').value='';saveKeys('clear')};setInterval(refresh,5000);setInterval(tick,1000);if(token())refresh();
 })();
 </script></body></html>`;
 }

@@ -2,6 +2,7 @@
 import * as jobs from './jobs.ts';
 import * as db from './reportdb.ts';
 import * as tavily from './tavily.ts';
+import * as exa from './exa.ts';
 
 const INTERVAL_MS = 60_000;
 const BATCH = 3;
@@ -66,11 +67,11 @@ function workerLive(): boolean {
 /** Queue up to BATCH untouched leads when a matching worker is live. */
 let pausedForQuota = false;
 
-/** The pi worker searches with Tavily, so it has no work to give while every key rests. */
+/** The pi worker searches with Tavily or Exa, so it has no work to give while every key of both rests. */
 function outOfCredits(): boolean {
-  const paused = contactResearchJobType() === 'research.contact.pi' && !(deps.tavilyAvailable ?? tavily.available)();
+  const paused = contactResearchJobType() === 'research.contact.pi' && !(deps.tavilyAvailable ?? (() => tavily.available() || exa.available()))();
   if (paused !== pausedForQuota) {
-    console.log(paused ? '[auto-queue] paused: every Tavily key is out of credits' : '[auto-queue] resumed: a Tavily key has credits again');
+    console.log(paused ? '[auto-queue] paused: every Tavily and Exa key is resting' : '[auto-queue] resumed: a search key has credits again');
     pausedForQuota = paused;
   }
   return paused;
