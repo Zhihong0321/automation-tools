@@ -21,6 +21,7 @@ import * as intel from './intel.ts';
 import * as reportdb from './reportdb.ts';
 import * as autoContact from './autocontact.ts';
 import * as contactWorker from './contact-worker.ts';
+import * as mapsWorker from './maps-worker.ts';
 import * as contactKeys from './contact-keys.ts';
 import { page } from './ui.ts';
 import { page as docsPage } from './docs.ts';
@@ -403,6 +404,7 @@ server.listen(PORT, '0.0.0.0', () => {
   autoContact.init({ launch: intel.launchContactResearch });
   autoContact.start();
   contactWorker.start();
+  mapsWorker.start();
   // Broker jobs live only in memory. Refill it from saved contact reports after
   // a restart, with no more concurrent jobs than the research lanes can run.
   setInterval(() => {

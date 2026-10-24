@@ -1,7 +1,8 @@
 # scraper.tech Google Maps — reference notes
 
 Tested by hand on 2026-10-24 to see whether it can replace the Mac mini's `gmap.scan`
-([worker/gmap.mjs](../worker/gmap.mjs)). Nothing in the hub uses it yet.
+([worker/gmap.mjs](../worker/gmap.mjs)). The hub now runs it as its `gmap.scan` worker:
+[maps-worker.ts](../agy-lab/src/maps-worker.ts), keyed by `SCRAPER_TECH_KEY`.
 
 scraper.tech's docs list the endpoints and response fields and nothing else: no parameter
 meanings, no caps, no rate limits per plan. Everything under **Behaviour** comes from
