@@ -1,6 +1,7 @@
 // Contact research on Exa alone: Exa finds the pages and Exa reads them.
-// Not wired to the job queue yet; benchmarked against the v2 pipeline in
-// contact-worker.ts. See docs/search-providers.md for the API notes behind it.
+// The contact worker's first choice: contact-worker.ts runs it while an Exa key
+// has credits and falls back to v2 on Tavily otherwise. See docs/search-providers.md
+// for the API notes and the benchmark behind it.
 //
 // 1. Searches, all with userLocation MY: the name with its address, with full
 //    text and highlights aimed at phones, emails and roles (the first ten
@@ -21,8 +22,9 @@ const PAGE_CHARS = 8_000;
 const MAX_SEARCH_PAGES = 8;
 const HIGHLIGHT_QUERY = 'phone number, mobile, WhatsApp, email address, owner, director, manager, founder';
 
+/** An Exa error carries provider 'exa', so the worker can tell it from a Pi error and fall back to Tavily. */
 function fail(message: string, code: string): Error {
-  return Object.assign(new Error(message), { code });
+  return Object.assign(new Error(message), { code, provider: 'exa' });
 }
 
 type ExaResult = {

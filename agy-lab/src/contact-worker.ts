@@ -1,7 +1,11 @@
 // In-hub contact worker. The broker assigns research.contact.pi jobs to this
 // process; it does not depend on a machine running local-worker.
 //
-// Two steps per company. Search: Tavily runs two searches (name and address,
+// A job runs the Exa pipeline (contact-exa.ts) while an Exa key has credits,
+// and this file's v2 pipeline on Tavily when Exa rests or fails. Both end in
+// extractResult here.
+//
+// v2, two steps per company. Search: Tavily runs two searches (name and address,
 // name and "phone email contact") and Exa runs one on LinkedIn only, for the
 // names and titles of people who work there. Read: this process opens the pages
 // found, and Pi (MiniMax) pulls the people, phones and emails out of those pages
@@ -933,6 +937,27 @@ function errorText(cause: unknown): string {
   return String(cause);
 }
 
+/**
+ * One company. The Exa pipeline (contact-exa.ts) runs while an Exa key has
+ * credits: it found the most people and phones in the 2026-10-24 benchmark at
+ * $0.017 a company. When every Exa key rests, or Exa fails (a spent key, a rate
+ * limit, a search that does not answer), the job falls back to v2 on Tavily.
+ */
+async function runJob(target: Target, payload: unknown, config: ContactConfig): Promise<Record<string, unknown>> {
+  if (exa.available()) {
+    try {
+      const exaPipeline = await import('./contact-exa.ts');
+      return await withKey('exa', (key) => exaPipeline.research(payload, { apiKey: key, timeoutMs: config.timeoutMs }));
+    } catch (cause) {
+      // Only Exa itself failing (spent key, rate limit, down) moves the job to Tavily; a Pi error stands.
+      if ((cause as { provider?: string }).provider !== 'exa' || !tavily.available()) throw cause;
+      console.warn(`[contact] ${target.name}: Exa pipeline stopped (${(cause as Error).message.slice(0, 120)}); falling back to v2 on Tavily.`);
+    }
+  }
+  if (!tavily.available()) throw fail('every Tavily and Exa key is resting', 'quota');
+  return finish(target, await searchAll(target, 'tavily'), fetch, config);
+}
+
 async function execute(name: string, job: jobs.Job, env: NodeJS.ProcessEnv): Promise<void> {
   const reportId = String((job.payload as { reportId?: unknown } | null)?.reportId ?? '');
   const beat = setInterval(() => { jobs.touch(name, '127.0.0.1', [JOB_TYPE]); }, 20_000);
@@ -945,9 +970,7 @@ async function execute(name: string, job: jobs.Job, env: NodeJS.ProcessEnv): Pro
     await Promise.all([tavily.refresh(env), exa.refresh(env)]);
     const target = targetFromPayload(job.payload);
     const config = resolveConfig(env);
-    const provider = pickGeneral(tavily.available(), exa.available());
-    if (!provider) throw fail('every Tavily and Exa key is resting', 'quota');
-    const result = await finish(target, await searchAll(target, provider), fetch, config);
+    const result = await runJob(target, job.payload, config);
     if (reportId) {
       const intel = await import('./intel.ts');
       await intel.acceptContactResult(reportId, job.id, true, result, null, name);

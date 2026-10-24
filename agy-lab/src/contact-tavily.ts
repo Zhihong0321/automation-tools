@@ -1,6 +1,6 @@
 // Contact research on Tavily alone: Tavily finds the pages and Tavily reads them.
-// Not wired to the job queue yet; benchmarked against the v2 pipeline in
-// contact-worker.ts. See docs/search-providers.md for the API notes behind it.
+// Not wired to the job queue: it lost the 2026-10-24 benchmark to the Exa
+// pipeline and to v2 (fewer people). See docs/search-providers.md for the API notes behind it.
 //
 // 1. Three searches, all topic general and country malaysia: the name with its
 //    address, the name with the roles and contact words we want, and LinkedIn
