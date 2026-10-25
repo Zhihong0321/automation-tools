@@ -13,6 +13,7 @@
 //    are added to the page text, since a page's text often leaves them out.
 // 3. Pi extracts from those pages and the search snippets, as in v2.
 import * as cw from './contact-worker.ts';
+import * as exa from './exa.ts';
 
 type FetchImpl = typeof fetch;
 
@@ -37,8 +38,20 @@ type ExaResult = {
 };
 type ExaAnswer = { results?: ExaResult[]; costDollars?: { total?: number }; statuses?: Array<{ id?: string; status?: string }> };
 
-/** One Exa call. Quota and rate-limit errors carry the codes exa.releaseFor reads. */
+/** One Exa call, counted against its key for the /auto-queue page. */
 async function call(endpoint: string, body: Record<string, unknown>, apiKey: string, fetchImpl: FetchImpl, timeoutMs = 45_000): Promise<ExaAnswer> {
+  try {
+    const answer = await callOnce(endpoint, body, apiKey, fetchImpl, timeoutMs);
+    exa.record(apiKey, { dollars: answer.costDollars?.total ?? 0 });
+    return answer;
+  } catch (cause) {
+    exa.record(apiKey, { error: (cause as Error).message ?? String(cause) });
+    throw cause;
+  }
+}
+
+/** Quota and rate-limit errors carry the codes exa.releaseFor reads. */
+async function callOnce(endpoint: string, body: Record<string, unknown>, apiKey: string, fetchImpl: FetchImpl, timeoutMs: number): Promise<ExaAnswer> {
   let res: Response;
   try {
     res = await fetchImpl(`${API}/${endpoint}`, {

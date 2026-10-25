@@ -9,6 +9,7 @@ import * as jobs from './jobs.ts';
 import * as db from './reportdb.ts';
 import * as autoScan from './autoscan.ts';
 import * as autoContact from './autocontact.ts';
+import * as keyHealth from './keyhealth.ts';
 
 const MIN = 60_000;
 /** A Maps scan job times out at 20 minutes; past 30 it is stuck. */
@@ -189,8 +190,9 @@ export async function snapshot(hours: number): Promise<Record<string, unknown>> 
   const now = Date.now();
   const slots = hourSlots(hours, now);
   const since = slots[slots.length - 1]!;
-  const [scan, contact, data, problems, state, mapsUsed] = await Promise.all([
+  const [scan, contact, data, problems, state, mapsUsed, keys] = await Promise.all([
     autoScan.status(), autoContact.status(), db.autoQueueHourly(since), db.autoQueueProblems(since), db.autoQueueState(), db.mapsUsageThisMonth(),
+    keyHealth.snapshot(),
   ]);
   const rows = hourly(slots, data);
   const latest = (kind: string): Latest => {
@@ -220,6 +222,7 @@ export async function snapshot(hours: number): Promise<Record<string, unknown>> 
     holds: state.holds.map((h) => ({ ...h, at: iso(h.at) })),
     problems,
     problemGroups: groupProblems(problems),
+    keys,
   };
 }
 
@@ -253,6 +256,13 @@ tr.idle td{color:#5d6470}tr.err td{background:#24171a}td.z{color:#4a505a}td.bad{
 .err-item.bad .msg{color:#ffc2bc}.small{color:var(--muted);font-size:11.5px}
 .empty{padding:18px;text-align:center;color:var(--muted)}.error-box{display:none;color:var(--bad);background:#28191c;border:1px solid #5c2a30;border-radius:8px;padding:10px 12px;margin-bottom:16px}.error-box.show{display:block}
 .legend{font-size:11.5px;color:var(--muted);margin:8px 0 0}
+.tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.tile{border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:10px;padding:11px 13px;background:#13161b}
+.tile.ok{border-left-color:var(--ok)}.tile.warn{border-left-color:var(--warn)}.tile.bad{border-left-color:var(--bad);background:#1f1517}
+.tile .name{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}.tile .big{font-size:21px;font-weight:700;line-height:1.2;margin:4px 0 2px;font-variant-numeric:tabular-nums}
+.tile.ok .big{color:var(--ok)}.tile.warn .big{color:var(--warn)}.tile.bad .big{color:var(--bad)}.tile .line{font-size:11.5px;color:var(--muted)}
+.bar{height:6px;border-radius:3px;background:#262b33;overflow:hidden;margin:6px 0 4px}.bar i{display:block;height:100%;background:var(--ok)}.bar i.warn{background:var(--warn)}.bar i.bad{background:var(--bad)}
+.mono{font:12px ui-monospace,Consolas,monospace}details{margin-top:12px}summary{cursor:pointer;color:var(--muted);font-size:12.5px;font-weight:600}
+@media(max-width:1100px){.tiles{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:900px){body{padding:20px 14px 44px}.lanes{grid-template-columns:1fr}.err-item{grid-template-columns:1fr}}
 </style></head><body><div class="wrap">
 <h1>Auto queue</h1><p class="sub">Every automatic queue and run, read from what the runs saved: the taman Maps auto-scan, the contact research auto-queue, and the missing-taman finder. Refreshes every minute.</p>
@@ -260,6 +270,7 @@ tr.idle td{color:#5d6470}tr.err td{background:#24171a}td.z{color:#4a505a}td.bad{
 <div class="card"><div class="row"><input id="token" class="token" type="password" placeholder="LAB_TOKEN" autocomplete="current-password"><button class="primary" id="save">Save and refresh</button><select id="hours"><option value="6">Last 6 hours</option><option value="24" selected>Last 24 hours</option><option value="48">Last 48 hours</option><option value="168">Last 7 days</option></select><button id="refresh">Refresh</button><span id="updated" class="updated">not loaded</span></div></div>
 <div id="error" class="error-box" role="alert"></div>
 <div class="lanes" id="lanes"></div>
+<div class="card"><div class="section-head"><h2>API keys: quota left</h2><span class="updated">provider numbers refresh every 5 min</span></div><div class="tiles" id="keyTiles"></div><div id="keyDetail"></div></div>
 <div class="card"><div class="section-head"><h2>Per hour</h2><span class="updated" id="hourNote"></span></div><div class="table-wrap"><table><thead>
 <tr><th></th><th class="grp sep" colspan="7">Maps auto-scan (scraper.tech)</th><th class="grp sep" colspan="6">Contact research auto-queue</th><th class="grp sep" colspan="2">Taman finder</th><th class="sep"></th></tr>
 <tr><th>Hour</th><th class="sep">Queued</th><th>Done</th><th>Partial</th><th>Failed</th><th>Companies</th><th>Requests</th><th>Skipped</th><th class="sep">Queued</th><th>Done</th><th>Failed</th><th>With phone</th><th>People</th><th>Deferred</th><th class="sep">Towns</th><th>Added</th><th class="sep">Errors</th></tr>
@@ -283,7 +294,29 @@ tr.idle td{color:#5d6470}tr.err td{background:#24171a}td.z{color:#4a505a}td.bad{
   var KIND={failed:'failed',partial:'partial',skipped_searches:'searches skipped','contact.deferred':'deferred','contact.failed':'worker failed','business_search.save_failed':'save failed','auto.tick_failed':'loop error'};
   var lane=function(title,v,kv,extra){return '<div class="lane '+v.level+'"><h3>'+esc(title)+'</h3><p class="verdict">'+(v.level==='ok'?'✓ ':v.level==='warn'?'! ':'✕ ')+esc(v.headline)+'</p>'+(v.reasons.length>1?'<ul>'+v.reasons.slice(1).map(function(r){return '<li>'+esc(r)+'</li>'}).join('')+'</ul>':'')+'<div class="kv">'+kv.map(function(p){return '<span>'+esc(p[0])+'</span><b>'+esc(p[1])+'</b>'}).join('')+'</div>'+(extra||'')+'</div>'};
   var workers=function(list){if(!list||!list.length)return '<p class="small" style="margin:8px 0 0">No worker has claimed this job type.</p>';return '<p class="small" style="margin:8px 0 0">'+list.map(function(w){return '<span class="pill '+(w.status==='online'?'ok':w.status==='cooldown'?'warn':'bad')+'">'+esc(w.name)+' '+esc(w.status)+'</span>'}).join(' ')+'</p>'};
+
+  var num=function(n){return n==null?'—':Number(n).toLocaleString()};
+  var usd=function(n){return n==null?'—':'$'+Number(n).toFixed(2)};
+  var lvl=function(share){return share==null?'':share<0.05?'bad':share<0.2?'warn':''};
+  var bar=function(left,total){if(left==null||!total)return '';var s=Math.max(0,Math.min(1,left/total));return '<div class="bar"><i class="'+lvl(s)+'" style="width:'+(s*100).toFixed(1)+'%"></i></div>'};
+  var until=function(iso){if(!iso)return '';var s=(new Date(iso).getTime()-Date.now())/1000;if(s<=0)return 'resetting';if(s<3600)return 'resets in '+Math.round(s/60)+'m';if(s<172800)return 'resets in '+(s/3600).toFixed(1)+'h';return 'resets '+when(iso)};
+  var tile=function(name,level,big,lines,b){return '<div class="tile '+esc(level||'')+'"><div class="name">'+esc(name)+'</div><div class="big">'+esc(big)+'</div>'+(b||'')+lines.filter(Boolean).map(function(l){return '<div class="line">'+esc(l)+'</div>'}).join('')+'</div>'};
+  var renderKeys=function(k){
+    var t=k.tavily||{},e=k.exa||{},m=k.scraperTech||{},mm=k.minimax||{},x=k.extractLlm||{},w=(mm.windows||[])[0];
+    $('keyTiles').innerHTML=
+      tile('Tavily search',t.level,t.error?'error':num(t.creditsLeft)+' left',[t.error||('of '+num(t.creditsTotal)+' credits this month'),t.keys!=null?t.usable+' of '+t.keys+' keys usable':''],bar(t.creditsLeft,t.creditsTotal))+
+      tile('Exa search',e.level,e.error?'error':e.usable+' of '+e.keys+' keys',[e.error||'usable now (a spent key rests a day)',e.spentUsd!=null?usd(e.spentUsd)+' spent since counting began':'','Exa does not report credit left'])+
+      tile('scraper.tech Maps',m.level,m.error?'error':num(m.left)+' left',[m.error||('of '+num(m.plan)+' requests this month'),m.used!=null?num(m.hub)+' hub + '+num(m.finder)+' finder used':'',m.resetsAt?until(m.resetsAt):''],bar(m.left,m.plan))+
+      tile('MiniMax token plan',mm.level,mm.error?'error':!mm.configured?'not set':w?w.intervalLeftPct+'% left':'—',[mm.error||mm.note||(w?'this 5-hour window, '+until(w.intervalResetsAt):''),w?w.weekLeftPct+'% of the week left, '+until(w.weekResetsAt):''],w?bar(Math.min(w.intervalLeftPct,w.weekLeftPct),100):'')+
+      tile('Contact extract LLM',x.level,x.error?'error':!x.configured?'not set':x.leftUsd!=null?usd(x.leftUsd)+' left':'—',[x.error||x.note||(x.limitUsd!=null?'of '+usd(x.limitUsd)+', '+usd(x.usedUsd)+' used':''),x.model?x.model+' on '+x.host:''],x.leftUsd!=null?bar(x.leftUsd,x.limitUsd):'');
+    var tRows=(t.perKey||[]).map(function(r){var s=r.limit?r.left/r.limit:null;return '<tr class="'+(r.cooling?'err':'')+'"><td class="mono">'+esc(r.tail)+'</td><td>'+num(r.used)+' / '+num(r.limit)+'</td><td class="'+(lvl(s)||'good')+'">'+num(r.left)+'</td><td style="text-align:left"><span class="pill '+(r.resting?'bad':r.cooling?'warn':'ok')+'">'+(r.resting?'out of credits':r.cooling?'cooling':'usable')+'</span></td></tr>'}).join('');
+    var eRows=(e.perKey||[]).map(function(r){return '<tr class="'+(r.cooling?'err':'')+'"><td class="mono">'+esc(r.tail)+'</td><td style="text-align:left"><span class="pill '+(r.cooling?'bad':'ok')+'">'+(r.cooling?'resting':'usable')+'</span></td><td>'+usd(r.spentUsd)+'</td><td>'+num(r.calls)+'</td><td class="'+(r.failures?'warn':'z')+'">'+num(r.failures)+'</td><td>'+esc(ago(r.lastOkAt))+'</td><td style="text-align:left;white-space:normal;max-width:420px" class="small">'+(r.lastError?esc(ago(r.lastErrorAt))+': '+esc(r.lastError):'')+'</td></tr>'}).join('');
+    $('keyDetail').innerHTML=
+      '<details><summary>Tavily, per key ('+(t.keys||0)+')</summary><div class="table-wrap"><table><thead><tr><th>Key</th><th>Used / limit</th><th>Left</th><th style="text-align:left">State</th></tr></thead><tbody>'+(tRows||'<tr><td colspan="4" class="empty">No Tavily keys.</td></tr>')+'</tbody></table></div></details>'+
+      '<details><summary>Exa, per key ('+(e.keys||0)+')</summary><div class="table-wrap"><table><thead><tr><th>Key</th><th style="text-align:left">State</th><th>Spent</th><th>Calls</th><th>Failures</th><th>Last worked</th><th style="text-align:left">Last error</th></tr></thead><tbody>'+(eRows||'<tr><td colspan="7" class="empty">No Exa keys.</td></tr>')+'</tbody></table></div></details>';
+  };
   var render=function(b){
+    if(b.keys)renderKeys(b.keys);
     var m=b.maps,c=b.contact,f=b.finder,ms=m.status,cs=c.status,sum=function(k,g){return b.hourly.reduce(function(n,r){return n+r[g][k]},0)};
     $('lanes').innerHTML=
       lane('Taman Maps auto-scan',m.verdict,[['Holding',ms.holding||'no, running'],['Tamans scanned',ms.scanned+' of '+ms.tamans],['Scans in flight',ms.inFlight],['Maps requests this month',m.mapsRequestsThisMonth+' of '+ms.monthlyBudget],['Last queued',ago(m.latest&&m.latest.last_queued)],['Last completed',ago(m.latest&&m.latest.last_completed)],['Loop last ticked',ago(ms.lastTickAt)],['In window','queued '+sum('queued','maps')+', done '+sum('completed','maps')+', failed '+sum('failed','maps')+', '+sum('companies','maps')+' companies']],workers(m.workers))+

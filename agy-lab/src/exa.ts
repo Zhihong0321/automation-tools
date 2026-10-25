@@ -1,7 +1,8 @@
 // Exa web search, the second search provider for contact research. Keys live in
 // the gemini_contact_key table (kind 'exa') and rotate round-robin like Tavily's.
 // Exa has no usage endpoint to read, so a key rests on the error that says it is
-// spent: out of credits or refused rests it for a day, a rate limit for a minute.
+// spent: out of credits or refused rests it for a day, a rate limit for a minute,
+// and the hub counts each key's spend itself from the costDollars on each answer.
 import * as db from './reportdb.ts';
 import { createKeyPool, type Lease, type SearchHit } from './tavily.ts';
 
@@ -15,6 +16,30 @@ export const pool = createKeyPool({ concurrency: KEY_CONCURRENCY });
 
 export function available(): boolean {
   return pool.slots() > 0;
+}
+
+// What each key spent, counted from the costDollars on every answer, so the
+// /auto-queue page can show it. Held in memory and written once a minute.
+type Tally = { calls: number; dollars: number; failures: number; lastOkAt: string | null; lastError: string | null; lastErrorAt: string | null };
+const tallies = new Map<string, Tally>();
+let flushTimer: NodeJS.Timeout | null = null;
+
+/** Count one Exa call against its key: what it cost, or the error it hit. */
+export function record(apiKey: string, outcome: { dollars?: number; error?: string }): void {
+  const t = tallies.get(apiKey) ?? { calls: 0, dollars: 0, failures: 0, lastOkAt: null, lastError: null, lastErrorAt: null };
+  t.calls++;
+  if (outcome.error) { t.failures++; t.lastError = outcome.error.slice(0, 300); t.lastErrorAt = new Date().toISOString(); }
+  else { t.dollars += outcome.dollars ?? 0; t.lastOkAt = new Date().toISOString(); }
+  tallies.set(apiKey, t);
+  flushTimer ??= setInterval(() => { void flush(); }, 60_000).unref();
+}
+
+export async function flush(): Promise<void> {
+  const batch = [...tallies.entries()];
+  tallies.clear();
+  for (const [secret, t] of batch) {
+    await db.addSearchKeySpend('exa', secret, t).catch((e: Error) => console.warn('[exa] could not save key spend: ' + e.message));
+  }
 }
 
 export async function loadKeys(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
@@ -39,12 +64,21 @@ function fail(message: string, code: string): Error {
   return Object.assign(new Error(message), { code });
 }
 
+type SearchOpts = { numResults?: number; includeDomains?: string[]; timeoutMs?: number; fetchImpl?: FetchImpl };
+
 /** One Exa search with the given key, as Tavily-shaped hits: url, title, and the highlight sentences as content. */
-export async function searchWithKey(
-  query: string,
-  apiKey: string,
-  opts: { numResults?: number; includeDomains?: string[]; timeoutMs?: number; fetchImpl?: FetchImpl } = {},
-): Promise<SearchHit[]> {
+export async function searchWithKey(query: string, apiKey: string, opts: SearchOpts = {}): Promise<SearchHit[]> {
+  try {
+    const { hits, dollars } = await searchOnce(query, apiKey, opts);
+    record(apiKey, { dollars });
+    return hits;
+  } catch (cause) {
+    record(apiKey, { error: (cause as Error).message ?? String(cause) });
+    throw cause;
+  }
+}
+
+async function searchOnce(query: string, apiKey: string, opts: SearchOpts): Promise<{ hits: SearchHit[]; dollars: number }> {
   let res: Response;
   try {
     res = await (opts.fetchImpl ?? fetch)('https://api.exa.ai/search', {
@@ -69,14 +103,15 @@ export async function searchWithKey(
     throw fail(`exa key refused or out of credits (${res.status}): ${raw.slice(0, 200)}`, 'quota');
   }
   if (!res.ok) throw fail(`upstream error: exa answered ${res.status}: ${raw.slice(0, 200)}`, 'timeout');
-  let body: { results?: Array<{ url?: string; title?: string; highlights?: string[] }> };
-  try { body = JSON.parse(raw); } catch { return []; }
+  let body: { results?: Array<{ url?: string; title?: string; highlights?: string[] }>; costDollars?: { total?: number } };
+  try { body = JSON.parse(raw); } catch { return { hits: [], dollars: 0 }; }
   const clean = (v: unknown, max: number) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
-  return (body.results ?? []).flatMap((item): SearchHit[] => {
+  const hits = (body.results ?? []).flatMap((item): SearchHit[] => {
     const url = typeof item.url === 'string' ? item.url.trim() : '';
     if (!/^https?:\/\//i.test(url)) return [];
     return [{ url, title: clean(item.title, 200), content: clean((item.highlights ?? []).join(' '), 600) }];
   });
+  return { hits, dollars: body.costDollars?.total ?? 0 };
 }
 
 /** Rest the key the way the error asks: a day for a refused or spent key, a minute for a rate limit. */

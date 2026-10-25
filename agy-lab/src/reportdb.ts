@@ -532,6 +532,20 @@ export function migrate(): Promise<void> {
       );
       comment on table maps_usage is 'scraper.tech Maps requests spent per calendar month (UTC), counted by maps-worker.ts after each scan';
 
+      create table if not exists search_key_spend (
+        kind text not null,
+        secret text not null,
+        calls integer not null default 0,
+        dollars numeric not null default 0,
+        failures integer not null default 0,
+        last_ok_at timestamptz,
+        last_error text,
+        last_error_at timestamptz,
+        since timestamptz not null default now(),
+        primary key (kind, secret)
+      );
+      comment on table search_key_spend is 'What each search key spent, counted by the hub from each answer (Exa has no usage endpoint); apart from gemini_contact_key so saving keys does not reset it';
+
       create table if not exists territory_discovered (
         id bigserial primary key,
         state text not null,
@@ -4919,6 +4933,49 @@ export async function addMapsUsage(requests: number): Promise<void> {
      on conflict (month) do update set requests = maps_usage.requests + excluded.requests, updated_at = now()`,
     [usageMonth(), Math.round(requests)],
   );
+}
+
+/** Add one batch of calls to a search key's running spend. */
+export async function addSearchKeySpend(kind: string, secret: string, t: {
+  calls: number; dollars: number; failures: number; lastOkAt: string | null; lastError: string | null; lastErrorAt: string | null;
+}): Promise<void> {
+  if (!configured()) return;
+  await migrate();
+  await sql(
+    `insert into search_key_spend (kind, secret, calls, dollars, failures, last_ok_at, last_error, last_error_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8)
+     on conflict (kind, secret) do update set
+       calls = search_key_spend.calls + excluded.calls,
+       dollars = search_key_spend.dollars + excluded.dollars,
+       failures = search_key_spend.failures + excluded.failures,
+       last_ok_at = coalesce(excluded.last_ok_at, search_key_spend.last_ok_at),
+       last_error = coalesce(excluded.last_error, search_key_spend.last_error),
+       last_error_at = coalesce(excluded.last_error_at, search_key_spend.last_error_at)`,
+    [kind, secret, t.calls, t.dollars, t.failures, t.lastOkAt, t.lastError, t.lastErrorAt],
+  );
+}
+
+export async function listSearchKeySpend(kind: string): Promise<Array<{
+  secret: string; calls: number; dollars: number; failures: number; last_ok_at: string | null; last_error: string | null; last_error_at: string | null; since: string;
+}>> {
+  if (!configured()) return [];
+  await migrate();
+  const out = await sql<{ secret: string; calls: number; dollars: string; failures: number; last_ok_at: string | null; last_error: string | null; last_error_at: string | null; since: string }>(
+    `select secret, calls, dollars::text as dollars, failures, last_ok_at, last_error, last_error_at, since from search_key_spend where kind = $1`,
+    [kind],
+  );
+  return out.rows.map((r) => ({ ...r, dollars: Number(r.dollars) }));
+}
+
+/** Maps requests the missing-taman finder spent this month from a PC; maps_usage counts only the hub's. */
+export async function finderMapsRequestsThisMonth(): Promise<number> {
+  if (!configured()) return 0;
+  await migrate();
+  const out = await sql<{ n: number }>(
+    `select coalesce(sum(maps_requests), 0)::int as n from taman_finder_town where to_char(finished_at at time zone 'UTC', 'YYYY-MM') = $1`,
+    [usageMonth()],
+  );
+  return Number(out.rows[0]?.n ?? 0);
 }
 
 export async function mapsUsageThisMonth(): Promise<number> {

@@ -1,0 +1,164 @@
+// API key health for the /auto-queue page: what each paid service the pipeline
+// spends has left, from the provider itself wherever it will say.
+//
+//   Tavily        GET /usage per key (tavily.ts refreshes it every ten minutes)
+//   Exa           no usage endpoint; the hub counts costDollars per key (exa.record)
+//   scraper.tech  no usage endpoint; the hub counts requests (maps_usage) plus the finder's
+//   MiniMax       GET /v1/api/openplatform/coding_plan/remains, the Token Plan windows
+//   Extract LLM   CONTACT_LLM_URL's /dashboard/billing/{subscription,usage} (one-api style)
+//
+// Provider reads are cached for five minutes, so a page refreshing every minute
+// does not spend anyone's rate limit.
+import * as db from './reportdb.ts';
+import * as tavily from './tavily.ts';
+import * as exa from './exa.ts';
+import * as pi from './pi.ts';
+import * as extractLlm from './extract-llm.ts';
+import * as autoScan from './autoscan.ts';
+
+type FetchImpl = typeof fetch;
+export type Level = 'ok' | 'warn' | 'bad' | 'unknown';
+
+const CACHE_MS = 5 * 60_000;
+const MINIMAX_URL = 'https://api.minimax.io/v1/api/openplatform/coding_plan/remains';
+
+const tail = (secret: string) => (secret.length <= 4 ? '••••' : '••••' + secret.slice(-4));
+const iso = (v: unknown) => (v == null ? null : new Date(v as string).toISOString());
+
+/** Share left to a level: under 5% is out, under 20% is low. */
+export function levelFor(left: number | null, total: number | null): Level {
+  if (left == null || total == null || total <= 0) return 'unknown';
+  const share = left / total;
+  return share < 0.05 ? 'bad' : share < 0.2 ? 'warn' : 'ok';
+}
+
+const cache = new Map<string, { at: number; value: unknown }>();
+async function cached<T>(key: string, load: () => Promise<T>): Promise<T> {
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.value as T;
+  const value = await load();
+  cache.set(key, { at: Date.now(), value });
+  return value;
+}
+
+/** The Token Plan windows MiniMax reports: the rolling interval and the week, as percent left. */
+export function parseMinimax(body: unknown): Array<{ model: string; intervalLeftPct: number | null; intervalResetsAt: string | null; weekLeftPct: number | null; weekResetsAt: string | null }> {
+  const b = body as { model_remains?: Array<Record<string, unknown>>; base_resp?: { status_code?: number; status_msg?: string } };
+  if (b?.base_resp && b.base_resp.status_code !== 0) throw new Error('MiniMax: ' + (b.base_resp.status_msg ?? 'status ' + b.base_resp.status_code));
+  const pct = (v: unknown) => (typeof v === 'number' ? v : null);
+  const at = (v: unknown) => (typeof v === 'number' ? new Date(v).toISOString() : null);
+  return (b?.model_remains ?? []).map((m) => ({
+    model: String(m.model_name ?? 'general'),
+    intervalLeftPct: pct(m.current_interval_remaining_percent),
+    intervalResetsAt: at(m.end_time),
+    weekLeftPct: pct(m.current_weekly_remaining_percent),
+    weekResetsAt: at(m.weekly_end_time),
+  }));
+}
+
+async function minimax(fetchImpl: FetchImpl) {
+  const key = pi.config().apiKey;
+  if (!key) return { level: 'unknown' as Level, configured: false, note: 'MINIMAX_API_KEY is not set' };
+  try {
+    const windows = await cached('minimax', async () => {
+      const res = await fetchImpl(MINIMAX_URL, { headers: { authorization: 'Bearer ' + key }, signal: AbortSignal.timeout(15_000) });
+      if (!res.ok) throw new Error(`MiniMax answered HTTP ${res.status}`);
+      return parseMinimax(await res.json());
+    });
+    const worst = Math.min(...windows.flatMap((w) => [w.intervalLeftPct, w.weekLeftPct].filter((n): n is number => n != null)));
+    return { level: Number.isFinite(worst) ? levelFor(worst, 100) : 'unknown' as Level, configured: true, keyTail: tail(key), windows };
+  } catch (err) {
+    return { level: 'unknown' as Level, configured: true, keyTail: tail(key), error: (err as Error).message };
+  }
+}
+
+/** One-api style billing: hard_limit_usd is the key's total, total_usage is cents spent. */
+export function parseBilling(subscription: unknown, usage: unknown): { limitUsd: number; usedUsd: number; leftUsd: number } | null {
+  const limit = Number((subscription as { hard_limit_usd?: unknown })?.hard_limit_usd);
+  const cents = Number((usage as { total_usage?: unknown })?.total_usage);
+  if (!Number.isFinite(limit) || !Number.isFinite(cents)) return null;
+  const usedUsd = cents / 100;
+  return { limitUsd: limit, usedUsd, leftUsd: Math.max(0, limit - usedUsd) };
+}
+
+async function extract(fetchImpl: FetchImpl) {
+  const cfg = extractLlm.config();
+  if (!cfg) return { level: 'unknown' as Level, configured: false, note: 'CONTACT_LLM_URL is not set; contact research extracts with MiniMax' };
+  try {
+    const billing = await cached('extract', async () => {
+      const get = async (path: string) => {
+        const res = await fetchImpl(cfg.url + path, { headers: { authorization: 'Bearer ' + cfg.key }, signal: AbortSignal.timeout(15_000) });
+        if (!res.ok) throw new Error(`${path} answered HTTP ${res.status}`);
+        return res.json();
+      };
+      return parseBilling(await get('/dashboard/billing/subscription'), await get('/dashboard/billing/usage'));
+    });
+    if (!billing) return { level: 'unknown' as Level, configured: true, model: cfg.model, host: new URL(cfg.url).host, note: 'the provider gave no balance' };
+    return { level: levelFor(billing.leftUsd, billing.limitUsd), configured: true, model: cfg.model, host: new URL(cfg.url).host, keyTail: tail(cfg.key), ...billing };
+  } catch (err) {
+    return { level: 'unknown' as Level, configured: true, model: cfg.model, host: new URL(cfg.url).host, error: (err as Error).message };
+  }
+}
+
+async function tavilyKeys() {
+  await tavily.refresh();
+  const keys = tavily.pool.stats().map((k) => ({
+    tail: k.tail,
+    used: k.usedThisMonth,
+    limit: k.monthlyLimit,
+    left: k.monthlyLimit != null && k.usedThisMonth != null ? Math.max(0, k.monthlyLimit - k.usedThisMonth) : null,
+    resting: k.resting,
+    cooling: k.cooling,
+  }));
+  const known = keys.filter((k) => k.limit != null);
+  const left = known.reduce((n, k) => n + (k.left ?? 0), 0);
+  const total = known.reduce((n, k) => n + (k.limit ?? 0), 0);
+  const usable = keys.filter((k) => !k.cooling).length;
+  const level: Level = !keys.length ? 'unknown' : !usable ? 'bad' : levelFor(left, total);
+  return { level, keys: keys.length, usable, creditsLeft: left, creditsTotal: total, perKey: keys };
+}
+
+async function exaKeys() {
+  await exa.refresh();
+  await exa.flush();
+  const spend = new Map((await db.listSearchKeySpend('exa')).map((r) => [r.secret, r]));
+  const keys = exa.pool.stats().map((k) => {
+    const s = spend.get(k.secret);
+    return {
+      tail: k.tail,
+      cooling: k.cooling,
+      spentUsd: s ? Math.round(s.dollars * 1000) / 1000 : 0,
+      calls: s?.calls ?? 0,
+      failures: s?.failures ?? 0,
+      lastOkAt: iso(s?.last_ok_at),
+      lastError: s?.last_error ?? null,
+      lastErrorAt: iso(s?.last_error_at),
+      since: iso(s?.since),
+    };
+  });
+  const usable = keys.filter((k) => !k.cooling).length;
+  const level: Level = !keys.length ? 'unknown' : !usable ? 'bad' : usable < keys.length / 2 ? 'warn' : 'ok';
+  return { level, keys: keys.length, usable, spentUsd: Math.round(keys.reduce((n, k) => n + k.spentUsd, 0) * 100) / 100, perKey: keys };
+}
+
+async function scraperTech() {
+  const plan = Number(process.env.SCRAPER_TECH_MONTHLY_LIMIT) || 30_000;
+  const budget = autoScan.config().budget;
+  const [hub, finder] = await Promise.all([db.mapsUsageThisMonth(), db.finderMapsRequestsThisMonth()]);
+  const used = hub + finder;
+  const left = Math.max(0, plan - used);
+  const now = new Date();
+  const resetsAt = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString();
+  return { level: levelFor(left, plan), plan, used, hub, finder, left, autoScanBudget: budget, resetsAt, configured: Boolean(process.env.SCRAPER_TECH_KEY?.trim()) };
+}
+
+const settle = async <T>(name: string, run: () => Promise<T>): Promise<T | { level: Level; error: string }> => {
+  try { return await run(); } catch (err) { return { level: 'unknown', error: `${name}: ${(err as Error).message}` }; }
+};
+
+export async function snapshot(fetchImpl: FetchImpl = fetch) {
+  const [tav, ex, maps, mm, llm] = await Promise.all([
+    settle('tavily', tavilyKeys), settle('exa', exaKeys), settle('scraper.tech', scraperTech), minimax(fetchImpl), extract(fetchImpl),
+  ]);
+  return { tavily: tav, exa: ex, scraperTech: maps, minimax: mm, extractLlm: llm };
+}
