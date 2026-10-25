@@ -22,14 +22,27 @@ test('the queue holds for a pause, no worker, the budget, a running scan, or not
   assert.match(holdReason({ ...open, left: 0 })!, /every listed taman/);
 });
 
-test('every listed taman is walked in list order, and scanned ones are skipped', () => {
+test('every listed taman is queued once, spread evenly over the districts', () => {
+  const tamans = allTamans([], ['johor', 'selangor']);
+  const districts = [...new Set(tamans.map((t) => t.state + '|' + t.district))];
+  const order = remaining(tamans, new Set());
+  assert.equal(order.length, tamans.length);
+  // The first round takes one taman from each of the 19 districts, in list order.
+  assert.deepEqual(order.slice(0, districts.length).map((t) => t.state + '|' + t.district), districts);
+  assert.equal(order[0]!.queryPlace, tamans[0]!.queryPlace);
+  // A district already ahead waits until the others catch up.
+  const first = tamans.filter((t) => t.district === tamans[0]!.district).slice(0, 3);
+  const ahead = remaining(tamans, new Set(first.map((t) => t.queryPlace.toLowerCase())));
+  assert.notEqual(ahead[0]!.district, tamans[0]!.district);
+  assert.equal(ahead.slice(0, districts.length - 1).some((t) => t.district === tamans[0]!.district), false);
+});
+
+test('within a district the queue keeps list order and skips scanned tamans', () => {
   const tamans = allTamans([], ['johor']);
-  const johor = ALL_TERRITORIES.johor!;
-  const count = johor.districts.reduce((n, d) => n + d.towns.reduce((m, t) => m + t.tamans.length, 0), 0);
-  assert.equal(tamans.length, count);
-  assert.equal(tamans[0]!.queryPlace, johor.districts[0]!.towns[0]!.tamans[0]!.queryPlace);
-  const done = new Set([tamans[0]!.queryPlace.toLowerCase()]);
-  assert.equal(remaining(tamans, done)[0]!.queryPlace, tamans[1]!.queryPlace);
+  const district = tamans.filter((t) => t.district === tamans[0]!.district);
+  const order = remaining(tamans, new Set([district[0]!.queryPlace.toLowerCase()]))
+    .filter((t) => t.district === tamans[0]!.district);
+  assert.deepEqual(order.map((t) => t.queryPlace), district.slice(1).map((t) => t.queryPlace));
 });
 
 test('verified discovered tamans join their district; unverified and already-listed ones do not', () => {

@@ -1,19 +1,29 @@
-// Finds tamans the hand-built territory list misses, district by district.
+// Finds tamans the hand-built territory list misses, town by town in every
+// daerah.
 //
 // ALL_TERRITORIES was compiled once and goes stale: housing areas opened in the
-// last few years are simply absent, so nobody scans them. For each district this
-// runs two Tavily searches for new housing, asks the extract LLM to pull area
-// names out of the snippets, drops the ones the list already has, and checks the
-// rest against Google Maps. Every candidate is saved; only verified ones are
-// meant to be shown or merged.
+// last few years are absent, and a daerah holds far more tamans than the list
+// names. A daerah is too big for one search, so each of its towns gets its own:
+// two Tavily searches whose snippets the extract LLM reads for area names, and
+// two Google Maps searches whose housing-estate rows are tamans Maps itself
+// knows. Names the list already has are dropped. A Maps row is verified by being
+// on Maps; a Tavily name is verified when the town's Maps rows, or one Maps check
+// of its own, confirm it. Every candidate is saved; only verified ones join the
+// territory list.
 import * as db from './reportdb.ts';
 import * as extractLlm from './extract-llm.ts';
 import * as tavily from './tavily.ts';
 import { resolveConfig, searchMaps } from './maps-worker.ts';
-import { ALL_TERRITORIES, type DistrictLocation, type StateTerritory } from './territories.ts';
+import { ALL_TERRITORIES, type DistrictLocation, type StateTerritory, type TownLocation } from './territories.ts';
 
-export const MAX_CANDIDATES = 25;
-const SNIPPET_BUDGET = 20_000;
+/** Tavily names checked on Maps one by one per town, after the town's Maps list. */
+export const MAX_CHECKS = 20;
+const SNIPPET_BUDGET = 16_000;
+/** The second, smaller read when deepseek thinks past its output cap on the full one. */
+const RETRY_SNIPPET_BUDGET = 6_000;
+/** Maps categories that are a residential area, not a business in one. */
+const AREA_TYPES = ['Housing Estate', 'Housing complex', 'Housing society', 'Housing development', 'Residential complex', 'Neighborhood', 'Gated community'];
+const AREA_NAME = /^(taman|tmn|bandar|bdr|desa|kampung|kg|residensi|pangsapuri)\b/i;
 
 export type SearchHit = { url: string; title: string; content: string };
 export type MapsRow = { name?: unknown; full_address?: unknown; types?: unknown; place_id?: unknown };
@@ -25,7 +35,7 @@ export type Deps = {
   search: (query: string) => Promise<SearchHit[]>;
   llm: (prompt: string) => Promise<string>;
   /** null when no scraper.tech key is set: candidates are saved unverified. */
-  maps: ((query: string) => Promise<MapsRow[]>) | null;
+  maps: ((query: string, limit?: number) => Promise<MapsRow[]>) | null;
   save: (rows: FoundTaman[]) => Promise<number>;
   log: (message: string) => void;
 };
@@ -38,8 +48,8 @@ export type Summary = {
   candidates: number;
   verified: number;
   saved: number;
-  errors: Array<{ district: string; error: string }>;
-  perDistrict: Array<{ district: string; candidates: number; verified: number }>;
+  errors: Array<{ district: string; town?: string; error: string }>;
+  perDistrict: Array<{ district: string; towns: number; candidates: number; verified: number }>;
 };
 
 const PREFIX = /^(taman|tmn|bandar|bdr|desa|kampung|kg)\b[\s.]*/;
@@ -52,11 +62,25 @@ export function tamanKey(name: string): string {
   return stripped || lower.replace(/[^a-z0-9]+/g, '');
 }
 
-export function searchQueries(district: string, stateName: string): string[] {
+export function searchQueries(town: string, district: string, stateName: string): string[] {
   return [
-    `taman perumahan baru ${district} ${stateName}`,
-    `new housing taman ${district} ${stateName} 2021 2022 2023 2024 2025`,
+    `senarai taman perumahan ${town} ${district} ${stateName}`,
+    `taman baru ${town} ${district} ${stateName} 2020 2021 2022 2023 2024 2025`,
   ];
+}
+
+/** Maps searches whose housing-estate rows list the town's tamans. */
+export function mapsQueries(townPlace: string): string[] {
+  return [`taman in ${townPlace}`, `housing estate in ${townPlace}`];
+}
+
+/** A Maps row that is a residential area in this town or district, not a business in one. */
+export function isAreaRow(row: MapsRow, places: string[]): boolean {
+  const name = typeof row.name === 'string' ? row.name : '';
+  const address = typeof row.full_address === 'string' ? row.full_address.toLowerCase() : '';
+  const types = Array.isArray(row.types) ? row.types.map(String) : [];
+  const area = types.some((t) => AREA_TYPES.includes(t)) || (!types.length && AREA_NAME.test(name));
+  return area && !!name && places.some((p) => address.includes(p.toLowerCase()));
 }
 
 /** Every taman and town name the list already has for this district, as keys. */
@@ -71,18 +95,18 @@ export function knownKeys(district: DistrictLocation): Set<string> {
   return keys;
 }
 
-export function buildPrompt(district: string, stateName: string, hits: SearchHit[]): string {
+export function buildPrompt(town: string, district: string, stateName: string, hits: SearchHit[], budget = SNIPPET_BUDGET): string {
   const blocks: string[] = [];
   let used = 0;
   for (const hit of hits) {
     const block = `[${blocks.length + 1}] ${hit.title}\nURL: ${hit.url}\n${hit.content}`;
-    if (used + block.length > SNIPPET_BUDGET) break;
+    if (used + block.length > budget) break;
     blocks.push(block);
     used += block.length;
   }
   return [
-    `You read web search snippets about housing in the district of ${district}, ${stateName}, Malaysia.`,
-    'List every residential or mixed-use area name the snippets say is in that district:',
+    `You read web search snippets about housing in ${town}, in the district of ${district}, ${stateName}, Malaysia.`,
+    'List every residential or mixed-use area name the snippets say is in that town or district:',
     'names starting with Taman, Bandar, Desa, Kota, Bukit, Residensi, Pangsapuri, Kampung and similar.',
     'Rules:',
     '- Copy each name exactly as printed. Never invent or complete a name.',
@@ -172,54 +196,83 @@ export function matchMapsRow(name: string, district: string, stateName: string, 
   return null;
 }
 
-async function runDistrict(
-  district: DistrictLocation, stateName: string, deps: Deps, summary: Summary,
-): Promise<{ candidates: number; verified: number }> {
-  const results = await Promise.allSettled(searchQueries(district.name, stateName).map((q) => deps.search(q)));
-  const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-  if (failures.length === results.length) throw failures[0]!.reason;
-  for (const f of failures) deps.log(`[taman-finder] ${district.name}: one search failed: ${(f.reason as Error)?.message ?? f.reason}`);
+const reason = (cause: unknown): string => (cause as Error)?.message ?? String(cause);
 
+/** Tavily names for one town: two searches, then the LLM, read again smaller if it thinks past its cap. */
+async function tavilyNames(town: string, district: string, stateName: string, deps: Deps, summary: Summary): Promise<Candidate[]> {
+  const results = await Promise.allSettled(searchQueries(town, district, stateName).map((q) => deps.search(q)));
+  for (const r of results) if (r.status === 'rejected') deps.log(`[taman-finder] ${town}, ${district}: a search failed: ${reason(r.reason)}`);
   const hits: SearchHit[] = [];
   const urls = new Set<string>();
   for (const r of results) {
     if (r.status !== 'fulfilled') continue;
     summary.searched++;
-    for (const hit of r.value) {
-      if (urls.has(hit.url)) continue;
-      urls.add(hit.url);
-      hits.push(hit);
-    }
+    for (const hit of r.value) if (!urls.has(hit.url)) { urls.add(hit.url); hits.push(hit); }
   }
-  if (!hits.length) return { candidates: 0, verified: 0 };
+  if (!hits.length) return [];
+  try {
+    return parseCandidates(await deps.llm(buildPrompt(town, district, stateName, hits)));
+  } catch (cause) {
+    const code = (cause as { code?: string }).code;
+    if (code !== 'length' && code !== 'timeout' && code !== 'empty') throw cause;
+    return parseCandidates(await deps.llm(buildPrompt(town, district, stateName, hits, RETRY_SNIPPET_BUDGET)));
+  }
+}
 
-  const known = knownKeys(district);
-  const candidates = parseCandidates(await deps.llm(buildPrompt(district.name, stateName, hits)))
-    .filter((c) => !known.has(tamanKey(c.name)))
-    .slice(0, MAX_CANDIDATES);
-
-  const rows: FoundTaman[] = [];
-  for (const c of candidates) {
-    const query = `${c.name}, ${district.name}, ${stateName}`;
-    let match: MapsRow | null = null;
-    if (deps.maps) {
+async function runTown(
+  town: TownLocation, district: DistrictLocation, stateName: string, known: Set<string>, deps: Deps, summary: Summary,
+): Promise<{ candidates: number; verified: number }> {
+  const places = [town.name, district.name];
+  const areaRows: MapsRow[] = [];
+  if (deps.maps) {
+    for (const q of mapsQueries(town.queryPlace)) {
       try {
-        match = matchMapsRow(c.name, district.name, stateName, await deps.maps(query));
+        areaRows.push(...(await deps.maps(q, 500)).filter((row) => isAreaRow(row, places)));
       } catch (cause) {
-        deps.log(`[taman-finder] ${query}: Maps check failed: ${(cause as Error)?.message ?? cause}`);
+        deps.log(`[taman-finder] ${q}: Maps search failed: ${reason(cause)}`);
       }
     }
-    rows.push({
-      state: stateName, district: district.name, name: c.name, name_key: tamanKey(c.name), query_place: query,
-      evidence_url: c.evidence_url,
-      maps_name: match ? String(match.name) : null,
-      maps_address: match ? String(match.full_address) : null,
-      verified: match !== null,
-    });
   }
-  // Saved per district, so a later failure does not lose this district's work.
-  summary.saved += await deps.save(rows);
-  return { candidates: rows.length, verified: rows.filter((r) => r.verified).length };
+  let names: Candidate[] = [];
+  try {
+    names = await tavilyNames(town.name, district.name, stateName, deps, summary);
+  } catch (cause) {
+    // The Maps rows still count when the Tavily half fails.
+    deps.log(`[taman-finder] ${town.name}, ${district.name}: ${reason(cause)}`);
+    summary.errors.push({ district: district.name, town: town.name, error: reason(cause) });
+  }
+
+  const rows = new Map<string, FoundTaman>();
+  const add = (name: string, evidence: string | null, match: MapsRow | null) => {
+    const key = tamanKey(name);
+    if (!key || known.has(key) || rows.has(key)) return;
+    rows.set(key, {
+      state: stateName, district: district.name, name, name_key: key, query_place: `${name}, ${town.name}, ${stateName}`,
+      evidence_url: evidence, maps_name: match ? String(match.name) : null,
+      maps_address: match ? String(match.full_address) : null, verified: match !== null,
+    });
+  };
+  for (const row of areaRows) add(String(row.name).replace(/\s+/g, ' ').trim(), null, row);
+  let checks = 0;
+  for (const c of names) {
+    const key = tamanKey(c.name);
+    if (known.has(key) || rows.has(key)) continue;
+    let match = matchMapsRow(c.name, district.name, stateName, areaRows);
+    if (!match && deps.maps && checks < MAX_CHECKS) {
+      checks++;
+      try {
+        match = matchMapsRow(c.name, district.name, stateName, await deps.maps(`${c.name}, ${town.name}, ${district.name}, ${stateName}`, 10));
+      } catch (cause) {
+        deps.log(`[taman-finder] ${c.name}: Maps check failed: ${reason(cause)}`);
+      }
+    }
+    add(c.name, c.evidence_url, match);
+  }
+  const list = [...rows.values()];
+  // Saved per town, so a later failure does not lose this town's work.
+  summary.saved += await deps.save(list);
+  for (const r of list) known.add(r.name_key);
+  return { candidates: list.length, verified: list.filter((r) => r.verified).length };
 }
 
 /** Tavily through the shared key pool; the key list is refreshed once per run. */
@@ -229,15 +282,22 @@ export function tavilySearch(): (query: string) => Promise<SearchHit[]> {
     ready ??= tavily.refresh();
     await ready;
     if (!tavily.pool.stats().length) throw new Error('no Tavily key is configured');
-    const lease = await tavily.pool.acquire();
-    try {
-      const hits = await tavily.searchWithKey(query, lease.secret, { maxResults: 20, depth: 'basic' });
-      lease.release();
-      return hits;
-    } catch (cause) {
-      tavily.releaseFor(lease, cause);
-      throw cause;
+    // A spent or rate-limited key is rested by releaseFor; try the next one.
+    let last: unknown = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const lease = await tavily.pool.acquire();
+      try {
+        const hits = await tavily.searchWithKey(query, lease.secret, { maxResults: 20, depth: 'basic' });
+        lease.release();
+        return hits;
+      } catch (cause) {
+        tavily.releaseFor(lease, cause);
+        last = cause;
+        const code = (cause as { code?: string }).code;
+        if (code !== 'quota' && code !== 'rate_limit') break;
+      }
     }
+    throw last;
   };
 }
 
@@ -248,8 +308,8 @@ function defaultDeps(): Deps {
     search: tavilySearch(),
     llm: async (prompt) => (await extractLlm.ask(prompt, { timeoutMs: 120_000, maxTokens: 8192 })).answer,
     // Each check is one Maps request, counted against the same monthly budget as scans.
-    maps: config.key ? async (query) => {
-      const rows = await searchMaps(config, query, 10) as MapsRow[];
+    maps: config.key ? async (query, limit = 10) => {
+      const rows = await searchMaps(config, query, limit) as MapsRow[];
       void db.addMapsUsage(1).catch(() => {});
       return rows;
     } : null,
@@ -258,27 +318,38 @@ function defaultDeps(): Deps {
   };
 }
 
-/** One pass over a state's districts, in order; a failing district is recorded and skipped. */
-export async function findMissingTamans(state: string, deps: Partial<Deps> = {}): Promise<Summary> {
+/**
+ * One pass over a state's daerah, or over one daerah, town by town. A failing
+ * town is recorded and the rest still run.
+ */
+export async function findMissingTamans(state: string, deps: Partial<Deps> = {}, opts: { district?: string } = {}): Promise<Summary> {
   const d: Deps = { ...defaultDeps(), ...deps };
   const territory = d.territories[String(state ?? '').toLowerCase()];
   if (!territory) throw new Error(`unknown state: ${state}`);
+  const wanted = opts.district?.trim().toLowerCase();
+  const districts = territory.districts.filter((x) => !wanted || x.name.toLowerCase() === wanted);
+  if (!districts.length) throw new Error(`unknown district: ${opts.district} in ${territory.state}`);
   const summary: Summary = {
-    state: territory.state, districts: territory.districts.length, searched: 0,
+    state: territory.state, districts: districts.length, searched: 0,
     candidates: 0, verified: 0, saved: 0, errors: [], perDistrict: [],
   };
-  for (const district of territory.districts) {
-    try {
-      const out = await runDistrict(district, territory.state, d, summary);
-      summary.candidates += out.candidates;
-      summary.verified += out.verified;
-      summary.perDistrict.push({ district: district.name, ...out });
-    } catch (cause) {
-      const error = (cause as Error)?.message ?? String(cause);
-      d.log(`[taman-finder] ${district.name}: ${error}`);
-      summary.errors.push({ district: district.name, error });
-      summary.perDistrict.push({ district: district.name, candidates: 0, verified: 0 });
+  for (const district of districts) {
+    const known = knownKeys(district);
+    const total = { district: district.name, towns: district.towns.length, candidates: 0, verified: 0 };
+    for (const town of district.towns) {
+      try {
+        const out = await runTown(town, district, territory.state, known, d, summary);
+        total.candidates += out.candidates;
+        total.verified += out.verified;
+      } catch (cause) {
+        d.log(`[taman-finder] ${town.name}, ${district.name}: ${reason(cause)}`);
+        summary.errors.push({ district: district.name, town: town.name, error: reason(cause) });
+      }
     }
+    summary.candidates += total.candidates;
+    summary.verified += total.verified;
+    summary.perDistrict.push(total);
+    d.log(`[taman-finder] ${territory.state} / ${district.name}: ${total.candidates} new names, ${total.verified} verified over ${total.towns} towns`);
   }
   return summary;
 }

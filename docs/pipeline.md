@@ -37,17 +37,23 @@ The list was built by hand once, so tamans opened in the last few years are miss
 | | |
 |---|---|
 | File | [taman-finder.ts](../agy-lab/src/taman-finder.ts) |
-| Start | `POST /api/territories/find-missing` with `{"state":"johor"}`. Answers at once and runs for minutes. |
+| Start | `POST /api/territories/find-missing` with `{"state":"johor"}`, or `{"state":"johor","district":"Kulai"}` for one daerah. Answers at once and runs for minutes. |
 | Status | `GET /api/territories/discovered?state=johor`: whether it is running, the last run, and every candidate |
 | Saved in | table `territory_discovered` |
-| Cost | per district: 2 Tavily basic searches (2 credits), 1 deepseek call, and 1 scraper.tech request for each candidate (at most 25) |
+| Cost | per town: 2 Tavily basic searches (2 credits), 1–2 deepseek calls, 2 scraper.tech list searches, and up to 20 single checks. All of Johor (70 towns) is about 140 Tavily credits and 140–1,500 Maps requests. |
 | Pause | nothing to pause: it runs only when started |
 
-For each district it:
-1. runs 2 Tavily searches for new housing areas,
-2. asks deepseek to pull the area names out of the results,
-3. drops names already on the list,
-4. looks each one up on Google Maps.
+A daerah is too big for one search, so it works town by town (Johor: 70 towns in 10 daerah;
+Selangor: 55 in 9). For each town it:
+1. asks Google Maps for "taman in <town>" and "housing estate in <town>", and keeps the rows Maps
+   files as a housing estate, housing complex, neighbourhood or similar. Each is a taman Maps knows, so
+   it is verified already;
+2. runs 2 Tavily searches for the town's housing areas, new ones included;
+3. asks deepseek to pull the area names out of those results. If deepseek thinks past its output
+   cap, it reads again with fewer snippets;
+4. drops names the daerah already has;
+5. verifies each Tavily name against the town's Maps rows. If that fails, it looks the name up on Maps
+   once, at most 20 per town.
 
 Every candidate is saved. A verified one joins the territory list under "Newly found tamans", so the
 auto-scan picks it up too. If `SCRAPER_TECH_KEY` is not set, candidates are saved unverified.
@@ -63,7 +69,9 @@ Each Maps check is one request and is counted in `maps_usage`, the same monthly 
 | Cost | one Business scan per taman: about 100–420 scraper.tech requests |
 | Pause | `AUTO_SCAN_PAUSED=1` |
 
-- Every 2 minutes it queues a Business scan (max 2000) for the next taman, in list order.
+- Every 2 minutes it queues a Business scan (max 2000) for the next taman.
+- It spreads the scans evenly over all 19 daerah of Johor and Selangor. The next taman always comes
+  from the daerah with the fewest scanned so far, so no daerah waits for another to finish.
 - One scan at a time, unless `AUTO_SCAN_CONCURRENT` says more.
 - It skips a taman that already has a Business scan since the scraper.tech switch (2026-10-24).
   Older Mac mini scans do not count: they found far less (Taman Daya 118 against 1,838).

@@ -3463,8 +3463,9 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     return true;
   }
 
-  // Tavily looks for tamans the territory list lacks, district by district; the
-  // run takes minutes, so it answers at once and the result is read back below.
+  // Tavily and Maps look for tamans the territory list lacks, town by town in each
+  // daerah ({"state","district"?}); a run takes minutes, so it answers at once
+  // and the result is read back below.
   if (method === 'POST' && p === '/api/territories/find-missing') {
     const body = await ctx.readJson(req);
     const state = str(body.state).trim().toLowerCase() || 'johor';
@@ -3472,17 +3473,19 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       ctx.json(res, 400, { error: 'unknown state', states: Object.keys(territories.ALL_TERRITORIES) });
       return true;
     }
-    if (findingMissing.has(state)) {
-      ctx.json(res, 409, { error: 'already running for ' + state });
+    const district = str(body.district).trim();
+    const run = district ? state + '/' + district.toLowerCase() : state;
+    if (findingMissing.has(state) || findingMissing.has(run)) {
+      ctx.json(res, 409, { error: 'already running for ' + run });
       return true;
     }
-    findingMissing.add(state);
+    findingMissing.add(run);
     void import('./taman-finder.ts')
-      .then((finder) => finder.findMissingTamans(state))
-      .then((summary) => { lastFinderRun[state] = { at: new Date().toISOString(), summary }; console.log(`[taman-finder] ${state}: ${JSON.stringify(summary).slice(0, 300)}`); })
-      .catch((err: Error) => { lastFinderRun[state] = { at: new Date().toISOString(), error: err.message }; console.warn(`[taman-finder] ${state} failed: ${err.message}`); })
-      .finally(() => findingMissing.delete(state));
-    ctx.json(res, 202, { started: state });
+      .then((finder) => finder.findMissingTamans(state, {}, { district: district || undefined }))
+      .then((summary) => { lastFinderRun[run] = { at: new Date().toISOString(), summary }; console.log(`[taman-finder] ${run}: ${JSON.stringify(summary).slice(0, 300)}`); })
+      .catch((err: Error) => { lastFinderRun[run] = { at: new Date().toISOString(), error: err.message }; console.warn(`[taman-finder] ${run} failed: ${err.message}`); })
+      .finally(() => findingMissing.delete(run));
+    ctx.json(res, 202, { started: run });
     return true;
   }
 
@@ -3490,8 +3493,8 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     const state = url.searchParams.get('state')?.trim().toLowerCase() || undefined;
     const rows = await db.listDiscoveredTamans(state);
     ctx.json(res, 200, {
-      running: state ? findingMissing.has(state) : [...findingMissing],
-      lastRun: state ? lastFinderRun[state] ?? null : lastFinderRun,
+      running: [...findingMissing].filter((r) => !state || r === state || r.startsWith(state + '/')),
+      lastRun: Object.fromEntries(Object.entries(lastFinderRun).filter(([r]) => !state || r === state || r.startsWith(state + '/'))),
       verified: rows.filter((r) => r.verified).length,
       total: rows.length,
       tamans: rows,

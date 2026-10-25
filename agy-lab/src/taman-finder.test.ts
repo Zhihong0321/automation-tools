@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  findMissingTamans, knownKeys, lastJsonObject, matchMapsRow, parseCandidates, searchQueries, tamanKey,
+  findMissingTamans, isAreaRow, knownKeys, lastJsonObject, mapsQueries, matchMapsRow, parseCandidates, searchQueries, tamanKey,
   type Deps, type FoundTaman, type MapsRow, type SearchHit,
 } from './taman-finder.ts';
 import type { DistrictLocation, StateTerritory } from './territories.ts';
@@ -10,7 +10,7 @@ function district(name: string, towns: Array<{ name: string; tamans: string[] }>
   return {
     id: name.toLowerCase().replace(/\W+/g, '_'), num: 1, name, state: 'Johor',
     towns: towns.map((t) => ({
-      id: t.name, name: t.name, fullName: `${t.name}, ${name}`, queryPlace: `${t.name}, Johor`,
+      id: t.name, name: t.name, fullName: `${t.name}, ${name}`, queryPlace: `${t.name}, ${name}, Johor`,
       tamans: t.tamans.map((n) => ({ name: n, queryPlace: `${n}, ${t.name}, Johor` })),
     })),
   };
@@ -20,175 +20,140 @@ const territories: Record<string, StateTerritory> = {
   johor: {
     state: 'Johor',
     districts: [
-      district('Kulai', [{ name: 'Senai', tamans: ['Taman Daya', 'Taman Bukit Indah'] }]),
+      district('Kulai', [{ name: 'Senai', tamans: ['Taman Daya'] }, { name: 'Kulai', tamans: ['Taman Kulai Besar'] }]),
       district('Kluang', [{ name: 'Kluang', tamans: ['Taman Sri Lambak'] }]),
-      district('Muar', [{ name: 'Bakri', tamans: [] }]),
     ],
   },
 };
 
 const hit = (url: string): SearchHit => ({ url, title: 'New homes', content: 'Launching soon' });
+const area = (name: string, address: string, types: string[] = ['Housing Estate']): MapsRow => ({ name, full_address: address, types });
 
-/** Fakes for every outside call, recording what was asked and saved. */
+/** Fakes for every external call, recording what was asked and saved. */
 function fakes(over: Partial<Deps> = {}) {
-  const calls = { search: [] as string[], llm: [] as string[], maps: [] as string[], saved: [] as FoundTaman[] };
+  const saved: FoundTaman[] = [];
+  const asked = { search: [] as string[], maps: [] as Array<[string, number | undefined]>, llm: [] as string[] };
   const deps: Partial<Deps> = {
     territories,
-    search: async (q) => { calls.search.push(q); return [hit(`https://news.example/${calls.search.length}`)]; },
-    llm: async (p) => { calls.llm.push(p); return '{"tamans":[]}'; },
-    maps: async (q) => { calls.maps.push(q); return []; },
-    save: async (rows) => { calls.saved.push(...rows); return rows.length; },
+    search: async (q) => { asked.search.push(q); return [hit('https://news.example/' + asked.search.length)]; },
+    llm: async (prompt) => { asked.llm.push(prompt); return '{"tamans":[]}'; },
+    maps: async (q, limit) => { asked.maps.push([q, limit]); return []; },
+    save: async (rows) => { saved.push(...rows); return rows.length; },
     log: () => {},
     ...over,
   };
-  return { deps, calls };
+  return { deps, saved, asked };
 }
 
 test('tamanKey drops the area word, case and punctuation', () => {
-  assert.equal(tamanKey('Taman Daya'), 'daya');
-  assert.equal(tamanKey('Tmn. Daya'), 'daya');
-  assert.equal(tamanKey('TMN DAYA'), 'daya');
-  assert.equal(tamanKey('Bandar Seri Alam'), 'serialam');
-  assert.equal(tamanKey('Bdr. Seri-Alam'), 'serialam');
-  assert.equal(tamanKey('Kg. Melayu Majidee'), 'melayumajidee');
-  assert.equal(tamanKey('Kampung Baru'), 'baru');
-  assert.equal(tamanKey('Desa Tebrau'), 'tebrau');
-  assert.equal(tamanKey('Residensi Eco Botanic 2'), 'residensiecobotanic2');
-  // Only a whole leading word counts, and a bare prefix keeps its word.
+  assert.equal(tamanKey('Tmn. Daya Indah'), 'dayaindah');
+  assert.equal(tamanKey('Taman Daya-Indah'), 'dayaindah');
+  assert.equal(tamanKey('Bdr Baru Uda'), 'baruuda');
+  assert.equal(tamanKey('Kg. Melayu'), 'melayu');
   assert.equal(tamanKey('Tamarind Square'), 'tamarindsquare');
   assert.equal(tamanKey('Bandar'), 'bandar');
   assert.equal(tamanKey(''), '');
 });
 
-test('the two searches name the district and the state', () => {
-  assert.deepEqual(searchQueries('Kulai', 'Johor'), [
-    'taman perumahan baru Kulai Johor',
-    'new housing taman Kulai Johor 2021 2022 2023 2024 2025',
+test('each town gets its own Tavily and Maps searches', () => {
+  assert.deepEqual(searchQueries('Senai', 'Kulai', 'Johor'), [
+    'senarai taman perumahan Senai Kulai Johor',
+    'taman baru Senai Kulai Johor 2020 2021 2022 2023 2024 2025',
   ]);
+  assert.deepEqual(mapsQueries('Senai, Kulai, Johor'), ['taman in Senai, Kulai, Johor', 'housing estate in Senai, Kulai, Johor']);
+});
+
+test('only residential rows in the town or district count as tamans', () => {
+  const places = ['Senai', 'Kulai'];
+  assert.equal(isAreaRow(area('Taman Seri Senai', '81400 Senai, Johor'), places), true);
+  assert.equal(isAreaRow(area('Taman Seri Senai', '81400 Senai, Johor', ['Hardware store']), places), false);
+  assert.equal(isAreaRow(area('Taman Seri Senai', 'Johor Bahru, Johor'), places), false);
+  assert.equal(isAreaRow({ name: 'Taman Tiada Jenis', full_address: 'Kulai, Johor' }, places), true);
+  assert.equal(isAreaRow({ name: 'Kedai Ali', full_address: 'Kulai, Johor' }, places), false);
 });
 
 test('an LLM answer wrapped in prose and fences still parses', () => {
-  const answer = 'Here is what I found:\n```json\n{"tamans":[{"name":"Taman Kulai Utama","evidence_url":"https://a.example"},'
-    + '{"name":"  Bandar   Putra ","evidence_url":"not a url"},{"name":"Tmn Kulai Utama"},{"name":42}]}\n```\nHope this helps {not json}.';
-  assert.ok(Array.isArray(lastJsonObject(answer)?.tamans));
+  const answer = 'Here you go:\n```json\n{"tamans":[{"name":" Taman  Baru ","evidence_url":"https://a.example"},{"name":"Tmn Baru"},{"name":7},{"name":"Desa {Hill}","evidence_url":"ftp://x"}]}\n```';
   assert.deepEqual(parseCandidates(answer), [
-    { name: 'Taman Kulai Utama', evidence_url: 'https://a.example' },
-    { name: 'Bandar Putra', evidence_url: null },
+    { name: 'Taman Baru', evidence_url: 'https://a.example' },
+    { name: 'Desa {Hill}', evidence_url: null },
   ]);
-  assert.deepEqual(parseCandidates('no json here'), []);
-  assert.deepEqual(lastJsonObject('first {"a":1} then {"b":{"c":"}"}}'), { b: { c: '}' } });
+  assert.equal(lastJsonObject('no json'), null);
 });
 
-test('known tamans and town names are filtered out, and repeats are dropped', async () => {
-  const keys = knownKeys(territories.johor!.districts[0]!);
-  assert.ok(keys.has('daya') && keys.has('bukitindah') && keys.has('senai'));
-
-  const { deps, calls } = fakes({
+test('known names are dropped; Maps rows are verified; Tavily names verified by the town list, a check, or not at all', async () => {
+  const { deps, saved, asked } = fakes({
     territories: { johor: { state: 'Johor', districts: [territories.johor!.districts[0]!] } },
-    llm: async () => JSON.stringify({ tamans: [
-      { name: 'Tmn Daya', evidence_url: 'https://x.example' },
-      { name: 'Taman Bukit Indah' },
-      { name: 'Senai' },
-      { name: 'Taman Kulai Utama', evidence_url: 'https://x.example' },
-      { name: 'TAMAN KULAI UTAMA' },
-    ] }),
-  });
-  const summary = await findMissingTamans('Johor', deps);
-  assert.deepEqual(calls.saved.map((r) => r.name), ['Taman Kulai Utama']);
-  assert.deepEqual(calls.maps, ['Taman Kulai Utama, Kulai, Johor']);
-  assert.equal(calls.saved[0]!.query_place, 'Taman Kulai Utama, Kulai, Johor');
-  assert.equal(calls.saved[0]!.name_key, 'kulaiutama');
-  assert.equal(summary.candidates, 1);
-  assert.equal(summary.searched, 2);
-});
-
-test('a matching Maps row verifies a candidate and a non-matching one rejects it', async () => {
-  const rows: Record<string, MapsRow[]> = {
-    'Taman Kulai Utama, Kulai, Johor': [
-      { name: 'Kedai Runcit Ali', full_address: 'Jalan 1, Kulai, Johor' },
-      { name: 'Taman Kulai Utama', full_address: 'Jalan Utama 3, 81000 Kulai, Johor', place_id: 'ChIJ1' },
-    ],
-    // The name matches but the address is in another state.
-    'Taman Seri Murni, Kulai, Johor': [{ name: 'Taman Seri Murni', full_address: '12, Jalan Murni, 47000 Sungai Buloh, Selangor' }],
-  };
-  const { deps, calls } = fakes({
-    territories: { johor: { state: 'Johor', districts: [territories.johor!.districts[0]!] } },
-    llm: async () => '{"tamans":[{"name":"Taman Kulai Utama","evidence_url":"https://e.example/1"},{"name":"Taman Seri Murni"}]}',
-    maps: async (q) => rows[q] ?? [],
+    llm: async () => '{"tamans":[{"name":"Taman Daya"},{"name":"Taman Seri Senai","evidence_url":"https://n.example"},{"name":"Taman Checked"},{"name":"Taman Ghost"}]}',
+    maps: async (q, limit) => {
+      asked.maps.push([q, limit]);
+      if (q === 'taman in Senai, Kulai, Johor') return [area('Taman Seri Senai', 'Jalan 1, 81400 Senai, Johor'), area('Taman Daya', 'Senai, Johor'), area('Taman Maps Only', '81400 Senai, Kulai, Johor')];
+      if (q.startsWith('Taman Checked')) return [area('Taman Checked', 'Jalan 2, Senai, Kulai, Johor')];
+      return [];
+    },
   });
   const summary = await findMissingTamans('johor', deps);
-  assert.deepEqual(calls.saved, [
-    {
-      state: 'Johor', district: 'Kulai', name: 'Taman Kulai Utama', name_key: 'kulaiutama',
-      query_place: 'Taman Kulai Utama, Kulai, Johor', evidence_url: 'https://e.example/1',
-      maps_name: 'Taman Kulai Utama', maps_address: 'Jalan Utama 3, 81000 Kulai, Johor', verified: true,
-    },
-    {
-      state: 'Johor', district: 'Kulai', name: 'Taman Seri Murni', name_key: 'serimurni',
-      query_place: 'Taman Seri Murni, Kulai, Johor', evidence_url: null,
-      maps_name: null, maps_address: null, verified: false,
-    },
+  const senai = saved.filter((r) => r.query_place.endsWith('Senai, Johor'));
+  assert.deepEqual(senai.map((r) => [r.name, r.verified]), [
+    ['Taman Seri Senai', true], ['Taman Maps Only', true], ['Taman Checked', true], ['Taman Ghost', false],
   ]);
-  assert.equal(summary.verified, 1);
-  assert.equal(summary.saved, 2);
-  assert.deepEqual(summary.perDistrict, [{ district: 'Kulai', candidates: 2, verified: 1 }]);
+  assert.equal(senai.find((r) => r.name === 'Taman Seri Senai')!.maps_address, 'Jalan 1, 81400 Senai, Johor');
+  assert.deepEqual(asked.maps.filter(([q]) => q.startsWith('taman in') || q.startsWith('housing estate')).map(([, l]) => l), [500, 500, 500, 500]);
+  // The Kulai town does not save the Senai names again.
+  assert.equal(saved.filter((r) => r.name === 'Taman Ghost').length, 1);
+  assert.deepEqual(summary.perDistrict, [{ district: 'Kulai', towns: 2, candidates: 4, verified: 3 }]);
+});
+
+test('a read that thinks past its cap is retried on fewer snippets', async () => {
+  let calls = 0;
+  const { deps, saved } = fakes({
+    territories: { johor: { state: 'Johor', districts: [territories.johor!.districts[1]!] } },
+    llm: async (prompt) => {
+      calls++;
+      if (calls === 1) throw Object.assign(new Error('thought too long'), { code: 'length' });
+      assert.ok(prompt.length < 7_000);
+      return '{"tamans":[{"name":"Taman Retry"}]}';
+    },
+    search: async () => Array.from({ length: 40 }, (_, i) => ({ url: 'https://x.example/' + i, title: 't', content: 'x'.repeat(900) })),
+  });
+  await findMissingTamans('johor', deps);
+  assert.equal(calls, 2);
+  assert.deepEqual(saved.map((r) => r.name), ['Taman Retry']);
+});
+
+test('a failing town is recorded and the others still run; one daerah can run alone', async () => {
+  const { deps, asked } = fakes({
+    search: async (q) => { asked.search.push(q); if (q.includes('Senai')) throw new Error('tavily down'); return [hit('https://ok.example')]; },
+    llm: async (p) => { if (p.includes('in Kulai,')) throw new Error('llm broke'); return '{"tamans":[]}'; },
+  });
+  const summary = await findMissingTamans('johor', deps);
+  assert.deepEqual(summary.errors.map((e) => [e.district, e.town]), [['Kulai', 'Kulai']]);
+  assert.equal(summary.perDistrict.length, 2);
+  assert.ok(asked.search.some((q) => q.includes('Kluang')));
+
+  const one = fakes();
+  const only = await findMissingTamans('johor', one.deps, { district: 'kluang' });
+  assert.equal(only.districts, 1);
+  assert.ok(one.asked.search.every((q) => q.includes('Kluang')));
+});
+
+test('without a Maps key Tavily names are saved unverified', async () => {
+  const { deps, saved } = fakes({
+    territories: { johor: { state: 'Johor', districts: [territories.johor!.districts[1]!] } },
+    maps: null,
+    llm: async () => '{"tamans":[{"name":"Taman Unchecked"}]}',
+  });
+  await findMissingTamans('johor', deps);
+  assert.deepEqual(saved.map((r) => [r.name, r.verified]), [['Taman Unchecked', false]]);
 });
 
 test('matchMapsRow accepts a longer Maps name and needs the district or state in the address', () => {
-  const rows = [{ name: 'Taman Kulai Utama Fasa 2', full_address: 'Kulai, Johor' }];
-  assert.equal(matchMapsRow('Taman Kulai Utama', 'Kulai', 'Johor', rows), rows[0]);
-  assert.equal(matchMapsRow('Taman Kulai Utama', 'Kulai', 'Johor', [{ name: 'Taman Kulai Utama', full_address: 'Shah Alam, Selangor' }]), null);
-  assert.equal(matchMapsRow('Taman Lain', 'Kulai', 'Johor', rows), null);
+  assert.ok(matchMapsRow('Taman Bayu', 'Kulai', 'Johor', [area('Taman Bayu Indah Phase 2', 'Kulai, Johor')]));
+  assert.equal(matchMapsRow('Taman Bayu', 'Kulai', 'Johor', [area('Taman Bayu', 'Shah Alam, Selangor')]), null);
+  assert.ok(knownKeys(territories.johor!.districts[0]!).has('daya'));
 });
 
-test('without a Maps key every candidate is saved unverified', async () => {
-  const { deps, calls } = fakes({
-    territories: { johor: { state: 'Johor', districts: [territories.johor!.districts[2]!] } },
-    llm: async () => '{"tamans":[{"name":"Taman Bakri Jaya"}]}',
-    maps: null,
-  });
-  const summary = await findMissingTamans('johor', deps);
-  assert.equal(calls.saved.length, 1);
-  assert.equal(calls.saved[0]!.verified, false);
-  assert.equal(summary.verified, 0);
-});
-
-test('a district whose search throws is recorded and the rest still run', async () => {
-  const { deps, calls } = fakes({
-    search: async (q) => {
-      calls.search.push(q);
-      if (q.includes('Kluang')) throw new Error('every Tavily key is out of credits');
-      return [hit(`https://news.example/${calls.search.length}`)];
-    },
-    llm: async (p) => {
-      calls.llm.push(p);
-      return p.includes('district of Muar') ? '{"tamans":[{"name":"Taman Bakri Jaya"}]}' : '{"tamans":[{"name":"Taman Kulai Utama"}]}';
-    },
-  });
-  const summary = await findMissingTamans('johor', deps);
-  assert.equal(summary.districts, 3);
-  assert.deepEqual(summary.errors, [{ district: 'Kluang', error: 'every Tavily key is out of credits' }]);
-  assert.deepEqual(calls.saved.map((r) => r.district), ['Kulai', 'Muar']);
-  assert.equal(calls.llm.length, 2);
-  assert.equal(summary.searched, 4);
-  assert.deepEqual(summary.perDistrict.map((p) => p.district), ['Kulai', 'Kluang', 'Muar']);
-});
-
-test('one failed search of the pair still uses the other', async () => {
-  const { deps, calls } = fakes({
-    territories: { johor: { state: 'Johor', districts: [territories.johor!.districts[2]!] } },
-    search: async (q) => {
-      if (q.startsWith('new housing')) throw new Error('timeout');
-      return [hit('https://one.example')];
-    },
-    llm: async () => '{"tamans":[{"name":"Taman Bakri Jaya"}]}',
-  });
-  const summary = await findMissingTamans('johor', deps);
-  assert.deepEqual(summary.errors, []);
-  assert.equal(summary.searched, 1);
-  assert.equal(calls.saved.length, 1);
-});
-
-test('an unknown state is refused', async () => {
-  await assert.rejects(findMissingTamans('Atlantis', fakes().deps), /unknown state/);
+test('an unknown state or district is refused', async () => {
+  await assert.rejects(findMissingTamans('perlis', fakes().deps), /unknown state/);
+  await assert.rejects(findMissingTamans('johor', fakes().deps, { district: 'Nowhere' }), /unknown district/);
 });

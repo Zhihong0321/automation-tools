@@ -1,5 +1,6 @@
 // Queues a Google Maps Business scan for every taman in every listed district,
-// one after another, so the lead list fills without anyone clicking a taman.
+// one after another and spread evenly over the districts, so the lead list fills
+// without anyone clicking a taman.
 //
 // A taman is done once it has a Business scan since the scraper.tech switch:
 // the Mac mini's scans before that found a fraction of what a sweep finds
@@ -38,9 +39,29 @@ export function config(env: NodeJS.ProcessEnv = process.env) {
 
 type Taman = ReturnType<typeof territories.allTamans>[number];
 
-/** The tamans still to scan, in list order. */
+/**
+ * The tamans still to scan, spread evenly over every daerah: the next one always
+ * comes from the district with the fewest scanned so far (list order breaks a
+ * tie), so all of Johor and Selangor fill at the same pace instead of one
+ * district at a time. Within a district, list order.
+ */
 export function remaining(tamans: Taman[], done: Set<string>): Taman[] {
-  return tamans.filter((t) => !done.has(t.queryPlace.trim().toLowerCase()));
+  const groups = new Map<string, { scanned: number; left: Taman[] }>();
+  for (const t of tamans) {
+    const key = t.state + '|' + t.district;
+    const g = groups.get(key) ?? { scanned: 0, left: [] };
+    if (done.has(t.queryPlace.trim().toLowerCase())) g.scanned++; else g.left.push(t);
+    groups.set(key, g);
+  }
+  const order = [...groups.values()];
+  const out: Taman[] = [];
+  for (;;) {
+    let pick: { scanned: number; left: Taman[] } | null = null;
+    for (const g of order) if (g.left.length && (!pick || g.scanned < pick.scanned)) pick = g;
+    if (!pick) return out;
+    out.push(pick.left.shift()!);
+    pick.scanned++;
+  }
 }
 
 /** Why the queue is not starting a scan right now, or null when it may. */
