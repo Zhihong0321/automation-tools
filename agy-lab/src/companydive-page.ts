@@ -101,9 +101,38 @@ async function show(id) {
     html += '<details><summary>LLM calls (' + r.llm.length + ')</summary><ol>' + r.llm.map((u) => '<li>' + esc(u.step) + ' — ' + esc(u.engine || '') + ' · ' + (u.ms / 1000).toFixed(0) + 's</li>').join('') + '</ol></details>';
     html += '<details><summary>Facts (' + r.facts.length + ')</summary><ul>' + r.facts.map((f) => '<li><b>' + esc(f.topic) + '</b> ' + esc(f.fact) + ' <span class="muted">[' + f.sources.join(', ') + '] ' + esc(f.confidence) + '</span></li>').join('') + '</ul></details>';
   }
+  if (r) html += peopleHtml(d);
   html += '<details ' + (d.status === 'running' || d.status === 'queued' ? 'open' : '') + '><summary>Log</summary><div class="log">' + esc(log) + '</div></details>';
   $('view').innerHTML = html;
-  if (d.status === 'running' || d.status === 'queued') timer = setTimeout(() => { show(id); loadList(); }, 4000);
+  const peopleRunning = d.result && d.result.people && d.result.people.status === 'running';
+  if (d.status === 'running' || d.status === 'queued' || peopleRunning) timer = setTimeout(() => { show(id); loadList(); }, 4000);
+}
+
+function peopleHtml(d) {
+  const p = d.result.people;
+  const canRun = (d.status === 'done' || d.status === 'partial') && !(p && p.status === 'running');
+  let h = '<h2 style="margin-top:24px">People linked (Exa)</h2>';
+  if (canRun) h += '<p><button onclick="findPeople(' + d.id + ')">' + (p ? 'Search Exa again' : 'Find linked people with Exa') + '</button> <span class="muted">Uses the saved research; nothing is re-run.</span></p>';
+  if (!p) return h;
+  const dollars = (p.exa || []).reduce((n, c) => n + (c.dollars || 0), 0);
+  h += '<div class="stats muted"><span>Status: <b class="' + (p.status === 'failed' ? 'bad' : '') + '">' + esc(p.status) + '</b></span><span>Exa: ' + (p.exa || []).length + ' calls / $' + dollars.toFixed(3) + '</span><span>People: ' + (p.people || []).length + '</span></div>';
+  if (p.error) h += '<p class="bad">' + esc(p.error) + '</p>';
+  if ((p.people || []).length) {
+    h += '<div class="dossier"><table><thead><tr><th>Name</th><th>Role</th><th>Link</th><th>Now?</th><th>Confidence</th><th>Evidence</th></tr></thead><tbody>'
+      + p.people.map((x) => '<tr><td><b>' + esc(x.name) + '</b>' + (x.notes ? '<br><span class="muted">' + esc(x.notes) + '</span>' : '') + '</td><td>' + esc(x.role) + '</td><td>' + esc(x.relation) + '</td><td>' + (x.current === true ? 'yes' : x.current === false ? 'former' : '?') + '</td><td>' + esc(x.confidence) + '</td><td>'
+        + (x.evidence || []).map((e) => '<a href="' + esc(e.url) + '" target="_blank" rel="noopener" title="' + esc(e.quote) + '">' + esc(e.url.replace(/^https?:\\/\\/(www\\.)?/, '').slice(0, 48)) + '</a>').join('<br>') + '</td></tr>').join('')
+      + '</tbody></table></div>';
+  }
+  if ((p.rejected || []).length) h += '<details><summary>Rejected lookalikes (' + p.rejected.length + ')</summary><ul>' + p.rejected.map((x) => '<li>' + esc(x.name) + ' <span class="muted">' + esc(x.reason) + '</span></li>').join('') + '</ul></details>';
+  if ((p.warnings || []).length) h += '<p class="bad">Finished with fallbacks:</p><ul>' + p.warnings.map((w) => '<li class="muted">' + esc(w) + '</li>').join('') + '</ul>';
+  h += '<details ' + (p.status === 'running' ? 'open' : '') + '><summary>People log</summary><div class="log">' + esc((p.log || []).map((l) => l.at.slice(11, 19) + '  ' + l.msg).join('\\n')) + '</div></details>';
+  return h;
+}
+
+async function findPeople(id) {
+  const out = await api('/api/company-dive/' + id + '/people', { method: 'POST' });
+  if (out.error) alert(out.error);
+  show(id);
 }
 
 $('f').onsubmit = async (e) => {

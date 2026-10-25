@@ -92,3 +92,27 @@ test('a timeout of 0 tells Pi to wait for the answer', async () => {
     pi.setRunnerForTests(null);
   }
 });
+
+test('toHit keeps the profile name and dates every job, current or former', async () => {
+  const { toHit } = await import('./companydive-people.ts');
+  const hit = toHit({
+    url: 'https://my.linkedin.com/in/x', title: 'X - HR at Eternalgy', highlights: ['HR at Eternalgy Sdn Bhd'],
+    entities: [{ type: 'person', properties: { name: 'Yeap Elise', location: 'Johor', workHistory: [
+      { title: 'Human Resources', company: { name: 'Eternalgy Sdn Bhd' }, dates: { from: '2025-01' } },
+      { title: 'Clerk', company: { name: 'Old Co' }, dates: { from: '2020-01', to: '2024-12' } },
+    ] } }],
+  });
+  assert.equal(hit.name, 'Yeap Elise');
+  assert.deepEqual(hit.jobs, ['Human Resources at Eternalgy Sdn Bhd (2025-01 to now)', 'Clerk at Old Co (2020-01 to 2024-12)']);
+  assert.match(hit.text, /HR at Eternalgy/);
+});
+
+test('fallbackQueries searches people under the legal name and every alias', async () => {
+  const { fallbackQueries } = await import('./companydive-people.ts');
+  const qs = fallbackQueries({
+    id: 1, company: 'Eternalgy Sdn Bhd', country: 'Malaysia',
+    result: { identity: { legal_name: 'ETERNALGY SDN. BHD.', aliases: ['Eternalgy', '恒浩能源'], industry: 'solar PV EPC' } },
+  } as any);
+  assert.deepEqual(qs.filter((q) => q.kind === 'people').length, 3);
+  assert.ok(qs.some((q) => q.kind === 'web' && /director/.test(q.query)));
+});

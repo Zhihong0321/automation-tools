@@ -124,7 +124,7 @@ export async function budgetedCall(
 export type LlmUse = { step: string; engine: string; ms: number; promptChars: number; answerChars: number };
 
 /** Where a stage that could not finish says so; the dive carries on. */
-type Warn = (msg: string) => void | Promise<void>;
+export type Warn = (msg: string) => void | Promise<void>;
 
 /**
  * One streamed chat call to the deepseek model contact research already uses
@@ -182,7 +182,7 @@ function engines(): Engine[] {
  * both (about four minutes in all). If every round fails the stage gets the
  * error and falls back; the dive itself does not end here.
  */
-async function ask(prompt: string, opts: { step: string; uses?: LlmUse[] }): Promise<string> {
+export async function ask(prompt: string, opts: { step: string; uses?: LlmUse[] }): Promise<string> {
   const all = engines();
   if (!all.length) throw new Error(`LLM failed at ${opts.step}: neither CONTACT_LLM_* (deepseek) nor MINIMAX_API_KEY (Pi) is set`);
   const waits = [5_000, 15_000, 30_000, 60_000, 120_000];
@@ -237,7 +237,7 @@ export function parseJson<T>(text: string): T {
  * Ask for JSON, re-asking with the parse error up to twice. A stage that still
  * gets no usable JSON takes `fallback`, logs a warning and the dive goes on.
  */
-async function askJson<T>(prompt: string, opts: { step: string; uses?: LlmUse[]; warn: Warn }, fallback: T): Promise<T> {
+export async function askJson<T>(prompt: string, opts: { step: string; uses?: LlmUse[]; warn: Warn }, fallback: T): Promise<T> {
   let ask_ = prompt;
   let lastErr = '';
   for (let round = 0; round < 3; round++) {

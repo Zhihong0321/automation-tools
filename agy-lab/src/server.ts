@@ -25,6 +25,7 @@ import * as contactWorker from './contact-worker.ts';
 import * as mapsWorker from './maps-worker.ts';
 import * as contactKeys from './contact-keys.ts';
 import * as companyDive from './companydive.ts';
+import * as companyDivePeople from './companydive-people.ts';
 import { page as companyDivePage } from './companydive-page.ts';
 import { page } from './ui.ts';
 import { page as docsPage } from './docs.ts';
@@ -315,6 +316,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   }
 
   // ---- company deep dive (Brave + at most 15 Tavily calls + deepseek) ------
+  // /:id/people first: the dive's own handler would answer it 404.
+  if (await companyDivePeople.handle(req, res, url, { json })) return;
   if (await companyDive.handle(req, res, url, { json, readJson })) return;
 
   if (p === '/api/contact-keys' || p === '/api/gemini-contact-keys' || p === '/api/contact-stats') {
@@ -425,7 +428,9 @@ server.listen(PORT, '0.0.0.0', () => {
   // Age 0 at boot: this process owns no run yet, so anything non-terminal was
   // stranded by the restart that just happened.
   reapAbandonedRuns(0);
-  void companyDive.failInterrupted().catch((err: Error) => console.warn('could not close interrupted company dives: ' + err.message));
+  void companyDive.failInterrupted()
+    .then(() => companyDivePeople.failInterrupted())
+    .catch((err: Error) => console.warn('could not close interrupted company dives: ' + err.message));
   // Every lead, so a rule changed in this deploy reaches the ones already saved.
   if (reportdb.configured()) {
     void reportdb.applyLeadBlacklist({ all: true })
