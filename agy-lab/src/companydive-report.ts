@@ -275,7 +275,14 @@ const SCRIPT = String.raw`
     var id = d.identity || {};
     var stats = d.stats || {};
     var peopleCount = d.people && d.people.people ? d.people.people.length : null;
-    var reg = (id.registration_numbers || []).slice(0, 2).join(' / ');
+    // "1523087A" and "1523087-A" are one number written two ways.
+    var regSeen = {};
+    var reg = (id.registration_numbers || []).filter(function (n) {
+      var k = String(n).replace(/[^a-z0-9]/gi, '').toLowerCase();
+      if (regSeen[k]) return false;
+      regSeen[k] = 1;
+      return true;
+    }).slice(0, 2).join(' / ');
     var sub = [id.legal_name && id.legal_name !== d.company ? id.legal_name : '', reg ? 'Reg. ' + reg : '', d.country].filter(Boolean).join(' · ');
     var pills = [
       '<li>Generated <b>' + esc(fmtDate(d.finished_at || d.created_at)) + '</b></li>',
