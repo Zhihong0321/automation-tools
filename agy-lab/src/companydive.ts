@@ -326,7 +326,7 @@ SOURCE MATERIAL (each block starts with [id]):
 ${material}
 
 Tasks:
-1. Extract every useful fact about the target company. Each fact cites the [id]s it came from. Do not use outside knowledge. Ignore material about other companies with similar names.
+1. Extract the useful facts about the target company: at most 60, each one sentence under 200 characters, merging duplicates. Each fact cites the [id]s it came from. Do not use outside knowledge. Ignore material about other companies with similar names.
 2. Note contradictions between sources, such as different addresses, founding dates or headcounts.
 3. List what an investor, partner or competitor would still want to know.
 4. Plan up to ${maxSearches} web searches that would close the biggest gaps. Make each query specific: use the exact name, aliases or registration number. Set include_domains when one site is the obvious place (e.g. linkedin.com for people, a government registry, a forum for reviews). Use topic "news" with time_range "year" for recent news. Do not repeat what the material already answers.
@@ -351,7 +351,7 @@ NEW MATERIAL from gap-filling searches (each block starts with [id]):
 ${material}
 
 Tasks:
-1. Extract new facts from the NEW MATERIAL only. Cite [id]s. Skip anything already in the facts list. Ignore other companies with similar names.
+1. Extract new facts from the NEW MATERIAL only: at most 30, each one sentence under 200 characters. Cite [id]s. Skip anything already in the facts list. Ignore other companies with similar names.
 2. Say which gaps are still open.
 3. ${maxCalls > 0 ? `You may spend up to ${maxCalls} more calls, but only on gaps worth it. A call is either a search ({"kind":"search","query":"","topic":"general|news","include_domains":[],"time_range":null}) or a page read ({"kind":"extract","ids":[up to 20 ids]}). These ids have not been read yet and can be extracted: ${readable || '(none)'}. Return [] if nothing is worth it.` : 'No calls are left. Return "next": [].'}
 
@@ -365,7 +365,7 @@ function factsPrompt(company: string, facts: Fact[], material: string): string {
 NEW MATERIAL (each block starts with [id]):
 ${material}
 
-Extract new facts about "${company}" from the NEW MATERIAL only. Cite [id]s and skip anything already known.
+Extract new facts about "${company}" from the NEW MATERIAL only (at most 20, each under 200 characters). Cite [id]s and skip anything already known.
 Answer with ONLY JSON: {"facts": [{"topic": "", "fact": "", "sources": [ids], "confidence": "high|medium|low"}], "gaps_closed": [""]}`;
 }
 
@@ -400,14 +400,26 @@ Do not add a source list; it is shown separately.`;
 
 // ---------------------------------------------------------------- the dive
 
+/** What a dive has spent so far; a failed dive's error carries it as `stats`. */
+export type DiveStats = { tavily: TavilyCall[]; llmCalls: number; braveCalls: number };
+
 export async function run(company: string, country: string, progress: Progress): Promise<{ result: DiveResult; dossier: string }> {
+  const budget = new Budget();
+  const uses: LlmUse[] = [];
+  const counts = { brave: 0 };
+  try {
+    return await dive(company, country, progress, budget, uses, counts);
+  } catch (err) {
+    const stats: DiveStats = { tavily: budget.calls, llmCalls: uses.length, braveCalls: counts.brave };
+    throw Object.assign(err as Error, { stats });
+  }
+}
+
+async function dive(company: string, country: string, progress: Progress, budget: Budget, uses: LlmUse[], counts: { brave: number }): Promise<{ result: DiveResult; dossier: string }> {
   const short = shortName(company);
   const cc = COUNTRY_CODES[country.trim().toLowerCase()];
   const tavilyCountry = cc ? country.trim().toLowerCase() : undefined;
   const ledger = new Ledger();
-  const budget = new Budget();
-  const uses: LlmUse[] = [];
-  let braveCalls = 0;
 
   const say = async (stage: string, msg: string) => { await progress(stage, msg); };
   const T = (path: 'search' | 'extract' | 'map', body: Record<string, unknown>, label: string) =>
@@ -449,7 +461,7 @@ export async function run(company: string, country: string, progress: Progress):
   for (const [label, query, kind] of braveQueries) {
     try {
       const hits = await brave.search(query, { country: cc, kind });
-      braveCalls++;
+      counts.brave++;
       for (const h of hits) ledger.add(h.url, h.title, h.snippets, `brave:${label}`);
       await say('discover', `Brave ${label}: ${hits.length} results`);
     } catch (err) {
@@ -489,18 +501,25 @@ export async function run(company: string, country: string, progress: Progress):
   // 3. read ---------------------------------------------------------------
   let ownPages: string[] = [];
   if (mapDomain) {
+    let mapped: string[] = [];
     try {
       const out = await T('map', { url: 'https://' + mapDomain, max_depth: 2, limit: 50 }, 'T2 site map');
-      const mapped = [...new Set((out.results ?? []).map(String))] as string[];
-      const unread = mapped.filter((u) => (ledger.find(u)?.contentKind ?? 'none') === 'none');
-      await say('read', `Tavily T2: ${mapped.length} pages on ${mapDomain}, ${unread.length} not read yet`);
-      if (unread.length) {
-        const pick = await askJson<{ urls?: string[] }>(pickPagesPrompt(company, identity, unread.slice(0, 150), 15), { step: 'pick-pages', uses });
-        const allowed = new Set(unread.map(urlKey));
-        ownPages = (pick.urls ?? []).filter((u) => allowed.has(urlKey(u))).slice(0, 20);
-      }
+      mapped = [...new Set((out.results ?? []).map(String))] as string[];
     } catch (err) {
       await say('read', `Tavily T2 failed: ${(err as Error).message}`);
+    }
+    // /map sometimes answers with no pages for a site it mapped fine an hour
+    // earlier. The official pages discovery already found are the fallback.
+    if (!mapped.length) {
+      const official = new Set([mapDomain, ...(identity.official_domains ?? []).map((d) => hostOf('https://' + String(d).replace(/^https?:\/\//, '')))]);
+      mapped = ledger.sources.filter((s) => official.has(hostOf(s.url))).map((s) => s.url);
+    }
+    const unread = mapped.filter((u) => (ledger.find(u)?.contentKind ?? 'none') === 'none');
+    await say('read', `Tavily T2: ${mapped.length} official pages, ${unread.length} not read yet`);
+    if (unread.length) {
+      const pick = await askJson<{ urls?: string[] }>(pickPagesPrompt(company, identity, unread.slice(0, 150), 15), { step: 'pick-pages', uses });
+      const allowed = new Set(unread.map(urlKey));
+      ownPages = (pick.urls ?? []).filter((u) => allowed.has(urlKey(u))).slice(0, 20);
     }
   }
   for (const u of ownPages) relevant.add(ledger.add(u, '', [], 'tavily:T2').id);
@@ -519,7 +538,7 @@ export async function run(company: string, country: string, progress: Progress):
   const maxSearches = Math.max(0, Math.min(8, budget.left - 4));
   await say('analyse', `LLM analysis of ${relevantSources().length} sources`);
   const ana = await askJson<{ facts?: unknown; contradictions?: string[]; gaps?: string[]; searches?: Array<Record<string, any>> }>(
-    analysePrompt(company, country, identity, gaps, corpus(relevantSources(), 120_000), maxSearches), { step: 'analyse', uses, maxTokens: 16_000 });
+    analysePrompt(company, country, identity, gaps, corpus(relevantSources(), 120_000), maxSearches), { step: 'analyse', uses, maxTokens: 48_000 });
   let facts = cleanFacts(ana.facts, ledger);
   const contradictions = Array.isArray(ana.contradictions) ? ana.contradictions.map(String) : [];
   gaps = Array.isArray(ana.gaps) ? ana.gaps.map(String) : gaps;
@@ -559,7 +578,7 @@ export async function run(company: string, country: string, progress: Progress):
   const readable = relevantSources().filter((s) => s.contentKind === 'none' && !WALLED.test(hostOf(s.url)) && !s.failed).map((s) => s.id).join(', ');
   await say('reflect', `LLM reflection on ${fresh.length} new sources; ${reserve} reserve calls available`);
   const ref = await askJson<{ facts?: unknown; gaps?: string[]; next?: Array<Record<string, any>> }>(
-    reflectPrompt(company, identity, facts, gaps, corpus(fresh, 80_000) + '\n' + summaries.join('\n'), reserve, readable), { step: 'reflect', uses, maxTokens: 12_000 });
+    reflectPrompt(company, identity, facts, gaps, corpus(fresh, 80_000) + '\n' + summaries.join('\n'), reserve, readable), { step: 'reflect', uses, maxTokens: 32_000 });
   facts = facts.concat(cleanFacts(ref.facts, ledger));
   gaps = Array.isArray(ref.gaps) ? ref.gaps.map(String) : gaps;
   const next = (ref.next ?? []).slice(0, reserve);
@@ -586,7 +605,7 @@ export async function run(company: string, country: string, progress: Progress):
     const reserveNew = ledger.sources.filter((s) => !beforeReserve.has(`${s.id}:${s.contentKind}`) && s.contentKind !== 'none');
     for (const s of reserveNew) relevant.add(s.id);
     if (reserveNew.length) {
-      const extra = await askJson<{ facts?: unknown }>(factsPrompt(company, facts, corpus(reserveNew, 80_000)), { step: 'reserve-facts', uses, maxTokens: 8_000 });
+      const extra = await askJson<{ facts?: unknown }>(factsPrompt(company, facts, corpus(reserveNew, 80_000)), { step: 'reserve-facts', uses, maxTokens: 16_000 });
       facts = facts.concat(cleanFacts(extra.facts, ledger));
     }
   }
@@ -595,7 +614,7 @@ export async function run(company: string, country: string, progress: Progress):
   const cited = new Set(facts.flatMap((f) => f.sources));
   const sourceIndex = ledger.sources.filter((s) => cited.has(s.id)).map((s) => `[${s.id}] ${s.title || hostOf(s.url)} — ${s.url}`).join('\n');
   await say('write', `Writing the dossier from ${facts.length} facts and ${cited.size} cited sources`);
-  const dossier = await ask(dossierPrompt(company, country, identity, facts, contradictions, gaps, sourceIndex), { step: 'dossier', uses, maxTokens: 16_000 });
+  const dossier = await ask(dossierPrompt(company, country, identity, facts, contradictions, gaps, sourceIndex), { step: 'dossier', uses, maxTokens: 48_000 });
 
   const result: DiveResult = {
     identity,
@@ -605,9 +624,9 @@ export async function run(company: string, country: string, progress: Progress):
     sources: ledger.sources.map(({ content, snippets, ...rest }) => ({ ...rest, relevant: relevant.has(rest.id) })),
     tavily: budget.calls,
     llm: uses,
-    braveCalls,
+    braveCalls: counts.brave,
   };
-  await say('done', `Tavily ${budget.used}/${budget.max} calls, ${budget.credits} credits; Brave ${braveCalls}; LLM ${uses.length} calls`);
+  await say('done', `Tavily ${budget.used}/${budget.max} calls, ${budget.credits} credits; Brave ${counts.brave}; LLM ${uses.length} calls`);
   return { result, dossier: stripThinking(dossier).replace(/^```(?:markdown)?\s*|\s*```$/g, '') };
 }
 
@@ -683,9 +702,18 @@ async function execute(id: number): Promise<void> {
     });
   } catch (err) {
     const message = (err as Error).message;
+    const stats = (err as { stats?: DiveStats }).stats;
     log.push({ at: new Date().toISOString(), stage: 'failed', msg: message });
     console.error(`[company-dive ${id}] failed`, err);
-    await updateRow(id, { status: 'failed', error: message, log, finished_at: new Date().toISOString() });
+    await updateRow(id, {
+      status: 'failed', error: message, log, finished_at: new Date().toISOString(),
+      ...(stats ? {
+        tavily_calls: stats.tavily.length,
+        tavily_credits: stats.tavily.reduce((n, c) => n + c.credits, 0),
+        brave_calls: stats.braveCalls,
+        llm_calls: stats.llmCalls,
+      } : {}),
+    });
   }
 }
 
