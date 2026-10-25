@@ -15,6 +15,7 @@ export const document = {
     { name: 'Company research', description: 'Enrich one persisted company through the four-round research workflow.' },
     { name: 'Person research', description: 'Create a public-professional VIP brief from a validated person in a completed company report.' },
     { name: 'Published reports', description: 'Read final public output using an opaque report identifier.' },
+    { name: 'Company dive', description: 'Deep dive one company by name: a cited dossier plus linked people, behind a public report link that shows live progress.' },
     { name: 'Telemarketing', description: 'Telemarketer agent lead distribution, disposition updates, and notes authenticated by Telemarketer UID.' },
   ],
   security: [{ bearerAuth: [] }],
@@ -296,6 +297,100 @@ export const document = {
         },
       },
     },
+    '/api/company-dive': {
+      post: {
+        operationId: 'createCompanyDive',
+        tags: ['Company dive'],
+        summary: 'Start a company deep dive and get its public report link at once',
+        description: 'Brave discovery, at most 15 Tavily calls, deepseek analysis, then (unless people is false) an Exa search for people linked to the company. Takes 5 to 10 minutes. report_url works immediately: it shows live progress, then the finished report. Reports run one at a time; a later request waits its turn.',
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/CompanyDiveRequest' }, examples: { eternalgy: { value: { company: 'Eternalgy Sdn Bhd', country: 'Malaysia' } } } } } },
+        responses: {
+          '202': { description: 'Dive queued; report link ready', content: { 'application/json': { schema: { $ref: '#/components/schemas/CompanyDiveAccepted' } } } },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '503': { description: 'No report database, or BRAVE_API_KEYS is not set', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+        },
+      },
+      get: {
+        operationId: 'listCompanyDives',
+        tags: ['Company dive'],
+        summary: 'The 50 newest company dives',
+        responses: {
+          '200': { description: 'Recent dives, newest first', content: { 'application/json': { schema: { $ref: '#/components/schemas/CompanyDiveList' } } } },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '503': { $ref: '#/components/responses/Unavailable' },
+        },
+      },
+    },
+    '/api/company-dive/{diveId}': {
+      get: {
+        operationId: 'getCompanyDive',
+        tags: ['Company dive'],
+        summary: 'One dive in full, including internal call details',
+        description: 'Everything /d/{publicId}/data shows, plus every source found, every fact, each Tavily call with its credits and each LLM call with its model and time.',
+        parameters: [{ $ref: '#/components/parameters/DiveId' }],
+        responses: {
+          '200': { description: 'The dive record', content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '404': { $ref: '#/components/responses/NotFound' },
+        },
+      },
+    },
+    '/api/company-dive/{diveId}/people': {
+      post: {
+        operationId: 'runCompanyDivePeople',
+        tags: ['Company dive'],
+        summary: 'Run the Exa people step again on a finished dive',
+        description: 'Reads the saved research and does not redo it. At most 20 Exa calls. The result lands in the report people section.',
+        parameters: [{ $ref: '#/components/parameters/DiveId' }],
+        responses: {
+          '202': { description: 'People step started', content: { 'application/json': { schema: { type: 'object', properties: { id: { type: 'integer' }, people: { type: 'string', enum: ['running'] }, view_url: { type: 'string' } } } } } },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '409': { description: 'The dive has no saved research yet, or the people step is already running', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+        },
+      },
+      get: {
+        operationId: 'getCompanyDivePeople',
+        tags: ['Company dive'],
+        summary: 'The people step result in full',
+        description: 'Includes the rejected lookalikes and every Exa query with its cost.',
+        parameters: [{ $ref: '#/components/parameters/DiveId' }],
+        responses: {
+          '200': { description: 'People step result, or null if it never ran', content: { 'application/json': { schema: { type: 'object', properties: { people: { oneOf: [{ $ref: '#/components/schemas/CompanyDivePeople' }, { type: 'null' }] } } } } } },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '404': { $ref: '#/components/responses/NotFound' },
+        },
+      },
+    },
+    '/d/{publicId}/data': {
+      get: {
+        security: [],
+        operationId: 'getCompanyDivePublic',
+        tags: ['Company dive'],
+        summary: 'Public status and report JSON for one dive',
+        description: 'No bearer token: the opaque id is the permission. Poll every 5 to 10 seconds until status is done, partial or failed. No keys or internal call details are exposed.',
+        parameters: [{ $ref: '#/components/parameters/DivePublicId' }],
+        responses: {
+          '200': { description: 'Current state of the dive', content: { 'application/json': { schema: { $ref: '#/components/schemas/CompanyDivePublic' } } } },
+          '404': { $ref: '#/components/responses/NotFound' },
+        },
+      },
+    },
+    '/d/{publicId}': {
+      get: {
+        security: [],
+        operationId: 'viewCompanyDiveReport',
+        tags: ['Company dive'],
+        summary: 'The public report page',
+        description: 'No bearer token. Shows the stages and live log while the dive runs, then renders the report in place. Mobile friendly, light and dark, printable.',
+        parameters: [{ $ref: '#/components/parameters/DivePublicId' }],
+        responses: {
+          '200': { description: 'HTML report page', content: { 'text/html': { schema: { type: 'string' } } } },
+          '404': { description: 'Report not found page', content: { 'text/html': { schema: { type: 'string' } } } },
+        },
+      },
+    },
     '/r/{reportId}': {
       get: {
         security: [],
@@ -433,6 +528,8 @@ export const document = {
       bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'LAB_TOKEN', description: 'Send the EE Auto service token. Never place it in a public report URL.' },
     },
     parameters: {
+      DiveId: { name: 'diveId', in: 'path', required: true, description: 'Numeric dive id returned as id', schema: { type: 'integer' }, example: 4 },
+      DivePublicId: { name: 'publicId', in: 'path', required: true, description: 'Opaque 20-character id returned as public_id', schema: { type: 'string', pattern: '^[A-Za-z0-9_-]{20}$' }, example: 'sf9S9f84Sfi3cx0KGtBW' },
       ReportId: { name: 'reportId', in: 'path', required: true, description: 'Opaque 20-character id returned as report.id', schema: { type: 'string', pattern: '^[A-Za-z0-9_-]{20}$' }, example: 'AbCdEfGhIjKlMnOpQrSt' },
     },
     responses: {
@@ -637,6 +734,90 @@ export const document = {
       PublicCompanyReportResponse: { type: 'object', required: ['report', 'final'], properties: { report: { type: 'object', additionalProperties: true }, final: { oneOf: [{ $ref: '#/components/schemas/FinalCompanyReport' }, { type: 'null' }] }, final_cn: { oneOf: [{ $ref: '#/components/schemas/FinalCompanyReport' }, { type: 'null' }] }, translation: { type: ['object', 'null'], additionalProperties: true } } },
       PublicPersonReportResponse: { type: 'object', required: ['report', 'final'], properties: { report: { type: 'object', additionalProperties: true }, final: { oneOf: [{ $ref: '#/components/schemas/FinalPersonReport' }, { type: 'null' }] } } },
       PublicReportResponse: { oneOf: [{ $ref: '#/components/schemas/PublicSearchReportResponse' }, { $ref: '#/components/schemas/PublicCompanyReportResponse' }, { $ref: '#/components/schemas/PublicPersonReportResponse' }] },
+      CompanyDiveRequest: {
+        type: 'object',
+        required: ['company'],
+        properties: {
+          company: { type: 'string', minLength: 2, maxLength: 200, description: 'Company name. name is accepted as an alias.' },
+          country: { type: 'string', default: 'Malaysia' },
+          people: { type: 'boolean', default: true, description: 'Run the Exa people step after the research.' },
+        },
+      },
+      CompanyDiveAccepted: {
+        type: 'object',
+        properties: {
+          id: { type: 'integer' },
+          public_id: { type: 'string' },
+          status: { type: 'string', enum: ['queued'] },
+          company: { type: 'string' },
+          country: { type: 'string' },
+          people: { type: 'boolean' },
+          queued_behind_another: { type: 'boolean', description: 'True when another dive holds the one research slot.' },
+          report_url: { type: 'string', format: 'uri', description: 'Public link: live progress now, the report when done.' },
+          status_url: { type: 'string', format: 'uri', description: 'Public JSON to poll.' },
+          api_url: { type: 'string', format: 'uri' },
+          expected_minutes: { type: 'string', example: '5-10' },
+        },
+      },
+      CompanyDiveStatus: { type: 'string', enum: ['queued', 'running', 'done', 'partial', 'failed'], description: 'partial = finished, but a step used a fallback.' },
+      CompanyDiveList: {
+        type: 'object',
+        properties: {
+          dives: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'integer' }, public_id: { type: 'string' }, company: { type: 'string' }, country: { type: 'string' },
+                status: { $ref: '#/components/schemas/CompanyDiveStatus' }, stage: { type: 'string' },
+                tavily_calls: { type: 'integer' }, tavily_credits: { type: 'integer' }, brave_calls: { type: 'integer' }, llm_calls: { type: 'integer' },
+                created_at: { type: 'string', format: 'date-time' }, finished_at: { type: ['string', 'null'], format: 'date-time' },
+                report_url: { type: 'string', format: 'uri' }, status_url: { type: 'string', format: 'uri' }, api_url: { type: 'string', format: 'uri' },
+              },
+            },
+          },
+        },
+      },
+      CompanyDivePerson: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          role: { type: 'string' },
+          relation: { type: 'string', enum: ['founder', 'director', 'shareholder', 'management', 'employee', 'agent', 'partner', 'former', 'other'] },
+          current: { type: ['boolean', 'null'] },
+          confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+          evidence: { type: 'array', items: { type: 'object', properties: { url: { type: 'string' }, quote: { type: 'string' } } } },
+          notes: { type: 'string' },
+        },
+      },
+      CompanyDivePeople: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', enum: ['running', 'done', 'partial', 'failed'] },
+          people: { type: 'array', items: { $ref: '#/components/schemas/CompanyDivePerson' } },
+          rejected: { description: 'Public view: a count. Full record: [{name, reason}].' },
+          log: { type: 'array', items: { type: 'object', properties: { at: { type: 'string' }, msg: { type: 'string' } } } },
+        },
+        additionalProperties: true,
+      },
+      CompanyDivePublic: {
+        type: 'object',
+        properties: {
+          company: { type: 'string' },
+          country: { type: 'string' },
+          status: { $ref: '#/components/schemas/CompanyDiveStatus' },
+          stage: { type: 'string', enum: ['', 'discover', 'triage', 'read', 'analyse', 'fill', 'reflect', 'write', 'people', 'done'] },
+          error: { type: ['string', 'null'] },
+          created_at: { type: 'string', format: 'date-time' },
+          finished_at: { type: ['string', 'null'], format: 'date-time' },
+          log: { type: 'array', items: { type: 'object', properties: { at: { type: 'string' }, stage: { type: 'string' }, msg: { type: 'string' } } } },
+          dossier: { type: ['string', 'null'], description: 'Markdown with citations like [12]; present from the people stage on.' },
+          identity: { type: ['object', 'null'], additionalProperties: true },
+          sources: { type: 'array', items: { type: 'object', properties: { id: { type: 'integer' }, title: { type: 'string' }, url: { type: 'string' } } } },
+          stats: { type: ['object', 'null'], additionalProperties: { type: 'integer' } },
+          people: { oneOf: [{ $ref: '#/components/schemas/CompanyDivePeople' }, { type: 'null' }] },
+        },
+      },
       Error: { type: 'object', required: ['error'], properties: { error: { type: 'string' }, companyId: { type: 'string' } } },
     },
   },

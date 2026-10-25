@@ -305,6 +305,40 @@ report-library routes; it cannot access the operator shell or model/session APIs
 
 ---
 
+## Company dive — one company by name, behind a live report link
+
+One POST starts a deep dive on a company by name and returns a public link at
+once. The report takes 5–10 minutes. The link shows the stages and the live log
+while it runs, then the finished report in place. Brave finds the URLs
+(8 searches), Tavily reads the pages (at most 15 calls), deepseek does every
+thinking step (Pi on MiniMax if deepseek fails), and Exa finds the people linked
+to the company (at most 20 calls). `LAB_TOKEN` or `PORTAL_TOKEN`.
+
+```bash
+curl -s https://ee-auto.up.railway.app/api/company-dive \
+  -H "Authorization: Bearer $EE_AUTO_TOKEN" -H 'content-type: application/json' \
+  -d '{"company":"Eternalgy Sdn Bhd","country":"Malaysia"}'
+# 202 {"id":4,"public_id":"sf9S9f84Sfi3cx0KGtBW","status":"queued",
+#      "report_url":"https://ee-auto.up.railway.app/d/sf9S9f84Sfi3cx0KGtBW",
+#      "status_url":"https://ee-auto.up.railway.app/d/sf9S9f84Sfi3cx0KGtBW/data", ...}
+```
+
+| Route | Auth | What |
+| --- | --- | --- |
+| `POST /api/company-dive` | Bearer | `{company, country?="Malaysia", people?=true}` → 202 with `report_url`, `status_url`, `api_url` |
+| `GET /d/:publicId` | none | The report page: live progress, then the report. Mobile, light/dark, printable |
+| `GET /d/:publicId/data` | none | `status` (`queued`/`running`/`done`/`partial`/`failed`), `stage`, `log`, `dossier` (Markdown, `[n]` citations), `identity`, `sources`, `people`, `stats`. Poll every 5–10 s |
+| `GET /api/company-dive` | Bearer | The 50 newest dives with their links |
+| `GET /api/company-dive/:id` | Bearer | The full record, including every Tavily and LLM call |
+| `POST /api/company-dive/:id/people` | Bearer | Rerun the Exa people step on saved research (409 if none yet, or already running) |
+
+Reports run one at a time. No step has a timeout; a step with no usable answer
+falls back and the report ends `partial`. A redeploy stops a running dive: kept if
+the dossier was already written, `failed` before that. About USD 0.80 a report at
+list prices. Code: `agy-lab/src/companydive*.ts`.
+
+---
+
 ## Ads market research — `ads-market`
 
 `ads-research` answers *what is this company running?*. `ads-market` answers *what is

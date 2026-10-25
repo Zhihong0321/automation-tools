@@ -164,6 +164,7 @@ export function body(): string {
     <span class="nav-label">On this page</span>
     <a href="#start">Start here</a>
     <a href="#intel">Pipeline reference</a>
+    <a href="#company-dive">Company dive</a>
     <a href="#telemarketing">Telemarketer API (Auth by UID)</a>
     <a href="#engines">The three engines</a>
     <span class="nav-label">Gateway</span>
@@ -442,6 +443,74 @@ const companyId = search.data.companies[0].id;</code></pre>
   <p>Poll every 5–10 seconds; do not retry the POST just because work is still running.
   A repeated POST creates a separate report. Keep the returned <code>report.id</code> and
   <code>api_url</code> in your own request record.</p></div>
+</section>
+
+<section id="company-dive">
+  <h2>Company dive</h2>
+  <p>Deep dive one company by name. One POST returns a public report link at once; the
+  report takes 5&ndash;10 minutes. Brave finds the URLs (8 searches), Tavily reads the pages
+  (at most 15 calls), deepseek does every thinking step (Pi on MiniMax if deepseek fails),
+  and Exa finds the people linked to the company (at most 20 calls). The result is a cited
+  dossier, people cards with evidence links, and a numbered source list. Accepts
+  <code>LAB_TOKEN</code> or <code>PORTAL_TOKEN</code>.</p>
+
+  <h3>1. Start a report</h3>
+  <div class="ep"><span class="m post">POST</span><code class="path">/api/company-dive</code><span class="tag">Bearer &middot; returns 202</span></div>
+  <div class="tbl"><table><thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Meaning</th></tr></thead><tbody>
+    <tr><td><code>company</code></td><td>string, 2&ndash;200 chars</td><td><span class="req">yes</span></td><td>The company's name. <code>name</code> is accepted as an alias.</td></tr>
+    <tr><td><code>country</code></td><td>string</td><td>no</td><td>Defaults to <code>Malaysia</code>. Sets the search country for Brave and Tavily.</td></tr>
+    <tr><td><code>people</code></td><td>boolean</td><td>no</td><td>Defaults to <code>true</code>: run the Exa people step after the research.</td></tr>
+  </tbody></table></div>
+<pre><code>curl -s https://ee-auto.up.railway.app/api/company-dive \
+  -H "Authorization: Bearer $EE_AUTO_TOKEN" -H 'content-type: application/json' \
+  -d '{"company":"Eternalgy Sdn Bhd","country":"Malaysia"}'
+
+{
+  "id": 4, "public_id": "sf9S9f84Sfi3cx0KGtBW", "status": "queued",
+  "company": "Eternalgy Sdn Bhd", "country": "Malaysia", "people": true,
+  "queued_behind_another": false,
+  "report_url": "https://ee-auto.up.railway.app/d/sf9S9f84Sfi3cx0KGtBW",
+  "status_url": "https://ee-auto.up.railway.app/d/sf9S9f84Sfi3cx0KGtBW/data",
+  "api_url": "https://ee-auto.up.railway.app/api/company-dive/4",
+  "expected_minutes": "5-10"
+}</code></pre>
+  <p>Hand <code>report_url</code> to people: it works from the first second. Reports run one
+  at a time; <code>queued_behind_another: true</code> means this one waits its turn.</p>
+
+  <h3>2. The report link</h3>
+  <div class="ep"><span class="m get">GET</span><code class="path">/d/:publicId</code><span class="tag">no token &middot; HTML</span></div>
+  <p>While the dive runs, the page shows the stages, a progress bar and the live log, and
+  refreshes itself every 4 seconds. Once the dossier is written it renders the report in
+  place; the people section fills in when that step ends. Mobile friendly, light and dark,
+  with Print / PDF. The 20-character id is the permission, as for <code>/r/:id</code>.</p>
+
+  <h3>3. Poll the status as JSON</h3>
+  <div class="ep"><span class="m get">GET</span><code class="path">/d/:publicId/data</code><span class="tag">no token &middot; returns 200</span></div>
+  <div class="tbl"><table><thead><tr><th>Field</th><th>Meaning</th></tr></thead><tbody>
+    <tr><td><code>status</code></td><td><code>queued</code> &rarr; <code>running</code> &rarr; <code>done</code>, <code>partial</code> (finished, a step used a fallback) or <code>failed</code></td></tr>
+    <tr><td><code>stage</code></td><td><code>discover</code>, <code>triage</code>, <code>read</code>, <code>analyse</code>, <code>fill</code>, <code>reflect</code>, <code>write</code>, <code>people</code>, then <code>done</code></td></tr>
+    <tr><td><code>log</code></td><td><code>[{at, stage, msg}]</code>, oldest first</td></tr>
+    <tr><td><code>dossier</code></td><td>Markdown with citations like <code>[12]</code>; present from the <code>people</code> stage on</td></tr>
+    <tr><td><code>identity</code></td><td>Legal name, aliases, registration numbers, address, official domains, industry</td></tr>
+    <tr><td><code>sources</code></td><td><code>[{id, title, url}]</code>: the cited sources, numbered as in the dossier</td></tr>
+    <tr><td><code>people</code></td><td><code>{status, people:[{name, role, relation, current, confidence, evidence:[{url, quote}], notes}], rejected, exa_calls, log}</code></td></tr>
+    <tr><td><code>stats</code></td><td>Tavily, Brave and LLM call counts; facts found; sources found and cited</td></tr>
+  </tbody></table></div>
+
+  <h3>4. Operator routes</h3>
+  <div class="ep"><span class="m get">GET</span><code class="path">/api/company-dive</code><span class="tag">Bearer &middot; 50 newest, with their links</span></div>
+  <div class="ep"><span class="m get">GET</span><code class="path">/api/company-dive/:id</code><span class="tag">Bearer &middot; full record incl. call details</span></div>
+  <div class="ep"><span class="m post">POST</span><code class="path">/api/company-dive/:id/people</code><span class="tag">Bearer &middot; rerun people step &middot; 202 / 409</span></div>
+  <div class="ep"><span class="m get">GET</span><code class="path">/api/company-dive/:id/people</code><span class="tag">Bearer &middot; people step in full</span></div>
+  <p>The console page <a href="/company-dive">/company-dive</a> starts and watches dives too.</p>
+
+  <div class="call warn"><span class="h">Operational expectation</span>
+  <p>Poll <code>/d/:publicId/data</code> every 5&ndash;10 seconds; a repeated POST starts a
+  second report. No step has a timeout: a step without a usable answer falls back and the
+  report ends <code>partial</code>. A redeploy of ee-auto stops a running dive: after the
+  dossier is written it is kept (rerun the people step), before that the dive ends
+  <code>failed</code>. One report costs about USD 0.80 at list prices (Tavily 37 credits,
+  Exa about USD 0.34, Brave 8 searches, deepseek about 220k tokens in).</p></div>
 </section>
 
 <section id="telemarketing">

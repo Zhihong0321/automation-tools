@@ -113,3 +113,17 @@ test('the re-run workflow is documented for API consumers and the guide page', (
   assert.match(retry.description ?? '', /compare-and-swap/);
   assert.match(retry.description ?? '', /never an overwrite/);
 });
+
+test('company dive is on the served docs and in the OpenAPI contract', () => {
+  const html = page();
+  assert.match(html, /href="#company-dive"/);
+  assert.match(html, /POST<\/span><code class="path">\/api\/company-dive<\/code>/);
+  assert.match(html, /\/d\/:publicId\/data/);
+  assert.ok(document.paths['/api/company-dive'].post);
+  assert.ok(document.paths['/api/company-dive'].get);
+  assert.ok(document.paths['/api/company-dive/{diveId}'].get);
+  assert.ok(document.paths['/api/company-dive/{diveId}/people'].post);
+  assert.deepEqual(document.paths['/d/{publicId}/data'].get.security, []);
+  assert.deepEqual(document.paths['/d/{publicId}'].get.security, []);
+  assert.ok(document.components.schemas.CompanyDivePublic);
+});
