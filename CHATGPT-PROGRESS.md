@@ -6,6 +6,19 @@ that day, not an estimate.
 A signed-in ChatGPT session, running in a Railway container, driven over HTTP.
 Log in without a human, ask a question, get the answer back as JSON.
 
+> **2026-10-25: broken on Railway.** Measured on prod after `d6d2c06`:
+> - `openai-waynecollins` is still signed in (sidebar and chat history render).
+> - The composer lost its `#prompt-textarea` id. Fixed: `COMPOSER` in
+>   `sessions.ts` also matches `div.ProseMirror[contenteditable=true]`, and the
+>   prompt now lands (`entry: "insert"`).
+> - **The send is refused.** The turn renders `cloudflare_challenge` + Retry
+>   in place of an answer, and the first page load after a restart is a "Just a
+>   moment..." interstitial. Cloudflare now challenges chat from this IP.
+> - Messages no longer carry `[data-message-author-role]`, so `readAnswer` would
+>   read nothing even if an answer came back. Not fixed. No real answer DOM has
+>   been seen yet to fix it against.
+> - A bare `chatgpt` now rotates across every `ready` session.
+
 ---
 
 ## It works
