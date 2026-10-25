@@ -14,8 +14,12 @@ export const KEY_CONCURRENCY = 2;
 /** One contact job is two advanced searches at two credits each. */
 export const RESERVE_CREDITS = 4;
 const USAGE_REFRESH_MS = 10 * 60_000;
-/** After a failed /usage read, wait this long before reading that key again. */
-const USAGE_RETRY_MS = 2 * 60_000;
+/**
+ * After a failed /usage read, wait this long before reading that key again.
+ * Tavily answered the hub's /usage with 429 for every key on 2026-10-25 (the same
+ * call from elsewhere answered 200), so back off well past its window.
+ */
+const USAGE_RETRY_MS = 15 * 60_000;
 
 type FetchImpl = typeof fetch;
 
