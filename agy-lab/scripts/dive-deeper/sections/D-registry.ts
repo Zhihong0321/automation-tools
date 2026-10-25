@@ -12,12 +12,12 @@
 // copied into findings; only its presence is noted, privately.
 import zlib from 'node:zlib';
 import type { Ctx, Finding } from '../lib.ts';
-import { extractClaims, companyNames, host, type Claim, type Verdict } from './D-common.ts';
+import { extractClaims, companyNames, host, type Claim, type Verdict, type SelfGrade } from './D-common.ts';
 
 type Rec = { register: string; url: string; found: boolean; record: string; cannot?: string; notes?: string[]; pii?: string[] };
 
 export const REGISTERS: Record<string, { name: string; url: string; auto: string; how: string }> = {
-  CIDB: { name: 'CIDB CIMS contractor search', url: 'https://cims.cidb.gov.my/smis/regcontractor/reglocalsearchcontractor.vbhtml', auto: 'yes', how: 'read-only search form (POST, no CAPTCHA) by SSM number; result row gives grade, state, phone, PPK/SPKK. The detail view (Paparan) redirects to an error page outside a browser.' },
+  CIDB: { name: 'CIDB CIMS contractor search', url: 'https://cims.cidb.gov.my/smis/regcontractor/reglocalsearchcontractor.vbhtml', auto: 'yes', how: 'read-only search form (POST, no CAPTCHA), swept for every company: 12-digit SSM number, then names, each with the Valid and the Expired filter. Rows give grade, state, phone, PPK/SPKK/STB; no expiry date (the detail view and the CSV export add nothing readable). Old-format SSM numbers do not match.' },
   SEDA_RPVSP: { name: 'SEDA Registered PV Service Provider directory', url: 'https://services.seda.gov.my/spqp/listing', auto: 'yes', how: 'one GET; the whole directory is embedded as JSON (about 1 MB). Also carries contact MyKad numbers (PII).' },
   SEDA_RPVI: { name: 'SEDA Registered Solar PV Investor directory', url: 'https://services.seda.gov.my/rpvi/rpvi/listing', auto: 'yes', how: 'GET with ?company_name=; JSON embedded in the page.' },
   MYHIJAU: { name: 'MyHIJAU directory / GGP e-catalogue', url: 'https://www.myhijau.my/directory/ggp', auto: 'yes (by certificate number)', how: 'XHR JSON GET ?search_name=; returns every listing in the matching groups with certificate numbers and dates but no company names, so the match is by certificate number.' },
@@ -107,30 +107,152 @@ const nameRe = (short: string) => new RegExp(short.replace(/[.*+?^${}()|[\]\\]/g
 
 // ---------- one checker per register; each returns what the register says, never a verdict ----------
 
-async function cidb(ctx: Ctx, dive: any): Promise<Rec> {
+// ---------- CIDB sweep: run for every company, whatever it claims ----------
+
+type CimsRow = { name: string; grade: string; state: string; district: string; phone: string; ppk: string; spkk: string; stb: string; status: 'valid' | 'expired'; via: string };
+type Sweep = { rows: CimsRow[]; main: CimsRow | null; queries: string[]; ssm: string; ssmName: string | null; names: string[]; mydigital: { url: string; grade: string; owner: string } | null; cannot?: string };
+
+const normName = (s: string) => s.toLowerCase().replace(/&amp;/g, '&').replace(/\b(sdn\.?\s*bhd\.?|bhd\.?|berhad|plt|\(m\))/g, ' ').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+const gradeNo = (g: string) => Number(String(g).replace(/\D/g, '')) || 0;
+
+/** The company's names to search CIMS by: legal name, aliases and any "formerly ..." name in the dive. */
+function sweepNames(dive: any): string[] {
+  const id = dive.result?.identity ?? {};
+  const out = [id.legal_name, dive.company, ...(id.aliases ?? [])].filter(Boolean).map(String);
+  for (const f of dive.result?.facts ?? []) {
+    for (const m of String(f.fact).matchAll(/formerly(?:\s+known\s+as|\s+registered\s+as)?\s+([A-Z][A-Za-z0-9&.' -]{2,60}?(?:Sdn\.?\s*Bhd\.?|Works|Enterprise|Trading|PLT|Services|Solutions))\b/g)) out.push(m[1]);
+  }
+  const seen = new Set<string>();
+  return out.filter((n) => { const k = normName(n); if (k.length < 4 || seen.has(k)) return false; seen.add(k); return true; });
+}
+
+let sweepOnce: Promise<Sweep> | null = null;
+function cidbSweep(ctx: Ctx, dive: any): Promise<Sweep> {
+  if (!sweepOnce) sweepOnce = doSweep(ctx, dive);
+  return sweepOnce;
+}
+
+async function doSweep(ctx: Ctx, dive: any): Promise<Sweep> {
   const R = REGISTERS.CIDB;
   const n = companyNames(dive);
-  const form = (ssm: string, name: string) => new URLSearchParams({ comName: name, ComState: '', ComCategoryID: '', CidbRegno: '', seltype: '', selvalidity: '', ssmno: ssm, hdnpagesize: '10', hdnctpage: '1', hdntotpage: '0', hdnsortcol: 'ComName', hdnsortdir: '0', hdntotalrecs: '0', hdnexportopts: '0' }).toString();
-  const notes: string[] = [];
-  let rows: string[][] = [];
-  for (const [ssm, name] of [[n.ssmNew, ''], ['', n.short]] as const) {
-    if (!ssm && !name) continue;
-    const p = await ctx.page(R.url, { method: 'POST', body: form(ssm, name), headers: { 'content-type': 'application/x-www-form-urlencoded' } });
-    if (p.status !== 200) { ctx.warn(`CIDB search HTTP ${p.status} ${p.error ?? ''}`); continue; }
-    if (/captcha/i.test(p.html)) return { register: R.name, url: R.url, found: false, record: '', cannot: 'CIDB search now shows a CAPTCHA' };
-    rows = p.html.split(/<tr/i).slice(1).map((tr) => [...tr.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => cellText(m[1]))).filter((c) => c.length >= 9 && nameRe(n.short).test(c[1] ?? ''));
-    if (rows.length) { notes.push(`searched by ${ssm ? 'SSM number ' + ssm : 'name ' + name}`); break; }
+  const names = sweepNames(dive);
+  const keys = names.map(normName);
+  const form = (ssm: string, name: string, validity: string) => new URLSearchParams({ comName: name, ComState: '', ComCategoryID: '', CidbRegno: '', seltype: '1', selvalidity: validity, ssmno: ssm, hdnpagesize: '50', hdnctpage: '1', hdntotpage: '0', hdnsortcol: 'ComName', hdnsortdir: '0', hdntotalrecs: '0', hdnexportopts: '0' }).toString();
+  const rows: CimsRow[] = [];
+  const queries: string[] = [];
+  let ssmName: string | null = null;
+  let cannot: string | undefined;
+  const search = async (ssm: string, name: string, via: string) => {
+    for (const [validity, status] of [['1', 'valid'], ['2', 'expired']] as const) {
+      queries.push(`${via} (${status})`);
+      const p = await ctx.page(R.url, { method: 'POST', body: form(ssm, name, validity), headers: { 'content-type': 'application/x-www-form-urlencoded' } });
+      if (p.status !== 200) { ctx.warn(`CIDB search ${via} HTTP ${p.status} ${p.error ?? ''}`); continue; }
+      if (/captcha|recaptcha/i.test(p.html)) { cannot = 'CIDB search now shows a CAPTCHA'; return; }
+      for (const tr of p.html.split(/<tr/i).slice(1)) {
+        const c = [...tr.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => cellText(m[1]));
+        if (c.length < 9 || !/^\d+$/.test(c[0])) continue;
+        const row: CimsRow = { name: c[1], grade: c[2], state: c[3], district: c[4], phone: c[5], ppk: c[7], spkk: c[8], stb: c[9] ?? '', status, via };
+        const ours = ssm ? true : keys.includes(normName(row.name));
+        if (ssm) ssmName = ssmName ?? row.name;
+        if (ours && !rows.some((x) => x.name === row.name && x.status === row.status)) rows.push(row);
+      }
+    }
+  };
+  if (n.ssmNew) await search(n.ssmNew.replace(/\D/g, ''), '', `SSM number ${n.ssmNew}`);
+  // Name searches: shortest distinctive names first; CIMS matches substrings, so a name already covered is skipped.
+  const queried: string[] = [];
+  for (const nm of [...names].sort((a, b) => normName(a).length - normName(b).length)) {
+    if (cannot || queried.length >= 4) break;
+    const k = normName(nm);
+    if (k.length < 5 || queried.some((q) => k.includes(q))) continue;
+    queried.push(k);
+    await search('', nm.replace(/\b(sdn\.?\s*bhd\.?|berhad|bhd\.?)\b/gi, '').trim(), `name "${nm}"`);
   }
-  // The MyDigital Kontraktor page the dive found is a third-party portfolio, not the register.
+  const legal = normName(n.legal);
+  const rank = (r: CimsRow) => (normName(r.name) === legal || r.via.startsWith('SSM') ? 0 : 2) + (r.status === 'valid' ? 0 : 1);
+  const main = [...rows].sort((a, b) => rank(a) - rank(b))[0] ?? null;
+  // MyDigital Kontraktor: a portfolio page the company controls, not the register.
+  let mydigital: Sweep['mydigital'] = null;
   const md = (dive.result?.sources ?? []).find((s: any) => host(s.url) === 'mydigitalkontraktor.com.my');
   if (md) {
     const p = await ctx.page(md.url);
-    const g = ctx.htmlText(p.html).match(/CIDB Registered Contractor\s*•\s*(G\d)/i);
-    if (g) notes.push(`MyDigital Kontraktor portfolio (${md.url}) shows grade ${g[1]}`);
+    const t = ctx.htmlText(p.html);
+    const g = t.match(/CIDB Registered Contractor\s*•\s*(G\d)/i);
+    if (g) mydigital = { url: md.url, grade: g[1].toUpperCase(), owner: (t.match(/©\s*([^·\n]{3,80})/)?.[1] ?? '').trim() };
   }
-  if (!rows.length) return { register: R.name, url: R.url, found: false, record: 'no row for the company in the CIDB contractor search', notes };
-  const [no, name, grade, state, district, phone, fax, ppk, spkk, stb] = rows[0];
-  return { register: R.name, url: R.url, found: true, record: `name ${name}; grade ${grade}; state ${state}; district ${district}; phone ${phone}; PPK ${ppk || '-'}; SPKK ${spkk || '-'}; STB ${stb || '-'}${rows.length > 1 ? `; ${rows.length} rows matched` : ''}`, notes };
+  return { rows, main, queries, ssm: n.ssmNew, ssmName, names, mydigital, cannot };
+}
+
+const rowText = (r: CimsRow) => `${r.name}: grade ${r.grade}, ${r.status.toUpperCase()} (CIMS shows status only, no expiry date), ${r.state}/${r.district}, phone ${r.phone || '-'}, PPK ${r.ppk || '-'}, SPKK ${r.spkk || '-'}, STB ${r.stb || '-'}`;
+
+async function cidb(ctx: Ctx, dive: any): Promise<Rec> {
+  const R = REGISTERS.CIDB;
+  const s = await cidbSweep(ctx, dive);
+  if (s.cannot) return { register: R.name, url: R.url, found: false, record: '', cannot: s.cannot };
+  const notes = s.mydigital ? [`MyDigital Kontraktor portfolio (${s.mydigital.url}, "© ${s.mydigital.owner}") shows grade ${s.mydigital.grade}`] : [];
+  if (!s.main) return { register: R.name, url: R.url, found: false, record: `no row in the CIDB register, valid or expired, for ${s.names.join(' / ')}${s.ssm ? ' or SSM ' + s.ssm : ''}`, notes };
+  return { register: R.name, url: R.url, found: true, record: rowText(s.main) + (s.rows.length > 1 ? `; other matching entries: ${s.rows.filter((r) => r !== s.main).map(rowText).join(' | ')}` : ''), notes };
+}
+
+/** Findings from the sweep itself: registration status, SSM confirmation, and every grade the company shows vs the register. */
+function sweepFindings(ctx: Ctx, dive: any, s: Sweep, selfGrades: SelfGrade[], claimedGrades: Set<string>): Finding[] {
+  const R = REGISTERS.CIDB;
+  const f: Finding[] = [];
+  const base = { source: R.url, checked_at: ctx.now(), register: R.name, issuer: 'CIDB', sweep: true };
+  if (s.cannot) return [{ title: "CAN'T CHECK AUTOMATICALLY: CIDB registration", detail: s.cannot, severity: 'low', evidence: s.cannot, verdict: "can't check automatically", ...base }];
+  const shown = [...selfGrades];
+  if (s.mydigital) shown.push({ grade: s.mydigital.grade, where: s.mydigital.url, text: `MyDigital Kontraktor portfolio, "© ${s.mydigital.owner}"` });
+  const shownText = (gs: SelfGrade[]) => [...new Set(gs.map((g) => g.where))].join(', ');
+  if (!s.main) {
+    f.push({ title: `CIDB sweep: not in the CIDB register (valid or expired)`, detail: `CIMS has no contractor under ${s.names.map((x) => `"${x}"`).join(', ')}${s.ssm ? ` or SSM number ${s.ssm}` : ''} (searched: ${s.queries.join('; ')}). Contractors doing construction or installation work in Malaysia are expected to register with CIDB, and clients and tenders often ask for it; check whether your work needs it.`, severity: 'medium', evidence: 'no rows', verdict: 'not found', ...base });
+    for (const g of [...new Set(shown.map((x) => x.grade))].filter((x) => !claimedGrades.has(x))) f.push({ title: `CONTRADICTED (overclaim): CIDB grade ${g} is shown but the company is not in the register`, detail: `Shown on ${shownText(shown.filter((x) => x.grade === g))}.`, severity: 'high', evidence: 'no rows', verdict: 'contradicted', direction: 'overclaim', ...base });
+    return f;
+  }
+  const m = s.main;
+  const others = s.rows.filter((r) => r !== m);
+  f.push({ title: `CIDB sweep: ${m.name} is ${m.status === 'valid' ? 'registered, grade ' + m.grade + ', VALID' : 'grade ' + m.grade + ' but EXPIRED'}`, detail: `${rowText(m)}. Found by ${m.via}.${others.length ? ' Other entries under your names: ' + others.map(rowText).join(' | ') + '.' : ''}`, severity: m.status === 'expired' ? 'high' : 'info', evidence: rowText(m), verdict: m.status === 'valid' ? 'verified' : 'contradicted', direction: m.status === 'expired' ? 'lapsed' : null, ...base });
+  if (s.ssm && s.ssmName) {
+    const same = normName(s.ssmName) === normName(companyNames(dive).legal);
+    f.push({ title: `${same ? 'VERIFIED' : 'CONTRADICTED'}: SSM number ${s.ssm} belongs to "${s.ssmName}"`, detail: same ? 'CIDB keys its register on the SSM number; the name on that SSM number matches the legal name the company uses.' : `CIDB has SSM number ${s.ssm} under "${s.ssmName}", but the company calls itself "${companyNames(dive).legal}".`, severity: same ? 'info' : 'medium', evidence: `SSM search -> ${s.ssmName}`, verdict: same ? 'verified' : 'contradicted', ...base });
+  }
+  for (const g of [...new Set(shown.map((x) => x.grade))].filter((x) => !claimedGrades.has(x))) {
+    const where = shownText(shown.filter((x) => x.grade === g));
+    let dir: string, verdict: Verdict, sev: Finding['severity'];
+    if (m.status === 'expired') { dir = 'lapsed'; verdict = 'contradicted'; sev = 'high'; }
+    else if (gradeNo(g) < gradeNo(m.grade)) { dir = 'undersell'; verdict = 'contradicted'; sev = 'high'; }
+    else if (gradeNo(g) > gradeNo(m.grade)) { dir = 'overclaim'; verdict = 'contradicted'; sev = 'high'; }
+    else { dir = 'consistent'; verdict = 'verified'; sev = 'info'; }
+    const msg = dir === 'undersell' ? `you show ${g} but the register says ${m.grade}: you undersell yourself; update these pages`
+      : dir === 'overclaim' ? `you show ${g} but the register says ${m.grade}: an overclaim a client can check`
+      : dir === 'lapsed' ? `you show ${g} but the registration has EXPIRED (register grade ${m.grade}): renew it or remove the claim`
+      : `matches the register (${m.grade}, valid)`;
+    f.push({ title: `${dir === 'consistent' ? 'VERIFIED' : 'CONTRADICTED (' + dir + ')'}: CIDB grade ${g} shown on your pages`, detail: `${msg}. Shown on: ${where}.`, severity: sev, evidence: rowText(m), verdict, direction: dir, ...base });
+  }
+  return f;
+}
+
+// ---------- the "not shown" rule, in code ----------
+
+/** Specific values in a claim that a register record must display to verify it: dates, category codes, long numbers, certificate numbers. */
+function specificTokens(c: Claim): string[] {
+  const v = c.value || '';
+  const toks = [
+    ...v.matchAll(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g),
+    ...v.matchAll(/\b[A-Z]{1,2}\d{2}\b/g),
+    ...v.matchAll(/\b\d{6,}[-A-Z0-9]*\b/gi),
+    ...v.matchAll(/MyH[PS]\s*\d+\s*\/\s*\d+(?:-\d+)?/gi),
+  ].map((m) => m[0]);
+  return [...new Set(toks)];
+}
+const squash = (s: string) => s.toUpperCase().replace(/\s+/g, '');
+function notShown(c: Claim, record: string): string[] {
+  const rec = squash(record);
+  return specificTokens(c).filter((t) => !rec.includes(squash(t)));
+}
+function pastDates(c: Claim): string[] {
+  if (!/until|valid|expir|active|to\b/i.test(c.claim + ' ' + c.value)) return [];
+  const now = Date.now();
+  return [...(c.value + ' ' + c.claim).matchAll(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g)].filter((m) => Date.UTC(+m[3], +m[2] - 1, +m[1]) < now).map((m) => m[0]);
 }
 
 async function sedaRpvsp(ctx: Ctx, dive: any): Promise<Rec> {
@@ -266,8 +388,12 @@ async function lookup(ctx: Ctx, dive: any, c: Claim, cache: Map<string, Promise<
 
 export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; notes: Record<string, unknown> }> {
   const id = dive.result?.identity ?? {};
-  const { claims, pages } = await extractClaims(ctx, dive);
+  const { claims, pages, selfGrades = [], cached } = await extractClaims(ctx, dive);
   ctx.log(`${claims.length} claims: ${claims.map((c) => `${c.id} ${c.issuer} ${c.value}`).join(' | ')}`);
+
+  // Step 1b: the CIDB sweep runs for every company, whatever it claims.
+  const sweep = await cidbSweep(ctx, dive);
+  ctx.log(`CIDB sweep: ${sweep.cannot ?? (sweep.main ? rowText(sweep.main) : 'no rows')} (${sweep.queries.length} searches; ${sweep.rows.length} matching entries; shown grades: ${selfGrades.map((g) => g.grade).join(',') || '-'}${sweep.mydigital ? '; MyDigital ' + sweep.mydigital.grade : ''})`);
 
   // Step 2: register lookups (sequential: polite, and the big SEDA/MyHijau pages are fetched once).
   const cache = new Map<string, Promise<Rec>>();
@@ -310,6 +436,18 @@ Return JSON only: {"results":[{"id":"C01","verdict":"verified|contradicted|not_s
     if (r.cannot) { verdict = "can't check automatically"; why = r.cannot; }
     else if (!r.found) { verdict = 'not found'; why = r.record; }
     else { const v = verdicts[c.id]; verdict = v?.verdict ?? 'verified'; why = v?.why || r.record; }
+    // Rule in code: a specific value the register record does not display cannot be verified.
+    const missing = r.found && !r.cannot ? notShown(c, r.record) : [];
+    if (verdict === 'verified' && missing.length) { verdict = "can't check automatically"; why = `the register does not show ${missing.join(', ')} (${why})`; }
+    const cg = c.issuer === 'CIDB' ? c.value.match(/\bG[1-7]\b/i)?.[0]?.toUpperCase() : undefined;
+    let direction: string | null = null;
+    if (cg && sweep.main) {
+      direction = sweep.main.status === 'expired' ? 'lapsed' : gradeNo(cg) < gradeNo(sweep.main.grade) ? 'undersell' : gradeNo(cg) > gradeNo(sweep.main.grade) ? 'overclaim' : 'consistent';
+      if (direction === 'lapsed') verdict = 'contradicted';
+      if (direction !== 'consistent') why += ` Direction: ${direction} (${cg} shown, register ${sweep.main.grade} ${sweep.main.status}).`;
+    }
+    const past = pastDates(c);
+    if (past.length) why += ` The claimed end date ${past.join(', ')} has already passed; update the listings that say it.`;
     const sev = verdict === 'contradicted' ? 'high' : verdict === 'not found' ? 'medium' : verdict === 'verified' ? 'info' : 'low';
     findings.push({
       title: `${verdict.toUpperCase()}: ${c.claim}`,
@@ -318,10 +456,12 @@ Return JSON only: {"results":[{"id":"C01","verdict":"verified|contradicted|not_s
       source: r.url || null,
       checked_at: ctx.now(),
       evidence: r.record || r.cannot,
-      claim_id: c.id, claim: c.claim, issuer: c.issuer, value: c.value, claimed_on: c.where, verdict, register: r.register,
+      claim_id: c.id, claim: c.claim, issuer: c.issuer, value: c.value, claimed_on: c.where, verdict, register: r.register, direction,
     });
   });
+  const claimedGrades = new Set(claims.filter((c) => c.issuer === 'CIDB').map((c) => c.value.match(/\bG[1-7]\b/i)?.[0]?.toUpperCase()).filter(Boolean) as string[]);
+  findings.unshift(...sweepFindings(ctx, dive, sweep, selfGrades, claimedGrades));
   if (pii.size) findings.push({ title: 'PRIVATE: a public register exposes your staff MyKad numbers', detail: [...pii].join('. ') + '. The numbers sit in the page data (not shown on screen) and can be read by anyone. Ask the register to remove them. (Report privately, never as bait.)', severity: 'high', source: null, checked_at: ctx.now(), verdict: 'risk', private: true });
 
-  return { findings, notes: { claims, pages_read: pages, registers: REGISTERS, records: recs.map((r, i) => ({ id: claims[i].id, ...r })) } };
+  return { findings, notes: { claims, claims_cached: !!cached, pages_read: pages, self_grades: selfGrades, cidb_sweep: sweep, registers: REGISTERS, records: recs.map((r, i) => ({ id: claims[i].id, ...r })) } };
 }

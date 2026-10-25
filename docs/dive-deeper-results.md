@@ -6,6 +6,62 @@ came after the user approved 4 more dives: #5 Everest Tent Technologies (tents, 
 Tech (solar shop, Kajang). Round 2 reran only the lanes kept in round 1. Its totals come first; the round 1 detail
 follows.
 
+## Round 3: after the Step 2 fixes (same 5 companies)
+
+Every kept lane got the fixes listed under round 2, ran again on dives #4–8, and was graded by hand again.
+C's two lanes were merged into one, C-merged (rule checks plus an LLM on the company's own prose; LanguageTool dropped).
+
+| Section · lane | Round 2: findings · precision · owner-cares yes | Round 3: findings · precision · owner-cares yes | Verdict |
+|---|---|---|---|
+| E · maps reviews | 44 · 89% · 12 | **48 · 94% · 19** | **Keep** |
+| H · maps rank | 39 · 97% · 21 | **31 · 97% · 15** (merged per area) | **Keep** |
+| H · web | 62 · 89% · 26 | **31 · 90% · 10** (deduped; noise 35% → 26%) | **Keep** |
+| G · fixed questions | 103 · 93% · 44 | 108 · **88%** · 46 | **Keep, fix the domain check** |
+| G · grounded | 125 · 70% · 45 | **143 · 83% · 52** | **Keep, fix the domain check** |
+| C · merged (rules + LLM) | 454 · 59% · 40 (two lanes) | **157 · 78% · 32**; noise 68% → 38% | **Keep; retire C-rules and C-llm** |
+| D · registers + CIDB sweep | 64 · 91% · 7 | **54 · 96% · 12**, 0 wrong | **Keep** |
+
+Fewer "yes" findings in H and C is mostly merging: one finding per area, or one hijack alert, now stands for what used to be several.
+
+What the fixes bought:
+- **Repeatable.**
+  - H stores its trade words and towns per company.
+  - D stores its claim list per company.
+  - G asks every question 3 times and reports the majority answer.
+- **Wrong verdicts fall:**
+  - D: 4 → 0.
+  - G grounded judge: 33 false "wrong" → 4. 0 of 101 claims graded "sourced, not in dive" were wrong.
+  - C: 97 → 10.
+- **New, checked findings.**
+  - Dead own pages that search still lists (eternalgy.com/admin; 3 Rienzo pages, all 404).
+  - Same-address duplicate listings (Everest + "Sri SSK Canvas"; MNA Solar + "MNA Green Tech", with different phones).
+  - Eternalgy has no KL listing despite its KL office.
+  - CIDB sweep for every company: Rienzo G2 expired, Everest not registered, Hou Sent's old firm expired; Eternalgy and MNA undersell, since they show G3/G5 while the register says G7.
+  - Reviews hidden deeper in the list: a 2★ model-swap complaint with no reply at Rienzo (2023).
+  - Defensive replies to 1★ reviews at MNA.
+  - Review widgets on the sites (Rienzo Trustindex, Everest Elfsight).
+  - MNA's shop shows RM 0.00 prices.
+  - A leaked internal note on Eternalgy's news page is now caught by a rule.
+  - The everesttent.com gambling takeover: now one top alert in H-web, C and G.
+- **gpt runaway answers are gone.** Asking for brevity in the prompt, with no cap, brought the longest answer down to 2.4k characters (it was 868k). The models also invented less, which may change what G measures.
+
+New problems the fixes introduced (not built yet):
+- **G: the domain check matches generic name words** ("tent", "gate", "hou"). It gave 13 wrong "AI gives a non-existent or other site" findings and one false gambling alarm. It is the reason G-fixed precision fell from 93% to 88%; without it, both G lanes would be about 90%.
+- **H: a listing whose name is part of an alias** ("AutoGate System" ⊂ "Rienzo Autogate System") was taken as Rienzo's. Found during grading and fixed before E ran; it now requires the brand word.
+- **C lost most cross-page contradictions** (11.5 GWh vs 1.65 GWh, the two KL addresses).
+- Smaller ones:
+  - E counts staff names with the LLM, which got worse; count them in code.
+  - H skips thin queries, so Eternalgy lost its #1 rank in Kluang.
+  - H read Rienzo's old Cheras address as a current office.
+
+Cost per company, round 3:
+- **Maps:** ~19 requests (H 9, E ~10). E reused round-2 review pages through a cache this round; it needs ~10 without it. About 230 of the 1,000 free requests are used this month.
+- **Brave and Exa:** 11 Brave, 9 Exa (~$0.06).
+- **LLM:** ~190 calls, about 1M gpt-6.1-sol input tokens; G-fixed's 3 asks per question are most of it.
+- **Time:** the lanes run in parallel, so the longest one, 4–5 min, sets the total.
+
+---
+
 ## Round 2: kept lanes on all 5 companies
 
 Precision is correct / findings, for all 5 companies. "Owner cares" counts the yes verdicts.

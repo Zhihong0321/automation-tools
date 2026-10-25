@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { OUT, type Ctx, type Finding } from '../lib.ts';
-import { ANSWER_MODELS, ANSWER_TEMP, JUDGE_MODEL, MAX_PROMPTS, usage, askAndJudge, findingsFrom, profileOf, signatures, type Prompt } from './G-shared.ts';
+import { ANSWER_MODELS, ANSWER_TEMP, BRIEF, JUDGE_MODEL, MAX_PROMPTS, usage, askAndJudge, checkDomains, findingsFrom, profileOf, signatures, type Prompt } from './G-shared.ts';
 import { fixedQuestions } from './G-fixed.ts';
 
 const SYSTEM = 'You are a helpful assistant with web search. Use the search results provided when they are relevant, cite the URLs you rely on, and say so when the results do not answer the question.';
@@ -36,23 +36,30 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
     if (!r.length) ctx.warn(`exa: no results for "${q}"`);
     results.set(q, r);
   }
+  // Round 3: the judge sees the same search results, so real details from search are "sourced", not "wrong".
+  const evidence = (p: Prompt) => (results.get(queryOf(p)) ?? []).map((x: any, i: number) => `[${i + 1}] ${x.title ?? ''} — ${x.url}\n${String(x.text ?? '').replace(/\s+/g, ' ').slice(0, 1200)}`).join('\n\n');
   const context = (p: Prompt) => {
     const r = results.get(queryOf(p)) ?? [];
     if (!r.length) return '';
     return 'Web search results:\n' + r.map((x: any, i: number) => `[${i + 1}] ${x.title ?? ''} — ${x.url}\n${String(x.text ?? '').replace(/\s+/g, ' ').slice(0, 1200)}`).join('\n\n') + '\n\nQuestion: ';
   };
-  const judged = await askAndJudge(ctx, dive, profile, prompts, { context, system: SYSTEM });
+  const judged = await askAndJudge(ctx, dive, profile, prompts, { context, system: SYSTEM, evidence });
   const findings = findingsFrom(ctx, profile, judged, prompts);
   // Which of our own pages does the search even surface?
   const domains = (dive.result?.identity?.official_domains ?? []).map((d: string) => d.replace(/^www\./, ''));
   const hits = queries.map((q) => ({ q, urls: (results.get(q) ?? []).map((x: any) => x.url), own: (results.get(q) ?? []).filter((x: any) => domains.some((d: string) => String(x.url).includes(d))).length }));
-  for (const h of hits.filter((h) => !/contact/.test(h.q) && prompts.some((p) => p.kind === 'trade' && p.text === h.q))) {
+  // Round 3 fix: pick the trade searches by prompt kind. The old filter (!/contact/) also dropped the hire
+  // question, whose text ends "Which companies should I contact?".
+  const tradeQ = new Set(prompts.filter((p) => p.kind === 'trade').map(queryOf));
+  for (const h of hits.filter((h) => tradeQ.has(h.q))) {
     findings.push({ title: `A web search for "${h.q}" returns ${h.own} of your pages in the top ${h.urls.length}`, detail: h.urls.join(' | '), severity: h.own ? 'info' : 'high', source: null, checked_at: ctx.now(), kind: 'search' });
   }
+  const dom = await checkDomains(ctx, dive, profile, judged);
+  findings.push(...dom.findings);
   return {
     findings,
     notes: {
-      profile, answer_temperature: ANSWER_TEMP, models: ANSWER_MODELS, judge: JUDGE_MODEL, usage_by_model: usage,
+      profile, answer_temperature: ANSWER_TEMP, brief: BRIEF, domains: dom.domains, max_answer_chars: Math.max(0, ...judged.map((j) => j.answer.length)), models: ANSWER_MODELS, judge: JUDGE_MODEL, usage_by_model: usage,
       prompts, search_hits: hits, search_results: Object.fromEntries([...results].map(([q, r]) => [q, r.map((x: any) => ({ title: x.title, url: x.url, text: String(x.text ?? '').slice(0, 1200) }))])), signatures: signatures(judged),
       answers: judged.map((j) => ({ id: j.prompt.id, model: j.model, outcome: j.outcome, searched: j.searched, stub: j.stub, answer: j.answer, claims: j.claims, dropped: j.dropped, competitors: j.competitors, confused_with: j.confused_with, recommended: j.recommended, judge_summary: j.judge_summary })),
       limit: 'Simulated search assistant: Exa results pasted into the prompt. Real Perplexity/ChatGPT use their own search index and ranking.',

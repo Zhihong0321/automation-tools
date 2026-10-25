@@ -7,7 +7,9 @@
 //      about / why-choose / credentials pages, and the logo alt texts on the homepage.
 // One LLM call turns that into a short, de-duplicated claim list. Every step falls back:
 // a dead page or a bad LLM answer logs a warning and the list is built from what is left.
-import type { Ctx } from '../lib.ts';
+import fs from 'node:fs';
+import path from 'node:path';
+import { OUT, type Ctx } from '../lib.ts';
 
 export type Verdict = 'verified' | 'contradicted' | 'not found' | "can't check automatically";
 
@@ -82,8 +84,46 @@ export async function readOfficialSite(ctx: Ctx, dive: any): Promise<{ url: stri
   return pages;
 }
 
-/** Step 1: the claim list (dive facts + a fresh read of the official site), one LLM call. */
-export async function extractClaims(ctx: Ctx, dive: any): Promise<{ claims: Claim[]; pages: { url: string; status: number }[] }> {
+export type SelfGrade = { grade: string; where: string; text: string };
+export type ClaimSet = { claims: Claim[]; pages: { url: string; status: number }[]; selfGrades: SelfGrade[]; extracted_at?: string; cached?: boolean };
+
+/** Identity facts are not claims to verify: the CIDB sweep covers registration numbers and names. */
+const IDENTITY = /registration (no|number)|registered (as|company) (no|number)|\bssm\b.*\b(no|number)\b|incorporat|established|founded|formerly|also known|known as|legal name|registered name|aliases?|address|headcount|employees|staff count|portfolio shows/i;
+function isIdentity(c: Claim): boolean {
+  if (c.issuer === 'SSM' && !/capital/i.test(c.claim)) return true;
+  return IDENTITY.test(c.claim) && !/capital|cidb|seda|myhijau|grade/i.test(c.claim);
+}
+
+/** Every CIDB grade the company or its listings show: the official site today, plus the dive's facts. */
+function gradesShown(pages: { url: string; lines: string }[], dive: any): SelfGrade[] {
+  const out: SelfGrade[] = [];
+  const r = dive.result ?? {};
+  const add = (text: string, where: string) => {
+    if (!/cidb|gred|grade/i.test(text)) return;
+    for (const m of text.matchAll(/\bG([1-7])\b/g)) out.push({ grade: 'G' + m[1], where, text: text.slice(Math.max(0, m.index! - 80), m.index! + 60).replace(/\s+/g, ' ') });
+  };
+  for (const p of pages) for (const line of p.lines.split('\n')) add(line, p.url);
+  for (const f of r.facts ?? []) for (const sid of f.sources ?? []) { const u = r.sources?.find((s: any) => s.id === sid)?.url; if (u) add(f.fact, u); }
+  const seen = new Set<string>();
+  return out.filter((g) => { const k = g.grade + '|' + g.where; if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
+function filterOnly(set: ClaimSet): ClaimSet {
+  const only = process.env.D_ONLY;
+  return only ? { ...set, claims: set.claims.filter((c) => only.split(',').includes(c.issuer)) } : set;
+}
+
+/** Step 1: the claim list (dive facts + a fresh read of the official site), one LLM call.
+ *  Stored once per dive in out/D-claims-<id>.json so reruns check the same claims; D_FRESH_CLAIMS=1 rebuilds it. */
+export async function extractClaims(ctx: Ctx, dive: any): Promise<ClaimSet> {
+  const file = path.join(OUT, `D-claims-${ctx.diveId}.json`);
+  if (!process.env.D_FRESH_CLAIMS && fs.existsSync(file)) {
+    try {
+      const cached = JSON.parse(fs.readFileSync(file, 'utf8')) as ClaimSet;
+      ctx.log(`claim list from ${path.basename(file)} (${cached.claims.length} claims, extracted ${cached.extracted_at})`);
+      return filterOnly({ ...cached, cached: true });
+    } catch (e) { ctx.warn(`claim cache unreadable (${(e as Error).message}); extracting again`); }
+  }
   const r = dive.result ?? {};
   const src = (ids: number[]) => (ids ?? []).map((i) => r.sources?.find((s: any) => s.id === i)?.url).filter(Boolean);
   const facts = (r.facts ?? []).filter((f: any) => KW.test(f.fact)).map((f: any) => `- ${f.fact} [sources: ${src(f.sources).join(' ')}]`).join('\n');
@@ -95,16 +135,17 @@ export async function extractClaims(ctx: Ctx, dive: any): Promise<{ claims: Clai
   const prompt = `You list the CHECKABLE CLAIMS a company makes about itself, so each can be checked against the body that would issue it.
 Company: ${r.identity?.legal_name ?? dive.company} (${r.identity?.industry ?? ''}), Malaysia.
 
-A checkable claim is a grade, registration, certificate (with its number if given), licence, membership, award (with its year), appointment or partnership (e.g. "preferred partner", "sole distributor"), a project / capacity count, a named client or a client/partner logo, or a superlative ("fastest", "first", "highest").
+A checkable claim is a grade, licence, certificate (with its number if given), registration with a body other than SSM (CIDB, SEDA, ST, MOF...), membership, award (with its year), appointment or partnership (e.g. "preferred partner", "sole distributor"), a project / capacity / customer count, a named client or a client/partner logo, or a superlative ("fastest", "first", "No.1", "highest").
 Skip product specs, warranties, prices and opinions.
+Skip IDENTITY FACTS entirely (they are checked elsewhere): company registration numbers, incorporation or founding dates, "established in", legal names, former names, aliases, addresses, headcount, and observations a directory makes about the company (e.g. "portfolio shows 0 projects").
 
 Rules:
 - If two pages give DIFFERENT values for the same credential (e.g. grade G7 on one site, G3 on another; award year 2024 vs 2025; 1,000+ vs 925+ projects), make ONE CLAIM PER VALUE, each with its own pages.
 - Merge the same value said on several pages into one claim with all the pages in "where".
 - A logo with no words (e.g. "cidb", "seda", "suruhanjaya tenaga", "Maybank") counts only if no worded claim covers that body; then the claim is "displays the <body> logo".
 - issuer is exactly one of: ${ISSUERS.join(', ')}.
-  CIDB = contractor grade; SEDA_RPVSP = SEDA registered PV service provider; SEDA_RPVI = SEDA registered PV investor; MYHIJAU = MyHijau mark / certificate / green tax allowance; GOLDEN_BULL = Golden Bull Award; MPSEA = MPIA/MPSEA association membership; ST = Suruhanjaya Tenaga (Energy Commission) licence/registration; SHRDC = SHRDC centre of excellence / training partner; MAYBANK = Maybank partner/installer; SAJ = SAJ distributorship; SSM = company registry facts (paid-up capital, incorporation); INSURER = insurance cover; SELF_COUNT = project/plant/MWp/revenue counts, "fastest", "first" and other figures only the company holds; OTHER = anything else.
-- value: the exact checkable value (grade "G7", certificate number, award year, the count), or "" if none.
+  CIDB = contractor grade; SEDA_RPVSP = SEDA registered PV service provider; SEDA_RPVI = SEDA registered PV investor; MYHIJAU = MyHijau mark / certificate / green tax allowance; GOLDEN_BULL = Golden Bull Award; MPSEA = MPIA/MPSEA association membership; ST = Suruhanjaya Tenaga (Energy Commission) licence/registration; SHRDC = SHRDC centre of excellence / training partner; MAYBANK = Maybank partner/installer; SAJ = SAJ distributorship; SSM = paid-up capital only; INSURER = insurance cover; SELF_COUNT = project/plant/MWp/revenue counts, "fastest", "first" and other figures only the company holds; OTHER = anything else.
+- value: the exact checkable value (grade "G7", certificate number, award year, the count, category codes, dates), or "" if none.
 - At most 18 claims, most important first (grades, registrations and certificates first).
 
 Dive facts (already researched; urls are where each was seen):
@@ -120,8 +161,8 @@ Return JSON only: {"claims":[{"claim":"...","kind":"grade|registration|certifica
 
   const answer = await ctx.llm(prompt);
   const parsed = ctx.parseJson<{ claims: any[] }>(answer);
-  let claims: Claim[] = (parsed?.claims ?? []).filter((c: any) => c && c.claim).slice(0, 18).map((c: any, i: number) => ({
-    id: 'C' + String(i + 1).padStart(2, '0'),
+  let claims: Claim[] = (parsed?.claims ?? []).filter((c: any) => c && c.claim).map((c: any) => ({
+    id: '',
     claim: String(c.claim),
     kind: String(c.kind ?? 'other'),
     issuer: (ISSUERS as readonly string[]).includes(String(c.issuer)) ? String(c.issuer) : 'OTHER',
@@ -129,7 +170,10 @@ Return JSON only: {"claims":[{"claim":"...","kind":"grade|registration|certifica
     where: Array.isArray(c.where) ? c.where.map(String).slice(0, 4) : [],
     quote: String(c.quote ?? '').slice(0, 200),
   }));
-  if (!claims.length) {
+  const dropped = claims.filter(isIdentity);
+  if (dropped.length) ctx.log(`dropped ${dropped.length} identity facts: ${dropped.map((c) => c.claim).join(' | ')}`);
+  claims = claims.filter((c) => !isIdentity(c)).slice(0, 18).map((c, i) => ({ ...c, id: 'C' + String(i + 1).padStart(2, '0') }));
+  if (!parsed) {
     ctx.warn('claim extraction failed; falling back to a keyword pick of the dive facts');
     claims = (r.facts ?? []).filter((f: any) => f.topic === 'reputation').slice(0, 10).map((f: any, i: number) => ({
       id: 'C' + String(i + 1).padStart(2, '0'), claim: f.fact, kind: 'other',
@@ -137,7 +181,10 @@ Return JSON only: {"claims":[{"claim":"...","kind":"grade|registration|certifica
       value: (f.fact.match(/\bG[1-7]\b|MyHS[\w/]+|20\d\d/) ?? [''])[0], where: src(f.sources), quote: '',
     }));
   }
-  const only = process.env.D_ONLY;
-  if (only) claims = claims.filter((c) => only.split(',').includes(c.issuer));
-  return { claims, pages: pages.map((p) => ({ url: p.url, status: p.status })) };
+  const set: ClaimSet = { claims, pages: pages.map((p) => ({ url: p.url, status: p.status })), selfGrades: gradesShown(pages, dive), extracted_at: ctx.now() };
+  if (parsed) {
+    try { fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(file, JSON.stringify(set, null, 2)); }
+    catch (e) { ctx.warn(`claim cache not written: ${(e as Error).message}`); }
+  }
+  return filterOnly(set);
 }

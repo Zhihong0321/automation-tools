@@ -4,12 +4,14 @@
 // G-shared ANSWER_MODELS (deepseek-v4.1-flash-1017 and gpt-6.1-sol), then a judge call
 // scores each answer against the dive's facts.
 //
-// Calls: 1 (profile) + 11 x 2 answers + 11 x 2 judge = 45 LLM calls. No Exa.
+// Round 3: every question is asked DD_G_REPEAT times (default 3) per model; findings report the
+// majority answer and the spread. A DNS check runs on every domain the answers give for the company.
+// Calls: 1 (profile) + 11 x 2 x 3 answers + 11 x 2 x 3 judge = 133 LLM calls. No Exa.
 // Env: DD_G_TEMP (answer temperature, default 0), DD_G_MAX (only the first N questions),
-//      DD_G_MODELS, DD_G_JUDGE.
+//      DD_G_REPEAT, DD_G_BRIEF=0 (no brevity request), DD_G_MODELS, DD_G_JUDGE.
 // Limit: the models on our keys have no web access; answers reflect training data only.
 import type { Ctx, Finding } from '../lib.ts';
-import { ANSWER_MODELS, ANSWER_TEMP, JUDGE_MODEL, MAX_PROMPTS, usage, askAndJudge, findingsFrom, profileOf, signatures, type Profile, type Prompt } from './G-shared.ts';
+import { ANSWER_MODELS, ANSWER_TEMP, BRIEF, JUDGE_MODEL, MAX_PROMPTS, usage, askAndJudge, checkDomains, findingsFrom, majority, profileOf, signatures, type Profile, type Prompt } from './G-shared.ts';
 
 export function fixedQuestions(p: Profile): Prompt[] {
   const all: Prompt[] = [
@@ -26,6 +28,9 @@ export function fixedQuestions(p: Profile): Prompt[] {
     { id: 'hire', kind: 'trade', topic: 'findability', text: `I live in ${p.area}, ${p.state} and I want to ${p.job}. Which companies should I contact?` },
   ];
   // Small test runs: keep a mix (first company questions, plus one trade question).
+  // Test runs: DD_G_ONLY=website,phone,hire asks only those question ids.
+  const only = (process.env.DD_G_ONLY ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (only.length) return all.filter((q) => only.includes(q.id));
   if (MAX_PROMPTS >= all.length) return all;
   return [...all.filter((q) => q.kind === 'company').slice(0, Math.max(1, MAX_PROMPTS - 1)), all.find((q) => q.kind === 'trade')!];
 }
@@ -34,14 +39,17 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   const profile = await profileOf(ctx, dive);
   ctx.log(`profile: ${profile.name} | ${profile.trade} | ${profile.area}, ${profile.state} | job: ${profile.job}`);
   const prompts = fixedQuestions(profile);
-  const judged = await askAndJudge(ctx, dive, profile, prompts);
-  const findings = findingsFrom(ctx, profile, judged, prompts);
+  const repeat = Math.max(1, Number(process.env.DD_G_REPEAT ?? 3) || 1);
+  const judged = await askAndJudge(ctx, dive, profile, prompts, { repeat });
+  const findings = findingsFrom(ctx, profile, majority(judged), prompts, judged);
+  const dom = await checkDomains(ctx, dive, profile, judged);
+  findings.push(...dom.findings);
   return {
     findings,
     notes: {
-      profile, answer_temperature: ANSWER_TEMP, models: ANSWER_MODELS, judge: JUDGE_MODEL, usage_by_model: usage,
+      profile, answer_temperature: ANSWER_TEMP, repeat, brief: BRIEF, domains: dom.domains, max_answer_chars: Math.max(0, ...judged.map((j) => j.answer.length)), models: ANSWER_MODELS, judge: JUDGE_MODEL, usage_by_model: usage,
       prompts, signatures: signatures(judged),
-      answers: judged.map((j) => ({ id: j.prompt.id, model: j.model, outcome: j.outcome, searched: j.searched, stub: j.stub, answer: j.answer, claims: j.claims, dropped: j.dropped, competitors: j.competitors, confused_with: j.confused_with, recommended: j.recommended, judge_summary: j.judge_summary })),
+      answers: judged.map((j) => ({ id: j.prompt.id, sample: j.sample, model: j.model, outcome: j.outcome, searched: j.searched, stub: j.stub, answer: j.answer, claims: j.claims, dropped: j.dropped, competitors: j.competitors, confused_with: j.confused_with, recommended: j.recommended, judge_summary: j.judge_summary })),
       limit: 'deepseek answers from training data only; gpt-6.1-sol sometimes runs its own web search (see searched), so its answers can reflect the live web.',
     },
   };
