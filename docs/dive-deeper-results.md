@@ -1,8 +1,77 @@
 # Dive-deeper — step 1 results (prototype, not final)
 
-Run on 2026-10-25/26 against **one company only, Eternalgy Sdn Bhd (company-dive #4)**. The user chose that
-test set: only Eternalgy had a finished dive, and the user asked for no new dives yet. So every number
-below is n = 1. It shows which methods work, not how they behave across companies.
+**Round 1** (2026-10-25) ran on one company only, Eternalgy Sdn Bhd (company-dive #4). **Round 2** (2026-10-26)
+came after the user approved 4 more dives: #5 Everest Tent Technologies (tents, Kajang), #6 Hou Sent Renovation
+& Construction (Klang), #7 Rienzo (gates and security doors, Kajang, 754 reviews) and #8 MNA Solar / MNA Green
+Tech (solar shop, Kajang). Round 2 reran only the lanes kept in round 1. Its totals come first; the round 1 detail
+follows.
+
+## Round 2: kept lanes on all 5 companies
+
+Precision is correct / findings, for all 5 companies. "Owner cares" counts the yes verdicts.
+
+| Section · lane | Findings | Correct | Precision | Owner cares (yes) | Per company: requests | Per company: time | Verdict now |
+|---|---|---|---|---|---|---|---|
+| E · maps reviews | 44 | 39 | 89% | 12 | 5–9 Maps, 3 Brave, 1 LLM | 1.5–2 min | **Keep, change** |
+| H · maps rank | 39 | 38 | 97% | 21 | 3–9 Maps, 1 LLM | 0.5 min | **Keep** |
+| H · web rank + name search | 62 | 55 | 89% | 26 | 5–11 Brave, 2 LLM | 1 min | **Keep, change** (noise) |
+| G · fixed questions | 103 | 96 | 93% | 44 | 45 LLM (~250k gpt tokens) | 3.5–4 min | **Keep** |
+| G · grounded (Exa first) | 125 | 88 | 70% | 45 | 45 LLM, 9 Exa | 4 min | **Keep, fix the judge first** |
+| C · rule checks | 83 | 77 | 93% | 12 | 14–65 GETs, 0 LLM | 0.1–1 min | **Keep**, add a defacement check |
+| C · LanguageTool grammar | 62 | 19 | 31% | ~1 | 1–12 calls | – | **Drop** |
+| C · LLM page by page | 309 | 171 | 55% | 27 | 2–31 LLM | 1–8 min | **Keep, change** |
+| D · registers | 64 | 58 | 91% | 7 | 2–14 GETs, 1–2 LLM | 1.5–3 min | **Keep, rebuild as a CIDB sweep** |
+
+Cost per company:
+- Inputs: ~15 Maps requests, ~10 Brave, 9 Exa (~$0.06) and ~110 LLM calls. Most of the tokens are gpt-6.1-sol in section G.
+- Time: the lanes run in parallel, so the longest lane, about 4.5 min, sets the total. The company-dive before them takes 7–12 min.
+- Maps budget: about 160 of the 1,000 free requests used this month.
+
+### What the 4 new companies taught us
+
+**Correct is not the same as worth paying for.** Outside solar, most findings are true but dull. D found nothing an owner would care about for Everest, Hou Sent or Rienzo, because its registers are solar ones. LLM findings in C were mostly "no".
+
+**The best finding per company came from different sections each time:**
+- **Everest:** its official domain everesttent.com now serves an Indonesian gambling site (ROYAL123) and still ranks for the company's name (H-web; checked live). C-llm saw it but buried it among grammar notes, and C-rules missed it. A LinkedIn page in Everest's name carries the same "ROYAL 123" text (G).
+- **Hou Sent:** a duplicate Maps listing with no website (H), and the only unanswered review is a written 1★ (E). A lookup by SSM number shows its old sole proprietorship in CIDB as expired G3 (found by hand in D grading; the lane missed it).
+- **Rienzo:** 754 reviews at 5★, yet only #6–#8 in Kajang and Cheras (H). Facebook and directories still show the old address and the old "Rienzo Home" name (H-web). The footer registration number doesn't match the registry (C). Its CIDB G2 registration has expired (found by hand in D grading).
+- **MNA Solar:** rating down to 4.0★ in the last 6 months, and the owner replies only to 1★ reviews, defensively (E). A second Maps listing at the same address has a different phone (H). The footer still says "© 2023 MNA Gadgetz", the old brand (C; checked live). CIDB says G7 while its own listings say G5 (D grading).
+
+**AI invents websites:** for 3 of 4 companies, both models gave domains that do not exist (everesttent.com.my, rienzohome.com.my, mnagreentech.com; DNS-checked by the lead session). Without search, AI named the company in 1 of 16 trade answers; with search, in 6 of 16.
+
+### Changes each section needs (Step 2 material, not done)
+
+- **E:**
+  - Rienzo's 9-page budget covers only its newest ~4 weeks of reviews. Sample across time instead of taking the newest pages.
+  - Reserve part of the budget for small alias listings.
+  - Detect review widgets on the site. Rienzo shows 8 Google reviews through Trustindex, so "reviews not reused" was wrong.
+  - Tag the tone of owner replies (MNA's are defensive).
+- **H:**
+  - Pick the trade words and areas once per company and store them. Today each run picks new ones, so ranks can't be compared between runs.
+  - Dedupe by URL across the 3 name queries.
+  - Keep "a different company shows up" only for the same trade in Malaysia (Minnesota "MN Solar" and Houston "Heaven Sent" are noise).
+  - Skip thin queries that return fewer than 10 results.
+- **G:**
+  - Give the grounded judge the search snippets and a "sourced, not in dive" verdict. 33 of 41 of its "wrong" verdicts were real facts the dive lacked.
+  - Add a DNS check on every domain an AI answer names.
+- **C:**
+  - Add a defacement check (gambling or spam keywords, a title that doesn't match the company) that stops the crawl and raises one top alert.
+  - Read JS-filled values properly (Rienzo's counters show "0 %" in raw HTML).
+  - Run after H so Maps phones get compared.
+- **D:**
+  - Always sweep CIDB CIMS by SSM number, then by name, with the valid and expired filters run separately.
+  - Make "value not shown means can't check" a rule in code (all 3 of its wrong verdicts were this bug).
+  - Drop identity facts from the claim list.
+  - Next registers to test: ST ECOS (down both days), SIRIM, MyIPO.
+
+### Errors found in company-dive output (company-dive not changed)
+- Eternalgy: the dive treats MyDigital Kontraktor (the company's own page, G3) as CIDB. CIMS says G7.
+- Rienzo: the dive's address is Dun & Bradstreet's, so G asked trade questions about the wrong town.
+- MNA: the dive shows CIDB as "active", but MyDigital Kontraktor says it has expired, and CIMS says G7 valid.
+
+---
+
+## Round 1 detail (Eternalgy only)
 
 Plan: [dive-deeper-plan.md](dive-deeper-plan.md). Code: `agy-lab/scripts/dive-deeper/`. Nothing deployed,
 nothing written to the hub, no `companydive*` file touched.
@@ -23,7 +92,7 @@ Cost units:
 - Brave: about $0.005 per call at list price.
 - LLM: tokens only; the router's price per token is not known.
 
-## Summary: keep / change / drop
+### Round 1 summary: keep / change / drop
 
 | Section | Lane | Verdict | Why, in one line |
 |---|---|---|---|
@@ -149,8 +218,8 @@ Fixes:
 
 ## Open items for the user
 
-1. **Run the other 4 test companies?** (They need new company-dives: ~37 Tavily credits each.) The n = 1 caveat applies to everything above.
-2. **gpt-6.1-sol runaway answers in section G**: allow a length cap in that one section, or ask gpt only the fixed questions?
+1. ~~Run the other 4 test companies?~~ Done in round 2 (dives #5–8).
+2. **gpt-6.1-sol runaway answers in section G** (round 2: 5 answers over 20k characters, the largest 202k): allow a length cap in that one section, or ask gpt only the fixed questions?
 3. The company-dive's G3/G7 reading is wrong. It is a company-dive accuracy issue, so it is for you to decide; nothing in company-dive was changed.
 4. Facts only you can settle:
    - is the HQ at unit 23-01 or 21-01?

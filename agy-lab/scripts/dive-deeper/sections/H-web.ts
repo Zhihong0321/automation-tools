@@ -18,7 +18,7 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   const footprint = (r.facts ?? []).filter((f: any) => ['footprint', 'identity', 'products_services'].includes(f.topic)).map((f: any) => '- ' + f.fact).join('\n');
   const plan = ctx.parseJson(await ctx.llm(
     `A Malaysian customer looks for a company like this on Google. Company: ${dive.company}. Industry: ${id.industry}. HQ: ${id.address}.\nFacts:\n${footprint}\n\n` +
-    `Return JSON {"trades": [2 short search phrases a customer would type, e.g. "solar panel installer"], "areas": [up to 4 towns/cities where the company has an office or says it serves, most important first]}. JSON only.`,
+    `Return JSON {"trades": [2 short search phrases a customer would type, e.g. "solar panel installer"], "areas": [up to 4 Malaysian towns or cities (never a state or a country) where the company has an office or says it serves, most important first]}. JSON only.`,
   ));
   const trades: string[] = (plan?.trades ?? []).slice(0, 2);
   const areas: string[] = (plan?.areas ?? []).slice(0, 4);

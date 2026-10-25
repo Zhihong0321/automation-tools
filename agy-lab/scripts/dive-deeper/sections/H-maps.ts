@@ -27,7 +27,7 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   const footprint = (r.facts ?? []).filter((f: any) => ['footprint', 'identity', 'products_services'].includes(f.topic)).map((f: any) => '- ' + f.fact).join('\n');
   const plan = ctx.parseJson(await ctx.llm(
     `A Malaysian customer looks for a company like this on Google Maps. Company: ${dive.company}. Industry: ${id.industry}. HQ: ${id.address}.\nFacts:\n${footprint}\n\n` +
-    `Return JSON {"trades": [2 short search phrases a customer would type, e.g. "solar panel installer"], "areas": [up to 4 towns/cities where the company has an office or says it serves, most important first]}. JSON only.`,
+    `Return JSON {"trades": [2 short search phrases a customer would type, e.g. "solar panel installer"], "areas": [up to 4 Malaysian towns or cities (never a state or a country) where the company has an office or says it serves, most important first]}. JSON only.`,
   ));
   const trades: string[] = (plan?.trades ?? []).slice(0, 2);
   const areas: string[] = (plan?.areas ?? []).slice(0, 4);
@@ -58,7 +58,12 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
 
   // 2. A Maps search for the company's own name: how many listings carry it?
   const own = await ctx.maps('search_maps', { query: String(id.legal_name ?? dive.company), limit: '20', lang: 'en' });
-  const listings = (own?.data ?? []).filter(isUs).map((x: any) => ({ name: x.name, address: x.full_address, rating: x.rating, reviews: x.review_count, phone: x.phone_number, website: x.website, claimed: x.is_claimed, verified: x.verified, closed: x.is_permanently_closed || x.is_temporarily_closed, place_link: x.place_link }));
+  // Its own listings: the name search plus any listing of it the trade searches turned up
+  // (a brand listing like "MNA SOLAR" can be missed by a search for the legal name).
+  const seen = new Set<string>();
+  const ownRows = [...(own?.data ?? []), ...results.flatMap((x) => x.data?.data ?? [])].filter(isUs)
+    .filter((x: any) => { const k = String(x.place_id ?? x.business_id ?? x.name); if (seen.has(k)) return false; seen.add(k); return true; });
+  const listings = ownRows.map((x: any) => ({ name: x.name, address: x.full_address, rating: x.rating, reviews: x.review_count, phone: x.phone_number, website: x.website, claimed: x.is_claimed, verified: x.verified, closed: x.is_permanently_closed || x.is_temporarily_closed, place_link: x.place_link }));
   if (own) {
     const unclaimed = listings.filter((l: any) => l.claimed === false);
     findings.push({ title: `${listings.length} Google Maps listings carry your name`, detail: listings.map((l: any) => `${l.name} — ${l.address ?? 'no address'} — ${l.rating ?? '-'}★/${l.reviews ?? 0} — ${l.phone ?? 'no phone'} — ${l.website ?? 'no website'}${l.claimed === false ? ' — NOT CLAIMED' : ''}${l.closed ? ' — CLOSED' : ''}`).join(' | ') || 'none found', severity: listings.length === 0 ? 'high' : unclaimed.length ? 'medium' : 'info', source: `https://www.google.com/maps/search/${encodeURIComponent(String(id.legal_name ?? dive.company))}`, checked_at: ctx.now() });
