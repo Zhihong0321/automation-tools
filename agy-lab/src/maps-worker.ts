@@ -22,6 +22,7 @@
 // Mac mini's "an empty feed is never 0" rule was about a throttled IP, which
 // this path does not have.
 import * as jobs from './jobs.ts';
+import * as db from './reportdb.ts';
 
 export const JOB_TYPE = 'gmap.scan';
 export const WORKER_NAME = 'scraper-tech-maps';
@@ -324,6 +325,8 @@ async function lane(name: string, env: NodeJS.ProcessEnv): Promise<void> {
         const deadline = Date.parse(job.startedAt ?? new Date().toISOString()) + job.timeoutMs - DEADLINE_MARGIN_MS;
         const result = await scan(job.payload as Record<string, unknown> | null, config, fetch, { deadline });
         jobs.finish(job.id, true, result, null);
+        // The monthly count the taman auto-scan budgets against.
+        void db.addMapsUsage(Number(result.requests)).catch((e: Error) => console.warn('[maps] could not count usage: ' + e.message));
       } catch (cause) {
         const message = (cause as Error).message ?? String(cause);
         jobs.finish(job.id, false, null, message);

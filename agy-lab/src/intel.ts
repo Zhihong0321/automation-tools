@@ -14,6 +14,7 @@ import { normalizePhoneNumber } from './phone.ts';
 import { importSalesAgents } from './atap-import.ts';
 import { searchParallelPeople } from './parallel-contact.ts';
 import * as autoContact from './autocontact.ts';
+import * as autoScan from './autoscan.ts';
 export { normalizePhoneNumber };
 
 export interface Ctx {
@@ -1674,6 +1675,27 @@ export async function translateChinese(
   // So it ships, and it ships carrying the list of what did not check out.
   const errors = validateChineseTranslation(translated, finalReport);
   return { translated, model, ms: Date.now() - started, validation_errors: errors };
+}
+
+/** States a missing-taman run is working on, and each state's last outcome. */
+const findingMissing = new Set<string>();
+const lastFinderRun: Record<string, Record<string, unknown>> = {};
+
+/** Start one business-list report. The portal, the API and the taman auto-scan all start here. */
+export async function launchBusinessSearch(input: {
+  keyword?: string; place?: string; max?: unknown; userId?: string | null; timeoutMs?: unknown; autoQueued?: boolean;
+}): Promise<db.PublishedReport> {
+  const keyword = str(input.keyword).trim();
+  const place = str(input.place).trim();
+  const max = Math.min(Math.max(Math.round(num(input.max, 200)), 1), 2000);
+  const request: Record<string, unknown> = {
+    keyword, place: place || null, max, userId: input.userId || null, timeoutMs: num(input.timeoutMs, 1_200_000),
+    ...(input.autoQueued ? { autoQueued: 'true' } : {}),
+  };
+  const title = keyword ? `${keyword}${place ? ' in ' + place : ''}` : `Businesses in ${place}`;
+  const report = await db.createReport({ type: 'business_search', title, userId: str(request.userId) || null, request });
+  void runBusinessSearch(report.public_id, report.id, request);
+  return report;
 }
 
 async function runBusinessSearch(publicId: string, reportId: string, request: Record<string, unknown>): Promise<void> {
@@ -3425,13 +3447,55 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
   // ---- Telemarketing territory / lead-map --------------------------------
   if (method === 'GET' && p === '/api/territories') {
     const state = url.searchParams.get('state') || 'johor';
-    const [scans, assignments, contactPending] = await Promise.all([
+    const [scans, assignments, contactPending, discovered] = await Promise.all([
       db.getTerritoryScanStats().catch(() => []),
       db.getTamanAssignments(state).catch(() => ({})),
       db.getTamanContactPending().catch(() => ({})),
+      db.listDiscoveredTamans(state).catch(() => []),
     ]);
-    const result = territories.buildTerritoryResponse(state, scans, assignments, contactPending);
+    const result = territories.buildTerritoryResponse(state, scans, assignments, contactPending, discovered);
     ctx.json(res, 200, result);
+    return true;
+  }
+
+  if (method === 'GET' && p === '/api/territories/auto-scan') {
+    ctx.json(res, 200, await autoScan.status());
+    return true;
+  }
+
+  // Tavily looks for tamans the territory list lacks, district by district; the
+  // run takes minutes, so it answers at once and the result is read back below.
+  if (method === 'POST' && p === '/api/territories/find-missing') {
+    const body = await ctx.readJson(req);
+    const state = str(body.state).trim().toLowerCase() || 'johor';
+    if (!territories.ALL_TERRITORIES[state]) {
+      ctx.json(res, 400, { error: 'unknown state', states: Object.keys(territories.ALL_TERRITORIES) });
+      return true;
+    }
+    if (findingMissing.has(state)) {
+      ctx.json(res, 409, { error: 'already running for ' + state });
+      return true;
+    }
+    findingMissing.add(state);
+    void import('./taman-finder.ts')
+      .then((finder) => finder.findMissingTamans(state))
+      .then((summary) => { lastFinderRun[state] = { at: new Date().toISOString(), summary }; console.log(`[taman-finder] ${state}: ${JSON.stringify(summary).slice(0, 300)}`); })
+      .catch((err: Error) => { lastFinderRun[state] = { at: new Date().toISOString(), error: err.message }; console.warn(`[taman-finder] ${state} failed: ${err.message}`); })
+      .finally(() => findingMissing.delete(state));
+    ctx.json(res, 202, { started: state });
+    return true;
+  }
+
+  if (method === 'GET' && p === '/api/territories/discovered') {
+    const state = url.searchParams.get('state')?.trim().toLowerCase() || undefined;
+    const rows = await db.listDiscoveredTamans(state);
+    ctx.json(res, 200, {
+      running: state ? findingMissing.has(state) : [...findingMissing],
+      lastRun: state ? lastFinderRun[state] ?? null : lastFinderRun,
+      verified: rows.filter((r) => r.verified).length,
+      total: rows.length,
+      tamans: rows,
+    });
     return true;
   }
 
@@ -4276,13 +4340,9 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       ctx.json(res, 400, { error: 'keyword or place/location is required' });
       return true;
     }
-    const max = Math.min(Math.max(Math.round(num(body.max, 200)), 1), 2000);
-    const request = { keyword, place: place || null, max, userId: str(body.requesterId || body.userId) || null, timeoutMs: num(body.timeoutMs, 1_200_000) };
-    const title = keyword
-      ? `${keyword}${place ? ' in ' + place : ''}`
-      : `Businesses in ${place}`;
-    const report = await db.createReport({ type: 'business_search', title, userId: str(request.userId) || null, request });
-    void runBusinessSearch(report.public_id, report.id, request);
+    const report = await launchBusinessSearch({
+      keyword, place, max: body.max, userId: str(body.requesterId || body.userId) || null, timeoutMs: body.timeoutMs,
+    });
     ctx.json(res, 202, { report: envelope(req, report) });
     return true;
   }

@@ -524,6 +524,29 @@ export function migrate(): Promise<void> {
       alter table company_data add column if not exists blacklist_reason text;
       alter table company_data add column if not exists blacklist_checked_at timestamptz;
       comment on column company_data.blacklist_reason is 'lead-blacklist.ts group that keeps this lead out of contact research; null when it may be researched';
+
+      create table if not exists maps_usage (
+        month text primary key,
+        requests integer not null default 0,
+        updated_at timestamptz not null default now()
+      );
+      comment on table maps_usage is 'scraper.tech Maps requests spent per calendar month (UTC), counted by maps-worker.ts after each scan';
+
+      create table if not exists territory_discovered (
+        id bigserial primary key,
+        state text not null,
+        district text not null,
+        name text not null,
+        name_key text not null,
+        query_place text not null,
+        evidence_url text,
+        maps_name text,
+        maps_address text,
+        verified boolean not null default false,
+        created_at timestamptz not null default now(),
+        unique (state, district, name_key)
+      );
+      comment on table territory_discovered is 'Tamans missing from territories.ts, found by taman-finder.ts (Tavily + the contact LLM) and checked on Google Maps';
       create index if not exists company_data_lead_status_idx on company_data (lead_status);
       create index if not exists company_data_assigned_to_idx on company_data (assigned_to);
       create index if not exists company_data_is_hidden_idx on company_data (is_hidden);
@@ -4864,3 +4887,80 @@ export async function hideAtapSolarRegistrations(
   return { updated: res.rows.length };
 }
 
+
+// ---- Maps budget, taman auto-scan, discovered tamans ------------------------
+
+const usageMonth = (at = new Date()): string => at.toISOString().slice(0, 7);
+
+/** Add one scan's scraper.tech requests to this month's count. */
+export async function addMapsUsage(requests: number): Promise<void> {
+  if (!configured() || !Number.isFinite(requests) || requests <= 0) return;
+  await migrate();
+  await sql(
+    `insert into maps_usage (month, requests) values ($1, $2)
+     on conflict (month) do update set requests = maps_usage.requests + excluded.requests, updated_at = now()`,
+    [usageMonth(), Math.round(requests)],
+  );
+}
+
+export async function mapsUsageThisMonth(): Promise<number> {
+  if (!configured()) return 0;
+  await migrate();
+  const out = await sql<{ requests: number }>('select requests from maps_usage where month = $1', [usageMonth()]);
+  return Number(out.rows[0]?.requests ?? 0);
+}
+
+/**
+ * Places that need no auto-scan: a Business scan since `since` that is queued,
+ * running, completed, or partial with companies. Keyed by lower-cased place.
+ * Also the number of auto-scans still in flight.
+ */
+export async function autoScanProgress(since: string): Promise<{ done: Set<string>; inFlight: number }> {
+  await migrate();
+  const out = await sql<{ place: string; status: string; auto: boolean }>(
+    `select lower(trim(request->>'place')) as place, status, coalesce(request->>'autoQueued', '') = 'true' as auto
+     from published_report
+     where report_type = 'business_search'
+       and lower(coalesce(request->>'keyword', '')) in ('business', '')
+       and created_at >= $1
+       and (status in ('queued', 'running', 'completed')
+            or (status = 'partial' and jsonb_typeof(result->'companies') = 'array' and jsonb_array_length(result->'companies') > 0))`,
+    [since],
+  );
+  return {
+    done: new Set(out.rows.map((r) => r.place)),
+    inFlight: out.rows.filter((r) => r.auto && (r.status === 'queued' || r.status === 'running')).length,
+  };
+}
+
+export type DiscoveredTaman = {
+  state: string; district: string; name: string; query_place: string;
+  evidence_url: string | null; maps_name: string | null; maps_address: string | null; verified: boolean;
+};
+
+/** Save found tamans; a name already saved for that district keeps its first record. */
+export async function saveDiscoveredTamans(rows: Array<DiscoveredTaman & { name_key: string }>): Promise<number> {
+  if (!rows.length) return 0;
+  await migrate();
+  let saved = 0;
+  for (const r of rows) {
+    const out = await sql(
+      `insert into territory_discovered (state, district, name, name_key, query_place, evidence_url, maps_name, maps_address, verified)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict (state, district, name_key) do nothing`,
+      [r.state, r.district, r.name, r.name_key, r.query_place, r.evidence_url, r.maps_name, r.maps_address, r.verified],
+    );
+    saved += out.rowCount ?? 0;
+  }
+  return saved;
+}
+
+export async function listDiscoveredTamans(state?: string): Promise<DiscoveredTaman[]> {
+  if (!configured()) return [];
+  await migrate();
+  const out = await sql<DiscoveredTaman>(
+    `select state, district, name, query_place, evidence_url, maps_name, maps_address, verified
+     from territory_discovered where ($1::text is null or lower(state) = lower($1)) order by state, district, name`,
+    [state ?? null],
+  );
+  return out.rows;
+}

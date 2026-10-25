@@ -8538,6 +8538,54 @@ export const ALL_TERRITORIES: Record<string, StateTerritory> = {
   johor: JOHOR_TERRITORY,
 };
 
+/** A taman taman-finder.ts found and checked on Google Maps. */
+export interface DiscoveredTamanInput {
+  state: string;
+  district: string;
+  name: string;
+  query_place: string;
+  verified: boolean;
+}
+
+/**
+ * A copy of the state's districts with its verified discovered tamans added,
+ * each district's under one extra town, "Newly found tamans". Unverified ones
+ * stay out: a name only a search snippet gave is not yet a place.
+ */
+export function withDiscovered(base: StateTerritory, discovered: DiscoveredTamanInput[] = []): DistrictLocation[] {
+  const districts: DistrictLocation[] = JSON.parse(JSON.stringify(base.districts));
+  for (const d of districts) {
+    const known = new Set(d.towns.flatMap((t) => t.tamans.map((tm) => cleanStr(tm.queryPlace))));
+    const found = discovered.filter((x) => x.verified
+      && cleanStr(x.state) === cleanStr(base.state) && cleanStr(x.district) === cleanStr(d.name)
+      && !known.has(cleanStr(x.query_place)));
+    if (!found.length) continue;
+    d.towns.push({
+      id: d.id + '_discovered',
+      name: 'Newly found tamans',
+      fullName: 'Newly found tamans (' + d.name + ')',
+      queryPlace: d.name + ', ' + base.state,
+      tamans: found.map((x) => ({ name: x.name, queryPlace: x.query_place })),
+    });
+  }
+  return districts;
+}
+
+/** Every taman of every listed state, in list order: what the taman auto-scan walks. */
+export function allTamans(discovered: DiscoveredTamanInput[] = [], states = Object.keys(ALL_TERRITORIES)): Array<{
+  state: string; district: string; town: string; name: string; queryPlace: string;
+}> {
+  const out: Array<{ state: string; district: string; town: string; name: string; queryPlace: string }> = [];
+  for (const key of states) {
+    const base = ALL_TERRITORIES[key.toLowerCase()];
+    if (!base) continue;
+    for (const d of withDiscovered(base, discovered)) {
+      for (const t of d.towns) for (const tm of t.tamans) out.push({ state: base.state, district: d.name, town: t.name, name: tm.name, queryPlace: tm.queryPlace });
+    }
+  }
+  return out;
+}
+
 function cleanStr(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
@@ -8589,9 +8637,10 @@ export function buildTerritoryResponse(
   scans: TerritoryScanStatInput[] = [],
   tamanAssignments: Record<string, { assigned_to: string; telemarketer_uid?: string | null; assigned_at?: string } | string> = {},
   contactPending: Record<string, number> = {},
+  discovered: DiscoveredTamanInput[] = [],
 ) {
   const base = ALL_TERRITORIES[stateName.toLowerCase()] ?? JOHOR_TERRITORY;
-  const districts: DistrictLocation[] = JSON.parse(JSON.stringify(base.districts));
+  const districts: DistrictLocation[] = withDiscovered(base, discovered);
 
   let totalTamans = 0;
   let scannedTamans = 0;
