@@ -1,13 +1,23 @@
 # The home worker
 
 A loop that asks the lab for a job, runs it on this machine, and posts the answer
-back. Two things keep the work here rather than in the container:
+back. What keeps the work here rather than in the container:
 
-- **A home IP.** A Google Maps scan from a datacenter address comes back thin
-  instead of coming back an error, so a scan run in Railway is quietly incomplete.
 - **Logins that already exist here.** The ChatGPT accounts are signed in inside
   ego lite's profiles on this machine, and Facebook was signed in by hand in the crawler's own task
   space — no OAuth-paste apparatus, no keyring the container does not have.
+
+**`gmap.scan` has moved to the hub.** Google Maps business lists now come from
+scraper.tech, run by the hub's own worker (`scraper-tech-maps`,
+[maps-worker.ts](../agy-lab/src/maps-worker.ts)). It found 1,838 businesses in
+Taman Daya where this machine found 118. The home IP was the reason scans ran
+here: a scan from a datacenter address came back thin. scraper.tech does not have
+that problem. The hub no longer gives this machine `gmap.scan`: `RETIRED_TYPES` in
+[jobs.ts](../agy-lab/src/jobs.ts) drops it from any worker whose name starts with
+`m4-mini`, even if the scan daemon still offers it. The `gmap.scan` row and the
+scan daemon below are kept for the record. See
+[docs/pipeline.md](../docs/pipeline.md) and
+[docs/scraper-tech-maps.md](../docs/scraper-tech-maps.md).
 
 It only ever makes outbound requests. Nothing needs to be opened on the router.
 

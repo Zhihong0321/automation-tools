@@ -1,0 +1,215 @@
+# How a lead flows
+
+One page from "a taman on the list" to "a number a telemarketer can call". Everything below runs in
+the Railway hub (`agy-lab`, https://ee-auto.up.railway.app). The Mac mini takes no part in it any more.
+
+Checked against the code on 2026-10-25. The taman auto-scan and the missing-taman finder were being
+added that day, so their names can still change: read the files before relying on them.
+
+All `/api/*` calls need `Authorization: Bearer $LAB_TOKEN`. Env vars are Railway variables on the
+hub. Changing one redeploys the hub.
+
+```
+Territory list  (+ missing-taman finder)
+   -> taman auto-scan
+   -> Google Maps business list (scraper.tech)
+   -> company_data
+   -> lead blacklist
+   -> contact auto-queue
+   -> Exa (or Tavily) search + deepseek page reading
+   -> contact report
+   -> telemarketing
+```
+
+## 1. Territory list
+
+| | |
+|---|---|
+| File | [territories.ts](../agy-lab/src/territories.ts) (`ALL_TERRITORIES`) |
+| Size | Johor: 10 districts, 771 tamans. Selangor: 9 districts, 1,060 tamans. |
+| Status | `GET /api/territories?state=johor` |
+| Cost | none |
+
+The list was built by hand once, so tamans opened in the last few years are missing.
+
+### Missing-taman finder
+
+| | |
+|---|---|
+| File | [taman-finder.ts](../agy-lab/src/taman-finder.ts) |
+| Start | `POST /api/territories/find-missing` with `{"state":"johor"}`. Answers at once and runs for minutes. |
+| Status | `GET /api/territories/discovered?state=johor`: whether it is running, the last run, and every candidate |
+| Saved in | table `territory_discovered` |
+| Cost | per district: 2 Tavily basic searches (2 credits), 1 deepseek call, and 1 scraper.tech request for each candidate (at most 25) |
+| Pause | nothing to pause: it runs only when started |
+
+For each district it:
+1. runs 2 Tavily searches for new housing areas,
+2. asks deepseek to pull the area names out of the results,
+3. drops names already on the list,
+4. looks each one up on Google Maps.
+
+Every candidate is saved. A verified one joins the territory list under "Newly found tamans", so the
+auto-scan picks it up too. If `SCRAPER_TECH_KEY` is not set, candidates are saved unverified.
+Each Maps check is one request and is counted in `maps_usage`, the same monthly count the auto-scan budgets against.
+
+## 2. Taman auto-scan
+
+| | |
+|---|---|
+| File | [autoscan.ts](../agy-lab/src/autoscan.ts) |
+| Switches | `AUTO_SCAN_PAUSED`, `MAPS_MONTHLY_BUDGET` (default 25,000), `AUTO_SCAN_CONCURRENT` (default 1), `AUTO_SCAN_STATES` (default `johor,selangor`) |
+| Status | `GET /api/territories/auto-scan`: tamans, scanned, remaining, next five, requests used this month, budget, and why it is holding |
+| Cost | one Business scan per taman: about 100–420 scraper.tech requests |
+| Pause | `AUTO_SCAN_PAUSED=1` |
+
+- Every 2 minutes it queues a Business scan (max 2000) for the next taman, in list order.
+- One scan at a time, unless `AUTO_SCAN_CONCURRENT` says more.
+- It skips a taman that already has a Business scan since the scraper.tech switch (2026-10-24).
+  Older Mac mini scans do not count: they found far less (Taman Daya 118 against 1,838).
+- It stops starting scans when this month's requests plus one more scan (420) would pass
+  `MAPS_MONTHLY_BUDGET`. The month count lives in table `maps_usage`. Manual scans count against the
+  same number but are never held. 25,000 of the plan's 30,000 leaves room for manual scans.
+- It also holds while no Maps worker is live.
+
+At 100–420 requests a taman, 25,000 requests cover roughly 60–250 tamans a month. The 1,831 listed
+tamans take several months on the $4 plan.
+
+## 3. Google Maps business list (scraper.tech)
+
+| | |
+|---|---|
+| File | [maps-worker.ts](../agy-lab/src/maps-worker.ts): the hub's `gmap.scan` worker, named `scraper-tech-maps` |
+| Switches | `SCRAPER_TECH_KEY` (vault name `SCRAPER_TECH_KEY`), `MAPS_LANES` (default 3), `SCRAPER_TECH_BASE_URL` (default `https://mcp.scraper.tech`) |
+| Start by hand | taman buttons **Business**, **Factory**, **Shop**, or the Business list form, or `POST /api/business-search` |
+| Status | `GET /api/jobs` (lanes `scraper-tech-maps`, `-2`, `-3`); each scan is a report at `/r/<id>` |
+| Cost | $4/month for 30,000 requests. Business taman scan about 100–420 requests, Factory 19, Shop 16. |
+| Pause | unset `SCRAPER_TECH_KEY`: the lanes go idle and a business search fails at once with "worker is offline" |
+
+How a scan works:
+- The MCP URL is `https://mcp.scraper.tech/<key>`, tool `search_maps`. One call per query, `limit` 500.
+- One Google search tops out around 150–190 places, so a scan sweeps a family of keywords,
+  "`<word> in <taman>`":
+
+  | Button | Family | Words |
+  |---|---|---|
+  | Business | every kind of business | 45 |
+  | Factory | factories, manufacturers, suppliers | 19 |
+  | Shop | shops, restaurants, services | 16 |
+
+  A search with a location only sweeps the Business family. Any other keyword is one call.
+  The old "All" button is now Shop.
+- After a Business sweep it searches street by street: "shop in `<street>`" and "company in `<street>`",
+  2 requests per street. This is why a Business scan costs 100–420 requests.
+- Rows whose address does not name the taman are dropped (they are found again when their own taman
+  is scanned). Permanently closed places are dropped.
+- Max results go up to 2000. A business search times out after 20 minutes by default (also the ceiling).
+
+Measured:
+
+| Scan | scraper.tech | Mac mini |
+|---|---|---|
+| Taman Daya, Business | 1,838 businesses, 417 requests, 4.6 min | 118 |
+| Taman Universiti, Factory | 969 | 114 |
+
+The Mac mini no longer runs `gmap.scan`: `RETIRED_TYPES` in [jobs.ts](../agy-lab/src/jobs.ts) drops it
+from any worker whose name starts with `m4-mini`. Details and raw tests:
+[scraper-tech-maps.md](scraper-tech-maps.md).
+
+## 4. company_data
+
+Each business from a scan becomes a lead in table `company_data`, merged on Google's `place_id` so a
+second scan of the same place does not make a duplicate. `GET /api/leads` lists them.
+
+## 5. Lead blacklist
+
+| | |
+|---|---|
+| File | [lead-blacklist.ts](../agy-lab/src/lead-blacklist.ts) |
+| Stored in | `company_data.blacklist_reason` (empty when the lead may be researched) |
+| Runs | every lead at boot; new leads right after each scan and before each auto-queue cycle |
+| Cost | none |
+| Pause | no switch. Starting research on one company by hand still works on a blacklisted lead. |
+
+The groups (government, banks, malls, chains, competitors and so on) and what each one caught are in
+[lead-blacklist.md](lead-blacklist.md).
+
+## 6. Contact auto-queue
+
+| | |
+|---|---|
+| File | [autocontact.ts](../agy-lab/src/autocontact.ts) |
+| Switches | `AUTO_CONTACT_PAUSED` |
+| Status | `GET /api/contact-research/auto-queue` |
+| Cost | none itself; each job costs what step 7 costs |
+| Pause | `AUTO_CONTACT_PAUSED=1` |
+
+- Every 60 seconds it queues up to 3 contact research jobs, and none while 3 are still waiting.
+- It takes only leads that were checked against the blacklist, came out clean, and were never
+  researched (a lead whose earlier research failed goes first).
+- It holds itself while no contact worker is live, and while every Exa and Tavily key is resting.
+- New leads from a scan reach it on their own: scan, blacklist check, then the next cycle.
+
+First live run: 22 jobs in 10 minutes, 19 completed, 1 failed and then succeeded on a re-run,
+0 blacklisted. About 2 jobs a minute.
+
+## 7. Contact deep research
+
+| | |
+|---|---|
+| Files | [contact-worker.ts](../agy-lab/src/contact-worker.ts), [contact-exa.ts](../agy-lab/src/contact-exa.ts), [extract-llm.ts](../agy-lab/src/extract-llm.ts), [pi.ts](../agy-lab/src/pi.ts) |
+| Switches | `CONTACT_LLM_URL`, `CONTACT_LLM_KEY`, `CONTACT_LLM_MODEL` (vault `ZM_AI_FIXED_KEY`), `CONTACT_LANES` (default 3), `CONTACT_TIMEOUT_MS` (default 180,000) |
+| Keys | Exa and Tavily keys are kept in the hub: `GET /api/contact-keys`, or the `/workers` page. `EXA_API_KEYS` / `TAVILY_API_KEYS` are read only when the hub has none stored. |
+| Status | `GET /api/jobs` (lanes `pi-contact`), `GET /api/contact-keys` (quota per key), `GET /api/contact-stats` (finds per provider) |
+| Cost | Exa about $0.017 a company. Tavily fallback about 4 credits a company, on free keys. |
+| Pause | pause the auto-queue (step 6). Jobs already queued still run. |
+
+Two steps per company:
+1. **Search.** The Exa pipeline runs while any Exa key has credits (23 keys). If every Exa key is
+   resting, or Exa fails, the job falls back to the v2 pipeline on Tavily (19 free keys, 1,000
+   credits a month each).
+2. **Read.** A model reads the pages found and pulls out people, phones and emails. It may only return
+   what is printed on those pages. With the three `CONTACT_LLM_*` variables set this model is
+   **deepseek-v4.1-flash-1017**. Without them it falls back to Pi on MiniMax, whose Token Plan ran out
+   on 2026-10-24. Pi on MiniMax still serves report rounds and translation.
+
+Search providers compared: [search-providers.md](search-providers.md).
+
+## 8. Contact report and telemarketing
+
+The result is saved as a contact research report linked to the lead: the phones, emails and people
+found, each with the page it came from. On `/telemarketing` the team lead assigns tamans to telemarketers. Each taman
+row shows its scans, the Business / Factory / Shop scan buttons, and "Research N pending" for leads
+still waiting for contact research.
+
+## Switches
+
+All Railway variables on the hub.
+
+| Variable | Default | Does |
+|---|---|---|
+| `SCRAPER_TECH_KEY` | not set | scraper.tech key. Unset, the Maps worker is idle. Vault name `SCRAPER_TECH_KEY`. |
+| `SCRAPER_TECH_BASE_URL` | `https://mcp.scraper.tech` | scraper.tech MCP address |
+| `MAPS_LANES` | 3 | Maps scans run at once |
+| `AUTO_SCAN_PAUSED` | off | `1` holds the taman auto-scan |
+| `MAPS_MONTHLY_BUDGET` | 25,000 | auto-scan stops starting scans at this many requests this month |
+| `AUTO_SCAN_CONCURRENT` | 1 | auto-scans in flight at once |
+| `AUTO_SCAN_STATES` | `johor,selangor` | states the auto-scan walks |
+| `AUTO_CONTACT_PAUSED` | off | `1` holds the contact auto-queue |
+| `CONTACT_LLM_URL` | not set | page-reading model's address (OpenAI-compatible) |
+| `CONTACT_LLM_KEY` | not set | its key. Vault name `ZM_AI_FIXED_KEY`. |
+| `CONTACT_LLM_MODEL` | not set | `deepseek-v4.1-flash-1017`. With any of the three unset, reading falls back to Pi on MiniMax. |
+| `CONTACT_LANES` | 3 | contact research jobs at once |
+| `CONTACT_TIMEOUT_MS` | 180,000 | time limit per contact job |
+| `EXA_API_KEYS`, `TAVILY_API_KEYS` | not set | search keys, used only when none are stored in the hub |
+| `MINIMAX_API_KEY` | not set | Pi on MiniMax: report rounds, translation, and the reading fallback |
+
+## Where the money goes
+
+| What | Provider | Plan | Use |
+|---|---|---|---|
+| Google Maps business lists | scraper.tech | $4/month, 30,000 requests | Business taman scan 100–420 requests, Factory 19, Shop 16; finder 1 per candidate. Auto-scan capped at 25,000 a month. |
+| Contact search, first choice | Exa | 23 keys | about $0.017 a company |
+| Contact search, fallback | Tavily | 19 free keys, 1,000 credits a month each | about 4 credits a company; finder 2 credits a district |
+| Reading contact pages, finder names | deepseek-v4.1-flash-1017 (`ZM_AI_FIXED_KEY`) | not measured here | 1 call per company (a second, smaller try when the first stalls), 1 per finder district |
+| Report rounds, translation | Pi on MiniMax | Token Plan, ran out 2026-10-24 | also the reading fallback |
