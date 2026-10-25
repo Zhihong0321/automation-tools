@@ -32,32 +32,25 @@ Territory list  (+ missing-taman finder)
 
 The list was built by hand once, so tamans opened in the last few years are missing.
 
-### Missing-taman finder
+### Missing tamans: the search-for-taman SOP
 
 | | |
 |---|---|
-| File | [taman-finder.ts](../agy-lab/src/taman-finder.ts) |
-| Start | `POST /api/territories/find-missing` with `{"state":"johor"}`, or `{"state":"johor","district":"Kulai"}` for one daerah. Answers at once and runs for minutes. |
-| Status | `GET /api/territories/discovered?state=johor`: whether it is running, the last run, and every candidate |
-| Saved in | table `territory_discovered` |
-| Cost | per town: 2 Tavily basic searches (2 credits), 1–2 deepseek calls, 2 scraper.tech list searches, and up to 20 single checks. All of Johor (70 towns) is about 140 Tavily credits and 140–1,500 Maps requests. |
-| Pause | nothing to pause: it runs only when started |
+| How | the **search-for-taman** skill ([SKILL.md](../.claude/skills/search-for-taman/SKILL.md)), run from a person's machine, one daerah at a time |
+| Master list | [taman-search-master-list.md](taman-search-master-list.md): one row per daerah. A daerah marked Done is never searched again |
+| Tool | `agy-lab/scripts/find-tamans.ts` (`check`, `save`, `status`), on top of [taman-finder.ts](../agy-lab/src/taman-finder.ts) |
+| Saved in | table `territory_discovered` (tamans) and `taman_finder_town` (towns searched), through `POST /api/territories/finder` |
+| Cost | 7 scraper.tech requests per town (14 at most with retries). All 125 towns are about 875 requests, once. |
+| Pause | nothing to pause: it runs only when someone runs the SOP |
 
-A daerah is too big for one search, so it works town by town (Johor: 70 towns in 10 daerah;
-Selangor: 55 in 9). For each town it:
-1. asks Google Maps for "taman in <town>" and "housing estate in <town>", and keeps the rows Maps
-   files as a housing estate, housing complex, neighbourhood or similar. Each is a taman Maps knows, so
-   it is verified already;
-2. runs 2 Tavily searches for the town's housing areas, new ones included;
-3. asks deepseek to pull the area names out of those results. If deepseek thinks past its output
-   cap, it reads again with fewer snippets;
-4. drops names the daerah already has;
-5. verifies each Tavily name against the town's Maps rows. If that fails, it looks the name up on Maps
-   once, at most 20 per town.
+For each town, the tool reads the addresses from 7 Google Maps list searches and from the saved leads.
+An area name is a candidate only when 2 or more different addresses in that town carry it, and the
+daerah does not list it yet. The user approves each town's numbered list before anything is saved.
+A saved taman joins the territory list under "Newly found tamans", so the auto-scan scans it too.
 
-Every candidate is saved. A verified one joins the territory list under "Newly found tamans", so the
-auto-scan picks it up too. If `SCRAPER_TECH_KEY` is not set, candidates are saved unverified.
-Each Maps check is one request and is counted in `maps_usage`, the same monthly count the auto-scan budgets against.
+It is not a hub job on purpose: Google Maps answers vary from run to run, so a person reads each
+town's result first. The first, automatic version trusted Maps' housing categories, and on Senai 95
+of its 115 "verified" names were private houses, rooms for rent and house numbers.
 
 ## 2. Taman auto-scan
 

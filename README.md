@@ -18,7 +18,7 @@ variables and the local vault, never in this repo.
 
 Full reference, with every switch, status endpoint and cost: [docs/pipeline.md](docs/pipeline.md).
 
-1. **Territory list.** Johor (771 tamans) and Selangor (1,060). A finder adds tamans the list misses.
+1. **Territory list.** Johor (771 tamans) and Selangor (1,060). The **search-for-taman** SOP adds tamans the list misses, one daerah at a time, tracked in [docs/taman-search-master-list.md](docs/taman-search-master-list.md).
 2. **Taman auto-scan** queues a Business scan for each taman in turn, inside a monthly request budget.
 3. **Google Maps business list** comes from scraper.tech, in the hub. Buttons: Business, Factory, Shop.
 4. Each business becomes a lead in **`company_data`**.
@@ -29,7 +29,7 @@ Full reference, with every switch, status endpoint and cost: [docs/pipeline.md](
 9. **Telemarketing** assigns tamans to telemarketers, who call the leads.
 10. Pause switches: `AUTO_SCAN_PAUSED=1`, `AUTO_CONTACT_PAUSED=1`.
 
-The taman auto-scan and the missing-taman finder went live on 2026-10-25 (commit 372027a).
+The taman auto-scan went live on 2026-10-25. Missing tamans are found with the search-for-taman SOP (`.claude/skills/search-for-taman/`), run by hand.
 
 ## Docs
 
