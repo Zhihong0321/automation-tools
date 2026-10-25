@@ -39,6 +39,7 @@ export function config(env: NodeJS.ProcessEnv = process.env) {
 export type ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high';
 
 export interface AskOptions {
+  /** Default 300s; 0 means no timeout. */
   timeoutMs?: number;
   /** web_search and web_fetch. On unless a caller turns them off. */
   tools?: boolean;
@@ -232,7 +233,9 @@ async function runSdk(prompt: string, opts: Required<AskOptions>): Promise<strin
   } as Parameters<typeof createAgentSession>[0]);
   let timer: NodeJS.Timeout | undefined;
   try {
+    // timeoutMs 0 means no timeout: the run ends when the model answers.
     const timedOut = new Promise<never>((_, reject) => {
+      if (opts.timeoutMs <= 0) return;
       timer = setTimeout(() => {
         void session.abort().catch(() => {});
         reject(fail('timeout', `Pi gave no answer within ${Math.round(opts.timeoutMs / 1000)}s.`));

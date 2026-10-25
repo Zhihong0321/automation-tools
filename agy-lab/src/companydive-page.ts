@@ -98,6 +98,7 @@ async function show(id) {
     html += '<details open><summary>Sources (' + cited.size + ' cited, ' + r.sources.length + ' found)</summary><ol class="sources">'
       + r.sources.filter((s) => cited.has(s.id)).map((s) => '<li id="src-' + s.id + '" value="' + s.id + '"><a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.title || s.url) + '</a> <span class="muted">' + esc(s.url) + ' · ' + esc(s.found.join(', ')) + '</span></li>').join('') + '</ol></details>';
     html += '<details><summary>Tavily calls</summary><ol>' + r.tavily.map((c) => '<li>/' + esc(c.path) + ' — ' + esc(c.label) + ' · ' + c.credits + ' credits · ' + (c.ms / 1000).toFixed(1) + 's' + (c.ok ? '' : ' · <span class="bad">' + esc(c.note) + '</span>') + '</li>').join('') + '</ol></details>';
+    html += '<details><summary>LLM calls (' + r.llm.length + ')</summary><ol>' + r.llm.map((u) => '<li>' + esc(u.step) + ' — ' + esc(u.engine || '') + ' · ' + (u.ms / 1000).toFixed(0) + 's</li>').join('') + '</ol></details>';
     html += '<details><summary>Facts (' + r.facts.length + ')</summary><ul>' + r.facts.map((f) => '<li><b>' + esc(f.topic) + '</b> ' + esc(f.fact) + ' <span class="muted">[' + f.sources.join(', ') + '] ' + esc(f.confidence) + '</span></li>').join('') + '</ul></details>';
   }
   html += '<details ' + (d.status === 'running' || d.status === 'queued' ? 'open' : '') + '><summary>Log</summary><div class="log">' + esc(log) + '</div></details>';

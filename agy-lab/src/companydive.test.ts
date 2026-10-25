@@ -80,3 +80,15 @@ test('streamChat joins content deltas, drops reasoning, and sends no max_tokens'
   assert.equal(sent.stream, true);
   assert.equal('max_tokens' in sent, false);
 });
+
+test('a timeout of 0 tells Pi to wait for the answer', async () => {
+  const pi = await import('./pi.ts');
+  let seen = -1;
+  pi.setRunnerForTests(async (_prompt, opts) => { seen = opts.timeoutMs; return 'ok'; });
+  try {
+    assert.equal((await pi.ask('hi', { tools: false, timeoutMs: 0 })).answer, 'ok');
+    assert.equal(seen, 0);
+  } finally {
+    pi.setRunnerForTests(null);
+  }
+});

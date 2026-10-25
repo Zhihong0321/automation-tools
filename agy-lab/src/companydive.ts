@@ -25,6 +25,7 @@
 import * as brave from './brave.ts';
 import * as tavily from './tavily.ts';
 import * as extractLlm from './extract-llm.ts';
+import * as pi from './pi.ts';
 import * as reportdb from './reportdb.ts';
 
 export type Source = {
@@ -120,7 +121,7 @@ export async function budgetedCall(
   }
 }
 
-export type LlmUse = { step: string; ms: number; promptChars: number; answerChars: number };
+export type LlmUse = { step: string; engine: string; ms: number; promptChars: number; answerChars: number };
 
 /** Where a stage that could not finish says so; the dive carries on. */
 type Warn = (msg: string) => void | Promise<void>;
@@ -160,28 +161,47 @@ export async function streamChat(prompt: string, fetchImpl: typeof fetch = fetch
   return content;
 }
 
+type Engine = { name: string; call: (prompt: string) => Promise<string> };
+
 /**
- * Retries ride out a gateway blip (about four minutes of backoff in all). Only
- * missing configuration gives up at once. If every try fails the stage gets the
+ * The two models the hub has: deepseek (CONTACT_LLM_*) first, then Pi on MiniMax
+ * (MINIMAX_API_KEY), the same pair contact research uses. Neither gets a timeout
+ * or a token cap. Whichever is configured takes part.
+ */
+function engines(): Engine[] {
+  const out: Engine[] = [];
+  const ds = extractLlm.config();
+  if (ds) out.push({ name: ds.model, call: (prompt) => streamChat(prompt) });
+  if (pi.config().apiKey) out.push({ name: `pi/${pi.config().model}`, call: async (prompt) => (await pi.ask(prompt, { tools: false, timeoutMs: 0 })).answer });
+  return out;
+}
+
+/**
+ * Each round tries every engine in turn, so a deepseek outage moves the step to
+ * MiniMax instead of waiting. Between rounds the backoff rides out a blip on
+ * both (about four minutes in all). If every round fails the stage gets the
  * error and falls back; the dive itself does not end here.
  */
 async function ask(prompt: string, opts: { step: string; uses?: LlmUse[] }): Promise<string> {
+  const all = engines();
+  if (!all.length) throw new Error(`LLM failed at ${opts.step}: neither CONTACT_LLM_* (deepseek) nor MINIMAX_API_KEY (Pi) is set`);
   const waits = [5_000, 15_000, 30_000, 60_000, 120_000];
-  let lastErr = '';
-  for (let attempt = 0; attempt <= waits.length; attempt++) {
-    const started = Date.now();
-    try {
-      const answer = stripThinking(await streamChat(prompt));
-      if (!answer) throw new Error('empty answer');
-      opts.uses?.push({ step: opts.step, ms: Date.now() - started, promptChars: prompt.length, answerChars: answer.length });
-      return answer;
-    } catch (err) {
-      lastErr = (err as Error).message;
-      if ((err as { code?: string }).code === 'not_configured') break;
-      if (attempt < waits.length) await new Promise((r) => setTimeout(r, waits[attempt]));
+  const errors: string[] = [];
+  for (let round = 0; round <= waits.length; round++) {
+    for (const engine of all) {
+      const started = Date.now();
+      try {
+        const answer = stripThinking(await engine.call(prompt));
+        if (!answer) throw new Error('empty answer');
+        opts.uses?.push({ step: opts.step, engine: engine.name, ms: Date.now() - started, promptChars: prompt.length, answerChars: answer.length });
+        return answer;
+      } catch (err) {
+        errors.push(`${engine.name}: ${(err as Error).message.slice(0, 200)}`);
+      }
     }
+    if (round < waits.length) await new Promise((r) => setTimeout(r, waits[round]));
   }
-  throw new Error(`LLM failed at ${opts.step}: ${lastErr}`);
+  throw new Error(`LLM failed at ${opts.step}: ${errors.slice(-all.length).join(' | ')}`);
 }
 
 /** Some gateways leave the model's reasoning inline in <think> tags. */
