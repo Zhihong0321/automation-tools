@@ -305,7 +305,8 @@ export async function request(
         method: 'POST',
         headers: { authorization: 'Bearer ' + lease.secret, 'content-type': 'application/json' },
         body: JSON.stringify({ ...body, include_usage: true }),
-        signal: AbortSignal.timeout(opts.timeoutMs ?? 150_000),
+        // No timeout unless the caller asks for one: a slow extract still finishes.
+        ...(opts.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
       });
     } catch (cause) {
       lease.release();

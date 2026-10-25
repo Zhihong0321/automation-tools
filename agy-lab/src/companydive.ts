@@ -59,6 +59,8 @@ export type DiveResult = {
   tavily: TavilyCall[];
   llm: LlmUse[];
   braveCalls: number;
+  /** Stages that could not finish and fell back; empty on a clean run. */
+  warnings: string[];
 };
 
 export type Progress = (stage: string, msg: string) => void | Promise<void>;
@@ -120,23 +122,63 @@ export async function budgetedCall(
 
 export type LlmUse = { step: string; ms: number; promptChars: number; answerChars: number };
 
+/** Where a stage that could not finish says so; the dive carries on. */
+type Warn = (msg: string) => void | Promise<void>;
+
 /**
- * The deepseek model contact research already uses (CONTACT_LLM_*), with three
- * tries per step. No max_tokens: the model's hidden reasoning counts against it,
- * so any cap can cut the answer off mid-JSON. The timeout bounds a runaway call.
+ * One streamed chat call to the deepseek model contact research already uses
+ * (CONTACT_LLM_*). Streamed, with no timeout and no max_tokens of ours: a model
+ * that is still thinking keeps sending chunks, so nothing can cut a working call
+ * off. (Node's fetch drops a connection only after five minutes of complete
+ * silence, which is a dead socket, not a slow answer.) The reply is the content
+ * deltas; reasoning deltas are read and dropped.
+ */
+export async function streamChat(prompt: string, fetchImpl: typeof fetch = fetch): Promise<string> {
+  const cfg = extractLlm.config();
+  if (!cfg) throw Object.assign(new Error('CONTACT_LLM_URL, CONTACT_LLM_KEY and CONTACT_LLM_MODEL are not all set'), { code: 'not_configured' });
+  const res = await fetchImpl(cfg.url + '/chat/completions', {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + cfg.key, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], temperature: 0, stream: true }),
+  });
+  if (!res.ok || !res.body) throw new Error(`${cfg.model} answered HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const decoder = new TextDecoder();
+  let buffered = '';
+  let content = '';
+  for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+    buffered += decoder.decode(chunk, { stream: true });
+    const lines = buffered.split('\n');
+    buffered = lines.pop() ?? '';
+    for (const line of lines) {
+      const data = line.trim().startsWith('data:') ? line.trim().slice(5).trim() : '';
+      if (!data || data === '[DONE]') continue;
+      try {
+        content += JSON.parse(data).choices?.[0]?.delta?.content ?? '';
+      } catch { /* a keep-alive or partial line, not content */ }
+    }
+  }
+  return content;
+}
+
+/**
+ * Retries ride out a gateway blip (about four minutes of backoff in all). Only
+ * missing configuration gives up at once. If every try fails the stage gets the
+ * error and falls back; the dive itself does not end here.
  */
 async function ask(prompt: string, opts: { step: string; uses?: LlmUse[] }): Promise<string> {
+  const waits = [5_000, 15_000, 30_000, 60_000, 120_000];
   let lastErr = '';
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 0; attempt <= waits.length; attempt++) {
+    const started = Date.now();
     try {
-      const out = await extractLlm.ask(prompt, { timeoutMs: 300_000 });
-      const answer = stripThinking(out.answer);
-      opts.uses?.push({ step: opts.step, ms: out.ms, promptChars: prompt.length, answerChars: answer.length });
+      const answer = stripThinking(await streamChat(prompt));
+      if (!answer) throw new Error('empty answer');
+      opts.uses?.push({ step: opts.step, ms: Date.now() - started, promptChars: prompt.length, answerChars: answer.length });
       return answer;
     } catch (err) {
       lastErr = (err as Error).message;
       if ((err as { code?: string }).code === 'not_configured') break;
-      if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 5_000));
+      if (attempt < waits.length) await new Promise((r) => setTimeout(r, waits[attempt]));
     }
   }
   throw new Error(`LLM failed at ${opts.step}: ${lastErr}`);
@@ -171,15 +213,24 @@ export function parseJson<T>(text: string): T {
   throw new Error(`unterminated JSON in answer: ${text.slice(0, 200)}`);
 }
 
-/** Ask for JSON; one more round with the parse error if the first answer does not parse. */
-async function askJson<T>(prompt: string, opts: { step: string; uses?: LlmUse[] }): Promise<T> {
-  const first = await ask(prompt, opts);
-  try {
-    return parseJson<T>(first);
-  } catch (err) {
-    const retry = await ask(`${prompt}\n\nYour previous answer could not be parsed (${(err as Error).message}). Answer again with only the JSON.`, { ...opts, step: opts.step + ':retry' });
-    return parseJson<T>(retry);
+/**
+ * Ask for JSON, re-asking with the parse error up to twice. A stage that still
+ * gets no usable JSON takes `fallback`, logs a warning and the dive goes on.
+ */
+async function askJson<T>(prompt: string, opts: { step: string; uses?: LlmUse[]; warn: Warn }, fallback: T): Promise<T> {
+  let ask_ = prompt;
+  let lastErr = '';
+  for (let round = 0; round < 3; round++) {
+    try {
+      return parseJson<T>(await ask(ask_, { ...opts, step: round ? `${opts.step}:retry${round}` : opts.step }));
+    } catch (err) {
+      lastErr = (err as Error).message;
+      if (/^LLM failed/.test(lastErr)) break;
+      ask_ = `${prompt}\n\nYour previous answer could not be parsed (${lastErr.slice(0, 200)}). Answer again with only the complete JSON.`;
+    }
   }
+  await opts.warn(`${opts.step}: no usable answer (${lastErr.slice(0, 200)}); carrying on with a fallback`);
+  return fallback;
 }
 
 // ---------------------------------------------------------------- helpers
@@ -426,6 +477,8 @@ async function dive(company: string, country: string, progress: Progress, budget
   const ledger = new Ledger();
 
   const say = async (stage: string, msg: string) => { await progress(stage, msg); };
+  const warnings: string[] = [];
+  const warn: Warn = async (msg) => { warnings.push(msg); await say('warn', msg); };
   const T = (path: 'search' | 'extract' | 'map', body: Record<string, unknown>, label: string) =>
     budgetedCall(budget, path, body, label);
 
@@ -491,7 +544,8 @@ async function dive(company: string, country: string, progress: Progress, budget
   // 2. triage -------------------------------------------------------------
   await say('triage', `LLM triage of ${ledger.sources.length} URLs`);
   const tri = await askJson<{ identity?: Identity; relevant_ids?: unknown; map_domain?: string | null; extract_ids?: unknown; gaps?: string[] }>(
-    triagePrompt(company, country, ledger, t1Answer), { step: 'triage', uses });
+    triagePrompt(company, country, ledger, t1Answer), { step: 'triage', uses, warn },
+    { relevant_ids: ledger.sources.map((s) => s.id), map_domain: null, extract_ids: [], gaps: [] });
   const identity: Identity = tri.identity ?? {};
   const relevant = new Set(ids(tri.relevant_ids, ledger));
   let gaps: string[] = Array.isArray(tri.gaps) ? tri.gaps.map(String) : [];
@@ -521,7 +575,8 @@ async function dive(company: string, country: string, progress: Progress, budget
     const unread = mapped.filter((u) => (ledger.find(u)?.contentKind ?? 'none') === 'none');
     await say('read', `Tavily T2: ${mapped.length} official pages, ${unread.length} not read yet`);
     if (unread.length) {
-      const pick = await askJson<{ urls?: string[] }>(pickPagesPrompt(company, identity, unread.slice(0, 150), 15), { step: 'pick-pages', uses });
+      const pick = await askJson<{ urls?: string[] }>(pickPagesPrompt(company, identity, unread.slice(0, 150), 15), { step: 'pick-pages', uses, warn },
+        { urls: [...unread].sort((x, y) => x.length - y.length).slice(0, 15) });
       const allowed = new Set(unread.map(urlKey));
       ownPages = (pick.urls ?? []).filter((u) => allowed.has(urlKey(u))).slice(0, 20);
     }
@@ -542,7 +597,8 @@ async function dive(company: string, country: string, progress: Progress, budget
   const maxSearches = Math.max(0, Math.min(8, budget.left - 4));
   await say('analyse', `LLM analysis of ${relevantSources().length} sources`);
   const ana = await askJson<{ facts?: unknown; contradictions?: string[]; gaps?: string[]; searches?: Array<Record<string, any>> }>(
-    analysePrompt(company, country, identity, gaps, corpus(relevantSources(), 120_000), maxSearches), { step: 'analyse', uses });
+    analysePrompt(company, country, identity, gaps, corpus(relevantSources(), 120_000), maxSearches), { step: 'analyse', uses, warn },
+    { facts: [], contradictions: [], gaps, searches: gaps.slice(0, maxSearches).map((g) => ({ query: `"${company}" ${g}` })) });
   let facts = cleanFacts(ana.facts, ledger);
   const contradictions = Array.isArray(ana.contradictions) ? ana.contradictions.map(String) : [];
   gaps = Array.isArray(ana.gaps) ? ana.gaps.map(String) : gaps;
@@ -582,7 +638,8 @@ async function dive(company: string, country: string, progress: Progress, budget
   const readable = relevantSources().filter((s) => s.contentKind === 'none' && !WALLED.test(hostOf(s.url)) && !s.failed).map((s) => s.id).join(', ');
   await say('reflect', `LLM reflection on ${fresh.length} new sources; ${reserve} reserve calls available`);
   const ref = await askJson<{ facts?: unknown; gaps?: string[]; next?: Array<Record<string, any>> }>(
-    reflectPrompt(company, identity, facts, gaps, corpus(fresh, 80_000) + '\n' + summaries.join('\n'), reserve, readable), { step: 'reflect', uses });
+    reflectPrompt(company, identity, facts, gaps, corpus(fresh, 80_000) + '\n' + summaries.join('\n'), reserve, readable), { step: 'reflect', uses, warn },
+    { facts: [], gaps, next: [] });
   facts = facts.concat(cleanFacts(ref.facts, ledger));
   gaps = Array.isArray(ref.gaps) ? ref.gaps.map(String) : gaps;
   const next = (ref.next ?? []).slice(0, reserve);
@@ -609,7 +666,7 @@ async function dive(company: string, country: string, progress: Progress, budget
     const reserveNew = ledger.sources.filter((s) => !beforeReserve.has(`${s.id}:${s.contentKind}`) && s.contentKind !== 'none');
     for (const s of reserveNew) relevant.add(s.id);
     if (reserveNew.length) {
-      const extra = await askJson<{ facts?: unknown }>(factsPrompt(company, facts, corpus(reserveNew, 80_000)), { step: 'reserve-facts', uses });
+      const extra = await askJson<{ facts?: unknown }>(factsPrompt(company, facts, corpus(reserveNew, 80_000)), { step: 'reserve-facts', uses, warn }, { facts: [] });
       facts = facts.concat(cleanFacts(extra.facts, ledger));
     }
   }
@@ -618,7 +675,22 @@ async function dive(company: string, country: string, progress: Progress, budget
   const cited = new Set(facts.flatMap((f) => f.sources));
   const sourceIndex = ledger.sources.filter((s) => cited.has(s.id)).map((s) => `[${s.id}] ${s.title || hostOf(s.url)} — ${s.url}`).join('\n');
   await say('write', `Writing the dossier from ${facts.length} facts and ${cited.size} cited sources`);
-  const dossier = await ask(dossierPrompt(company, country, identity, facts, contradictions, gaps, sourceIndex), { step: 'dossier', uses });
+  let prompt = dossierPrompt(company, country, identity, facts, contradictions, gaps, sourceIndex);
+  // With no facts (analysis fell back), the dossier reads the material itself.
+  if (!facts.length) prompt += `\n\nNo facts were extracted, so write from this material instead, citing its [id]s:\n${corpus(relevantSources(), 100_000)}`;
+  let dossier: string;
+  try {
+    dossier = await ask(prompt, { step: 'dossier', uses });
+  } catch (err) {
+    // The writing failed, not the research: the collected facts are the output.
+    await warn(`dossier: ${(err as Error).message}; the facts are shown instead`);
+    const sections = TOPICS.map((t) => {
+      const rows = facts.filter((f) => f.topic === t);
+      if (!rows.length) return '';
+      return `## ${t.replace(/_/g, ' ')}\n` + rows.map((f) => `- ${f.fact} ${f.sources.map((n) => `[${n}]`).join('')}`).join('\n') + '\n';
+    });
+    dossier = `# ${identity.legal_name || company}\n\nThe dossier could not be written this run. These are the facts collected, with their sources.\n\n${sections.join('\n')}`;
+  }
 
   const result: DiveResult = {
     identity,
@@ -629,6 +701,7 @@ async function dive(company: string, country: string, progress: Progress, budget
     tavily: budget.calls,
     llm: uses,
     braveCalls: counts.brave,
+    warnings,
   };
   await say('done', `Tavily ${budget.used}/${budget.max} calls, ${budget.credits} credits; Brave ${counts.brave}; LLM ${uses.length} calls`);
   return { result, dossier: stripThinking(dossier).replace(/^```(?:markdown)?\s*|\s*```$/g, '') };
@@ -697,7 +770,8 @@ async function execute(id: number): Promise<void> {
   try {
     const { result, dossier } = await run(row.company, row.country, progress);
     await updateRow(id, {
-      status: 'done', stage: 'done', log, result, dossier,
+      // 'partial': it finished, but a stage fell back; result.warnings says which.
+      status: result.warnings.length ? 'partial' : 'done', stage: 'done', log, result, dossier,
       tavily_calls: result.tavily.length,
       tavily_credits: result.tavily.reduce((n, c) => n + c.credits, 0),
       brave_calls: result.braveCalls,

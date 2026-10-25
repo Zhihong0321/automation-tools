@@ -87,6 +87,7 @@ async function show(id) {
     + '<div class="stats muted"><span>Status: <b class="' + (d.status === 'failed' ? 'bad' : '') + '">' + esc(d.status) + '</b></span>'
     + '<span>Tavily: ' + d.tavily_calls + ' calls / ' + d.tavily_credits + ' credits</span><span>Brave: ' + d.brave_calls + '</span><span>LLM: ' + d.llm_calls + '</span></div>';
   if (d.error) html += '<p class="bad">' + esc(d.error) + '</p>';
+  if (d.result && d.result.warnings && d.result.warnings.length) html += '<p class="bad">Finished with fallbacks:</p><ul>' + d.result.warnings.map((w) => '<li class="muted">' + esc(w) + '</li>').join('') + '</ul>';
   if (d.dossier) {
     const md = DOMPurify.sanitize(marked.parse(d.dossier));
     html += '<div class="dossier">' + md.replace(/\\[(\\d+)\\]/g, '<a class="cite" href="#src-$1" onclick="event.preventDefault();document.getElementById(\\'src-$1\\')?.scrollIntoView({block:\\'center\\'});">[$1]</a>') + '</div>';

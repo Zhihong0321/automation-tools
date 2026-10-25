@@ -52,7 +52,6 @@ export async function search(
     await spaced();
     const res = await fetchImpl(`${BASE}/${kind}/search?${params}`, {
       headers: { 'X-Subscription-Token': key, accept: 'application/json' },
-      signal: AbortSignal.timeout(30_000),
     });
     if (res.status === 429 || res.status === 402) {
       lastErr = `HTTP ${res.status} ${(await res.text()).slice(0, 200)}`;
