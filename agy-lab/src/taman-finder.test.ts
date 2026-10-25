@@ -1,159 +1,172 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  findMissingTamans, isAreaRow, knownKeys, lastJsonObject, mapsQueries, matchMapsRow, parseCandidates, searchQueries, tamanKey,
-  type Deps, type FoundTaman, type MapsRow, type SearchHit,
-} from './taman-finder.ts';
+import { areasIn, countEvidence, knownKeys, mapsQueries, pendingTowns, runTown, tamanKey, townId, type Deps } from './taman-finder.ts';
+import type { DiscoveredTaman, FinderTownRun } from './reportdb.ts';
 import type { DistrictLocation, StateTerritory } from './territories.ts';
 
 function district(name: string, towns: Array<{ name: string; tamans: string[] }>): DistrictLocation {
   return {
-    id: name.toLowerCase().replace(/\W+/g, '_'), num: 1, name, state: 'Johor',
+    id: name.toLowerCase(), num: 1, name, state: 'Johor',
     towns: towns.map((t) => ({
-      id: t.name, name: t.name, fullName: `${t.name}, ${name}`, queryPlace: `${t.name}, ${name}, Johor`,
+      id: t.name, name: t.name, fullName: t.name, queryPlace: `${t.name}, ${name}, Johor`,
       tamans: t.tamans.map((n) => ({ name: n, queryPlace: `${n}, ${t.name}, Johor` })),
     })),
   };
 }
 
-const territories: Record<string, StateTerritory> = {
-  johor: {
-    state: 'Johor',
-    districts: [
-      district('Kulai', [{ name: 'Senai', tamans: ['Taman Daya'] }, { name: 'Kulai', tamans: ['Taman Kulai Besar'] }]),
-      district('Kluang', [{ name: 'Kluang', tamans: ['Taman Sri Lambak'] }]),
-    ],
-  },
-};
+const kulai = district('Kulai', [
+  { name: 'Senai', tamans: ['Taman Senai Utama', 'Taman Sri Senai', 'Taman Bintang Senai', 'Bandar Putra Kulai (IOI)'] },
+  { name: 'Kulai', tamans: ['Taman Kulai Besar'] },
+]);
+const johor: StateTerritory = { state: 'Johor', districts: [kulai, district('Kluang', [{ name: 'Kluang', tamans: [] }])] };
 
-const hit = (url: string): SearchHit => ({ url, title: 'New homes', content: 'Launching soon' });
-const area = (name: string, address: string, types: string[] = ['Housing Estate']): MapsRow => ({ name, full_address: address, types });
+test('tamanKey: area word, brackets, punctuation and Seri all fold', () => {
+  assert.equal(tamanKey('Tmn. Seri Senai'), tamanKey('Taman Sri Senai'));
+  assert.equal(tamanKey('Bandar Putra Kulai (IOI)'), 'putrakulai');
+  assert.equal(tamanKey('Kg. Baru Senai'), 'barusenai');
+  assert.equal(tamanKey('Tamarind'), 'tamarind');
+});
 
-/** Fakes for every external call, recording what was asked and saved. */
-function fakes(over: Partial<Deps> = {}) {
-  const saved: FoundTaman[] = [];
-  const asked = { search: [] as string[], maps: [] as Array<[string, number | undefined]>, llm: [] as string[] };
-  const deps: Partial<Deps> = {
-    territories,
-    search: async (q) => { asked.search.push(q); return [hit('https://news.example/' + asked.search.length)]; },
-    llm: async (prompt) => { asked.llm.push(prompt); return '{"tamans":[]}'; },
-    maps: async (q, limit) => { asked.maps.push([q, limit]); return []; },
+test('a listed taman also counts without its town name', () => {
+  const keys = knownKeys(kulai);
+  assert.ok(keys.has('bintang'), 'Taman Bintang Senai covers Taman Bintang in Senai');
+  assert.ok(keys.has(tamanKey('Taman Seri Senai')), 'Seri is the listed Sri');
+  assert.ok(keys.has(tamanKey('Bandar Putra Kulai')), 'brackets do not hide a listed name');
+  assert.equal(keys.has('dawani'), false);
+});
+
+test('seven Maps list searches per town', () => {
+  assert.deepEqual(mapsQueries('Senai, Kulai, Johor'), [
+    'taman in Senai, Kulai, Johor', 'housing estate in Senai, Kulai, Johor', 'shop in Senai, Kulai, Johor', 'company in Senai, Kulai, Johor',
+    'factory in Senai, Kulai, Johor', 'kedai in Senai, Kulai, Johor', 'services in Senai, Kulai, Johor',
+  ]);
+});
+
+test('an address gives area names only when it is in the town, and never a road or garble', () => {
+  assert.deepEqual(areasIn('12, Jalan Hulubalang, Taman Dawani, 81400 Senai, Johor', 'Senai'), ['Taman Dawani']);
+  assert.deepEqual(areasIn('3, Jalan Merbau 1, Bandar Putra Kulai, 81000 Kulai, Johor', 'Senai'), []);
+  assert.deepEqual(areasIn('Taman Aman, Senai, Johor', 'Senai'), ['Taman Aman']);
+  assert.deepEqual(areasIn('Taman Jalan Raya, Taman 81400 Baru, Taman 新, 81400 Senai', 'Senai'), []);
+});
+
+test('evidence counts different addresses, and keeps the common spelling', () => {
+  const ev = countEvidence([
+    '1, Jalan A, Taman Dawani, 81400 Senai, Johor',
+    '2, Jalan A, Taman Dawani, 81400 Senai, Johor',
+    '2, Jalan A, Taman Dawani, 81400 Senai, Johor',
+    '9, Jalan B, Tmn Dawani, 81400 Senai, Johor',
+    'Our home, 5, Jalan C, Taman Selasih, 81400 Senai, Johor',
+  ], 'Senai');
+  assert.deepEqual(ev.map((e) => [e.name, e.addresses]), [['Taman Dawani', 3], ['Taman Selasih', 1]]);
+});
+
+function deps(over: Partial<Deps> = {}) {
+  const saved: Array<DiscoveredTaman & { name_key: string }> = [];
+  const recorded: FinderTownRun[] = [];
+  const d: Deps = {
+    maps: async () => [],
+    leadAddresses: async () => [],
     save: async (rows) => { saved.push(...rows); return rows.length; },
+    record: async (run) => { recorded.push(run); return true; },
     log: () => {},
     ...over,
   };
-  return { deps, saved, asked };
+  return { d, saved, recorded };
 }
 
-test('tamanKey drops the area word, case and punctuation', () => {
-  assert.equal(tamanKey('Tmn. Daya Indah'), 'dayaindah');
-  assert.equal(tamanKey('Taman Daya-Indah'), 'dayaindah');
-  assert.equal(tamanKey('Bdr Baru Uda'), 'baruuda');
-  assert.equal(tamanKey('Kg. Melayu'), 'melayu');
-  assert.equal(tamanKey('Tamarind Square'), 'tamarindsquare');
-  assert.equal(tamanKey('Bandar'), 'bandar');
-  assert.equal(tamanKey(''), '');
+test('a town keeps new names with two or more addresses and records the outcome once', async () => {
+  const { d, saved, recorded } = deps({
+    maps: async (q) => q.startsWith('taman in') ? [
+      { full_address: '1, Jalan A, Taman Dawani, 81400 Senai, Johor' },
+      { full_address: '2, Jalan B, Taman Dawani, 81400 Senai, Johor' },
+      { full_address: 'Shalini, 47, Jalan Bintang 2, Taman Bintang, 81400 Senai, Johor' },
+      { full_address: '8, Jalan C, Taman Bintang, 81400 Senai, Johor' },
+      { full_address: 'Our home, 5, Jalan D, Taman Selasih, 81400 Senai, Johor' },
+    ] : [],
+    leadAddresses: async () => ['7, Jalan E, Taman Dawani, 81400 Senai, Johor', '3, Jalan F, Tmn Seri Senai, 81400 Senai, Johor', '4, Jalan F, Taman Sri Senai, 81400 Senai, Johor'],
+  });
+  const out = await runTown(johor, kulai, kulai.towns[0]!, d);
+  assert.deepEqual(saved.map((r) => [r.name, r.query_place, r.verified]), [['Taman Dawani', 'Taman Dawani, Senai, Johor', true]]);
+  assert.equal(saved[0]!.evidence_url, 'named in 3 addresses in Senai');
+  // Taman Bintang is the listed Taman Bintang Senai; Tmn Seri Senai is the listed Taman Sri Senai.
+  assert.deepEqual(out.listed.map((e) => e.key).sort(), ['bintang', tamanKey('Taman Sri Senai')].sort());
+  assert.deepEqual(out.thin.map((e) => e.name), ['Taman Selasih']);
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0]!.status, 'done');
+  assert.equal(recorded[0]!.maps_requests, 7);
+  assert.equal(recorded[0]!.added, 1);
 });
 
-test('each town gets its own Tavily and Maps searches', () => {
-  assert.deepEqual(searchQueries('Senai', 'Kulai', 'Johor'), [
-    'senarai taman perumahan Senai Kulai Johor',
-    'taman baru Senai Kulai Johor 2020 2021 2022 2023 2024 2025',
-  ]);
-  assert.deepEqual(mapsQueries('Senai, Kulai, Johor'), ['taman in Senai, Kulai, Johor', 'housing estate in Senai, Kulai, Johor']);
-});
-
-test('only residential rows in the town or district count as tamans', () => {
-  const places = ['Senai', 'Kulai'];
-  assert.equal(isAreaRow(area('Taman Seri Senai', '81400 Senai, Johor'), places), true);
-  assert.equal(isAreaRow(area('Taman Seri Senai', '81400 Senai, Johor', ['Hardware store']), places), false);
-  assert.equal(isAreaRow(area('Taman Seri Senai', 'Johor Bahru, Johor'), places), false);
-  assert.equal(isAreaRow({ name: 'Taman Tiada Jenis', full_address: 'Kulai, Johor' }, places), true);
-  assert.equal(isAreaRow({ name: 'Kedai Ali', full_address: 'Kulai, Johor' }, places), false);
-});
-
-test('an LLM answer wrapped in prose and fences still parses', () => {
-  const answer = 'Here you go:\n```json\n{"tamans":[{"name":" Taman  Baru ","evidence_url":"https://a.example"},{"name":"Tmn Baru"},{"name":7},{"name":"Desa {Hill}","evidence_url":"ftp://x"}]}\n```';
-  assert.deepEqual(parseCandidates(answer), [
-    { name: 'Taman Baru', evidence_url: 'https://a.example' },
-    { name: 'Desa {Hill}', evidence_url: null },
-  ]);
-  assert.equal(lastJsonObject('no json'), null);
-});
-
-test('known names are dropped; Maps rows are verified; Tavily names verified by the town list, a check, or not at all', async () => {
-  const { deps, saved, asked } = fakes({
-    territories: { johor: { state: 'Johor', districts: [territories.johor!.districts[0]!] } },
-    llm: async () => '{"tamans":[{"name":"Taman Daya"},{"name":"Taman Seri Senai","evidence_url":"https://n.example"},{"name":"Taman Checked"},{"name":"Taman Ghost"}]}',
-    maps: async (q, limit) => {
-      asked.maps.push([q, limit]);
-      if (q === 'taman in Senai, Kulai, Johor') return [area('Taman Seri Senai', 'Jalan 1, 81400 Senai, Johor'), area('Taman Daya', 'Senai, Johor'), area('Taman Maps Only', '81400 Senai, Kulai, Johor')];
-      if (q.startsWith('Taman Checked')) return [area('Taman Checked', 'Jalan 2, Senai, Kulai, Johor')];
-      return [];
+test('a search that fails once is retried; a town where most searches fail is recorded failed', async () => {
+  const tries = new Map<string, number>();
+  const flaky = deps({
+    maps: async (q) => {
+      tries.set(q, (tries.get(q) ?? 0) + 1);
+      if (tries.get(q) === 1) throw new Error('fetch failed');
+      return [{ full_address: '1, Jalan A, Taman Dawani, 81400 Senai, Johor' }, { full_address: '2, Jalan B, Taman Dawani, 81400 Senai, Johor' }];
     },
   });
-  const summary = await findMissingTamans('johor', deps);
-  const senai = saved.filter((r) => r.query_place.endsWith('Senai, Johor'));
-  assert.deepEqual(senai.map((r) => [r.name, r.verified]), [
-    ['Taman Seri Senai', true], ['Taman Maps Only', true], ['Taman Checked', true], ['Taman Ghost', false],
+  const ok = await runTown(johor, kulai, kulai.towns[0]!, flaky.d);
+  assert.equal(ok.status, 'done');
+  assert.equal(ok.maps_requests, 14);
+  assert.deepEqual(flaky.saved.map((r) => r.name), ['Taman Dawani']);
+
+  let n = 0;
+  const mostlyDown = deps({
+    // 4 of the 7 searches fail both tries (8 calls): more than half.
+    maps: async () => { if (n++ >= 8) return []; throw new Error("fetch failed"); },
+    leadAddresses: async () => ['1, Jalan A, Taman Dawani, 81400 Senai, Johor', '2, Jalan B, Taman Dawani, 81400 Senai, Johor'],
+  });
+  const down = await runTown(johor, kulai, kulai.towns[0]!, mostlyDown.d);
+  assert.equal(down.status, 'failed', 'leads alone do not make a check that lost most of its searches');
+  assert.equal(mostlyDown.saved.length, 0);
+});
+
+test('a town where every source failed is recorded failed and saves nothing', async () => {
+  const { d, saved, recorded } = deps({
+    maps: async () => { throw new Error('scraper.tech down'); },
+    leadAddresses: async () => { throw new Error('db down'); },
+  });
+  const out = await runTown(johor, kulai, kulai.towns[0]!, d);
+  assert.equal(out.status, 'failed');
+  assert.equal(saved.length, 0);
+  assert.equal(recorded[0]!.status, 'failed');
+  assert.match(String(recorded[0]!.error), /scraper.tech down/);
+});
+
+test('a town with no evidence is done, not failed: checked once either way', async () => {
+  const { d, recorded } = deps();
+  const out = await runTown(johor, kulai, kulai.towns[1]!, d);
+  assert.equal(out.status, 'done');
+  assert.equal(recorded[0]!.added, 0);
+});
+
+test('pending towns skip checked ones and spread over the daerah', () => {
+  const all = pendingTowns(new Set(), ['johor'], { johor });
+  assert.deepEqual(all.map((t) => t.town.name), ['Senai', 'Kluang', 'Kulai']);
+  const left = pendingTowns(new Set([townId('Johor', 'Kulai', 'Senai')]), ['johor'], { johor });
+  assert.deepEqual(left.map((t) => t.town.name), ['Kluang', 'Kulai']);
+});
+
+test('a common word left after dropping a town never hides another taman', () => {
+  const d = district('Kulai', [
+    { name: 'Senai', tamans: ['Taman Bintang Senai'] },
+    { name: 'Sedenak', tamans: ['Kampung Baru Sedenak'] },
   ]);
-  assert.equal(senai.find((r) => r.name === 'Taman Seri Senai')!.maps_address, 'Jalan 1, 81400 Senai, Johor');
-  assert.deepEqual(asked.maps.filter(([q]) => q.startsWith('taman in') || q.startsWith('housing estate')).map(([, l]) => l), [500, 500, 500, 500]);
-  // The Kulai town does not save the Senai names again.
-  assert.equal(saved.filter((r) => r.name === 'Taman Ghost').length, 1);
-  assert.deepEqual(summary.perDistrict, [{ district: 'Kulai', towns: 2, candidates: 4, verified: 3 }]);
+  const senai = knownKeys(d, 'Senai');
+  assert.equal(senai.has('baru'), false, 'Kampung Baru Sedenak is not "baru" in Senai');
+  assert.equal(senai.has('bintang'), true);
+  assert.equal(knownKeys(d, 'Sedenak').has('bintang'), false, 'the bare name only counts in its own town');
 });
 
-test('a read that thinks past its cap is retried on fewer snippets', async () => {
-  let calls = 0;
-  const { deps, saved } = fakes({
-    territories: { johor: { state: 'Johor', districts: [territories.johor!.districts[1]!] } },
-    llm: async (prompt) => {
-      calls++;
-      if (calls === 1) throw Object.assign(new Error('thought too long'), { code: 'length' });
-      assert.ok(prompt.length < 7_000);
-      return '{"tamans":[{"name":"Taman Retry"}]}';
-    },
-    search: async () => Array.from({ length: 40 }, (_, i) => ({ url: 'https://x.example/' + i, title: 't', content: 'x'.repeat(900) })),
+test('a name that is only a common word is set aside as too vague', async () => {
+  const { d, saved } = deps({
+    leadAddresses: async () => [
+      '1, Jalan A, Kampung Baru, 81400 Senai, Johor', '2, Jalan B, Kampung Baru, 81400 Senai, Johor',
+      '3, Jalan C, Taman Dawani, 81400 Senai, Johor', '4, Jalan D, Taman Dawani, 81400 Senai, Johor',
+    ],
   });
-  await findMissingTamans('johor', deps);
-  assert.equal(calls, 2);
-  assert.deepEqual(saved.map((r) => r.name), ['Taman Retry']);
-});
-
-test('a failing town is recorded and the others still run; one daerah can run alone', async () => {
-  const { deps, asked } = fakes({
-    search: async (q) => { asked.search.push(q); if (q.includes('Senai')) throw new Error('tavily down'); return [hit('https://ok.example')]; },
-    llm: async (p) => { if (p.includes('in Kulai,')) throw new Error('llm broke'); return '{"tamans":[]}'; },
-  });
-  const summary = await findMissingTamans('johor', deps);
-  assert.deepEqual(summary.errors.map((e) => [e.district, e.town]), [['Kulai', 'Kulai']]);
-  assert.equal(summary.perDistrict.length, 2);
-  assert.ok(asked.search.some((q) => q.includes('Kluang')));
-
-  const one = fakes();
-  const only = await findMissingTamans('johor', one.deps, { district: 'kluang' });
-  assert.equal(only.districts, 1);
-  assert.ok(one.asked.search.every((q) => q.includes('Kluang')));
-});
-
-test('without a Maps key Tavily names are saved unverified', async () => {
-  const { deps, saved } = fakes({
-    territories: { johor: { state: 'Johor', districts: [territories.johor!.districts[1]!] } },
-    maps: null,
-    llm: async () => '{"tamans":[{"name":"Taman Unchecked"}]}',
-  });
-  await findMissingTamans('johor', deps);
-  assert.deepEqual(saved.map((r) => [r.name, r.verified]), [['Taman Unchecked', false]]);
-});
-
-test('matchMapsRow accepts a longer Maps name and needs the district or state in the address', () => {
-  assert.ok(matchMapsRow('Taman Bayu', 'Kulai', 'Johor', [area('Taman Bayu Indah Phase 2', 'Kulai, Johor')]));
-  assert.equal(matchMapsRow('Taman Bayu', 'Kulai', 'Johor', [area('Taman Bayu', 'Shah Alam, Selangor')]), null);
-  assert.ok(knownKeys(territories.johor!.districts[0]!).has('daya'));
-});
-
-test('an unknown state or district is refused', async () => {
-  await assert.rejects(findMissingTamans('perlis', fakes().deps), /unknown state/);
-  await assert.rejects(findMissingTamans('johor', fakes().deps, { district: 'Nowhere' }), /unknown district/);
+  const out = await runTown(johor, kulai, kulai.towns[0]!, d);
+  assert.deepEqual(saved.map((r) => r.name), ['Taman Dawani']);
+  assert.deepEqual(out.vague.map((e) => e.name), ['Kampung Baru']);
 });

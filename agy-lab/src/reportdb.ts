@@ -546,7 +546,25 @@ export function migrate(): Promise<void> {
         created_at timestamptz not null default now(),
         unique (state, district, name_key)
       );
-      comment on table territory_discovered is 'Tamans missing from territories.ts, found by taman-finder.ts (Tavily + the contact LLM) and checked on Google Maps';
+      comment on table territory_discovered is 'Tamans missing from territories.ts, found by taman-finder.ts from Google Maps address evidence';
+
+      create table if not exists taman_finder_town (
+        id bigserial primary key,
+        state text not null,
+        district text not null,
+        town text not null,
+        status text not null,
+        started_at timestamptz not null,
+        finished_at timestamptz not null default now(),
+        maps_requests integer not null default 0,
+        addresses_read integer not null default 0,
+        names_seen integer not null default 0,
+        added integer not null default 0,
+        detail jsonb not null default '{}'::jsonb,
+        error text,
+        unique (state, district, town)
+      );
+      comment on table taman_finder_town is 'One row per town the missing-taman finder has checked, done or failed: a town is checked once';
       create index if not exists company_data_lead_status_idx on company_data (lead_status);
       create index if not exists company_data_assigned_to_idx on company_data (assigned_to);
       create index if not exists company_data_is_hidden_idx on company_data (is_hidden);
@@ -4980,4 +4998,44 @@ export async function listDiscoveredTamans(state?: string): Promise<DiscoveredTa
     [state ?? null],
   );
   return out.rows;
+}
+
+export type FinderTownRun = {
+  state: string; district: string; town: string; status: 'done' | 'failed'; started_at: string;
+  maps_requests: number; addresses_read: number; names_seen: number; added: number;
+  detail: Record<string, unknown>; error: string | null;
+};
+
+/** Record one town the finder checked. A town is checked once: a second record is ignored. */
+export async function recordFinderTown(run: FinderTownRun): Promise<boolean> {
+  await migrate();
+  const out = await sql(
+    `insert into taman_finder_town (state, district, town, status, started_at, maps_requests, addresses_read, names_seen, added, detail, error)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) on conflict (state, district, town) do nothing`,
+    [run.state, run.district, run.town, run.status, run.started_at, run.maps_requests, run.addresses_read, run.names_seen, run.added, JSON.stringify(run.detail), run.error],
+  );
+  return (out.rowCount ?? 0) > 0;
+}
+
+export async function listFinderTowns(): Promise<Array<FinderTownRun & { finished_at: string }>> {
+  if (!configured()) return [];
+  await migrate();
+  const out = await sql<FinderTownRun & { finished_at: string }>(
+    `select state, district, town, status, started_at, finished_at, maps_requests, addresses_read, names_seen, added, detail, error
+     from taman_finder_town order by finished_at desc`,
+  );
+  return out.rows;
+}
+
+/** Addresses of saved leads that name this town: free address evidence for the finder. */
+export async function leadAddressesForTown(town: string): Promise<string[]> {
+  if (!configured() || !town.trim()) return [];
+  await migrate();
+  const out = await sql<{ address: string }>(
+    `select address from company_data
+     where merged_into is null and address is not null and address ilike '%' || $1 || '%'
+     limit 20000`,
+    [town.trim()],
+  );
+  return out.rows.map((r) => r.address);
 }

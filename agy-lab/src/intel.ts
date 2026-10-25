@@ -1677,10 +1677,6 @@ export async function translateChinese(
   return { translated, model, ms: Date.now() - started, validation_errors: errors };
 }
 
-/** States a missing-taman run is working on, and each state's last outcome. */
-const findingMissing = new Set<string>();
-const lastFinderRun: Record<string, Record<string, unknown>> = {};
-
 /** Start one business-list report. The portal, the API and the taman auto-scan all start here. */
 export async function launchBusinessSearch(input: {
   keyword?: string; place?: string; max?: unknown; userId?: string | null; timeoutMs?: unknown; autoQueued?: boolean;
@@ -3463,29 +3459,30 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     return true;
   }
 
-  // Tavily and Maps look for tamans the territory list lacks, town by town in each
-  // daerah ({"state","district"?}); a run takes minutes, so it answers at once
-  // and the result is read back below.
-  if (method === 'POST' && p === '/api/territories/find-missing') {
+  // The missing-taman finder runs from a person's machine (scripts/find-tamans.ts).
+  // After a town's result is approved there, it is saved here: the tamans, and the
+  // town's run, which marks it checked. Body: { run: FinderTownRun, tamans: DiscoveredTaman[] }.
+  if (method === 'POST' && p === '/api/territories/finder') {
     const body = await ctx.readJson(req);
-    const state = str(body.state).trim().toLowerCase() || 'johor';
-    if (!territories.ALL_TERRITORIES[state]) {
-      ctx.json(res, 400, { error: 'unknown state', states: Object.keys(territories.ALL_TERRITORIES) });
+    const run = object(body.run) as unknown as db.FinderTownRun;
+    if (!str(run.state) || !str(run.district) || !str(run.town)) {
+      ctx.json(res, 400, { error: 'run.state, run.district and run.town are required' });
       return true;
     }
-    const district = str(body.district).trim();
-    const run = district ? state + '/' + district.toLowerCase() : state;
-    if (findingMissing.has(state) || findingMissing.has(run)) {
-      ctx.json(res, 409, { error: 'already running for ' + run });
-      return true;
-    }
-    findingMissing.add(run);
-    void import('./taman-finder.ts')
-      .then((finder) => finder.findMissingTamans(state, {}, { district: district || undefined }))
-      .then((summary) => { lastFinderRun[run] = { at: new Date().toISOString(), summary }; console.log(`[taman-finder] ${run}: ${JSON.stringify(summary).slice(0, 300)}`); })
-      .catch((err: Error) => { lastFinderRun[run] = { at: new Date().toISOString(), error: err.message }; console.warn(`[taman-finder] ${run} failed: ${err.message}`); })
-      .finally(() => findingMissing.delete(run));
-    ctx.json(res, 202, { started: run });
+    const tamans = rows(body.tamans).map((t) => ({
+      state: str(t.state), district: str(t.district), name: str(t.name), name_key: str(t.name_key),
+      query_place: str(t.query_place), evidence_url: str(t.evidence_url) || null,
+      maps_name: str(t.maps_name) || null, maps_address: str(t.maps_address) || null, verified: true,
+    })).filter((t) => t.name && t.name_key && t.query_place);
+    const added = await db.saveDiscoveredTamans(tamans);
+    const recorded = await db.recordFinderTown({ ...run, added });
+    console.log(`[taman-finder] saved ${run.town}, ${run.district}: ${added} tamans added${recorded ? '' : ' (town was already recorded)'}`);
+    ctx.json(res, 200, { added, recorded });
+    return true;
+  }
+
+  if (method === 'GET' && p === '/api/territories/finder') {
+    ctx.json(res, 200, { towns: await db.listFinderTowns() });
     return true;
   }
 
@@ -3493,8 +3490,6 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     const state = url.searchParams.get('state')?.trim().toLowerCase() || undefined;
     const rows = await db.listDiscoveredTamans(state);
     ctx.json(res, 200, {
-      running: [...findingMissing].filter((r) => !state || r === state || r.startsWith(state + '/')),
-      lastRun: Object.fromEntries(Object.entries(lastFinderRun).filter(([r]) => !state || r === state || r.startsWith(state + '/'))),
       verified: rows.filter((r) => r.verified).length,
       total: rows.length,
       tamans: rows,

@@ -1,355 +1,239 @@
-// Finds tamans the hand-built territory list misses, town by town in every
-// daerah.
+// Finds tamans the hand-built territory list misses, one town at a time, from
+// address evidence.
 //
-// ALL_TERRITORIES was compiled once and goes stale: housing areas opened in the
-// last few years are absent, and a daerah holds far more tamans than the list
-// names. A daerah is too big for one search, so each of its towns gets its own:
-// two Tavily searches whose snippets the extract LLM reads for area names, and
-// two Google Maps searches whose housing-estate rows are tamans Maps itself
-// knows. Names the list already has are dropped. A Maps row is verified by being
-// on Maps; a Tavily name is verified when the town's Maps rows, or one Maps check
-// of its own, confirm it. Every candidate is saved; only verified ones join the
-// territory list.
+// A real taman is named in the address of many places: "12, Jalan Hulubalang,
+// Taman Dawani, 81400 Senai". A private house that someone filed on Google Maps
+// as a "Housing complex" is not. So the finder reads addresses, never place
+// names: seven Google Maps list searches in the town plus every saved lead whose
+// address names it, then keeps an area name only when at least MIN_ADDRESSES
+// different addresses in this town carry it and the daerah does not list it yet.
+// (The first version trusted Maps' housing categories and Tavily snippets; on
+// Senai 95 of its 115 "verified" names were houses, rooms and house numbers.)
+//
+// It runs from a person's machine, not in the hub: Maps answers vary from run to
+// run, so each town's result is read and approved by hand before anything is
+// saved (agy-lab/scripts/find-tamans.ts). A saved town is a row in
+// taman_finder_town, so a town is checked once.
 import * as db from './reportdb.ts';
-import * as extractLlm from './extract-llm.ts';
-import * as tavily from './tavily.ts';
-import { resolveConfig, searchMaps } from './maps-worker.ts';
 import { ALL_TERRITORIES, type DistrictLocation, type StateTerritory, type TownLocation } from './territories.ts';
 
-/** Tavily names checked on Maps one by one per town, after the town's Maps list. */
-export const MAX_CHECKS = 20;
-const SNIPPET_BUDGET = 16_000;
-/** The second, smaller read when deepseek thinks past its output cap on the full one. */
-const RETRY_SNIPPET_BUDGET = 6_000;
-/** Maps categories that are a residential area, not a business in one. */
-const AREA_TYPES = ['Housing Estate', 'Housing complex', 'Housing society', 'Housing development', 'Residential complex', 'Neighborhood', 'Gated community'];
-const AREA_NAME = /^(taman|tmn|bandar|bdr|desa|kampung|kg|residensi|pangsapuri)\b/i;
+/** Different addresses in the town that must name an area before it counts. */
+export const MIN_ADDRESSES = 2;
 
-export type SearchHit = { url: string; title: string; content: string };
-export type MapsRow = { name?: unknown; full_address?: unknown; types?: unknown; place_id?: unknown };
-export type FoundTaman = db.DiscoveredTaman & { name_key: string };
-export type Candidate = { name: string; evidence_url: string | null };
-
-export type Deps = {
-  territories: Record<string, StateTerritory>;
-  search: (query: string) => Promise<SearchHit[]>;
-  llm: (prompt: string) => Promise<string>;
-  /** null when no scraper.tech key is set: candidates are saved unverified. */
-  maps: ((query: string, limit?: number) => Promise<MapsRow[]>) | null;
-  save: (rows: FoundTaman[]) => Promise<number>;
-  log: (message: string) => void;
-};
-
-export type Summary = {
-  state: string;
-  districts: number;
-  /** Tavily searches that answered. */
-  searched: number;
-  candidates: number;
-  verified: number;
-  saved: number;
-  errors: Array<{ district: string; town?: string; error: string }>;
-  perDistrict: Array<{ district: string; towns: number; candidates: number; verified: number }>;
-};
-
+const AREA = /^(taman|tmn|bandar|bdr|kampung|kg|desa)\.?\s+\S/i;
 const PREFIX = /^(taman|tmn|bandar|bdr|desa|kampung|kg)\b[\s.]*/;
 
-/** Compare key for an area name: "Tmn. Daya Indah" and "Daya-Indah" both become "dayaindah". */
+/**
+ * Compare key for an area name. Brackets, the area word, spaces and punctuation
+ * go, and Seri is Sri: "Tmn. Seri Senai" and "Taman Sri Senai" are one name,
+ * and "Bandar Putra Kulai (IOI)" is "Bandar Putra Kulai".
+ */
 export function tamanKey(name: string): string {
-  const lower = String(name ?? '').toLowerCase().trim();
+  const lower = String(name ?? '').toLowerCase().replace(/\(.*?\)/g, ' ').replace(/\bseri\b/g, 'sri').trim();
   const stripped = lower.replace(PREFIX, '').replace(/[^a-z0-9]+/g, '');
-  // A bare "Bandar" or "Desa" keeps its word rather than becoming an empty key.
   return stripped || lower.replace(/[^a-z0-9]+/g, '');
 }
 
-export function searchQueries(town: string, district: string, stateName: string): string[] {
-  return [
-    `senarai taman perumahan ${town} ${district} ${stateName}`,
-    `taman baru ${town} ${district} ${stateName} 2020 2021 2022 2023 2024 2025`,
-  ];
+/** The key with a trailing town name dropped: "Taman Bintang Senai" in Senai is "bintang". */
+function bareKey(name: string, town: string): string {
+  const key = tamanKey(name);
+  const t = tamanKey(town);
+  return t && key.endsWith(t) && key.length > t.length ? key.slice(0, -t.length) : key;
 }
 
-/** Maps searches whose housing-estate rows list the town's tamans. */
-export function mapsQueries(townPlace: string): string[] {
-  return [`taman in ${townPlace}`, `housing estate in ${townPlace}`];
-}
+/** Words too common to name one taman on their own: "Kampung Baru", "Taman Jaya". */
+const GENERIC = new Set(['baru', 'jaya', 'indah', 'utama', 'perdana', 'permai', 'mewah', 'murni', 'sentosa', 'bahagia', 'damai', 'sri', 'perindustrian']);
 
-/** A Maps row that is a residential area in this town or district, not a business in one. */
-export function isAreaRow(row: MapsRow, places: string[]): boolean {
-  const name = typeof row.name === 'string' ? row.name : '';
-  const address = typeof row.full_address === 'string' ? row.full_address.toLowerCase() : '';
-  const types = Array.isArray(row.types) ? row.types.map(String) : [];
-  const area = types.some((t) => AREA_TYPES.includes(t)) || (!types.length && AREA_NAME.test(name));
-  return area && !!name && places.some((p) => address.includes(p.toLowerCase()));
-}
-
-/** Every taman and town name the list already has for this district, as keys. */
-export function knownKeys(district: DistrictLocation): Set<string> {
+/**
+ * Every name the daerah already lists. A listed name without its town ("Taman
+ * Bintang Senai" as "bintang") counts only inside that same town, so "Kampung
+ * Baru Sedenak" cannot hide "Kampung Baru Senai".
+ */
+export function knownKeys(district: DistrictLocation, inTown?: string): Set<string> {
   const keys = new Set<string>();
   for (const town of district.towns) {
     keys.add(tamanKey(town.name));
-    if (town.fullName) keys.add(tamanKey(town.fullName));
-    for (const taman of town.tamans) keys.add(tamanKey(taman.name));
+    for (const taman of town.tamans) {
+      keys.add(tamanKey(taman.name));
+      const bare = bareKey(taman.name, town.name);
+      if (!inTown || tamanKey(inTown) === tamanKey(town.name)) keys.add(bare);
+    }
   }
   keys.delete('');
   return keys;
 }
 
-export function buildPrompt(town: string, district: string, stateName: string, hits: SearchHit[], budget = SNIPPET_BUDGET): string {
-  const blocks: string[] = [];
-  let used = 0;
-  for (const hit of hits) {
-    const block = `[${blocks.length + 1}] ${hit.title}\nURL: ${hit.url}\n${hit.content}`;
-    if (used + block.length > budget) break;
-    blocks.push(block);
-    used += block.length;
-  }
-  return [
-    `You read web search snippets about housing in ${town}, in the district of ${district}, ${stateName}, Malaysia.`,
-    'List every residential or mixed-use area name the snippets say is in that town or district:',
-    'names starting with Taman, Bandar, Desa, Kota, Bukit, Residensi, Pangsapuri, Kampung and similar.',
-    'Rules:',
-    '- Copy each name exactly as printed. Never invent or complete a name.',
-    `- Leave out areas the snippets place outside ${district}.`,
-    '- Leave out developer names, roads and single buildings with no area name.',
-    '- evidence_url is the URL of the snippet that names the area.',
-    'Answer with JSON only: {"tamans":[{"name":"Taman Example","evidence_url":"https://..."}]}',
-    'If there are none, answer {"tamans":[]}.',
-    '',
-    'Snippets:',
-    blocks.join('\n\n'),
-  ].join('\n');
-}
-
-function tryParse(text: string): Record<string, unknown> | null {
-  try {
-    const value = JSON.parse(text);
-    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-/** The last complete JSON object in a model answer, ignoring prose and code fences around it. */
-export function lastJsonObject(text: string): Record<string, unknown> | null {
-  const source = String(text ?? '').trim();
-  const whole = tryParse(source);
-  if (whole) return whole;
-  let last: Record<string, unknown> | null = null;
-  let start = -1;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = 0; i < source.length; i++) {
-    const ch = source[i];
-    if (start < 0) {
-      if (ch === '{') { start = i; depth = 1; inString = false; escaped = false; }
-      continue;
-    }
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === '\\') escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') inString = true;
-    else if (ch === '{') depth++;
-    else if (ch === '}' && --depth === 0) {
-      const candidate = tryParse(source.slice(start, i + 1));
-      if (candidate) last = candidate;
-      start = -1;
-    }
-  }
-  return last;
-}
-
-/** Candidate names out of the LLM answer, cleaned and deduped by key. */
-export function parseCandidates(answer: string): Candidate[] {
-  const json = lastJsonObject(answer);
-  const list = Array.isArray(json?.tamans) ? json.tamans as unknown[] : [];
-  const seen = new Set<string>();
-  const out: Candidate[] = [];
-  for (const item of list) {
-    const raw = item as { name?: unknown; evidence_url?: unknown } | null;
-    const name = typeof raw?.name === 'string' ? raw.name.replace(/\s+/g, ' ').trim() : '';
-    const key = tamanKey(name);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    const url = typeof raw?.evidence_url === 'string' && /^https?:\/\//i.test(raw.evidence_url) ? raw.evidence_url : null;
-    out.push({ name, evidence_url: url });
-  }
-  return out;
-}
-
-/** The Maps row that confirms a candidate: matching name, and an address in the district or state. */
-export function matchMapsRow(name: string, district: string, stateName: string, rows: MapsRow[]): MapsRow | null {
-  const key = tamanKey(name);
-  if (!key) return null;
-  const places = [district, stateName].map((p) => p.toLowerCase());
-  for (const row of rows) {
-    const rowKey = tamanKey(typeof row.name === 'string' ? row.name : '');
-    const address = typeof row.full_address === 'string' ? row.full_address.toLowerCase() : '';
-    if (!rowKey || !address) continue;
-    if (!rowKey.includes(key) && !key.includes(rowKey)) continue;
-    if (places.some((p) => address.includes(p))) return row;
-  }
-  return null;
-}
-
-const reason = (cause: unknown): string => (cause as Error)?.message ?? String(cause);
-
-/** Tavily names for one town: two searches, then the LLM, read again smaller if it thinks past its cap. */
-async function tavilyNames(town: string, district: string, stateName: string, deps: Deps, summary: Summary): Promise<Candidate[]> {
-  const results = await Promise.allSettled(searchQueries(town, district, stateName).map((q) => deps.search(q)));
-  for (const r of results) if (r.status === 'rejected') deps.log(`[taman-finder] ${town}, ${district}: a search failed: ${reason(r.reason)}`);
-  const hits: SearchHit[] = [];
-  const urls = new Set<string>();
-  for (const r of results) {
-    if (r.status !== 'fulfilled') continue;
-    summary.searched++;
-    for (const hit of r.value) if (!urls.has(hit.url)) { urls.add(hit.url); hits.push(hit); }
-  }
-  if (!hits.length) return [];
-  try {
-    return parseCandidates(await deps.llm(buildPrompt(town, district, stateName, hits)));
-  } catch (cause) {
-    const code = (cause as { code?: string }).code;
-    if (code !== 'length' && code !== 'timeout' && code !== 'empty') throw cause;
-    return parseCandidates(await deps.llm(buildPrompt(town, district, stateName, hits, RETRY_SNIPPET_BUDGET)));
-  }
-}
-
-async function runTown(
-  town: TownLocation, district: DistrictLocation, stateName: string, known: Set<string>, deps: Deps, summary: Summary,
-): Promise<{ candidates: number; verified: number }> {
-  const places = [town.name, district.name];
-  const areaRows: MapsRow[] = [];
-  if (deps.maps) {
-    for (const q of mapsQueries(town.queryPlace)) {
-      try {
-        areaRows.push(...(await deps.maps(q, 500)).filter((row) => isAreaRow(row, places)));
-      } catch (cause) {
-        deps.log(`[taman-finder] ${q}: Maps search failed: ${reason(cause)}`);
-      }
-    }
-  }
-  let names: Candidate[] = [];
-  try {
-    names = await tavilyNames(town.name, district.name, stateName, deps, summary);
-  } catch (cause) {
-    // The Maps rows still count when the Tavily half fails.
-    deps.log(`[taman-finder] ${town.name}, ${district.name}: ${reason(cause)}`);
-    summary.errors.push({ district: district.name, town: town.name, error: reason(cause) });
-  }
-
-  const rows = new Map<string, FoundTaman>();
-  const add = (name: string, evidence: string | null, match: MapsRow | null) => {
-    const key = tamanKey(name);
-    if (!key || known.has(key) || rows.has(key)) return;
-    rows.set(key, {
-      state: stateName, district: district.name, name, name_key: key, query_place: `${name}, ${town.name}, ${stateName}`,
-      evidence_url: evidence, maps_name: match ? String(match.name) : null,
-      maps_address: match ? String(match.full_address) : null, verified: match !== null,
-    });
-  };
-  for (const row of areaRows) add(String(row.name).replace(/\s+/g, ' ').trim(), null, row);
-  let checks = 0;
-  for (const c of names) {
-    const key = tamanKey(c.name);
-    if (known.has(key) || rows.has(key)) continue;
-    let match = matchMapsRow(c.name, district.name, stateName, areaRows);
-    if (!match && deps.maps && checks < MAX_CHECKS) {
-      checks++;
-      try {
-        match = matchMapsRow(c.name, district.name, stateName, await deps.maps(`${c.name}, ${town.name}, ${district.name}, ${stateName}`, 10));
-      } catch (cause) {
-        deps.log(`[taman-finder] ${c.name}: Maps check failed: ${reason(cause)}`);
-      }
-    }
-    add(c.name, c.evidence_url, match);
-  }
-  const list = [...rows.values()];
-  // Saved per town, so a later failure does not lose this town's work.
-  summary.saved += await deps.save(list);
-  for (const r of list) known.add(r.name_key);
-  return { candidates: list.length, verified: list.filter((r) => r.verified).length };
-}
-
-/** Tavily through the shared key pool; the key list is refreshed once per run. */
-export function tavilySearch(): (query: string) => Promise<SearchHit[]> {
-  let ready: Promise<unknown> | null = null;
-  return async (query) => {
-    ready ??= tavily.refresh();
-    await ready;
-    if (!tavily.pool.stats().length) throw new Error('no Tavily key is configured');
-    // A spent or rate-limited key is rested by releaseFor; try the next one.
-    let last: unknown = null;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const lease = await tavily.pool.acquire();
-      try {
-        const hits = await tavily.searchWithKey(query, lease.secret, { maxResults: 20, depth: 'basic' });
-        lease.release();
-        return hits;
-      } catch (cause) {
-        tavily.releaseFor(lease, cause);
-        last = cause;
-        const code = (cause as { code?: string }).code;
-        if (code !== 'quota' && code !== 'rate_limit') break;
-      }
-    }
-    throw last;
-  };
-}
-
-function defaultDeps(): Deps {
-  const config = resolveConfig();
-  return {
-    territories: ALL_TERRITORIES,
-    search: tavilySearch(),
-    llm: async (prompt) => (await extractLlm.ask(prompt, { timeoutMs: 120_000, maxTokens: 8192 })).answer,
-    // Each check is one Maps request, counted against the same monthly budget as scans.
-    maps: config.key ? async (query, limit = 10) => {
-      const rows = await searchMaps(config, query, limit) as MapsRow[];
-      void db.addMapsUsage(1).catch(() => {});
-      return rows;
-    } : null,
-    save: (rows) => db.saveDiscoveredTamans(rows),
-    log: (message) => console.warn(message),
-  };
+/**
+ * Maps list searches for a town: residential areas, and businesses whose
+ * addresses name them. Google returns a different slice each time: four
+ * searches gave Senai 288 to 494 addresses, seven gave 608 and twice the names.
+ * ("restaurant" gave Senai no address that names a taman.)
+ */
+export function mapsQueries(townPlace: string): string[] {
+  return ['taman', 'housing estate', 'shop', 'company', 'factory', 'kedai', 'services'].map((w) => `${w} in ${townPlace}`);
 }
 
 /**
- * One pass over a state's daerah, or over one daerah, town by town. A failing
- * town is recorded and the rest still run.
+ * The area names an address gives, when the address is in this town: its
+ * "NNNNN Town" part names the town, or with no postcode part, it names the town
+ * anywhere. Parts with a road word, a postcode, a second address or non-Latin
+ * text are not area names.
  */
-export async function findMissingTamans(state: string, deps: Partial<Deps> = {}, opts: { district?: string } = {}): Promise<Summary> {
-  const d: Deps = { ...defaultDeps(), ...deps };
-  const territory = d.territories[String(state ?? '').toLowerCase()];
-  if (!territory) throw new Error(`unknown state: ${state}`);
-  const wanted = opts.district?.trim().toLowerCase();
-  const districts = territory.districts.filter((x) => !wanted || x.name.toLowerCase() === wanted);
-  if (!districts.length) throw new Error(`unknown district: ${opts.district} in ${territory.state}`);
-  const summary: Summary = {
-    state: territory.state, districts: districts.length, searched: 0,
-    candidates: 0, verified: 0, saved: 0, errors: [], perDistrict: [],
-  };
-  for (const district of districts) {
-    const known = knownKeys(district);
-    const total = { district: district.name, towns: district.towns.length, candidates: 0, verified: 0 };
-    for (const town of district.towns) {
+export function areasIn(address: string, town: string): string[] {
+  const parts = String(address ?? '').split(',').map((p) => p.trim()).filter(Boolean);
+  const post = parts.find((p) => /^\d{5}\s+\S/.test(p));
+  const townKey = tamanKey(town);
+  const inTown = post
+    ? tamanKey(post.replace(/^\d{5}\s+/, '')) === townKey
+    : parts.some((p) => tamanKey(p) === townKey);
+  if (!inTown) return [];
+  return parts
+    .filter((p) => AREA.test(p) && p.length <= 50 && !/\d{5}|[^\x20-\x7e]|\b(jalan|jln|lorong|lrg|persiaran)\b/i.test(p))
+    .map((p) => p.replace(/\s+/g, ' '));
+}
+
+export type Evidence = { key: string; name: string; addresses: number; sample: string };
+
+/** Count, per area name, the different addresses in the town that carry it. */
+export function countEvidence(addresses: string[], town: string): Evidence[] {
+  const byKey = new Map<string, { names: Map<string, number>; addresses: Set<string>; sample: string }>();
+  for (const address of new Set(addresses.map((a) => String(a ?? '').trim()).filter(Boolean))) {
+    for (const name of new Set(areasIn(address, town))) {
+      const key = tamanKey(name);
+      if (key.length < 3) continue;
+      const e = byKey.get(key) ?? { names: new Map(), addresses: new Set(), sample: address };
+      e.names.set(name, (e.names.get(name) ?? 0) + 1);
+      e.addresses.add(address);
+      byKey.set(key, e);
+    }
+  }
+  return [...byKey.entries()].map(([key, e]) => ({
+    key,
+    // The spelling most addresses use.
+    name: [...e.names.entries()].sort((a, b) => b[1] - a[1])[0]![0],
+    addresses: e.addresses.size,
+    sample: e.sample,
+  })).sort((a, b) => b.addresses - a.addresses);
+}
+
+type MapsRow = { full_address?: unknown };
+
+export type Deps = {
+  maps: ((query: string) => Promise<MapsRow[]>) | null;
+  leadAddresses: (town: string) => Promise<string[]>;
+  save: (rows: Array<db.DiscoveredTaman & { name_key: string }>) => Promise<number>;
+  record: (run: db.FinderTownRun) => Promise<boolean>;
+  log: (message: string) => void;
+};
+
+export type TownOutcome = db.FinderTownRun & {
+  found: Evidence[];
+  listed: Evidence[];
+  thin: Evidence[];
+  vague: Evidence[];
+};
+
+/** Check one town: read its addresses, keep the well-evidenced unlisted names, save and record. */
+export async function runTown(
+  state: StateTerritory, district: DistrictLocation, town: TownLocation, deps: Deps,
+): Promise<TownOutcome> {
+  const startedAt = new Date().toISOString();
+  let mapsRequests = 0;
+  const failures: string[] = [];
+  const addresses: string[] = [];
+  const queries = deps.maps ? mapsQueries(town.queryPlace) : [];
+  for (const q of queries) {
+    // A dropped connection or a "failed" answer gets one more try.
+    let last: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      mapsRequests++;
       try {
-        const out = await runTown(town, district, territory.state, known, d, summary);
-        total.candidates += out.candidates;
-        total.verified += out.verified;
+        for (const row of await deps.maps!(q)) if (typeof row.full_address === 'string') addresses.push(row.full_address);
+        last = null;
+        break;
       } catch (cause) {
-        d.log(`[taman-finder] ${town.name}, ${district.name}: ${reason(cause)}`);
-        summary.errors.push({ district: district.name, town: town.name, error: reason(cause) });
+        last = cause;
       }
     }
-    summary.candidates += total.candidates;
-    summary.verified += total.verified;
-    summary.perDistrict.push(total);
-    d.log(`[taman-finder] ${territory.state} / ${district.name}: ${total.candidates} new names, ${total.verified} verified over ${total.towns} towns`);
+    if (last) failures.push(`${q}: ${(last as Error)?.message ?? last}`.slice(0, 200));
   }
-  return summary;
+  const failedSearches = failures.length;
+  let leadCount = 0;
+  try {
+    const leads = await deps.leadAddresses(town.name);
+    leadCount = leads.length;
+    addresses.push(...leads);
+  } catch (cause) {
+    failures.push(`saved leads: ${(cause as Error)?.message ?? cause}`.slice(0, 200));
+  }
+
+  const known = knownKeys(district, town.name);
+  const evidence = countEvidence(addresses, town.name);
+  const isListed = (e: Evidence) => known.has(e.key) || known.has(bareKey(e.name, town.name));
+  const isVague = (e: Evidence) => e.key.length < 4 || GENERIC.has(e.key);
+  const listed = evidence.filter(isListed);
+  const vague = evidence.filter((e) => !isListed(e) && isVague(e));
+  const thin = evidence.filter((e) => !isListed(e) && !isVague(e) && e.addresses < MIN_ADDRESSES);
+  const found = evidence.filter((e) => !isListed(e) && !isVague(e) && e.addresses >= MIN_ADDRESSES);
+
+  // More than half the searches failed: the evidence is too thin to call the town
+  // checked. It is recorded failed, still once, so it shows in the status page
+  // instead of passing for a town with nothing new.
+  const failed = queries.length > 0 && failedSearches * 2 > queries.length;
+  const rows = found.map((e) => ({
+    state: state.state, district: district.name, name: e.name, name_key: e.key,
+    query_place: `${e.name}, ${town.name}, ${state.state}`,
+    evidence_url: `named in ${e.addresses} addresses in ${town.name}`, maps_name: null, maps_address: e.sample, verified: true,
+  }));
+  const added = failed ? 0 : await deps.save(rows);
+  const run: TownOutcome = {
+    state: state.state, district: district.name, town: town.name, status: failed ? 'failed' : 'done', started_at: startedAt,
+    maps_requests: mapsRequests, addresses_read: new Set(addresses).size, names_seen: evidence.length, added,
+    detail: {
+      added: found.map((e) => ({ name: e.name, addresses: e.addresses })),
+      alreadyListed: listed.map((e) => e.name),
+      tooVague: vague.map((e) => e.name),
+      tooFewAddresses: thin.map((e) => e.name),
+      leadAddresses: leadCount,
+      failures,
+    },
+    error: failures.length ? failures.join(' | ').slice(0, 1000) : null,
+    found, listed, thin, vague,
+  };
+  await deps.record(run);
+  deps.log(`[taman-finder] ${state.state} / ${district.name} / ${town.name}: ${run.status}, ${run.addresses_read} addresses, `
+    + `${evidence.length} area names, ${found.length} new (${listed.length} listed, ${thin.length} with one address)`);
+  return run;
+}
+
+type TownRef = { state: StateTerritory; district: DistrictLocation; town: TownLocation };
+
+export const townId = (state: string, district: string, town: string): string =>
+  [state, district, town].map((s) => s.trim().toLowerCase()).join('|');
+
+/**
+ * Towns not checked yet, spread evenly over the daerah: the next comes from the
+ * daerah with the fewest towns checked so far (list order breaks a tie).
+ */
+export function pendingTowns(done: Set<string>, states: string[], territories: Record<string, StateTerritory> = ALL_TERRITORIES): TownRef[] {
+  const groups: Array<{ checked: number; left: TownRef[] }> = [];
+  for (const key of states) {
+    const state = territories[key.toLowerCase()];
+    if (!state) continue;
+    for (const district of state.districts) {
+      const g = { checked: 0, left: [] as TownRef[] };
+      for (const town of district.towns) {
+        if (done.has(townId(state.state, district.name, town.name))) g.checked++; else g.left.push({ state, district, town });
+      }
+      groups.push(g);
+    }
+  }
+  const out: TownRef[] = [];
+  for (;;) {
+    let pick: (typeof groups)[number] | null = null;
+    for (const g of groups) if (g.left.length && (!pick || g.checked < pick.checked)) pick = g;
+    if (!pick) return out;
+    out.push(pick.left.shift()!);
+    pick.checked++;
+  }
 }
