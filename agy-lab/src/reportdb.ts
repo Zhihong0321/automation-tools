@@ -5116,7 +5116,8 @@ export async function autoQueueProblems(since: string, limit = 300): Promise<Aut
     sql<{ at: string; stage: string | null; event: string; public_id: string | null; detail: Record<string, unknown> }>(
       `select at, stage, event, public_id, detail from run_event
        where at >= $1 and event = any($2::text[]) order by at desc limit $3`,
-      [since, AUTO_QUEUE_PROBLEM_EVENTS.filter((e) => e !== 'auto.hold'), limit],
+      // contact.failed is the same failure as the failed report above; listing both doubles it.
+      [since, AUTO_QUEUE_PROBLEM_EVENTS.filter((e) => e !== 'auto.hold' && e !== 'contact.failed'), limit],
     ),
     sql<{ at: string; state: string; district: string; town: string; error: string | null }>(
       `select finished_at as at, state, district, town, error from taman_finder_town
