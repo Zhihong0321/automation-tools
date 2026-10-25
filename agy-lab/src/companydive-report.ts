@@ -58,7 +58,7 @@ a { color:var(--accent-ink); text-underline-offset:2px; }
 .btn:hover { border-color:var(--faint); }
 
 /* hero */
-.hero { padding:44px 0 28px; }
+.hero { padding-top:44px; padding-bottom:28px; }
 .kicker { font:600 12px/1 var(--sans); letter-spacing:.14em; text-transform:uppercase; color:var(--accent); margin:0 0 14px; }
 h1.title { font:600 clamp(30px, 5vw, 48px)/1.08 var(--serif); letter-spacing:-.01em; margin:0 0 12px; }
 .sub { color:var(--muted); font-size:15px; margin:0 0 18px; }
@@ -156,7 +156,17 @@ sup.cite a:hover { background:var(--accent); color:#fff; }
 @media (max-width: 560px) {
   body { font-size:15.5px; }
   .wrap { padding:0 16px; }
-  .hero { padding:28px 0 18px; }
+  .hero { padding-top:28px; padding-bottom:18px; }
+  /* Tables become one card per row, each cell labelled with its column. */
+  .table-wrap { border:0; background:none; overflow:visible; }
+  .prose table { min-width:0; }
+  .prose thead { display:none; }
+  .prose table, .prose tbody, .prose tr, .prose td { display:block; width:100%; }
+  .prose tr { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:4px 14px; margin:0 0 10px; }
+  .prose td { border-top:1px solid var(--line); padding:9px 0; }
+  .prose tr td:first-child { border-top:0; font-weight:600; }
+  .prose td[data-label]::before { content:attr(data-label); display:block; font:600 10.5px/1.3 var(--sans); letter-spacing:.06em; text-transform:uppercase; color:var(--faint); margin-bottom:3px; }
+  .prose tr td:first-child::before { display:none; }
   .prose p.lede { font-size:18px; }
   .prose h2 { font-size:22px; margin-top:40px; }
   .card { padding:20px; border-radius:14px; }
@@ -293,6 +303,11 @@ const SCRIPT = String.raw`
     if (first && first === prose.firstElementChild) first.className = 'lede';
     prose.querySelectorAll('table').forEach(function (t) {
       var w = document.createElement('div'); w.className = 'table-wrap'; t.parentNode.insertBefore(w, t); w.appendChild(t);
+      // Column names travel with each cell, for the stacked layout on phones.
+      var heads = [].map.call(t.querySelectorAll('thead th'), function (th) { return th.textContent.trim(); });
+      t.querySelectorAll('tbody tr').forEach(function (tr) {
+        [].forEach.call(tr.children, function (td, i) { if (heads[i]) td.setAttribute('data-label', heads[i]); });
+      });
     });
     prose.querySelectorAll('a').forEach(function (a) { a.target = '_blank'; a.rel = 'noopener'; });
     citeNodes(prose, ids);
