@@ -474,7 +474,7 @@ export async function handle(
         ['input[type="email"]', page.locator('input[type="email"]')],
         ['input[type="password"]', page.locator('input[type="password"]')],
         ['getByRole button /^continue$/i', page.getByRole('button', { name: /^continue$/i })],
-        ['#prompt-textarea', page.locator('#prompt-textarea')],
+        ['composer', page.locator(sessions.COMPOSER)],
       ];
       for (const [label, loc] of candidates) {
         probes[label] = await loc.count().catch((e: Error) => 'ERR ' + e.message.slice(0, 60));

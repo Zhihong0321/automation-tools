@@ -113,12 +113,24 @@ const timeoutFor = (route: Route): number =>
  * A ready session wins over a merely listed one: sessions outlive their logins
  * here, and routing to a signed-out profile produces a 503 for a request that a
  * working account beside it could have answered.
+ *
+ * With `rotate`, successive calls take turns across every ready account, so
+ * signing in a second free account doubles the free-tier allowance instead of
+ * sitting idle behind the first. `/v1/models` names the alias without rotating,
+ * or every listing would skip an account.
  */
-function defaultSession(kind: sessions.Kind): string {
+const rotation: Record<string, number> = {};
+export function defaultSession(kind: sessions.Kind, rotate = false): string {
   const pinned = (kind === 'meta' ? process.env.META_DEFAULT_SESSION : process.env.CGPT_DEFAULT_SESSION)?.trim();
   if (pinned) return pinned;
   const all = sessions.list().filter((s) => s.initialized && s.kind === kind);
-  const pick = all.find((s) => s.lastProbe?.status === 'ready') ?? all[0];
+  const ready = all.filter((s) => s.lastProbe?.status === 'ready').sort((a, b) => a.id.localeCompare(b.id));
+  let pick = ready[0] ?? all[0];
+  if (rotate && ready.length > 1) {
+    const turn = rotation[kind] ?? 0;
+    rotation[kind] = turn + 1;
+    pick = ready[turn % ready.length];
+  }
   if (!pick) {
     throw fail(
       503,
@@ -197,7 +209,7 @@ export function resolveModel(raw: string): Route {
         pinnedSession: Boolean(explicit),
       };
     }
-    const session = rest.join(':').trim() || defaultSession('chatgpt');
+    const session = rest.join(':').trim() || defaultSession('chatgpt', true);
     return { engine: 'chatgpt', model: 'chatgpt:' + session, session, location };
   }
   throw fail(404, `Unknown model "${wanted}". GET /v1/models lists what this gateway serves.`, 'model_not_found');

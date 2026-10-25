@@ -669,8 +669,8 @@ data: [DONE]</code></pre>
   </table></div>
   <p><code>gpt-*</code> maps to the signed-in ChatGPT account because tools hard-code a model
   id far more often than they let you choose one. A bare <code>chatgpt</code> resolves to
-  <code>CGPT_DEFAULT_SESSION</code>, otherwise the first session whose last probe said
-  <code>ready</code>. <code>@mini</code> and <code>@container</code> pin a location for ChatGPT; a bare
+  <code>CGPT_DEFAULT_SESSION</code> when set; otherwise calls take turns across every session whose
+  last probe said <code>ready</code>, so each extra signed-in account adds its own free allowance. <code>@mini</code> and <code>@container</code> pin a location for ChatGPT; a bare
   <code>chatgpt</code> prefers a live mini worker and falls back to the container. Pi runs in the
   container only. <code>meta</code> and
   <code>llama-*</code> still parse, for callers that have not been updated, but nothing
@@ -1201,7 +1201,7 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
       <tr><td><code>TRANSLATION_BATCH</code></td><td class="num">60</td><td>strings per translation call</td></tr>
       <tr><td><code>TRANSLATION_CONCURRENCY</code></td><td class="num">2</td><td>translation calls in flight; match it to the lanes serving <code>TRANSLATION_MODEL</code>, since wider only queues them one hop later</td></tr>
       <tr><td><code>DEFAULT_MODEL</code></td><td class="num">pi</td><td>what an empty or <code>auto</code> model resolves to</td></tr>
-      <tr><td><code>CGPT_DEFAULT_SESSION</code></td><td class="num">first ready</td><td>which account a bare <code>chatgpt</code> means</td></tr>
+      <tr><td><code>CGPT_DEFAULT_SESSION</code></td><td class="num">rotate ready</td><td>pins the account a bare <code>chatgpt</code> means; unset, calls rotate across ready accounts</td></tr>
       <tr><td><code>MINIMAX_API_KEY</code></td><td class="num">&mdash;</td><td>the Pi worker's MiniMax key; see <a href="#pi">Pi</a> for the other <code>PI_*</code> settings</td></tr>
       <tr><td><code>PI_ASK_TIMEOUT_MS</code></td><td class="num">300000</td><td></td></tr>
       <tr><td><code>CGPT_ASK_TIMEOUT_MS</code></td><td class="num">180000</td><td></td></tr>

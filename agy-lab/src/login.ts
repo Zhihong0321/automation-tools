@@ -66,7 +66,7 @@ export const SEL = {
   ],
   password: ['input[type="password"]', 'input[name="password"]', '#password'],
   otp: ['input[autocomplete="one-time-code"]', 'input[name="code"]', 'input[name="otp"]', 'input[inputmode="numeric"]'],
-  composer: ['#prompt-textarea'],
+  composer: [sessions.COMPOSER],
 } as const;
 
 /**
@@ -135,7 +135,8 @@ export const SIGNALS = () => {
       Array.from(document.querySelectorAll('button, a')).some(
         (n) => visible(n) && ['log in', 'login', 'sign up', 'sign up for free'].includes(label(n)),
       ),
-    composer: q('#prompt-textarea'),
+    // sessions.COMPOSER, inlined: this function is serialised into the page.
+    composer: q('#prompt-textarea, div.ProseMirror[contenteditable=true]'),
     title: document.title,
   };
 };

@@ -21,6 +21,12 @@ export type Kind = 'chatgpt' | 'meta';
  * DOM, both change together.
  */
 export const TEMP_CHAT_URL = 'https://chatgpt.com/?temporary-chat=true';
+/**
+ * The chat composer. OpenAI dropped the `#prompt-textarea` id by 2026-10-25; the
+ * box is now a bare ProseMirror editor (aria-label "Ask ChatGPT"). Both are kept
+ * so a rollback on their side does not break it again.
+ */
+export const COMPOSER = '#prompt-textarea, div.ProseMirror[contenteditable=true]';
 /** Bot-check interstitials. Emphatically not a logout. */
 const CHALLENGE = /just a moment|checking your browser|verify you are human|cf-chl|challenge-platform|attention required/i;
 
@@ -215,32 +221,33 @@ export async function probe(id: string, opts: { timeoutMs?: number; keepOpen?: b
       // produce garbage instead of stopping.
       await page
         .waitForFunction(
-          () => {
-            const el = document.querySelector('#prompt-textarea');
+          (composer) => {
+            const el = document.querySelector(composer);
             const login = Array.from(document.querySelectorAll('button, a')).some((n) =>
               /^(log ?in|sign ?up)/i.test((n.textContent ?? '').trim()),
             );
             return Boolean(el) || login;
           },
+          COMPOSER,
           { timeout: timeoutMs },
         )
         .catch(() => {});
 
       const s = await page
-        .evaluate(() => {
+        .evaluate((composer) => {
           const text = (n: Element) => (n.textContent ?? '').trim().toLowerCase();
           const clickable = Array.from(document.querySelectorAll('button, a'));
           return {
             login:
               Boolean(document.querySelector('[data-testid="login-button"], a[href*="/auth/login"]')) ||
               clickable.some((n) => ['log in', 'login', 'sign up', 'sign up for free'].includes(text(n))),
-            composer: Boolean(document.querySelector('#prompt-textarea')),
+            composer: Boolean(document.querySelector(composer)),
             account: Boolean(
               document.querySelector('[data-testid="profile-button"], [data-testid="accounts-profile-button"]'),
             ),
             body: (document.body?.innerText ?? '').slice(0, 400),
           };
-        })
+        }, COMPOSER)
         .catch(() => ({ login: false, composer: false, account: false, body: '' }));
 
       const url = page.url();
@@ -435,7 +442,7 @@ export async function ask(
     if (o.fresh !== false || !page.url().includes('chatgpt.com')) {
       await page.goto(TEMP_CHAT_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     }
-    await page.waitForSelector('#prompt-textarea', { timeout: 60_000, state: 'visible' });
+    await page.waitForSelector(COMPOSER, { timeout: 60_000, state: 'visible' });
 
     // The composer being live is not the signal. A visible sign-in control is.
     const wall = await page
@@ -447,13 +454,15 @@ export async function ask(
       })
       .catch(() => false);
     if (wall) {
+      // Recorded, so the gateway's rotation stops handing this account work.
+      recordProbe(id, 'logged_out', 'Sign-in wall at chatgpt.com during an ask.', Date.now() - started);
       throw Object.assign(
         new Error(`session "${id}" is signed out - chatgpt.com is showing a sign-in wall.`),
         { code: 'logged_out' },
       );
     }
 
-    await page.click('#prompt-textarea');
+    await page.click(COMPOSER);
     const entry = await enterPrompt(page, prompt);
     await page.keyboard.press('Enter');
 
@@ -499,7 +508,7 @@ export async function ask(
 async function enterPrompt(page: import('patchright').Page, prompt: string): Promise<'insert' | 'type'> {
   const composerText = () =>
     page
-      .evaluate(() => (document.querySelector('#prompt-textarea') as HTMLElement | null)?.innerText ?? '')
+      .evaluate((composer) => (document.querySelector(composer) as HTMLElement | null)?.innerText ?? '', COMPOSER)
       .catch(() => '');
 
   await page.keyboard.insertText(prompt);

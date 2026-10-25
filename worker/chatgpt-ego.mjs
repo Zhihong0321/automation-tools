@@ -25,6 +25,9 @@ import { readFileSync } from 'node:fs';
 
 const DEFAULT_SESSION = 'mini-main';
 const TEMP_CHAT_URL = 'https://chatgpt.com/?temporary-chat=true';
+// OpenAI dropped the #prompt-textarea id by 2026-10-25; the composer is now a bare
+// ProseMirror editor. Must track COMPOSER in agy-lab/src/sessions.ts.
+const COMPOSER = `#prompt-textarea, div.ProseMirror[contenteditable=true]`;
 const ASK_TIMEOUT_MS = Number(process.env.CGPT_ASK_TIMEOUT_MS ?? 180_000);
 const EGO_BIN = process.env.EGO_BROWSER_BIN ?? 'ego-browser';
 
@@ -279,7 +282,7 @@ try {
   // a working composer. A visible sign-in control outranks a live composer.
   const gate = await js(\`(() => ({
     login: !!document.querySelector('[data-testid="login-button"], a[href*="/auth/login"]'),
-    composer: !!document.querySelector('#prompt-textarea'),
+    composer: !!document.querySelector(${JSON.stringify(COMPOSER)}),
   }))()\`);
   if (gate.login || !gate.composer) {
     emit({ ok: false, code: 'signed_out', space: task.id, phases });
@@ -309,9 +312,9 @@ try {
   // ProseMirror is a rich editor; fillInput is explicitly unreliable on those.
   // Input.insertText into the focused composer is the mechanism already measured
   // to work on this exact page, so it is the one used.
-  await click('#prompt-textarea', { label: 'focus the composer' });
+  await click(${JSON.stringify(COMPOSER)}, { label: 'focus the composer' });
   await cdp('Input.insertText', { text: ${JSON.stringify(prompt)} });
-  const typed = await js(\`(document.querySelector('#prompt-textarea') || {}).innerText || ''\`);
+  const typed = await js(\`(document.querySelector(${JSON.stringify(COMPOSER)}) || {}).innerText || ''\`);
   phase('type');
   if (!typed.trim()) {
     emit({ ok: false, code: 'compose_failed', space: task.id, phases });
@@ -378,12 +381,12 @@ try {
   // shell paints first, and reading signals there reports a signed-in account as
   // signed out. Wait for the composer, and treat the wait timing out as the answer
   // rather than an error — a signed-out page never renders one.
-  try { await waitForElement('#prompt-textarea', { timeout: 20 }); } catch (e) { /* read the signals below and let them say why */ }
+  try { await waitForElement(${JSON.stringify(COMPOSER)}, { timeout: 20 }); } catch (e) { /* read the signals below and let them say why */ }
   await js(${JSON.stringify(DISMISS_MODAL)});
   const info = await pageInfo();
   const s = await js(\`(() => ({
     login: !!document.querySelector('[data-testid="login-button"], a[href*="/auth/login"]'),
-    composer: !!document.querySelector('#prompt-textarea'),
+    composer: !!document.querySelector(${JSON.stringify(COMPOSER)}),
     account: !!document.querySelector('[data-testid="profile-button"], button[aria-label*="Account" i]'),
   }))()\`);
   const ready = !s.login && (s.composer || s.account);

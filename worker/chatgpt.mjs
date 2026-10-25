@@ -38,6 +38,9 @@ const BASE_PORT = Number(process.env.CGPT_CDP_PORT ?? 9430);
 const ASK_TIMEOUT_MS = Number(process.env.CGPT_ASK_TIMEOUT_MS ?? 180_000);
 
 const TEMP_CHAT_URL = 'https://chatgpt.com/?temporary-chat=true';
+// OpenAI dropped the #prompt-textarea id by 2026-10-25; the composer is now a bare
+// ProseMirror editor. Must track COMPOSER in agy-lab/src/sessions.ts.
+const COMPOSER = `#prompt-textarea, div.ProseMirror[contenteditable=true]`;
 /** Bot-check interstitials. Emphatically not a logout. */
 const CHALLENGE = /just a moment|checking your browser|verify you are human|cf-chl|challenge-platform|attention required/i;
 
@@ -197,7 +200,7 @@ const READY = `(() => {
   const text = (n) => (n.textContent || '').trim().toLowerCase();
   const clickable = Array.from(document.querySelectorAll('button, a'));
   const login = clickable.some((n) => ['log in','login','sign up','sign up for free'].includes(text(n)));
-  const composer = !!document.querySelector('#prompt-textarea');
+  const composer = !!document.querySelector(${JSON.stringify(COMPOSER)});
   return {
     login,
     composer,
@@ -251,7 +254,7 @@ const READ_ANSWER = `(() => {
   }
 })()`;
 
-const COMPOSER_TEXT = `(() => { const el = document.querySelector('#prompt-textarea'); return el ? el.innerText : ''; })()`;
+const COMPOSER_TEXT = `(() => { const el = document.querySelector(${JSON.stringify(COMPOSER)}); return el ? el.innerText : ''; })()`;
 
 /**
  * The three facts that say whether a prompt has actually been sent.
@@ -262,7 +265,7 @@ const COMPOSER_TEXT = `(() => { const el = document.querySelector('#prompt-texta
  * accepted the message. Measured on this build, 2026-08-20.
  */
 const COMPOSER_STATE = `(() => {
-  const c = document.querySelector('#prompt-textarea');
+  const c = document.querySelector(${JSON.stringify(COMPOSER)});
   return {
     composer: c ? c.innerText.trim() : null,
     sendButton: !!document.querySelector('[data-testid="send-button"]'),
@@ -418,7 +421,7 @@ async function enterPrompt(conn, prompt) {
   const head = norm(prompt).slice(0, 40);
   const landed = async () => !head || norm(await conn.evaluate(COMPOSER_TEXT).catch(() => '')).includes(head);
 
-  await conn.evaluate(`(() => { const el = document.querySelector('#prompt-textarea'); if (el) el.focus(); return !!el; })()`);
+  await conn.evaluate(`(() => { const el = document.querySelector(${JSON.stringify(COMPOSER)}); if (el) el.focus(); return !!el; })()`);
   await conn.cdp('Input.insertText', { text: prompt });
   await sleep(150);
   if (await landed()) return 'insert';
@@ -427,7 +430,7 @@ async function enterPrompt(conn, prompt) {
   // inside the page, which some builds of the composer accept when the CDP call
   // lands in the wrong node.
   await conn.evaluate(`(() => {
-    const el = document.querySelector('#prompt-textarea');
+    const el = document.querySelector(${JSON.stringify(COMPOSER)});
     if (!el) return false;
     el.focus();
     document.execCommand('selectAll', false, null);
