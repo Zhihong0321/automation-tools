@@ -120,12 +120,16 @@ export async function budgetedCall(
 
 export type LlmUse = { step: string; ms: number; promptChars: number; answerChars: number };
 
-/** The deepseek model contact research already uses (CONTACT_LLM_*), with three tries per step. */
-async function ask(prompt: string, opts: { step: string; maxTokens?: number; uses?: LlmUse[] }): Promise<string> {
+/**
+ * The deepseek model contact research already uses (CONTACT_LLM_*), with three
+ * tries per step. No max_tokens: the model's hidden reasoning counts against it,
+ * so any cap can cut the answer off mid-JSON. The timeout bounds a runaway call.
+ */
+async function ask(prompt: string, opts: { step: string; uses?: LlmUse[] }): Promise<string> {
   let lastErr = '';
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const out = await extractLlm.ask(prompt, { timeoutMs: 300_000, maxTokens: opts.maxTokens });
+      const out = await extractLlm.ask(prompt, { timeoutMs: 300_000 });
       const answer = stripThinking(out.answer);
       opts.uses?.push({ step: opts.step, ms: out.ms, promptChars: prompt.length, answerChars: answer.length });
       return answer;
@@ -168,7 +172,7 @@ export function parseJson<T>(text: string): T {
 }
 
 /** Ask for JSON; one more round with the parse error if the first answer does not parse. */
-async function askJson<T>(prompt: string, opts: { step: string; maxTokens?: number; uses?: LlmUse[] }): Promise<T> {
+async function askJson<T>(prompt: string, opts: { step: string; uses?: LlmUse[] }): Promise<T> {
   const first = await ask(prompt, opts);
   try {
     return parseJson<T>(first);
@@ -326,7 +330,7 @@ SOURCE MATERIAL (each block starts with [id]):
 ${material}
 
 Tasks:
-1. Extract the useful facts about the target company: at most 60, each one sentence under 200 characters, merging duplicates. Each fact cites the [id]s it came from. Do not use outside knowledge. Ignore material about other companies with similar names.
+1. Extract every useful fact about the target company. Each fact cites the [id]s it came from. Do not use outside knowledge. Ignore material about other companies with similar names.
 2. Note contradictions between sources, such as different addresses, founding dates or headcounts.
 3. List what an investor, partner or competitor would still want to know.
 4. Plan up to ${maxSearches} web searches that would close the biggest gaps. Make each query specific: use the exact name, aliases or registration number. Set include_domains when one site is the obvious place (e.g. linkedin.com for people, a government registry, a forum for reviews). Use topic "news" with time_range "year" for recent news. Do not repeat what the material already answers.
@@ -351,7 +355,7 @@ NEW MATERIAL from gap-filling searches (each block starts with [id]):
 ${material}
 
 Tasks:
-1. Extract new facts from the NEW MATERIAL only: at most 30, each one sentence under 200 characters. Cite [id]s. Skip anything already in the facts list. Ignore other companies with similar names.
+1. Extract new facts from the NEW MATERIAL only. Cite [id]s. Skip anything already in the facts list. Ignore other companies with similar names.
 2. Say which gaps are still open.
 3. ${maxCalls > 0 ? `You may spend up to ${maxCalls} more calls, but only on gaps worth it. A call is either a search ({"kind":"search","query":"","topic":"general|news","include_domains":[],"time_range":null}) or a page read ({"kind":"extract","ids":[up to 20 ids]}). These ids have not been read yet and can be extracted: ${readable || '(none)'}. Return [] if nothing is worth it.` : 'No calls are left. Return "next": [].'}
 
@@ -365,7 +369,7 @@ function factsPrompt(company: string, facts: Fact[], material: string): string {
 NEW MATERIAL (each block starts with [id]):
 ${material}
 
-Extract new facts about "${company}" from the NEW MATERIAL only (at most 20, each under 200 characters). Cite [id]s and skip anything already known.
+Extract new facts about "${company}" from the NEW MATERIAL only. Cite [id]s and skip anything already known.
 Answer with ONLY JSON: {"facts": [{"topic": "", "fact": "", "sources": [ids], "confidence": "high|medium|low"}], "gaps_closed": [""]}`;
 }
 
@@ -538,7 +542,7 @@ async function dive(company: string, country: string, progress: Progress, budget
   const maxSearches = Math.max(0, Math.min(8, budget.left - 4));
   await say('analyse', `LLM analysis of ${relevantSources().length} sources`);
   const ana = await askJson<{ facts?: unknown; contradictions?: string[]; gaps?: string[]; searches?: Array<Record<string, any>> }>(
-    analysePrompt(company, country, identity, gaps, corpus(relevantSources(), 120_000), maxSearches), { step: 'analyse', uses, maxTokens: 48_000 });
+    analysePrompt(company, country, identity, gaps, corpus(relevantSources(), 120_000), maxSearches), { step: 'analyse', uses });
   let facts = cleanFacts(ana.facts, ledger);
   const contradictions = Array.isArray(ana.contradictions) ? ana.contradictions.map(String) : [];
   gaps = Array.isArray(ana.gaps) ? ana.gaps.map(String) : gaps;
@@ -578,7 +582,7 @@ async function dive(company: string, country: string, progress: Progress, budget
   const readable = relevantSources().filter((s) => s.contentKind === 'none' && !WALLED.test(hostOf(s.url)) && !s.failed).map((s) => s.id).join(', ');
   await say('reflect', `LLM reflection on ${fresh.length} new sources; ${reserve} reserve calls available`);
   const ref = await askJson<{ facts?: unknown; gaps?: string[]; next?: Array<Record<string, any>> }>(
-    reflectPrompt(company, identity, facts, gaps, corpus(fresh, 80_000) + '\n' + summaries.join('\n'), reserve, readable), { step: 'reflect', uses, maxTokens: 32_000 });
+    reflectPrompt(company, identity, facts, gaps, corpus(fresh, 80_000) + '\n' + summaries.join('\n'), reserve, readable), { step: 'reflect', uses });
   facts = facts.concat(cleanFacts(ref.facts, ledger));
   gaps = Array.isArray(ref.gaps) ? ref.gaps.map(String) : gaps;
   const next = (ref.next ?? []).slice(0, reserve);
@@ -605,7 +609,7 @@ async function dive(company: string, country: string, progress: Progress, budget
     const reserveNew = ledger.sources.filter((s) => !beforeReserve.has(`${s.id}:${s.contentKind}`) && s.contentKind !== 'none');
     for (const s of reserveNew) relevant.add(s.id);
     if (reserveNew.length) {
-      const extra = await askJson<{ facts?: unknown }>(factsPrompt(company, facts, corpus(reserveNew, 80_000)), { step: 'reserve-facts', uses, maxTokens: 16_000 });
+      const extra = await askJson<{ facts?: unknown }>(factsPrompt(company, facts, corpus(reserveNew, 80_000)), { step: 'reserve-facts', uses });
       facts = facts.concat(cleanFacts(extra.facts, ledger));
     }
   }
@@ -614,7 +618,7 @@ async function dive(company: string, country: string, progress: Progress, budget
   const cited = new Set(facts.flatMap((f) => f.sources));
   const sourceIndex = ledger.sources.filter((s) => cited.has(s.id)).map((s) => `[${s.id}] ${s.title || hostOf(s.url)} — ${s.url}`).join('\n');
   await say('write', `Writing the dossier from ${facts.length} facts and ${cited.size} cited sources`);
-  const dossier = await ask(dossierPrompt(company, country, identity, facts, contradictions, gaps, sourceIndex), { step: 'dossier', uses, maxTokens: 48_000 });
+  const dossier = await ask(dossierPrompt(company, country, identity, facts, contradictions, gaps, sourceIndex), { step: 'dossier', uses });
 
   const result: DiveResult = {
     identity,
