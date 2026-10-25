@@ -4915,7 +4915,7 @@ export async function mapsUsageThisMonth(): Promise<number> {
  * running, completed, or partial with companies. Keyed by lower-cased place.
  * Also the number of auto-scans still in flight.
  */
-export async function autoScanProgress(since: string): Promise<{ done: Set<string>; inFlight: number }> {
+export async function autoScanProgress(since: string, failuresSince = since): Promise<{ done: Set<string>; inFlight: number; gaveUp: Set<string> }> {
   await migrate();
   const out = await sql<{ place: string; status: string; auto: boolean }>(
     `select lower(trim(request->>'place')) as place, status, coalesce(request->>'autoQueued', '') = 'true' as auto
@@ -4927,11 +4927,28 @@ export async function autoScanProgress(since: string): Promise<{ done: Set<strin
             or (status = 'partial' and jsonb_typeof(result->'companies') = 'array' and jsonb_array_length(result->'companies') > 0))`,
     [since],
   );
+  // A place whose Business scan failed this many times is given up on, so one
+  // bad taman cannot eat the budget. A run a restart abandoned is not its fault.
+  const failed = await sql<{ place: string }>(
+    `select lower(trim(request->>'place')) as place
+     from published_report
+     where report_type = 'business_search'
+       and lower(coalesce(request->>'keyword', '')) in ('business', '')
+       and created_at >= $1
+       and status = 'failed'
+       and coalesce(error, '') not like 'This run was abandoned%'
+     group by 1
+     having count(*) >= $2`,
+    [failuresSince, AUTO_SCAN_MAX_FAILURES],
+  );
   return {
     done: new Set(out.rows.map((r) => r.place)),
     inFlight: out.rows.filter((r) => r.auto && (r.status === 'queued' || r.status === 'running')).length,
+    gaveUp: new Set(failed.rows.map((r) => r.place)),
   };
 }
+
+export const AUTO_SCAN_MAX_FAILURES = 3;
 
 export type DiscoveredTaman = {
   state: string; district: string; name: string; query_place: string;

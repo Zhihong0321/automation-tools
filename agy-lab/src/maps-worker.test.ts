@@ -186,3 +186,43 @@ test('the street pass stops at the deadline and keeps what it has', async () => 
   assert.deepEqual(result.streets, { total: 1, searched: 0, added: 0 });
   assert.equal(result.found, 1);
 });
+
+test('a sweep retries a failed search once, then skips it and keeps the scan', async () => {
+  const tries = new Map<string, number>();
+  const result = await scan({ keyword: 'factory', place: 'Taman Daya, Tebrau, Johor', max: 2000 }, config, fakeFetch((query) => {
+    tries.set(query, (tries.get(query) ?? 0) + 1);
+    return query.startsWith('steel in') ? { status: 'failed', data: [] } : { status: 'ok', data: [row(1)] };
+  }));
+  assert.equal(tries.get('steel in Taman Daya, Tebrau, Johor'), 2);
+  assert.deepEqual(result.skippedSearches, ['steel in Taman Daya, Tebrau, Johor']);
+  assert.equal(result.found, 1);
+  // Every call counts toward the budget, the retry included.
+  assert.equal(result.requests, FAMILIES.factory!.length + 1);
+});
+
+test('a sweep where too many searches fail fails, and says how many requests it spent', async () => {
+  let err: { message?: string; requests?: number } | null = null;
+  try {
+    await scan({ keyword: 'factory', place: 'Taman Daya, Tebrau, Johor', max: 2000 }, config,
+      fakeFetch(() => ({ status: 'failed', data: [] })));
+  } catch (e) {
+    err = e as { message?: string; requests?: number };
+  }
+  assert.match(String(err?.message), /searches failed/);
+  // The first batch of 6 words, each tried twice.
+  assert.equal(err?.requests, 12);
+});
+
+test('a rate limit stops the sweep at once instead of being skipped', async () => {
+  const limited = (async () => new Response('slow down', { status: 429 })) as unknown as typeof fetch;
+  await assert.rejects(scan({ keyword: 'factory', place: 'Taman Daya, Tebrau, Johor', max: 2000 }, config, limited), (e: { code?: string }) => e.code === 'rate_limit');
+});
+
+test('garbled street segments are not searched', () => {
+  const at = (address: string) => toBusiness(row(1, { full_address: address, name: 'X' }));
+  assert.deepEqual(streetsOf([
+    at('5, Jalan Bukit Perdana 2/5, Taman Bukit Perdana, 83000 Batu Pahat, Johor'),
+    at('Jalan bukit perdana 2/573 jalan bukit perdana 2/5邮政编码: 83000, Taman Bukit Perdana'),
+    at('Jalan Bukit Perdana 2/3Taman Bukit Perdana邮政编码: 86000'),
+  ]), ['Jalan Bukit Perdana 2/5']);
+});

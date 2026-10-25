@@ -32,6 +32,14 @@ const DEFAULT_MAX = 200;
 const MAX_LIMIT = 500;
 const CALL_TIMEOUT_MS = 90_000;
 const SWEEP_CONCURRENCY = 6;
+/**
+ * scraper.tech now and then answers one search with `"status": "failed"`. One
+ * such answer among a sweep's hundreds threw the whole taman away and the
+ * auto-scan ran it again and again (Taman Bukit Perdana, 3 times on
+ * 2026-10-25). In a sweep a failed search is tried once more, then skipped; the
+ * scan fails only when more than this share of its searches did.
+ */
+const MAX_FAILED_SHARE = 0.2;
 const STREET_CONCURRENCY = 10;
 const STREET_FORMS = ['shop', 'company'];
 /** Stop starting street calls this long before the job's lease runs out. */
@@ -79,7 +87,9 @@ export function streetsOf(businesses: Business[]): string[] {
   for (const b of businesses) {
     for (const part of String(b.address ?? '').split(',')) {
       const m = /^\s*(?:jalan|jln\.?)\s+(.+?)\s*$/i.exec(part);
-      if (!m) continue;
+      // A street fused with the rest of a garbled address ("Jalan Bukit Perdana
+      // 2/573 jalan bukit perdana 2/5邮政编码: 83000") is not a street scraper.tech can search.
+      if (!m || m[1]!.length > 40 || /[^\x20-\x7e]|\b\d{5}\b|\bjalan\b|\bjln\b/i.test(m[1]!)) continue;
       const street = 'Jalan ' + m[1]!.replace(/\s+/g, ' ');
       const key = squash(street);
       const hit = counts.get(key) ?? { street, n: 0 };
@@ -243,7 +253,28 @@ export async function scan(
 
   let query: string;
   let requests = 0;
+  let searches = 0;
+  const skipped: string[] = [];
   let outsideArea = 0;
+  // Every call is counted, a failed scan's too, so the monthly budget sees them.
+  const call = (q: string, n: number): Promise<Row[]> => { requests++; return searchMaps(config, q, n, fetchImpl); };
+  const tolerant = async (q: string): Promise<Row[]> => {
+    searches++;
+    let last: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await call(q, MAX_LIMIT);
+      } catch (cause) {
+        // A rate limit is not one bad search: stop and let the lane cool down.
+        if ((cause as { code?: string }).code === 'rate_limit') throw cause;
+        last = cause;
+      }
+    }
+    skipped.push(q);
+    console.warn(`[maps] skipped "${q}" after 2 failed tries: ${String((last as Error)?.message ?? last).slice(0, 120)}`);
+    return [];
+  };
+  const tooManySkipped = () => skipped.length > Math.max(2, Math.floor(searches * MAX_FAILED_SHARE));
   let businesses: Business[];
   const sweep: Array<{ keyword: string; rows: number; added: number }> = [];
   let streets: { total: number; searched: number; added: number } | null = null;
@@ -251,37 +282,40 @@ export async function scan(
   // location-only search sweeps too. A family keyword with no place is one call:
   // there is no area to sweep.
   const family = place ? familyFor(keyword) : null;
-  if (family) {
-    query = keyword ? `${keyword} in ${place}` : place;
-    for (let i = 0; i < family.length; i += SWEEP_CONCURRENCY) {
-      const batch = family.slice(i, i + SWEEP_CONCURRENCY);
-      const answers = await Promise.all(batch.map((word) => searchMaps(config, `${word} in ${place}`, MAX_LIMIT, fetchImpl)));
-      requests += batch.length;
-      answers.forEach((rows, j) => sweep.push({ keyword: batch[j]!, rows: rows.length, added: add(rows) }));
-      if (inArea([...found.values()], place).kept.length >= max) break;
-    }
-    if (family === FAMILIES.business && inArea([...found.values()], place).kept.length < max) {
-      const list = streetsOf(inArea([...found.values()], place).kept);
-      streets = { total: list.length, searched: 0, added: 0 };
-      const deadline = opts.deadline ?? Infinity;
-      for (let i = 0; i < list.length && Date.now() < deadline; i += STREET_CONCURRENCY) {
-        const batch = list.slice(i, i + STREET_CONCURRENCY);
-        const queries = batch.flatMap((street) => STREET_FORMS.map((form) => `${form} in ${street}, ${place}`));
-        const answers = await Promise.all(queries.map((q) => searchMaps(config, q, MAX_LIMIT, fetchImpl)));
-        requests += queries.length;
-        streets.searched += batch.length;
-        for (const rows of answers) streets.added += add(rows);
+  try {
+    if (family) {
+      query = keyword ? `${keyword} in ${place}` : place;
+      for (let i = 0; i < family.length; i += SWEEP_CONCURRENCY) {
+        const batch = family.slice(i, i + SWEEP_CONCURRENCY);
+        const answers = await Promise.all(batch.map((word) => tolerant(`${word} in ${place}`)));
+        answers.forEach((rows, j) => sweep.push({ keyword: batch[j]!, rows: rows.length, added: add(rows) }));
+        if (tooManySkipped()) throw fail(`${skipped.length} of ${searches} searches failed: ${skipped.slice(0, 3).join(' | ')}`);
         if (inArea([...found.values()], place).kept.length >= max) break;
       }
+      if (family === FAMILIES.business && inArea([...found.values()], place).kept.length < max) {
+        const list = streetsOf(inArea([...found.values()], place).kept);
+        streets = { total: list.length, searched: 0, added: 0 };
+        const deadline = opts.deadline ?? Infinity;
+        for (let i = 0; i < list.length && Date.now() < deadline; i += STREET_CONCURRENCY) {
+          const batch = list.slice(i, i + STREET_CONCURRENCY);
+          const queries = batch.flatMap((street) => STREET_FORMS.map((form) => `${form} in ${street}, ${place}`));
+          const answers = await Promise.all(queries.map((q) => tolerant(q)));
+          streets.searched += batch.length;
+          if (tooManySkipped()) throw fail(`${skipped.length} of ${searches} searches failed: ${skipped.slice(0, 3).join(' | ')}`);
+          for (const rows of answers) streets.added += add(rows);
+          if (inArea([...found.values()], place).kept.length >= max) break;
+        }
+      }
+      const area = inArea([...found.values()], place);
+      businesses = area.kept.slice(0, max);
+      outsideArea = area.outside;
+    } else {
+      query = place ? `${keyword} in ${place}` : keyword;
+      add(await call(query, limit));
+      businesses = [...found.values()].slice(0, max);
     }
-    const area = inArea([...found.values()], place);
-    businesses = area.kept.slice(0, max);
-    outsideArea = area.outside;
-  } else {
-    query = place ? `${keyword} in ${place}` : keyword;
-    add(await searchMaps(config, query, limit, fetchImpl));
-    requests = 1;
-    businesses = [...found.values()].slice(0, max);
+  } catch (cause) {
+    throw Object.assign(cause as Error, { requests });
   }
 
   return {
@@ -297,6 +331,7 @@ export async function scan(
     categories: sweep.length ? sweep : null,
     outsideArea,
     streets,
+    skippedSearches: skipped.length ? skipped : null,
     scrolls: 0,
     provider: 'scraper.tech',
     requests,
@@ -330,6 +365,8 @@ async function lane(name: string, env: NodeJS.ProcessEnv): Promise<void> {
       } catch (cause) {
         const message = (cause as Error).message ?? String(cause);
         jobs.finish(job.id, false, null, message);
+        const spent = Number((cause as { requests?: number }).requests);
+        if (spent > 0) void db.addMapsUsage(spent).catch((e: Error) => console.warn('[maps] could not count usage: ' + e.message));
         if ((cause as { code?: string }).code === 'rate_limit') jobs.coolDown(name, 5 * 60_000, message);
       } finally {
         clearInterval(beat);

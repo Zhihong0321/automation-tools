@@ -15,6 +15,8 @@ import * as territories from './territories.ts';
 const INTERVAL_MS = 120_000;
 /** The first scraper.tech Business scan (2026-10-24): earlier scans ran on the Mac mini. */
 export const SCRAPER_SINCE = '2026-10-24T12:00:00Z';
+/** Failures count toward giving up only from the sweep retry fix on: before it, one bad search failed any taman. */
+export const RETRY_FIX_SINCE = '2026-10-25T01:45:00Z';
 /** A Business scan with its street pass: 417 requests in Taman Daya, the densest seen. */
 const SCAN_ESTIMATE = 420;
 
@@ -77,15 +79,16 @@ export function holdReason(state: { paused: boolean; workerLive: boolean; used: 
 async function snapshot() {
   const cfg = config();
   const [progress, used, discovered] = await Promise.all([
-    db.autoScanProgress(SCRAPER_SINCE), db.mapsUsageThisMonth(), db.listDiscoveredTamans(),
+    db.autoScanProgress(SCRAPER_SINCE, RETRY_FIX_SINCE), db.mapsUsageThisMonth(), db.listDiscoveredTamans(),
   ]);
   const tamans = territories.allTamans(discovered, cfg.states);
-  const left = remaining(tamans, progress.done);
+  // A taman whose scan failed AUTO_SCAN_MAX_FAILURES times is skipped, not retried forever.
+  const left = remaining(tamans, new Set([...progress.done, ...progress.gaveUp]));
   const hold = holdReason({
     paused: cfg.paused, workerLive: jobs.liveTypes().includes('gmap.scan'), used, budget: cfg.budget,
     inFlight: progress.inFlight, concurrent: cfg.concurrent, left: left.length,
   });
-  return { cfg, used, inFlight: progress.inFlight, total: tamans.length, left, hold };
+  return { cfg, used, inFlight: progress.inFlight, total: tamans.length, left, hold, gaveUp: [...progress.gaveUp] };
 }
 
 export async function tick(): Promise<string | null> {
@@ -121,6 +124,7 @@ export async function status(): Promise<Record<string, unknown>> {
     remaining: s.left.length,
     next: s.left.slice(0, 5).map((t) => t.queryPlace),
     inFlight: s.inFlight,
+    gaveUpOn: s.gaveUp,
     mapsRequestsThisMonth: s.used,
     monthlyBudget: s.cfg.budget,
   };
