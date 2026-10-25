@@ -109,13 +109,20 @@ async function tavilyKeys() {
     left: k.monthlyLimit != null && k.usedThisMonth != null ? Math.max(0, k.monthlyLimit - k.usedThisMonth) : null,
     resting: k.resting,
     cooling: k.cooling,
+    usageError: k.usageError,
+    usageCheckedAt: k.usageCheckedAt,
   }));
   const known = keys.filter((k) => k.limit != null);
   const left = known.reduce((n, k) => n + (k.left ?? 0), 0);
   const total = known.reduce((n, k) => n + (k.limit ?? 0), 0);
   const usable = keys.filter((k) => !k.cooling).length;
-  const level: Level = !keys.length ? 'unknown' : !usable ? 'bad' : levelFor(left, total);
-  return { level, keys: keys.length, usable, creditsLeft: left, creditsTotal: total, perKey: keys };
+  const failed = keys.filter((k) => k.usageError);
+  // A key whose quota cannot be read is not known to be fine.
+  const level: Level = !keys.length ? 'unknown' : !usable ? 'bad' : failed.length && !known.length ? 'warn' : levelFor(left, total);
+  return {
+    level, keys: keys.length, usable, creditsLeft: left, creditsTotal: total, keysRead: known.length,
+    readFailures: failed.length, readError: failed[0]?.usageError ?? null, perKey: keys,
+  };
 }
 
 async function exaKeys() {

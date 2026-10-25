@@ -14,6 +14,8 @@ export const KEY_CONCURRENCY = 2;
 /** One contact job is two advanced searches at two credits each. */
 export const RESERVE_CREDITS = 4;
 const USAGE_REFRESH_MS = 10 * 60_000;
+/** After a failed /usage read, wait this long before reading that key again. */
+const USAGE_RETRY_MS = 2 * 60_000;
 
 type FetchImpl = typeof fetch;
 
@@ -32,6 +34,8 @@ export function createKeyPool(options: KeyPoolOptions = {}) {
     inflight: new Map<string, number>(),
     coolUntil: new Map<string, number>(),
     usage: new Map<string, Usage>(),
+    /** The last failed /usage read per key, so a broken read shows instead of reading as "no data". */
+    usageError: new Map<string, { message: string; at: number }>(),
     rrIndex: 0,
     waiters: [] as Array<(lease: Lease) => void>,
   };
@@ -97,7 +101,12 @@ export function createKeyPool(options: KeyPoolOptions = {}) {
     /** Tavily's own count for a key, from GET /usage. */
     setUsage(key: string, used: number, limit: number | null) {
       state.usage.set(key, { used, limit, spent: 0, checkedAt: Date.now() });
+      state.usageError.delete(key);
       wake();
+    },
+    /** A /usage read failed: keep the old number, say why, and wait before trying that key again. */
+    usageFailed(key: string, message: string) {
+      state.usageError.set(key, { message: message.slice(0, 200), at: Date.now() });
     },
     /** Credits this process spent since the last /usage read. */
     spend(key: string, credits: number) {
@@ -106,7 +115,8 @@ export function createKeyPool(options: KeyPoolOptions = {}) {
     },
     /** Keys with no /usage read, or one older than maxAgeMs. */
     staleUsage(maxAgeMs: number): string[] {
-      return state.keys.filter((key) => Date.now() - (state.usage.get(key)?.checkedAt ?? 0) > maxAgeMs);
+      return state.keys.filter((key) => Date.now() - (state.usage.get(key)?.checkedAt ?? 0) > maxAgeMs
+        && Date.now() - (state.usageError.get(key)?.at ?? 0) > USAGE_RETRY_MS);
     },
     stats() {
       return state.keys.map((secret) => {
@@ -118,6 +128,8 @@ export function createKeyPool(options: KeyPoolOptions = {}) {
           monthlyLimit: u?.limit ?? null,
           cooling: !usable(secret),
           resting: resting(secret),
+          usageError: state.usageError.get(secret)?.message ?? null,
+          usageCheckedAt: u ? new Date(u.checkedAt).toISOString() : null,
         };
       });
     },
@@ -163,7 +175,11 @@ export function refreshUsage(fetchImpl: FetchImpl = fetch): Promise<void> {
       try {
         const { used, limit } = await fetchUsage(key, fetchImpl);
         pool.setUsage(key, used, limit);
-      } catch { /* try again on the next refresh */ }
+      } catch (err) {
+        // Kept on the key and shown on /auto-queue; retried after USAGE_RETRY_MS.
+        const e = err as Error & { cause?: { code?: string } };
+        pool.usageFailed(key, `${e.name}: ${e.message}${e.cause?.code ? ' (' + e.cause.code + ')' : ''}`);
+      }
     }
   })().finally(() => { usageRun = null; });
   return usageRun;
