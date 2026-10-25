@@ -30,6 +30,7 @@ import { document as openApiDocument } from './openapi.ts';
 import { page as portalPage } from './portal.ts';
 import { page as guidePage } from './guide.ts';
 import { page as workersPage } from './workers.ts';
+import * as autoQueuePage from './autoqueue.ts';
 import { missingPage } from './nav.ts';
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -202,6 +203,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     return void res.end(portalPage('registrations'));
   }
 
+  if (method === 'GET' && (p === '/auto-queue' || p === '/auto-queue/')) {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
+    return void res.end(autoQueuePage.page());
+  }
+
   if (method === 'GET' && (p === '/workers' || p === '/workers.html')) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
     return void res.end(workersPage());
@@ -268,6 +274,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     return p.startsWith('/v1/')
       ? json(res, 401, { error: { message: 'bad or missing token', type: 'invalid_request_error', code: 'invalid_api_key' } })
       : json(res, 401, { error: 'bad or missing token' });
+  }
+
+  // ---- the /auto-queue dashboard ------------------------------------------
+  if (method === 'GET' && p === '/api/auto-queue/dashboard') {
+    if (!reportdb.configured()) return json(res, 503, { error: 'no report database configured' });
+    const hours = Math.min(168, Math.max(1, Math.round(Number(url.searchParams.get('hours')) || 24)));
+    return json(res, 200, await autoQueuePage.snapshot(hours));
   }
 
   // ---- business intelligence product API -------------------------------

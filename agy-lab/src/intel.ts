@@ -1731,6 +1731,11 @@ async function runBusinessSearch(publicId: string, reportId: string, request: Re
     const captured = { search: scanDetails, companies: capturedCompanies, scan_metadata: {
       blocked: scan.blocked, limited_view: scan.limitedView, capped: scan.capped,
       save_error: workerSaveError || null,
+      // The saved result swaps `search` for the database row, so the scan's own
+      // cost and skipped searches live here, where /auto-queue reads them.
+      requests: typeof scan.requests === 'number' ? scan.requests : null,
+      skipped_searches: Array.isArray(scan.skippedSearches) ? scan.skippedSearches : null,
+      took_ms: typeof scan.tookMs === 'number' ? scan.tookMs : null,
     } };
     // Keep the harvested rows before attempting any further writes. A later
     // persistence failure can then be repaired from this report without Maps.

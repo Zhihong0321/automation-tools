@@ -5039,3 +5039,137 @@ export async function leadAddressesForTown(town: string): Promise<string[]> {
   );
   return out.rows.map((r) => r.address);
 }
+
+// ---- auto-queue dashboard ---------------------------------------------------
+// Read straight from the saved runs, never from the queues' own counters, so the
+// /auto-queue page shows what actually happened rather than what a loop believes.
+
+const AUTO_RUN = `request->>'autoQueued' = 'true' and report_type in ('business_search', 'contact_research')`;
+const HOUR = (col: string) => `to_char(date_trunc('hour', ${col} at time zone 'UTC'), 'YYYY-MM-DD"T"HH24":00:00Z"')`;
+/** Hub events that mean an auto-run went wrong, or that a queue stopped or started again. */
+export const AUTO_QUEUE_PROBLEM_EVENTS = ['contact.deferred', 'contact.failed', 'business_search.save_failed', 'auto.tick_failed', 'auto.hold'];
+
+export type AutoQueueHourRow = {
+  hour: string; kind: string; status: string; n: number;
+  companies: number; requests: number; skipped: number; with_phone: number; people: number; avg_sec: number;
+};
+
+/** Per hour since `since`: auto-runs started, auto-runs finished by outcome, finder towns, problem events. */
+export async function autoQueueHourly(since: string): Promise<{
+  started: Array<{ hour: string; kind: string; n: number }>;
+  finished: AutoQueueHourRow[];
+  finder: Array<{ hour: string; status: string; n: number; added: number; requests: number }>;
+  events: Array<{ hour: string; event: string; n: number }>;
+}> {
+  await migrate();
+  const [started, finished, finder, events] = await Promise.all([
+    sql<{ hour: string; kind: string; n: number }>(
+      `select ${HOUR('created_at')} as hour, report_type as kind, count(*)::int as n
+       from published_report where ${AUTO_RUN} and created_at >= $1 group by 1, 2`,
+      [since],
+    ),
+    sql<AutoQueueHourRow>(
+      `select ${HOUR('coalesce(completed_at, updated_at)')} as hour, report_type as kind, status, count(*)::int as n,
+         coalesce(sum(case when jsonb_typeof(result->'companies') = 'array' then jsonb_array_length(result->'companies') end), 0)::int as companies,
+         coalesce(sum(case when (result->'scan_metadata'->>'requests') ~ '^[0-9]+$' then (result->'scan_metadata'->>'requests')::int end), 0)::int as requests,
+         coalesce(sum(case when jsonb_typeof(result->'scan_metadata'->'skipped_searches') = 'array' then jsonb_array_length(result->'scan_metadata'->'skipped_searches') end), 0)::int as skipped,
+         (count(*) filter (where jsonb_typeof(result->'phone_contacts') = 'array' and jsonb_array_length(result->'phone_contacts') > 0))::int as with_phone,
+         coalesce(sum(case when jsonb_typeof(result->'decision_makers') = 'array' then jsonb_array_length(result->'decision_makers') end), 0)::int as people,
+         coalesce(round(avg(extract(epoch from coalesce(completed_at, updated_at) - created_at))), 0)::int as avg_sec
+       from published_report
+       where ${AUTO_RUN} and status in ('completed', 'partial', 'failed') and coalesce(completed_at, updated_at) >= $1
+       group by 1, 2, 3`,
+      [since],
+    ),
+    sql<{ hour: string; status: string; n: number; added: number; requests: number }>(
+      `select ${HOUR('finished_at')} as hour, status, count(*)::int as n,
+         coalesce(sum(added), 0)::int as added, coalesce(sum(maps_requests), 0)::int as requests
+       from taman_finder_town where finished_at >= $1 group by 1, 2`,
+      [since],
+    ),
+    sql<{ hour: string; event: string; n: number }>(
+      `select ${HOUR('at')} as hour, event, count(*)::int as n
+       from run_event where at >= $1 and event = any($2::text[]) group by 1, 2`,
+      [since, AUTO_QUEUE_PROBLEM_EVENTS],
+    ),
+  ]);
+  return { started: started.rows, finished: finished.rows, finder: finder.rows, events: events.rows };
+}
+
+export type AutoQueueProblem = {
+  at: string; source: string; kind: string; title: string | null; message: string; public_id: string | null; detail?: unknown;
+};
+
+/** What went wrong since `since`, newest first: failed or partial auto-runs, skipped Maps searches, problem events, failed finder towns. */
+export async function autoQueueProblems(since: string, limit = 300): Promise<AutoQueueProblem[]> {
+  await migrate();
+  const [reports, events, towns] = await Promise.all([
+    sql<{ at: string; kind: string; status: string; title: string | null; error: string | null; public_id: string; skipped: string[] | null }>(
+      `select coalesce(completed_at, updated_at) as at, report_type as kind, status, title, error, public_id,
+         case when jsonb_typeof(result->'scan_metadata'->'skipped_searches') = 'array' then result->'scan_metadata'->'skipped_searches' end as skipped
+       from published_report
+       where ${AUTO_RUN} and coalesce(completed_at, updated_at) >= $1
+         and (status in ('failed', 'partial') or jsonb_typeof(result->'scan_metadata'->'skipped_searches') = 'array')
+       order by 1 desc limit $2`,
+      [since, limit],
+    ),
+    sql<{ at: string; stage: string | null; event: string; public_id: string | null; detail: Record<string, unknown> }>(
+      `select at, stage, event, public_id, detail from run_event
+       where at >= $1 and event = any($2::text[]) order by at desc limit $3`,
+      [since, AUTO_QUEUE_PROBLEM_EVENTS.filter((e) => e !== 'auto.hold'), limit],
+    ),
+    sql<{ at: string; state: string; district: string; town: string; error: string | null }>(
+      `select finished_at as at, state, district, town, error from taman_finder_town
+       where finished_at >= $1 and status <> 'done' order by finished_at desc limit $2`,
+      [since, limit],
+    ),
+  ]);
+  const out: AutoQueueProblem[] = [];
+  for (const r of reports.rows) {
+    const at = new Date(r.at).toISOString();
+    if (r.status === 'failed' || r.status === 'partial') {
+      out.push({ at, source: r.kind, kind: r.status, title: r.title, message: r.error || `${r.status} with no error text`, public_id: r.public_id });
+    }
+    if (r.skipped?.length) {
+      out.push({ at, source: r.kind, kind: 'skipped_searches', title: r.title,
+        message: `${r.skipped.length} Maps search(es) failed twice and were skipped`, public_id: r.public_id, detail: r.skipped.slice(0, 10) });
+    }
+  }
+  for (const e of events.rows) {
+    const d = e.detail ?? {};
+    const message = String(d.error ?? d.reason ?? d.server_error ?? d.worker_error ?? e.event);
+    out.push({ at: new Date(e.at).toISOString(), source: e.stage ?? 'hub', kind: e.event, title: null, message, public_id: e.public_id });
+  }
+  for (const t of towns.rows) {
+    out.push({ at: new Date(t.at).toISOString(), source: 'taman_finder', kind: 'failed', title: `${t.town}, ${t.district}, ${t.state}`, message: t.error || 'failed with no error text', public_id: null });
+  }
+  return out.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
+}
+
+/** Auto-runs still open, oldest first; when each queue last started and finished a run; the week's hold changes. */
+export async function autoQueueState(): Promise<{
+  open: Array<{ public_id: string; kind: string; status: string; title: string | null; created_at: string; updated_at: string }>;
+  latest: Array<{ kind: string; last_queued: string | null; last_finished: string | null; last_completed: string | null }>;
+  finderLatest: string | null;
+  holds: Array<{ at: string; stage: string | null; reason: string | null }>;
+}> {
+  await migrate();
+  const [open, latest, finder, holds] = await Promise.all([
+    sql<{ public_id: string; kind: string; status: string; title: string | null; created_at: string; updated_at: string }>(
+      `select public_id, report_type as kind, status, title, created_at, updated_at from published_report
+       where ${AUTO_RUN} and status in ('queued', 'running') order by created_at limit 200`,
+    ),
+    sql<{ kind: string; last_queued: string | null; last_finished: string | null; last_completed: string | null }>(
+      `select report_type as kind, max(created_at) as last_queued,
+         max(coalesce(completed_at, updated_at)) filter (where status in ('completed', 'partial', 'failed')) as last_finished,
+         max(completed_at) filter (where status = 'completed') as last_completed
+       from published_report where ${AUTO_RUN} group by 1`,
+    ),
+    sql<{ at: string | null }>(`select max(finished_at) as at from taman_finder_town`),
+    sql<{ at: string; stage: string | null; reason: string | null }>(
+      `select at, stage, detail->>'reason' as reason from run_event
+       where event = 'auto.hold' and at >= now() - interval '7 days' order by at desc limit 100`,
+    ),
+  ]);
+  return { open: open.rows, latest: latest.rows, finderLatest: finder.rows[0]?.at ?? null, holds: holds.rows };
+}

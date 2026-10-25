@@ -91,18 +91,34 @@ async function snapshot() {
   return { cfg, used, inFlight: progress.inFlight, total: tamans.length, left, hold, gaveUp: [...progress.gaveUp] };
 }
 
+let lastHold: string | null | undefined;
+let lastTickAt: string | null = null;
+
+/** Record a change of hold in run_event, so the dashboard can say when and why the scan queue stopped. */
+function noteHold(hold: string | null): void {
+  lastTickAt = new Date().toISOString();
+  // A running scan is the queue working, not a hold.
+  const next = hold === 'a scan is running' ? null : hold;
+  if (next === lastHold) return;
+  lastHold = next;
+  void db.logEvent({ stage: 'auto-scan', event: 'auto.hold', detail: { reason: next } });
+}
+
 export async function tick(): Promise<string | null> {
   if (ticking || !db.configured()) return null;
   ticking = true;
   try {
     const s = await snapshot();
+    noteHold(s.hold);
     if (s.hold) return null;
     const next = s.left[0]!;
     await launch({ keyword: 'business', place: next.queryPlace, max: 2000, userId: 'auto-scan:' + next.name, autoQueued: true });
     console.log(`[auto-scan] queued Business scan of ${next.queryPlace} (${s.total - s.left.length + 1} of ${s.total}, ${s.used} Maps requests used this month)`);
     return next.queryPlace;
   } catch (err) {
-    console.warn('[auto-scan] tick failed: ' + (err as Error).message);
+    const message = (err as Error).message ?? String(err);
+    console.warn('[auto-scan] tick failed: ' + message);
+    void db.logEvent({ stage: 'auto-scan', event: 'auto.tick_failed', detail: { error: message } });
     return null;
   } finally {
     ticking = false;
@@ -118,6 +134,7 @@ export async function status(): Promise<Record<string, unknown>> {
   return {
     paused: s.cfg.paused,
     holding: s.hold,
+    lastTickAt,
     states: s.cfg.states,
     tamans: s.total,
     scanned: s.total - s.left.length,

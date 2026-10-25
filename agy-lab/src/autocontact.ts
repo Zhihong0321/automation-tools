@@ -86,14 +86,32 @@ export function pausedByHand(env: NodeJS.ProcessEnv = process.env): boolean {
   return /^(1|true|yes|on)$/i.test(env.AUTO_CONTACT_PAUSED?.trim() ?? '');
 }
 
+/** Why the queue is not queuing, or null while it works; kept for status() and the /auto-queue page. */
+let hold: string | null | undefined;
+let lastTickAt: string | null = null;
+
+/** Record a change of hold in run_event, so the dashboard can say when and why the queue stopped. */
+function noteHold(next: string | null): void {
+  lastTickAt = new Date().toISOString();
+  if (next === hold) return;
+  hold = next;
+  void db.logEvent({ stage: 'auto-contact', event: 'auto.hold', detail: { reason: next } });
+}
+
 export async function tick(): Promise<number> {
-  if (ticking || pausedByHand() || !workerLive() || outOfCredits()) return 0;
+  if (ticking) return 0;
+  const blocked = pausedByHand() ? 'paused (AUTO_CONTACT_PAUSED)'
+    : !workerLive() ? `no live worker claims ${contactResearchJobType()}`
+    : outOfCredits() ? 'every Tavily and Exa key is resting'
+    : null;
+  if (blocked) { noteHold(blocked); return 0; }
   ticking = true;
   try {
     // Saved reports are the durable queue. Do not mint new reports while older
     // ones are waiting for the research lanes.
     const free = deps.backlog ? BATCH : Math.max(0, BATCH - await db.pendingContactReportCount());
-    if (!free) return 0;
+    // Full lanes are the queue working, not a hold.
+    if (!free) { noteHold(null); return 0; }
     // The backlog only offers leads checked against the blacklist; check new ones first.
     if (!deps.backlog) await db.applyLeadBlacklist();
     const rows = deps.backlog
@@ -102,8 +120,14 @@ export async function tick(): Promise<number> {
     for (const company of rows) {
       await deps.launch(company, { autoQueued: true });
     }
+    noteHold(rows.length ? null : 'no lead is waiting for contact research');
     console.log(`[auto-queue] queued ${rows.length} contact research job(s)`);
     return rows.length;
+  } catch (err) {
+    const message = (err as Error).message ?? String(err);
+    console.warn('[auto-queue] tick failed: ' + message);
+    void db.logEvent({ stage: 'auto-contact', event: 'auto.tick_failed', detail: { error: message } });
+    return 0;
   } finally {
     ticking = false;
   }
@@ -117,12 +141,18 @@ export async function status(): Promise<{
   workerAvailable: boolean;
   pausedForQuota: boolean;
   paused: boolean;
+  holding: string | null;
+  lastTickAt: string | null;
+  jobType: string;
   totals: { queued: number; running: number; completed: number; failed: number };
 }> {
   return {
     workerAvailable: workerLive(),
     pausedForQuota: outOfCredits(),
     paused: pausedByHand(),
+    holding: hold ?? null,
+    lastTickAt,
+    jobType: contactResearchJobType(),
     totals: await db.autoContactQueueTotals(),
   };
 }
