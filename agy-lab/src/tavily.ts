@@ -281,6 +281,54 @@ export function releaseFor(lease: Lease, cause: unknown): void {
   lease.release(code === 'rate_limit' ? 60_000 : 0, code === 'quota');
 }
 
+/**
+ * Any Tavily endpoint (search, extract, map, crawl) through the shared pool, for
+ * callers that need more than searchWithKey's trimmed hits. A key that answers
+ * 432/433 rests like it does for contact research, and the call moves on to the
+ * next key; the credits Tavily reports for the call are counted against the key.
+ */
+export async function request(
+  path: 'search' | 'extract' | 'map' | 'crawl',
+  body: Record<string, unknown>,
+  opts: { timeoutMs?: number; fetchImpl?: FetchImpl } = {},
+): Promise<Record<string, any>> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  await refresh();
+  const tries = pool.stats().length;
+  if (!tries) throw fail('no Tavily key is configured', 'not_installed');
+  for (let attempt = 0; attempt < tries; attempt++) {
+    if (!available()) break;
+    const lease = await pool.acquire();
+    let res: Response;
+    try {
+      res = await fetchImpl(`https://api.tavily.com/${path}`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer ' + lease.secret, 'content-type': 'application/json' },
+        body: JSON.stringify({ ...body, include_usage: true }),
+        signal: AbortSignal.timeout(opts.timeoutMs ?? 150_000),
+      });
+    } catch (cause) {
+      lease.release();
+      throw fail(`tavily /${path} unreachable: ${(cause as Error).message}`, 'timeout');
+    }
+    const raw = await res.text();
+    if (res.status === 432 || res.status === 433) {
+      lease.release(0, true);
+      continue;
+    }
+    if (res.status === 429) {
+      lease.release(60_000);
+      continue;
+    }
+    lease.release();
+    if (!res.ok) throw fail(`tavily /${path} answered ${res.status}: ${raw.slice(0, 200)}`, 'failed');
+    const out = JSON.parse(raw) as Record<string, any>;
+    pool.spend(lease.secret, Number(out.usage?.credits ?? 0));
+    return out;
+  }
+  throw fail('every Tavily key is out of credits until its quota resets', 'quota');
+}
+
 /** One search through the shared pool. */
 export async function search(query: string, opts: { maxResults?: number; depth?: 'basic' | 'advanced'; timeoutMs?: number } = {}): Promise<SearchHit[]> {
   await refresh();
