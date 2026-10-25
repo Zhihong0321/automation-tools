@@ -289,6 +289,17 @@ async function savePeople(id: number, people: PeopleResult): Promise<void> {
   await reportdb.sql(`update company_dive set result = jsonb_set(coalesce(result, '{}'::jsonb), '{people}', $2::jsonb) where id = $1`, [id, JSON.stringify(people)]);
 }
 
+/** Run the people step on a saved dive and store it; the dive runner calls this after the research. */
+export async function runFor(row: DiveRow): Promise<PeopleResult> {
+  if (runningFor.has(row.id)) throw new Error('the people step is already running for this dive');
+  runningFor.add(row.id);
+  try {
+    return await findPeople(row, (p) => savePeople(row.id, p));
+  } finally {
+    runningFor.delete(row.id);
+  }
+}
+
 /** A people step still 'running' at boot was cut off by a restart. */
 export async function failInterrupted(): Promise<void> {
   if (!reportdb.configured()) return;

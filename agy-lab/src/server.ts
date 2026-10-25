@@ -91,6 +91,7 @@ function authorized(req: http.IncomingMessage, url: URL): boolean {
   const productRoute = url.pathname.startsWith('/api/reports')
     || url.pathname.startsWith('/api/business-search')
     || url.pathname.startsWith('/api/company-research')
+    || url.pathname.startsWith('/api/company-dive')
     || url.pathname.startsWith('/api/contact-research')
     || url.pathname.startsWith('/api/person-research')
     // Ads market research is a /research workspace tool with its own form, so an
@@ -238,6 +239,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // public business evidence. The authenticated API below creates and inspects
   // them; requesters can send the /r/:id link without also leaking LAB_TOKEN.
   if (await intel.handlePublic(req, res, url)) return;
+  if (await companyDive.handlePublic(req, res, url)) return;
 
   // /v1/* is the gateway - the OpenAI-shaped surface other tools point at. It sits
   // behind the same token because a bearer header is exactly what an OpenAI client

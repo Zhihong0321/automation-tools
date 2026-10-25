@@ -86,6 +86,7 @@ async function show(id) {
   let html = '<h1>' + esc(d.company) + ' <span class="muted">(' + esc(d.country) + ')</span></h1>'
     + '<div class="stats muted"><span>Status: <b class="' + (d.status === 'failed' ? 'bad' : '') + '">' + esc(d.status) + '</b></span>'
     + '<span>Tavily: ' + d.tavily_calls + ' calls / ' + d.tavily_credits + ' credits</span><span>Brave: ' + d.brave_calls + '</span><span>LLM: ' + d.llm_calls + '</span></div>';
+  if (d.report_url) html += '<p>Public report: <a href="' + esc(d.report_url) + '" target="_blank" rel="noopener">' + esc(d.report_url) + '</a></p>';
   if (d.error) html += '<p class="bad">' + esc(d.error) + '</p>';
   if (d.result && d.result.warnings && d.result.warnings.length) html += '<p class="bad">Finished with fallbacks:</p><ul>' + d.result.warnings.map((w) => '<li class="muted">' + esc(w) + '</li>').join('') + '</ul>';
   if (d.dossier) {

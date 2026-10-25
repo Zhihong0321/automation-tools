@@ -21,7 +21,15 @@
 //   POST /api/company-dive          {company, country?} -> {id}
 //   GET  /api/company-dive          recent dives
 //   GET  /api/company-dive/:id      live log, then dossier, facts, sources, Tavily calls
+//   GET  /d/:publicId               the public report page (no token: the id is the link)
+//   GET  /d/:publicId/data          what that page polls: status, log, dossier, people
+//
+// After the research, the Exa people step (companydive-people.ts) runs on its own
+// unless the request said people: false. The dive stays 'running' at stage
+// 'people' until it ends, so one status covers the whole report.
 
+import crypto from 'node:crypto';
+import type http from 'node:http';
 import * as brave from './brave.ts';
 import * as tavily from './tavily.ts';
 import * as extractLlm from './extract-llm.ts';
@@ -730,7 +738,8 @@ async function dive(company: string, country: string, progress: Progress, budget
 // ---------------------------------------------------------------- storage
 
 export type DiveRow = {
-  id: number; company: string; country: string; status: string; stage: string;
+  id: number; public_id: string | null; options: { people?: boolean } | null;
+  company: string; country: string; status: string; stage: string;
   log: Array<{ at: string; stage: string; msg: string }>; result: DiveResult | null; dossier: string | null; error: string | null;
   tavily_calls: number; tavily_credits: number; brave_calls: number; llm_calls: number;
   created_at: string; finished_at: string | null;
@@ -756,8 +765,35 @@ function ensureTable(): Promise<unknown> {
       llm_calls int not null default 0,
       created_at timestamptz not null default now(),
       finished_at timestamptz
-    )`).catch((err) => { tableReady = null; throw err; });
+    );
+    alter table company_dive add column if not exists public_id text unique;
+    alter table company_dive add column if not exists options jsonb not null default '{}'::jsonb;`)
+    .then(async () => {
+      // Dives from before public links get one now.
+      const old = await reportdb.sql<{ id: string }>(`select id from company_dive where public_id is null`);
+      for (const row of old.rows) await reportdb.sql(`update company_dive set public_id = $2 where id = $1`, [row.id, newPublicId()]);
+    })
+    .catch((err) => { tableReady = null; throw err; });
   return tableReady;
+}
+
+/** 20 url-safe characters, the same shape as the hub's /r/:id report links. */
+function newPublicId(): string {
+  return crypto.randomBytes(15).toString('base64url');
+}
+
+function origin(req: http.IncomingMessage): string {
+  const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0]?.trim() || 'http';
+  return proto + '://' + (req.headers.host ?? 'localhost');
+}
+
+function links(req: http.IncomingMessage, row: { id: number | string; public_id: string | null }): Record<string, string> {
+  const base = origin(req);
+  return {
+    report_url: `${base}/d/${row.public_id}`,
+    status_url: `${base}/d/${row.public_id}/data`,
+    api_url: `${base}/api/company-dive/${row.id}`,
+  };
 }
 
 async function updateRow(id: number, fields: Partial<Omit<DiveRow, 'id' | 'created_at'>>): Promise<void> {
@@ -789,15 +825,26 @@ async function execute(id: number): Promise<void> {
   };
   try {
     const { result, dossier } = await run(row.company, row.country, progress);
+    const withPeople = row.options?.people !== false;
+    // 'partial': it finished, but a stage fell back; result.warnings says which.
+    const finalStatus = result.warnings.length ? 'partial' : 'done';
     await updateRow(id, {
-      // 'partial': it finished, but a stage fell back; result.warnings says which.
-      status: result.warnings.length ? 'partial' : 'done', stage: 'done', log, result, dossier,
+      status: withPeople ? 'running' : finalStatus, stage: withPeople ? 'people' : 'done', log, result, dossier,
       tavily_calls: result.tavily.length,
       tavily_credits: result.tavily.reduce((n, c) => n + c.credits, 0),
       brave_calls: result.braveCalls,
       llm_calls: result.llm.length,
-      finished_at: new Date().toISOString(),
+      ...(withPeople ? {} : { finished_at: new Date().toISOString() }),
     });
+    if (withPeople) {
+      await progress('people', 'Research saved; finding people linked to the company with Exa');
+      // Loaded here, not at the top: companydive-people imports this module.
+      const people = await import('./companydive-people.ts');
+      const saved = (await reportdb.sql<DiveRow>(`select * from company_dive where id = $1`, [id])).rows[0]!;
+      const found = await people.runFor(saved);
+      await progress('people', `People step ${found.status}: ${found.people.length} people linked`);
+      await updateRow(id, { status: finalStatus, stage: 'done', log, finished_at: new Date().toISOString() });
+    }
   } catch (err) {
     const message = (err as Error).message;
     const stats = (err as { stats?: DiveStats }).stats;
@@ -827,6 +874,9 @@ function pump(): void {
 export async function failInterrupted(): Promise<void> {
   if (!reportdb.configured()) return;
   await ensureTable();
+  // Cut off in the people step: the research is saved, so the report stands.
+  await reportdb.sql(`update company_dive set status = 'done', stage = 'done', finished_at = now()
+                       where status = 'running' and stage = 'people' and dossier is not null`);
   await reportdb.sql(`update company_dive set status = 'failed', error = 'interrupted by a restart', finished_at = now()
                        where status in ('queued', 'running')`);
 }
@@ -850,9 +900,9 @@ export async function handle(req: import('node:http').IncomingMessage, res: impo
   const method = req.method ?? 'GET';
   if (p === '/api/company-dive' && method === 'GET') {
     const out = await reportdb.sql(
-      `select id, company, country, status, stage, tavily_calls, tavily_credits, brave_calls, llm_calls, created_at, finished_at
+      `select id, public_id, company, country, status, stage, tavily_calls, tavily_credits, brave_calls, llm_calls, created_at, finished_at
          from company_dive order by id desc limit 50`);
-    ctx.json(res, 200, { dives: out.rows });
+    ctx.json(res, 200, { dives: out.rows.map((r) => ({ ...r, ...links(req, r as DiveRow) })) });
     return true;
   }
   if (p === '/api/company-dive' && method === 'POST') {
@@ -867,21 +917,84 @@ export async function handle(req: import('node:http').IncomingMessage, res: impo
       ctx.json(res, 503, { error: 'BRAVE_API_KEYS is not set' });
       return true;
     }
-    const out = await reportdb.sql<{ id: string }>(`insert into company_dive (company, country) values ($1, $2) returning id`, [company, country]);
+    const options = { people: body.people !== false };
+    const publicId = newPublicId();
+    const out = await reportdb.sql<{ id: string }>(
+      `insert into company_dive (company, country, public_id, options) values ($1, $2, $3, $4) returning id`,
+      [company, country, publicId, JSON.stringify(options)]);
     const id = Number(out.rows[0].id);
     waiting.push(id);
     pump();
-    // Still in `waiting` after pump() means another dive holds the one slot.
-    ctx.json(res, 202, { id, queued: waiting.includes(id), view_url: `/company-dive#${id}` });
+    // The report link works at once: it shows the live log until the report is ready.
+    ctx.json(res, 202, {
+      id, public_id: publicId, status: 'queued', company, country, people: options.people,
+      // Still in `waiting` after pump() means another dive holds the one slot.
+      queued_behind_another: waiting.includes(id),
+      ...links(req, { id, public_id: publicId }),
+      expected_minutes: '5-10',
+    });
     return true;
   }
   const m = p.match(/^\/api\/company-dive\/(\d+)$/);
   if (m && method === 'GET') {
     const row = (await reportdb.sql<DiveRow>(`select * from company_dive where id = $1`, [Number(m[1])])).rows[0];
-    if (row) ctx.json(res, 200, row);
+    if (row) ctx.json(res, 200, { ...row, ...links(req, row) });
     else ctx.json(res, 404, { error: 'no such dive' });
     return true;
   }
   ctx.json(res, 404, { error: 'not found', path: p });
+  return true;
+}
+
+// ---------------------------------------------------------------- public report
+
+/** What the public page may show: no keys, no internal ids beyond the source numbers. */
+export function publicView(row: DiveRow): Record<string, unknown> {
+  const r = row.result;
+  const cited = new Set((r?.facts ?? []).flatMap((f) => f.sources));
+  const people = (r as (DiveResult & { people?: Record<string, any> }) | null)?.people;
+  return {
+    company: row.company,
+    country: row.country,
+    status: row.status,
+    stage: row.stage,
+    error: row.status === 'failed' ? row.error : null,
+    created_at: row.created_at,
+    finished_at: row.finished_at,
+    log: (row.log ?? []).map((l) => ({ at: l.at, stage: l.stage, msg: l.msg })),
+    dossier: row.dossier,
+    identity: r?.identity ?? null,
+    sources: (r?.sources ?? []).filter((s) => cited.has(s.id)).map((s) => ({ id: s.id, title: s.title, url: s.url })),
+    stats: r ? {
+      tavily_calls: row.tavily_calls, brave_calls: row.brave_calls, llm_calls: row.llm_calls,
+      facts: r.facts.length, sources_found: r.sources.length, sources_cited: cited.size,
+    } : null,
+    people: people ? {
+      status: people.status,
+      people: people.people ?? [],
+      rejected: (people.rejected ?? []).length,
+      exa_calls: (people.exa ?? []).length,
+      log: (people.log ?? []).map((l: { at: string; msg: string }) => ({ at: l.at, msg: l.msg })),
+    } : null,
+  };
+}
+
+/** /d/:publicId and /d/:publicId/data, served without a token: the opaque id is the permission. */
+export async function handlePublic(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+  const m = /^\/d\/([A-Za-z0-9_-]{20})(\/data)?\/?$/.exec(url.pathname);
+  if (!m || (req.method ?? 'GET') !== 'GET') return false;
+  const send = (status: number, type: string, body: string) => {
+    res.writeHead(status, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
+    res.end(body);
+  };
+  if (!reportdb.configured()) return send(503, 'application/json', JSON.stringify({ error: 'reports are not configured' })), true;
+  await ensureTable();
+  const row = (await reportdb.sql<DiveRow>(`select * from company_dive where public_id = $1`, [m[1]])).rows[0];
+  if (m[2]) {
+    send(row ? 200 : 404, 'application/json', JSON.stringify(row ? publicView(row) : { error: 'report not found' }));
+    return true;
+  }
+  const { reportPage } = await import('./companydive-report.ts');
+  send(row ? 200 : 404, 'text/html', reportPage(row ? publicView(row) : null, m[1]));
   return true;
 }

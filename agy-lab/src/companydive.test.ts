@@ -116,3 +116,35 @@ test('fallbackQueries searches people under the legal name and every alias', asy
   assert.deepEqual(qs.filter((q) => q.kind === 'people').length, 3);
   assert.ok(qs.some((q) => q.kind === 'web' && /director/.test(q.query)));
 });
+
+test('publicView shows only cited sources and no internal call details', async () => {
+  const { publicView } = await import('./companydive.ts');
+  const view = publicView({
+    id: 3, public_id: 'abcdefghijklmnopqrst', options: { people: true }, company: 'Eternalgy Sdn Bhd', country: 'Malaysia',
+    status: 'running', stage: 'people', error: 'hidden while running', log: [{ at: '2026-10-25T09:00:00Z', stage: 'write', msg: 'Writing' }],
+    dossier: '# Eternalgy\n\nSummary [1].', tavily_calls: 14, tavily_credits: 37, brave_calls: 8, llm_calls: 6,
+    created_at: '2026-10-25T09:00:00Z', finished_at: null,
+    result: {
+      identity: { legal_name: 'ETERNALGY SDN. BHD.' }, facts: [{ topic: 'identity', fact: 'f', sources: [1], confidence: 'high' }],
+      contradictions: [], gaps: [], warnings: [], braveCalls: 8, llm: [], tavily: [{ n: 1, path: 'search', label: 'T1', credits: 2, ms: 1, ok: true }],
+      sources: [
+        { id: 1, url: 'https://a.my', title: 'A', contentKind: 'page', found: ['brave:exact'], relevant: true },
+        { id: 2, url: 'https://b.my', title: 'B', contentKind: 'none', found: ['brave:exact'], relevant: false },
+      ],
+      people: { status: 'running', people: [], rejected: [{ name: 'x', reason: 'y' }], exa: [{}, {}], log: [] },
+    } as any,
+  });
+  assert.deepEqual((view.sources as any[]).map((s) => s.id), [1]);
+  assert.equal(view.error, null);
+  assert.equal((view.people as any).rejected, 1);
+  assert.equal((view.people as any).exa_calls, 2);
+  assert.equal('tavily' in view, false);
+});
+
+test('reportPage embeds the data so a </script> in the log cannot end the tag', async () => {
+  const { reportPage } = await import('./companydive-report.ts');
+  const html = reportPage({ company: 'X', status: 'running', stage: 'read', log: [{ at: 'now', stage: 'read', msg: '</script><b>x' }] }, 'abcdefghijklmnopqrst');
+  assert.equal(html.includes('</script><b>x'), false);
+  assert.match(html, /data-id="abcdefghijklmnopqrst"/);
+  assert.match(reportPage(null, 'abcdefghijklmnopqrst'), /Report not found/);
+});
