@@ -3,9 +3,9 @@
 A loop that asks the lab for a job, runs it on this machine, and posts the answer
 back. What keeps the work here rather than in the container:
 
-- **Logins that already exist here.** The ChatGPT accounts are signed in inside
-  ego lite's profiles on this machine, and Facebook was signed in by hand in the crawler's own task
-  space — no OAuth-paste apparatus, no keyring the container does not have.
+- **Logins that already exist here.** Facebook was signed in by hand in the
+  crawler's own ego lite task space, and grok.com in its own — no OAuth-paste
+  apparatus, no keyring the container does not have.
 
 **`gmap.scan` has moved to the hub.** Google Maps business lists now come from
 scraper.tech, run by the hub's own worker (`scraper-tech-maps`,
@@ -33,31 +33,32 @@ POST /api/jobs/<id>/result                          {ok, result, error}
 |---|---|---|
 | `ping` | anything, echoed back | the proof job — reports `publicIp` |
 | `gmap.scan` | `{keyword, place?, max?, userId?}` | `gmap.mjs`, a Chrome on the home line, 12–60s |
-| `chatgpt.ask` | `{id, prompt, space?, timeoutMs?}` | `chatgpt-ego.mjs`, an ego lite task space, ~6s |
-| `chatgpt.probe` | `{id}` | whether that account is still signed in |
 | `fb.company` | `{name, city?, phone?, website?, address?, category?, budget?}` | `fb.mjs` → `fbw`, an ego lite crawl, 16–55s — 16s and no model call when the deterministic scorer settles it |
 | `fb.person` | `{person, company, city?}` | that person's profile, if it is publicly linked to the company |
 | `fb.discover` | `{name, city?}` | named humans on a company's public surface, 60–120s |
 | `fb.probe` | none | whether ego lite still holds a Facebook session — one page load, no model call |
 
-**`meta.*` and `muse.*` are gone.** Meta AI was never activated on this machine:
-no ego lite profile ever held a `meta.ai` or `facebook.com` cookie, so every route
-to it ended at an interactive Facebook login. The muse 1.2 stand-in that answered
-under the `meta.*` names through opencode is retired and `muse.mjs` is deleted.
-Nothing here claims those types now, which is exactly how the gateway finds out:
-`meta@mini` stops being listed `ready` by `GET /v1/models`, and a pinned call is
-refused up front rather than queueing a job no lane will take. `meta-ego.mjs` is
-left in the tree unused, with its test, as the record of the browser route.
+The `ads.company`, `ads.market` and `ads.probe` types run `ads.mjs` (ads-recon,
+a deterministic crawl of two public ad libraries) on the `-ads` lane below.
 
-The Facebook work that Meta was originally wanted for is `fb.*` below — a
+**`chatgpt.*`, `meta.*` and `muse.*` are gone.** On 2026-10-25 Cloudflare started
+refusing ChatGPT chats from the Railway IP — `cloudflare_challenge` came back in
+place of the answer — and the ChatGPT engine was removed on 2026-10-26, here and
+in the hub. `chatgpt.mjs`, `chatgpt-ego.mjs` and the ask LaunchAgent plist are
+deleted. Meta AI was retired before that: it was never activated on this machine
+(no ego lite profile ever held a `meta.ai` or `facebook.com` cookie, so every
+route to it ended at an interactive Facebook login), and the muse 1.2 stand-in
+that answered under the `meta.*` names is gone too. `meta-ego.mjs` and its test
+are deleted with it. The gateway's model names for those engines now resolve to
+Pi in the hub; no model call is queued for this machine any more.
+
+The Facebook work that Meta was originally wanted for is `fb.*` above — a
 read-only crawler with an evidence trail, not a model asked what it can see.
 
-The cloud gateway reaches these through the queue: `chatgpt@mini` in
-`GET /v1/models` is exactly `chatgpt.ask`, and an engine is
-listed `ready` there only while some lane here is claiming its type. A worker
-advertises the types it was **started** with, so a process older than the handler
-it is missing looks, from the cloud, exactly like a machine that is switched off.
-See [API.md](../API.md).
+A worker advertises the types it was **started** with, so a process older than
+the handler it is missing looks, from the cloud, exactly like a machine that is
+switched off. Restart a lane after a `git pull` that adds a handler. See
+[API.md](../API.md).
 
 ## Lanes
 
@@ -66,46 +67,47 @@ checking in under its own name — so a lane that dies is visible in `GET /api/j
 instead of being covered for by its neighbour still polling.
 
 With `WORKER_TYPES` unset there are four lanes: `<name>` for `ping` and
-`gmap.scan`, `<name>-ask` for the four wrapper types, `<name>-fb` for `fb.*` and
-`<name>-x` for `x.*`. Set, it collapses the process to a single lane taking
-exactly those types — which is how this machine actually runs, one process per
-engine:
+`gmap.scan`, `<name>-fb` for `fb.*`, `<name>-x` for `x.*` and `<name>-ads` for
+`ads.*`. Set, it collapses the process to a single lane taking exactly those
+types — which is how this machine actually runs, one process per engine:
 
 | Process | `WORKER_NAME` | `WORKER_TYPES` | Kept alive by |
 |---|---|---|---|
 | the scan | `$(hostname)` | `ping,gmap.scan` | the LaunchDaemon, at boot |
-| the ask lane | `macmini-ask` | `chatgpt.ask,chatgpt.probe` | the LaunchAgent, at login |
 | the fb lane | `macmini-fb` | `fb.company,fb.person,fb.discover,fb.probe` | the LaunchAgent, at login |
 | the x lane | `macmini-x` | `x.subject,x.company,x.probe` | the LaunchAgent, at login |
+| the ads lane | `macmini-ads` | `ads.company,ads.market,ads.probe` | the LaunchAgent (`com.eternalgy.gmapworker.ads.plist`), at login |
 
-Pinning the daemon matters as much as pinning the wrappers: a claim with no
-`types` asks for **any** job, so an unpinned scan daemon will happily take a
-`chatgpt.ask` off the queue and fail it with "no handler" — stealing it from the
-worker that could have answered.
+`agy.*`, `chatgpt.*`, `meta.*` and `muse.*` are dropped from `WORKER_TYPES` even
+when an installed plist still names them. A process whose `WORKER_TYPES` names
+**only** retired types claims nothing and logs that its LaunchAgent should be
+unloaded — rather than falling through to the default lanes and starting a second
+`gmap.scan` lane beside the scan daemon on the same home line.
 
-The split is by duration and by what the engine needs. A 15-second ChatGPT call
-queued behind a 60-second Maps scan is a person waiting on an HTTP request stuck
-behind work that holds the loop for minutes by design.
+Pinning the daemon matters as much as pinning the other lanes: an unpinned scan
+daemon starts all four default lanes, so it would claim `fb.*`, `x.*` and `ads.*`
+jobs in the system domain, where ego lite cannot run, and fail them — stealing
+them from the agent that could have answered.
+
+The split is by duration and by what the engine needs. Each lane is serial within
+itself, and the fb, x and ads lanes each hold their own ego lite task space for
+minutes at a time, so none of them should wait behind another.
 
 ## Accounts
 
 The wrappers store no password, token or TOTP. Every credential is a login that a
 human performed once, in a browser profile on this machine:
 
-- **ChatGPT** — `~/.gmap-worker/spaces.json` maps a session id to
-  `{space, profile}`, e.g. `pro -> {12, "Zhihong PRO"}`. Auth lives in that
-  profile's cookie DB under `~/Library/Application Support/Citro Labs/ego lite/`.
-  A task space inherits whatever profile is **default at the moment it is
-  created**, and `profileId`/`profileName` are accepted and silently ignored — so
-  adding an account means making its profile default in the GUI first. The wrapper
-  asserts the expected profile before typing and fails `wrong_profile` rather than
-  answering as the wrong account.
 - **Facebook** — signed in by hand once, in the `facebook read-only crawler` task
   space inside ego lite. `fb-recon` never types, stores or reads a password; when
   the session lapses the fix is `./fb login` on this machine, which hands you the
   browser to sign in yourself. `fb.probe` is how the cloud finds out.
 - **Claude** — `fbw` runs the Claude CLI on an OAuth login in the **login
   keychain**, which is the second reason the fb lane cannot be a daemon.
+
+The ChatGPT accounts this machine used to answer on are no longer used. The
+ChatGPT entries in `~/.gmap-worker/spaces.json` and any `CGPT_*` variables in
+`~/.gmap-worker.env` do nothing now and can be deleted.
 
 ---
 
@@ -195,7 +197,20 @@ launchctl bootout gui/$(id -u)/com.eternalgy.gmapworker.agy
 rm ~/Library/LaunchAgents/com.eternalgy.gmapworker.agy.plist
 ```
 
-**The ask, fb and x lanes are LaunchAgents and start at login, not at boot.** Pay
+### The ask lane — removed, unload it once
+
+The ask lane (`macmini-ask`, `chatgpt.ask` and `chatgpt.probe`) is gone with the
+ChatGPT engine, and `com.eternalgy.gmapworker.ask.plist` is deleted from the repo.
+A copy already installed on the mini keeps starting at login: after a `git pull`
+it claims nothing and logs that it should be unloaded, but it still runs. Remove
+it by hand, once:
+
+```bash
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.eternalgy.gmapworker.ask.plist
+rm ~/Library/LaunchAgents/com.eternalgy.gmapworker.ask.plist
+```
+
+**The fb, x and ads lanes are LaunchAgents and start at login, not at boot.** Pay
 for that with automatic login: System Settings → Users & Groups → Automatic login,
 set to this account. FileVault has to stay off for it to work at all.
 
@@ -205,7 +220,7 @@ it — ego lite is a GUI app and cannot run in the system domain either — with
 
 ### The fb lane — an agent for two reasons
 
-ego lite is a GUI app, so this lane hits the same wall as the ask lane. It also
+ego lite is a GUI app, and a GUI app cannot run in the system domain. It also
 runs the Claude CLI, whose credential is an OAuth login in the login keychain —
 which a system-domain process cannot unlock. Either reason alone rules out the
 daemon.
@@ -311,10 +326,8 @@ sleeping does.
 | `fb.*` fails `busy: the crawl space is under a human's control` | somebody clicked in the crawl space's window. The crawler will not fight you for the browser. Re-run when you are done. |
 | `fb.*` fails with a 403 mentioning `provider:11111` | `claude` read `~/.claude/settings.json`, which points at a proxy that does not serve `claude-sonnet-5`. `fbw` passes `--setting-sources project,local` to skip that file; a failure here means the flag was lost. |
 | every `fb.*` job fails only under launchd, never from your terminal | the desktop app exports variables a launchd job does not — the base-URL override above is the usual one. Reproduce with the `env -i` line in the install section. |
-| `chatgpt@mini` fails `task space not found: <n>` after a reboot | task space ids do not survive a browser restart. Register the space by NAME in `~/.gmap-worker/spaces.json` (`"space": "chatgpt-pro"`), not by number — `useOrCreateTaskSpace` then rebuilds it on demand, and the login lives in the profile's cookie jar, which does survive. The profile guard keeps the rebuild honest. |
-| `chatgpt@mini` is missing from `/v1/models` | no lane is claiming that type. Either the process is dead, or it is running code older than the handler — a worker only advertises the types it had when it started, so restart it after a `git pull`. |
-| `quota_reached: Individual quota reached. Resets in …` | The failed job records the quota error. The broker marks all lanes sharing this account `cooldown` in `GET /api/jobs`, stops assigning them jobs, and exposes `cooldownUntil`. The worker sleeps until the reset time, then resumes polling automatically. |
-| a `chatgpt.ask` fails `wrong_profile` | the task space in `spaces.json` is gone, and ego lite created a fresh one on whatever profile is default — which answers as the wrong account. Fix the space id, or make the right profile default in the GUI and rebuild it. |
+| `quota_reached: Individual quota reached. Resets in …` | The failed job records the quota error. The broker marks that lane `cooldown` in `GET /api/jobs`, stops assigning it jobs, and exposes `cooldownUntil`. The worker sleeps until the reset time, then resumes polling automatically. |
+| `WORKER_TYPES names only retired types (…); claiming nothing. Unload this LaunchAgent.` | an old LaunchAgent (usually the ask lane) is still installed. Unload and delete it — see [The ask lane](#the-ask-lane--removed-unload-it-once). |
 
 ## Configuration
 
@@ -323,15 +336,13 @@ sleeping does.
 | `LAB_TOKEN` | — | required; from `~/.gmap-worker.env` or the environment |
 | `LAB_URL` | `https://ee-auto.up.railway.app` | |
 | `WORKER_NAME` | `os.hostname()` | what `GET /api/jobs` reports |
-| `WORKER_TYPES` | empty | comma-separated. Empty gives the two default lanes; set, it pins the process to one lane taking exactly these types. See [Lanes](#lanes) |
+| `WORKER_TYPES` | empty | comma-separated. Empty gives the four default lanes; set, it pins the process to one lane taking exactly these types. See [Lanes](#lanes) |
 | `WORKER_ENV_FILE` | `~/.gmap-worker.env` | |
 | `FBW_BIN` | `~/project/gmap-recon/fb-recon/worker/fbw` | the fb-recon worker; it lives in its own repo |
 | `FB_BIN` | `~/project/gmap-recon/fb-recon/fb` | the crawler itself, used only by `fb.probe` |
 | `FB_TIMEOUT_MS` | 300000 | ceiling for one lead; the payload's `timeoutMs` wins when set |
-| `CGPT_ASK_TIMEOUT_MS` | 180000 | how long to wait for a ChatGPT answer to stop growing |
-| `CGPT_TRACE` | off | `1` narrates the answer-wait, phase by phase |
 | `EGO_BROWSER_BIN` | `ego-browser` on `PATH` | the worker prepends `~/.local/bin`, which launchd does not inherit |
-| `CGPT_SPACE`, `CGPT_PROFILE` | — | override `spaces.json` for one process |
+| `WORKER_COOLDOWN_MS` | unset | optional pause after each job, per lane |
 | `WORKER_RECOVERY_DIR` | `~/.gmap-worker/unsaved-scans` | local recovery copies of report scans; the hub writes to its own database |
 
 ### Recovering an unsaved Maps scan

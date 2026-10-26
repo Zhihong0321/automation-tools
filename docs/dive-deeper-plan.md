@@ -144,7 +144,8 @@ Only once steps 1–4 hold up:
 - How much does one deep run cost once every section runs? It has to stay far below the price.
 - Which outside registers (CIDB, SEDA, SSM) can be checked automatically, and which need a person?
 - Which AI assistants should we ask, given the Gemini ban? Only the models on our keys, or real
-  ChatGPT and Perplexity accounts?
+  ChatGPT and Perplexity accounts? (Since 2026-10-25 Cloudflare refuses ChatGPT chats from the
+  Railway IP, so a real ChatGPT account would have to be asked from somewhere else.)
 - PDPA: get a one-hour check from a Malaysian lawyer before the first paid report. Keep personal data
   to what the company publishes itself.
 - Delivery: an HTML link only, or a PDF as well?

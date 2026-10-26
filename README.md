@@ -9,7 +9,7 @@ leads to telemarketers by taman.
 | Service | Where | Runs |
 |---|---|---|
 | Hub, `agy-lab` | Railway, https://ee-auto.up.railway.app | the API, the research portal (`/research`), telemarketing (`/telemarketing`), workers status (`/workers`), the database, and the whole lead pipeline below |
-| Mac mini worker | home line, [worker/](worker/) | jobs that need a login held on that machine: ChatGPT (`chatgpt.*`), Facebook (`fb.*`), X (`x.*`) and ads research. It no longer runs Google Maps scans. |
+| Mac mini worker | home line, [worker/](worker/) | jobs that need a login held on that machine: Facebook (`fb.*`), X (`x.*`) and ads research (`ads.*`). It no longer runs Google Maps scans, and no longer answers model calls: the ChatGPT engine was removed on 2026-10-26 after Cloudflare started refusing it from the Railway IP, and the gateway (`/v1/chat/completions`, `/api/ask`) is Pi on MiniMax only. |
 
 All `/api/*` calls need `Authorization: Bearer $LAB_TOKEN`. Keys and the token live in the Railway
 variables and the local vault, never in this repo.
@@ -43,5 +43,5 @@ The taman auto-scan went live on 2026-10-25. Missing tamans are found with the s
 | [worker/README.md](worker/README.md) | the Mac mini worker: lanes, install, failure modes |
 | [agy-lab/README.md](agy-lab/README.md) | how the hub is set up on Railway |
 
-`HANDOFF.md`, `CHATGPT-PROGRESS.md`, `META-AI.md`, `STUPID-LOG.md`, `progress-08-20.md` and
-`AUTO-QUEUE-NEXT-STEP.MD` are older working notes. Treat them as history.
+`HANDOFF.md`, `STUPID-LOG.md`, `progress-08-20.md` and `AUTO-QUEUE-NEXT-STEP.MD` are older
+working notes. Treat them as history.

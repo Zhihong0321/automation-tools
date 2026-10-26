@@ -1,5 +1,15 @@
 # SESSION HANDOFF — 2026-08-19
 
+> **History — none of the ChatGPT part of this exists any more.** This handoff is
+> from 2026-08-19 and is kept as a record. The ChatGPT browser engine it was
+> working on was removed on 2026-10-26, after Cloudflare started refusing ChatGPT
+> chats from the Railway IP on 2026-10-25 (`cloudflare_challenge` in place of the
+> answer). `src/browser.ts`, `login.ts`, `sessions.ts`, `cgptroutes.ts` and
+> `totp.ts` are deleted, every `/api/cgpt/*` route below (including `/dom` and
+> `/frame`) is gone, and the image no longer carries Chrome, Xvfb or patchright.
+> agy was later replaced by Pi on MiniMax. Do not follow the "Next step" below.
+> The current gateway is described in [API.md](API.md).
+
 Read [STUPID-LOG.md](STUPID-LOG.md) first. It explains the process failure that
 turned "fill email, password, OTP" into a multi-hour bug hunt. Do not repeat it.
 

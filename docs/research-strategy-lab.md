@@ -6,6 +6,12 @@
 > the Mac mini, which visits the pages with a real Facebook session and returns the
 > URL every field was read from. The Meta/Muse engine is removed. Everything below
 > stands as the record of what was measured on 21 Aug, including the prompts.
+>
+> **Superseded again, 26 Oct 2026.** Round 02 no longer runs on ChatGPT: the
+> ChatGPT browser engine was removed after Cloudflare started refusing it from the
+> Railway IP on 25 Oct. Its three split audits (contacts, people, signals) now run
+> on Pi (MiniMax), as do Rounds 01 and 04. The "browser wrapper" truncation noted
+> below no longer applies to any round.
 
 ## Scope
 

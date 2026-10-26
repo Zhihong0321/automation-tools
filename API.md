@@ -1,35 +1,32 @@
-# The gateway — agy and ChatGPT as one API
+# The gateway — Pi as an OpenAI-shaped API
 
-Two engines behind one HTTP surface, in the OpenAI chat-completions shape, so a
+One engine behind one HTTP surface, in the OpenAI chat-completions shape, so a
 tool that already talks to an LLM only has to change a base URL. Behind the same
 token sit the research pipelines and the workers at home that do the crawling.
 
 ```
 Base URL   https://ee-auto.up.railway.app/v1
 API key    the LAB_TOKEN of this service
-Models     agy | chatgpt | chatgpt:<session>
-Locations  <model>@mini | <model>@container      (both engines run in both)
+Models     pi            (every older model name resolves to it — see Models)
+Location   this container only; @container is accepted, @mini is a 404
 Reference  https://ee-auto.up.railway.app/docs   (the same surface, laid out to read)
 ```
 
-| Engine | What it actually is | Typical |
-|---|---|---|
-| `agy` | the Antigravity CLI, signed in with a Google account, run with `-p` | ~14s container, ~9s mini |
-| `chatgpt` | a signed-in ChatGPT session in a real Chrome, typed into and read back | ~15s container, ~6s mini |
+| Engine | What it actually is |
+|---|---|
+| `pi` | the Pi worker (`agy-lab/src/pi.ts`), run in the hub through the Pi SDK against MiniMax, with two tools of ours: `web_search` (Tavily) and `web_fetch` (a plain GET of a public page) |
 
-Neither is a hosted API. Every call is a real CLI run or a real browser doing what
-a person would do, and the limits at the bottom of this page follow from that.
+Pi replaced agy (the Antigravity CLI) after the Google accounts it ran on were
+banned. It is an API client, not a browser: no shell, no file tools, no signed-in
+session to keep alive.
 
-> **`meta` is retired.** There is no Meta AI engine any more — not in the
-> container, not on the mini. See [Meta AI — retired](#meta-ai--retired). The
-> Facebook work it was wanted for is [`fb.*`](#facebook-lead-enrichment--fb),
+> **ChatGPT and Meta AI are removed.** Both were real browsers driving a signed-in
+> session. On 2026-10-25 Cloudflare started refusing ChatGPT chats from the Railway
+> IP (`cloudflare_challenge` came back in place of the answer), and the engine was
+> removed on 2026-10-26. Meta AI was already retired, region-blocked. Their model
+> names still resolve, to Pi. See [ChatGPT and Meta AI — removed](#chatgpt-and-meta-ai--removed).
+> The Facebook work Meta was wanted for is [`fb.*`](#facebook-lead-enrichment--fb),
 > which crawls the pages instead of asking a model what it can see.
-
-**Two locations.** Both engines run in two places: in this container, and on a Mac
-mini at home that claims them off the [job queue](#jobs--work-sent-to-a-machine-at-home).
-They are different machines with different accounts, not replicas. Suffix any
-model with `@mini` or `@container` to pin it; a bare name is pooled — see
-[Models](#models).
 
 ---
 
@@ -38,17 +35,17 @@ model with `@mini` or `@container` to pin it; a bare name is pooled — see
 ```bash
 curl -s https://ee-auto.up.railway.app/v1/chat/completions \
   -H "Authorization: Bearer $LAB_TOKEN" -H 'content-type: application/json' \
-  -d '{"model":"agy","messages":[{"role":"user","content":"Capital of Malaysia? One word."}]}'
+  -d '{"model":"pi","messages":[{"role":"user","content":"Capital of Malaysia? One word."}]}'
 ```
 
 ```json
 {
   "id": "chatcmpl-...",
   "object": "chat.completion",
-  "model": "agy",
+  "model": "pi",
   "choices": [{ "index": 0, "message": { "role": "assistant", "content": "Kuala Lumpur" }, "finish_reason": "stop" }],
   "usage": { "prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15, "estimated": true },
-  "agy_lab": { "engine": "agy", "ms": 13708 }
+  "agy_lab": { "engine": "pi", "ms": 13708 }
 }
 ```
 
@@ -57,16 +54,17 @@ With the OpenAI SDK, unchanged:
 ```python
 from openai import OpenAI
 client = OpenAI(base_url="https://ee-auto.up.railway.app/v1", api_key=LAB_TOKEN)
-client.chat.completions.create(model="chatgpt", messages=[{"role": "user", "content": "..."}])
+client.chat.completions.create(model="pi", messages=[{"role": "user", "content": "..."}])
 ```
 
 ```ts
 const client = new OpenAI({ baseURL: 'https://ee-auto.up.railway.app/v1', apiKey: LAB_TOKEN });
-await client.chat.completions.create({ model: 'agy', messages: [{ role: 'user', content: '...' }] });
+await client.chat.completions.create({ model: 'pi', messages: [{ role: 'user', content: '...' }] });
 ```
 
-Set the client's timeout to at least 3 minutes. A default of 60s will cut off
-answers this thing can produce.
+Set the client's timeout to at least 5 minutes. Pi searches and reads pages before
+it answers, and the gateway's own default (`PI_ASK_TIMEOUT_MS`) is 300s; a client
+default of 60s will cut off answers it can produce.
 
 ---
 
@@ -75,8 +73,9 @@ answers this thing can produce.
 | Call | Does |
 |---|---|
 | `POST /v1/chat/completions` | the OpenAI shape, `stream: true` supported |
-| `GET /v1/models` | what this box can currently route to, and whether each is signed in |
+| `GET /v1/models` | lists `pi`, with the MiniMax model behind it and `ready` (whether `MINIMAX_API_KEY` is set) |
 | `POST /api/ask` | the native shape: `{model, prompt}` in, `{answer, ms}` out |
+| `GET /api/queue` | what the admission queue is running and holding right now |
 | `POST /api/business-search` | start a Google Maps business-list report |
 | `POST /api/company-research` | start a multi-round company deep-research report |
 | `POST /api/ads-research` | capture the ads a company is running on Facebook and Google |
@@ -89,63 +88,36 @@ appending `/v1` to a base URL that already has it.
 
 | Name | Routes to |
 |---|---|
-| `agy`, `antigravity` | the agy CLI |
-| `chatgpt`, `openai` | the default ChatGPT session |
-| `chatgpt:<id>` | that ChatGPT session by name — one per account |
-| `gpt-4o`, `gpt-*`, `o1*` … | the default ChatGPT session |
-| *(empty)*, `auto` | `DEFAULT_MODEL`, which is `agy` unless set |
-| `<any of the above>@container` | that engine here, in this container |
-| `agy@mini`, `chatgpt@mini` | that engine on the Mac mini. `@macmini` is accepted too |
-| `chatgpt:<id>@mini` | a ChatGPT account in the **mini's** registry — the two registries are separate, and a container session name means nothing there |
+| `pi`, `minimax` | Pi |
+| *(empty)*, `auto` | `DEFAULT_MODEL`, which is `pi` unless set |
+| `agy`, `antigravity`, `gemini`, `google` | Pi — the names of the engine Pi replaced |
+| `chatgpt`, `openai`, `gpt-*`, `o1*`, `o3*`, `o4*` | Pi — the removed ChatGPT engine's names |
+| `meta`, `metaai`, `llama-*` | Pi — the removed Meta AI engine's names |
+| `<any of the above>@container` | the same; `@cloud` is accepted too |
+| `<any of the above>@mini` | 404 (`Nothing runs on the mini through this gateway any more; use pi.`). `@macmini` likewise |
 
-An unknown suffix is a 404 (`Unknown location "@x". Use @mini or @container.`).
-`meta`, `meta:<id>` and `llama-*` still parse, so an un-updated caller gets a clear
-refusal rather than a routing error, but nothing claims them.
+A `:<session>` suffix from the old ChatGPT names (`chatgpt:pro`) is ignored. An
+unknown name or location is a 404, and `GET /v1/models` lists only `pi`.
 
-`gpt-*` maps to ChatGPT because tools hard-code a model id far more often than
-they let you pick one. The response always names the model that actually ran, so
-the substitution is never silent: check `.model` and `.agy_lab.engine`.
-
-A bare `chatgpt` resolves to `CGPT_DEFAULT_SESSION` if set, otherwise the first
-session whose last probe said `ready`. A bare `chatgpt` that lands on the mini
-takes `MINI_DEFAULT_SESSION` (`mini-main`) instead, because the two registries are
-separate.
-
-**Which location a bare name gets.** An explicit `@mini` / `@container` always
-wins. A bare name is pooled and **prefers the mini whenever a mini worker is
-live**, because the mini is the capacity that was added — sending pooled traffic
-to the container first would leave the new machine idle and keep the old
-bottleneck. It falls back to the container the moment the mini stops polling.
-`ROUTING_PREFER=container` inverts it.
-
-"Live" is not configuration: it is the job types the mini's lanes claimed when
-they last checked in, which `GET /v1/models` reports per entry as `ready` plus the
-`workers` claiming it. A pinned `@mini` call to an engine nothing is claiming is a
-503 up front (`No mini worker is claiming agy.ask right now.`) rather than a job
-that sits `pending` until it times out. The mini's own side of this — which
-process advertises what, and why they are separate — is
-[worker/README.md](worker/README.md).
-
-`@mini` and `@container` pin a location. A bare engine prefers a live mini
-worker and falls back to the container.
+Every old name still resolves because tools hard-code a model id far more often
+than they let you pick one, and a tool that hard-coded `gpt-4o` should keep
+working rather than break the day the engine behind it went away. The response
+always names the model that actually ran, so the substitution is never silent:
+`.model` is `pi` and `.agy_lab.engine` is `pi`, whatever was asked for.
 
 ### The native shape
 
 ```bash
 curl -s https://ee-auto.up.railway.app/api/ask \
   -H "Authorization: Bearer $LAB_TOKEN" -H 'content-type: application/json' \
-  -d '{"model":"chatgpt","prompt":"...","timeoutMs":240000}'
+  -d '{"model":"pi","prompt":"...","timeoutMs":240000}'
 
-{"model":"chatgpt:openai-waynecollins","engine":"chatgpt","answer":"...","ms":15389,"settled":true}
+{"model":"pi","engine":"pi","answer":"...","ms":15389}
 ```
 
-`settled: false` means the answer stopped growing because the clock ran out, not
-because the model had finished — the text is real but partial. In the OpenAI shape
-the same fact appears as `finish_reason: "length"`.
-
-`tools: true` on either shape runs agy with `--dangerously-skip-permissions`, so
-it can touch the filesystem inside the container. Off by default, per call, never
-inherited.
+Pi always runs with its `web_search` and `web_fetch` tools. `tools: true` is still
+accepted on either shape, for callers written against agy, and changes nothing:
+there is no shell or filesystem for it to reach.
 
 ---
 
@@ -232,10 +204,11 @@ metadata are in `data.translation`; a missing `final_cn` means the report is
 The authenticated response also includes `research_run.round01` through
 `round04`, `validated_ledger`, `final_report`, and `round_status` for benchmarking:
 
-- `round01`: Gemini discovery;
-- `round02`: split ChatGPT audits for contacts, people, and signals;
+- `round01`: Pi discovery;
+- `round02`: three split Pi audits, for contacts, people, and signals (these ran
+  on ChatGPT until the engine was removed on 2026-10-26);
 - `round03`: Facebook evidence, crawled read-only by the `fb.*` worker;
-- `round04`: Gemini synthesis plus fidelity validation.
+- `round04`: Pi synthesis plus fidelity validation.
 
 Only rows with direct HTTPS evidence enter the validated ledger. If Round 04
 changes validated person/contact ids or introduces a URL, the synthesis is
@@ -288,7 +261,7 @@ Three consequences worth planning for:
 
 Parallel contact research requires `PARALLEL_API_KEY` in the server environment. The key stays server-side and is sent as the `x-api-key` header to `POST https://api.parallel.ai/v1beta/findall/entity-search`. Parallel and the existing contact flow write the same `contact_research` report type, `contact_research_run` table, and final contact ledger shape; `request.provider` distinguishes them. Parallel Entity Search provides people names, profile URLs, and descriptions, but no verified direct phones or emails. The ledger can still include the company's previously recorded phone.
 
-The Chinese edition is translated by `TRANSLATION_MODEL` (defaults to `agy`)
+The Chinese edition is translated by `TRANSLATION_MODEL` (defaults to `pi`)
 through this service's own gateway, so it needs no endpoint and no key of its
 own. It is produced AFTER the report is published: `GET /api/company-research/
 :reportId` returns `data.final` as soon as the English dossier is validated, and
@@ -301,7 +274,7 @@ permanent production connection.
 
 Set a separate 16+ character `PORTAL_TOKEN` before giving `/research` to end
 users. That token is accepted only by the business-search, company-research, and
-report-library routes; it cannot access the operator shell or model/session APIs.
+report-library routes; it cannot access the operator shell or the model APIs.
 
 ---
 
@@ -401,7 +374,7 @@ dynamic DNS, nothing on the home router.
 |---|---|
 | `POST /api/jobs` | `{type, payload, timeoutMs}` → 201 with the job, status `pending` |
 | `GET /api/jobs/next?worker=&wait=&types=&cooldownGroup=` | the worker's claim. Held open up to 25s; `204` when idle or cooling down, `200` with the job otherwise. A cooldown `204` carries `X-Worker-Cooldown-Until`. |
-| `POST /api/jobs/heartbeat` | `{worker, types, cooldownGroup}`. The worker's check-in while a job is in its hands. The claim above is silent for as long as the handler runs, and a research round runs minutes — past that, the lane ages out of the live table and the gateway starts refusing engines this machine is serving. Types and account group are re-sent every beat so a restarted lab learns the lane again. Not logged. |
+| `POST /api/jobs/heartbeat` | `{worker, types, cooldownGroup}`. The worker's check-in while a job is in its hands. The claim above is silent for as long as the handler runs, and a research round runs minutes — past that, the lane ages out of the live table and work that checks for a live worker (Round 03's `fb.company`, for one) starts skipping it. Types and cooldown group are re-sent every beat so a restarted lab learns the lane again. Not logged. |
 | `POST /api/jobs/:id/result` | `{worker, ok, result, error}` → the job becomes `done` or `failed`. A quota failure also sends `errorCode: "quota_reached"` and `retryAfterMs`; the broker returns `cooldownUntil`. |
 | `GET /api/jobs/:id` | status and result |
 | `GET /api/jobs` | the queue, plus every worker, its status (`online`, `offline`, or `cooldown`), last check-in, and quota cooldown deadline/reason |
@@ -426,10 +399,6 @@ container.
 |---|---|---|
 | `ping` | none | `{hostname, platform, node, publicIp, uptimeSec, at}` |
 | `gmap.scan` | `{keyword, place?, max?, userId?}` | `{businesses[], found, capped, blocked, blockedReason, limitedView, saved}` |
-| `chatgpt.ask` | `{id, prompt, timeoutMs?}` | `{ok, answer, ms}` — what `chatgpt@mini` is underneath |
-| `chatgpt.probe` | `{id}` | `{status, detail}` |
-| `agy.ask` | `{prompt, tools?, timeoutMs?}` | `{engine, answer, ms}` — what `agy@mini` is underneath |
-| `agy.probe` | none | `{status, detail, sample}` |
 | `fb.company` | `{name, city?, phone?, website?, address?, category?, budget?, timeoutMs?}` | `{engine, mode, lead, result, meta}` — the business's own Facebook Page |
 | `fb.person` | `{person, company, city?, budget?}` | the same envelope; that person's profile, with `messenger_url` + `messenger_source`, if it is publicly linked to the company |
 | `fb.discover` | `{name, city?, budget?}` | the same envelope, with `result.people[]` — each carrying `messenger_url` + `messenger_source` |
@@ -440,12 +409,11 @@ container.
 | `ads.probe` | none | `{status, detail, ms}` — whether ego lite can still reach both ad libraries |
 | `x.probe` | none | `{status, detail, account, ms}` — `ready`, `gated` or `logged_out` on grok.com |
 
-The four wrapper types are the transport for the mini's half of `/v1`; a caller
-that wants an answer should use `/v1/chat/completions` with `@mini` and let the
-gateway do the queueing. They are listed because a job that failed is read here,
-and because the worker reports engine failure *inside* a `done` job — `ok: false`
-with a `code`, which the gateway maps to 503 (`signed_out`, `no_space`), 504
-(`answer_timeout`) or 502.
+There are no model-answer job types any more. `chatgpt.ask`/`chatgpt.probe`,
+`agy.ask`/`agy.probe` and `meta.*` were the transport for the mini's half of
+`/v1`; that half is gone, and the worker drops those types even from an old
+`WORKER_TYPES` pin. A model answer comes from `/v1/chat/completions` or
+`/api/ask`, which run Pi here in the hub.
 
 ```bash
 ID=$(curl -s -X POST $LAB/api/jobs -H "authorization: Bearer $LAB_TOKEN" \
@@ -735,28 +703,20 @@ and `docs/plan-macmini-worker.md` is why it exists and what comes next.
 
 ## The queue
 
-Every engine here is a personal account with a human usage limit, so calls are
-admitted rather than accepted. **An admitted call waits; it does not fail** - an
-answer at +40s beats an error at +0s. It is refused up front only when waiting
-would be worse than being told no.
+Pi runs on one MiniMax account with a real rate limit, so calls are admitted
+rather than accepted. **An admitted call waits; it does not fail** - an answer at
++40s beats an error at +0s. A burst queues here instead of arriving at the provider
+as a burst and getting the account rate-limited.
 
-| Lane | At once | Engines | Spacing |
-|---|---|---|---|
-| `browser` | 1 | `chatgpt` - the container has one Chrome | 2s between calls |
-| `agy` | 2 | `agy` | none |
-| `mini` | 2 | everything routed `@mini` | per engine, as above |
+There is one lane, `pi`, `PI_MAX_CONCURRENT` (6) wide, with no spacing between
+calls by default (`PI_MIN_GAP_MS`, 0): Pi is an API client talking to an API that
+expects programs. Contact research takes three of those six slots
+(`CONTACT_LANES`), so a report round or a translation never queues behind the
+contact backlog. The `browser` lane (one Chrome, for ChatGPT) and the `mini` lane
+(everything routed `@mini`) were removed with the ChatGPT and Meta AI engines.
 
-The mini is its own lane rather than extra width on `browser`: it is a different
-machine with a different account and its own browser, so sharing would serialise
-two things that have no reason to wait for each other. Its ceiling is accounts,
-not browsers — ego lite runs each account in its own task space, and two side by
-side is what has been measured (8.9s for a pair, not 16.1s serial).
-
-Slots are per lane; spacing, caps and counters are per engine, because the lane is
-a machine limit and the account that gets rate-limited is not.
-
-Calls are queued FIFO and paced safely rather than rejected. **An admitted call waits; it never fails** - an
-answer at +40s beats an error at +0s. Hourly caps and inter-call gaps pace execution smoothly.
+Calls are queued FIFO and paced rather than rejected. Hourly caps, when set, pace
+execution instead of failing it.
 
 | Mode | Behavior |
 |---|---|
@@ -766,11 +726,7 @@ answer at +40s beats an error at +0s. Hourly caps and inter-call gaps pace execu
 A call that waited reports `agy_lab.queuedMs` (native shape: `queuedMs`). A queued
 **stream** narrates the wait in SSE comment lines - `: queued ahead=3 eta=41s`, then
 `: waiting` every 15s - so no intermediary mistakes a silent socket for a dead one.
-Hanging up cancels the work. `GET /api/queue` shows what is running, waiting and
-spaced right now.
-
-`POST /api/cgpt/:id/ask` goes through the same queue. A path to an account that
-skips the spacing is not a shortcut; it is the one call that gets it limited.
+`GET /api/queue` shows what is running and waiting right now.
 
 ---
 
@@ -800,94 +756,80 @@ than as nothing at all. `LOG_PROMPTS=0` keeps sizes and drops previews.
 ## What the OpenAI shape promises and this cannot keep
 
 - **Sampling parameters do nothing.** `temperature`, `top_p`, `max_tokens`, `seed`,
-  `stop`, `response_format` — a browser session has no such knobs and agy's `-p`
-  takes none. They are accepted, ignored, and listed back in `agy_lab.ignored` so
-  a caller can see they had no effect rather than assume they worked.
+  `stop`, `response_format` — the Pi worker runs its own fixed settings. They are
+  accepted, ignored, and listed back in `agy_lab.ignored` so a caller can see they
+  had no effect rather than assume they worked.
 - **Token counts are an estimate**, characters ÷ 4, marked `"estimated": true`.
-  No engine here reports real usage.
+  The gateway does not report real usage.
 - **`n > 1` is refused**, not faked. Each call is one real model run.
 - **No function calling, no logprobs, no image input.** An image part in a message
   is replaced with `[unsupported content part: image_url]` rather than dropped, so
   a prompt that depended on it fails visibly.
-- **History is flattened into one prompt.** No engine here takes a message array:
-  system messages come first verbatim, then `User:` / `Assistant:` turns. A single
-  user message is passed through unlabelled.
-- **Every browser call starts a new chat** — a temporary chat on ChatGPT. There is
-  no server-side conversation to continue, so send the history you want considered.
+- **History is flattened into one prompt.** A Pi run starts from one prompt, not a
+  message array: system messages come first verbatim, then `User:` / `Assistant:`
+  turns. A single user message is passed through unlabelled.
+- **Every call is a fresh run.** There is no server-side conversation to continue,
+  so send the history you want considered.
 
-Streaming is real for ChatGPT (the answer is polled as it renders, ~1.5s
-granularity) and single-shot for agy, which prints only when it is done.
+Streaming is single-shot: the answer arrives whole when the run ends, as one
+content chunk, followed by the usage chunk and `[DONE]`.
 
 ---
 
 ## Limits that will bite you
 
-**One browser at a time.** `MAX_OPEN_BROWSERS=1`, LRU-evicted, closed after five
-minutes idle. Every ChatGPT account shares that one slot: calls serialise, and
-alternating between accounts evicts the other profile, which costs about a second
-per call - measured 9.6s for a warm call against 10.4s for the same one right
-after a different account. agy is a CLI and runs up to `AGY_MAX_CONCURRENT` (2)
-alongside. This is a pipeline back-end, not a fan-out one.
+**Pi is slow by construction.** It searches and reads pages before it answers, so
+a call takes tens of seconds, not one. A caller that wants to give up sooner passes
+`timeoutMs`; nothing is faster for being hurried.
 
-**Answers are read from `innerText`.** A long fenced code block does not always
-read back whole, and asking for one big JSON blob is the shape most likely to come
-back truncated. Ask for line records instead.
+**One account behind everything.** The gateway, every research round, translation
+and contact research share the one MiniMax account and the six slots of the `pi`
+lane. When MiniMax rate-limits, the call is a 503 with the provider's message.
 
-**A signed-out ChatGPT session is a 503, deliberately.** The logged-out page still
-has a working composer, so a naive wrapper types into it and returns an anonymous
-answer that looks fine and is worthless. The gateway checks for a sign-in wall and
-refuses instead. Fix it with `POST /api/cgpt/:id/login`.
-
-**Nothing re-logs-in on its own.** `GET /v1/models` reports each session's last
-probe; a monitor that cares should probe and re-login rather than wait for a 503.
-
-**The mini is a machine in a house, and it answers only while it is polling.**
-Nothing here can start it. If its worker is not running — the process died, the
-mini slept, the login session ended — `@mini` entries drop out of `/v1/models`,
-a pinned `@mini` call is a 503, and a bare name silently goes back to the
-container at container speed. That last one is the failure worth naming, because
-it looks like nothing at all: check `.model` in the response, which always says
-where the answer actually came from.
+**Nothing on the mini answers `/v1`.** The Mac mini still runs the crawlers
+(`gmap.scan`, `fb.*`, `x.*`, `ads.*`) through the [job queue](#jobs--work-sent-to-a-machine-at-home),
+but no model answer comes from it. A `@mini` model name is a 404, not a fallback.
 
 ### Status codes
 
 | Code | Means |
 |---|---|
 | 401 | bad or missing token |
-| 404 | unknown model, or a session that does not exist |
+| 404 | unknown model or location — including any `@mini` |
 | 400 | a request the gateway will not fake (`n>1`, empty messages) |
-| 503 | the engine exists but is not signed in / not installed |
-| 504 | the engine took longer than `timeoutMs` |
-| 502 | the engine ran and failed — the message says how |
+| 503 | Pi is not configured (`MINIMAX_API_KEY` unset), or MiniMax is rate limiting |
+| 504 | the run took longer than `timeoutMs` |
+| 502 | the run failed — the message says how |
 
 In a stream the status line is already sent, so a failure arrives as a final
 `data: {"error":{...}}` chunk before `data: [DONE]`.
 
 ---
 
-## Meta AI — retired
+## ChatGPT and Meta AI — removed
 
-**There is no Meta engine.** Do not route to `meta`, `meta:<id>`, `meta@mini` or
-`llama-*`. They parse, so an old caller gets a clean refusal rather than a
-confusing routing error, but nothing answers on any of them.
+**There is no ChatGPT engine and no Meta engine.** Their model names (`chatgpt`,
+`openai`, `gpt-*`, `o1*`/`o3*`/`o4*`, `meta`, `metaai`, `llama-*`) resolve to Pi so
+an old caller keeps working; the response says `pi`.
 
-Both routes to it are gone, for different reasons:
+- **ChatGPT** was a signed-in ChatGPT session in a real Chrome in this container,
+  typed into and read back, with a second copy on the Mac mini (`chatgpt@mini`).
+  On 2026-10-25 Cloudflare started refusing ChatGPT chats from the Railway IP —
+  `cloudflare_challenge` came back in place of the answer — and the engine was
+  judged no longer possible and removed on 2026-10-26. The `/api/cgpt/*` session
+  routes and `/api/net` are gone with it, and the Docker image no longer carries
+  Chrome, Xvfb, fonts or patchright. Company Round 02 and person research's audit
+  and synthesis, which ran on ChatGPT, now run on Pi; a person report's
+  `synthesis_mode` is `pi_validated` (older reports may still say
+  `chatgpt_validated`).
+- **Meta AI** was retired before that. The container is region-blocked: Railway's
+  address is told Meta AI is not available in its country, even with an imported,
+  signed-in profile, and the gate applies on ordinary page loads, not only at
+  login. The mini never had it either — no browser profile there ever held a
+  `meta.ai` cookie — and the muse 1.2 stand-in that answered under the `meta.*` job
+  types is deleted.
 
-- **The container is region-blocked.** Railway's address is served *"Meta AI isn't
-  available yet in your country"* even with an imported, signed-in profile. The
-  gate applies on ordinary page loads, not only at login, so replaying cookies
-  there was never going to work. The measurements are in `META-AI.md`.
-- **The mini never had it, and its stand-in is deleted.** Meta AI was never
-  activated on that machine — no browser profile there ever held a `meta.ai`
-  cookie — so a muse 1.2 engine answered under the `meta.*` job types through
-  OpenCode instead. That worker (`worker/muse.mjs`) is removed and no lane claims
-  `meta.ask` or `muse.ask`. A pinned `meta@mini` is refused up front rather than
-  queueing a job nothing will take.
-
-The container still understands a `meta` session *kind*, so importing a
-storageState is not rejected — but no traffic is routed to it and none should be.
-
-**What replaced it.** Meta was wanted for one thing this API actually needed: what
+**What replaced Meta.** Meta was wanted for one thing this API actually needed: what
 a company's Facebook presence says about it. That is
 [`fb.*`](#facebook-lead-enrichment--fb) — a read-only crawler that visits the
 pages and reports the facebook.com URL every field was read from, instead of a
@@ -902,26 +844,25 @@ re-pointed onto it, so the round now produces auditable rows rather than an
 | Variable | Default | |
 |---|---|---|
 | `LAB_TOKEN` | — | required; the API key for everything under `/api` and `/v1` |
-| `DEFAULT_MODEL` | `agy` | what an empty or `auto` model resolves to |
-| `CGPT_DEFAULT_SESSION` | first `ready` | which account a bare `chatgpt` means |
-| `AGY_ASK_TIMEOUT_MS` | 300000 | |
-| `CGPT_ASK_TIMEOUT_MS` | 180000 | |
-| `AGY_MAX_CONCURRENT` | 2 | agy runs in flight at once **in the container** (memory guard: agy plus a headed Chrome in 4GB). Does not apply to `agy@mini` — that is `AGY_LANES` on the worker |
-| `MINI_MAX_CONCURRENT` | 5 | calls in flight on the mini - that lane's width. Keep it equal to the worker's lane count (3 ChatGPT accounts + `AGY_LANES`); wider only moves the queue into the job broker |
-| `AGY_LANES` (worker) | 2 | dedicated `agy.ask` lanes on the mini. Measured 24 Aug: three concurrent `agy -p` answer in 7/9/12s against a 9s solo baseline with no contention; the ceiling is the single Google account, not the binary |
-| `MINI_DEFAULT_SESSION` | `mini-main` | which of the mini's accounts a bare `chatgpt@mini` means |
-| `ROUTING_PREFER` | `mini` | where a bare model name goes when both locations are live |
-| `MAX_OPEN_BROWSERS` | 1 | Chrome profiles open at once - the browser lane's width |
-| `CGPT_MIN_GAP_MS` | 2000 | spacing between calls to that account |
-| `AGY_MIN_GAP_MS` | 2000 | spacing between calls to the local Google Antigravity account |
+| `DEFAULT_MODEL` | `pi` | what an empty or `auto` model resolves to |
+| `MINIMAX_API_KEY` | — | required for Pi; without it `GET /v1/models` shows `ready: false` and calls are a 503 |
+| `PI_MODEL` | `MiniMax-M3.1-Flash-Preview` | the MiniMax model Pi runs |
+| `PI_THINKING` | `low` | `minimal`, `low`, `medium` or `high` |
+| `PI_ASK_TIMEOUT_MS` | 300000 | the gateway's default `timeoutMs` |
+| `PI_MAX_CONCURRENT` | 6 | the `pi` lane's width |
+| `PI_MIN_GAP_MS` | 0 | spacing between Pi calls |
 | `QUEUE_REJECT` | `false` | `true` re-enables fast-fail 429 shedding instead of queue waiting |
 | `QUEUE_MAX_DEPTH` | 10 | waiting calls before 429 when `QUEUE_REJECT=true` |
 | `QUEUE_MAX_WAIT_MS` | 300000 | longest wait threshold when `QUEUE_REJECT=true` |
-| `*_HOURLY_LIMIT` | off | calls per rolling hour, per engine (paces wait instead of throwing) |
-| `WORKER_COOLDOWN_MS` | random | worker cooldown between jobs (default: 2.5-4.5s for ChatGPT, 1.5-2.5s for AGY; `0` disables) |
+| `PI_HOURLY_LIMIT` | off | calls per rolling hour (paces wait instead of throwing) |
+| `WORKER_COOLDOWN_MS` (worker) | unset | optional pause between jobs on each Mac mini lane; unset means none |
 | `LOG_MEMORY` | 1000 | records kept in memory |
 | `LOG_PROMPTS` | on | `0` drops prompt previews |
 
-The rest of the service — installing agy, driving a login, the DOM observation
-layer — is in [agy-lab/README.md](agy-lab/README.md) and
-[CHATGPT-PROGRESS.md](CHATGPT-PROGRESS.md).
+`CGPT_*`, `META_*`, `MAX_OPEN_BROWSERS`, `BROWSER_IDLE_MS`, `BROWSER_LEASE_MS`,
+`ROUTING_PREFER`, `MINI_DEFAULT_SESSION`, `MINI_META_DEFAULT_SESSION` and
+`MINI_MAX_CONCURRENT` belonged to the removed engines and no longer do anything.
+`CONTACT_RESEARCH_MODEL=chatgpt` now routes contact research to
+`research.contact.pi`.
+
+The rest of the service is in [agy-lab/README.md](agy-lab/README.md).

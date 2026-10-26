@@ -82,6 +82,13 @@ Two things to carry over with it rather than rediscover:
 
 ## Phase 3 — the research chain
 
+> **Not how it turned out.** The `chatgpt` and `meta` steps below no longer exist:
+> Meta AI was retired (region-blocked from Railway), and the ChatGPT browser engine
+> was removed on 2026-10-26 after Cloudflare started refusing it from the Railway
+> IP. There is no browser lane in the container any more. The research rounds run
+> on Pi (MiniMax) in the hub, and the Facebook round is the `fb.*` crawler on the
+> mini. Kept as the original plan.
+
 Per company, all of it through the gateway this service already exposes, so the mini needs
 no logins of its own:
 

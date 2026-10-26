@@ -31,6 +31,14 @@ worker also requires `PG_PROXY_URL` and `PG_DB_NAME=pg_2nd`.
 
 ## Available tools
 
+> **Changed since this was written.** Gemini/agy was replaced by Pi (MiniMax)
+> after the Google accounts were banned. Meta AI was retired (Railway's address is
+> region-blocked) and Round 03 became the read-only `fb.*` Facebook crawler. The
+> ChatGPT browser engine was removed on 2026-10-26 after Cloudflare started
+> refusing it from the Railway IP, and Round 02 now runs on Pi. Rounds 01, 02 and
+> 04 all run on Pi today. The table and sequence below are the original
+> requirement; see [../API.md](../API.md) for what runs now.
+
 The application exposes four research tools:
 
 | Tool | Purpose |
