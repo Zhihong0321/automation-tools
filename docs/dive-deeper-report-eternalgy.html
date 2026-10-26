@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eternalgy Presence Audit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: one reading column, an audit sheet. Fixes first, then one block per angle; every finding carries a status stripe and its proof. */
+:root {
+  --bg: #f5f7f4;
+  --paper: #ffffff;
+  --ink: #15201b;
+  --muted: #56635c;
+  --line: #d8dfd9;
+  --accent: #0e5a52;
+  --urgent: #b42318;
+  --urgent-bg: #fdecea;
+  --fix: #a15c07;
+  --fix-bg: #fdf3e2;
+  --good: #067647;
+  --good-bg: #e6f4ec;
+  --info: #475467;
+  --info-bg: #eef1f4;
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1513; --paper: #161e1b; --ink: #e6ece8; --muted: #9ba8a1; --line: #29342f; --accent: #5cc4b6;
+    --urgent: #f97066; --urgent-bg: #3a1714; --fix: #fdb022; --fix-bg: #33240b; --good: #47cd89; --good-bg: #0f2a1d; --info: #b0bac4; --info-bg: #1d2428;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1513; --paper: #161e1b; --ink: #e6ece8; --muted: #9ba8a1; --line: #29342f; --accent: #5cc4b6;
+  --urgent: #f97066; --urgent-bg: #3a1714; --fix: #fdb022; --fix-bg: #33240b; --good: #47cd89; --good-bg: #0f2a1d; --info: #b0bac4; --info-bg: #1d2428;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.55; }
+.wrap { max-width: 860px; margin: 0 auto; padding-block: 40px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 40px; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: clamp(28px, 5vw, 40px); font-weight: 800; letter-spacing: -0.01em; }
+h2 { font-size: 22px; font-weight: 700; }
+h3 { font-size: 17px; font-weight: 700; }
+p { margin: 0; }
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.lede { font-size: 18px; color: var(--muted); max-width: 62ch; }
+header { display: grid; gap: 14px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 14px; color: var(--muted); }
+.meta b { color: var(--ink); font-weight: 600; }
+.draft { border: 1px dashed var(--fix); color: var(--fix); background: var(--fix-bg); padding: 2px 8px; border-radius: 4px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; }
+
+/* Snapshot: one row per angle with its state */
+.snap { display: grid; gap: 0; border-top: 1px solid var(--line); }
+.snap-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; align-items: baseline; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.snap-row a { font-family: var(--display); font-weight: 700; text-decoration: none; color: var(--ink); }
+.snap-row a:hover { color: var(--accent); }
+.snap-row p { grid-column: 1 / -1; font-size: 15px; color: var(--muted); }
+.chip { font-family: var(--mono); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; white-space: nowrap; font-weight: 500; }
+.chip.urgent { color: var(--urgent); background: var(--urgent-bg); }
+.chip.fix { color: var(--fix); background: var(--fix-bg); }
+.chip.good { color: var(--good); background: var(--good-bg); }
+.chip.info { color: var(--info); background: var(--info-bg); }
+
+/* Top fixes: the order is the priority */
+.fixes { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; counter-reset: fix; }
+.fixes li { counter-increment: fix; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px 16px 58px; position: relative; display: grid; gap: 6px; }
+.fixes li::before { content: counter(fix); position: absolute; left: 18px; top: 14px; font-family: var(--display); font-weight: 800; font-size: 24px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.fixes .why { color: var(--muted); font-size: 15px; }
+.fixes .how { font-size: 15px; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+
+section.angle { display: grid; gap: 16px; }
+.angle-head { display: grid; gap: 6px; }
+.angle-head .q { color: var(--muted); }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.fact { background: var(--paper); padding: 12px 14px; display: grid; gap: 2px; min-width: 0; }
+.fact .v { font-family: var(--display); font-weight: 800; font-size: 22px; font-variant-numeric: tabular-nums; }
+.fact .k { font-size: 13px; color: var(--muted); }
+
+.findings { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.findings li { background: var(--paper); border: 1px solid var(--line); border-left: 4px solid var(--info); border-radius: 6px; padding: 12px 14px; display: grid; gap: 4px; min-width: 0; }
+.findings li.urgent { border-left-color: var(--urgent); }
+.findings li.fix { border-left-color: var(--fix); }
+.findings li.good { border-left-color: var(--good); }
+.findings .t { font-weight: 600; }
+.findings .d { color: var(--muted); font-size: 15px; overflow-wrap: anywhere; }
+.findings .src { font-size: 13px; overflow-wrap: anywhere; }
+q { font-style: italic; quotes: "“" "”"; }
+code, .num { font-family: var(--mono); font-size: 0.92em; }
+
+table { width: 100%; border-collapse: collapse; font-size: 15px; }
+.tbl { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: var(--mono); font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+tr:last-child td { border-bottom: 0; }
+
+.private { border: 1px solid var(--urgent); background: var(--urgent-bg); border-radius: 8px; padding: 16px 18px; display: grid; gap: 8px; }
+.private h2 { color: var(--urgent); font-size: 18px; }
+.private ul, .cant ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.cant { display: grid; gap: 8px; color: var(--muted); font-size: 15px; }
+footer { border-top: 1px solid var(--line); padding-top: 16px; display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+@media (max-width: 520px) { .fixes li { padding-left: 46px; } .fixes li::before { left: 14px; font-size: 20px; } }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+<header>
+  <div class="meta"><span class="eyebrow">Dive-deeper report</span><span class="draft">DRAFT FOR REVIEW</span></div>
+  <h1>How customers, Google and AI see Eternalgy Sdn Bhd</h1>
+  <p class="lede">We checked your Google reviews, your Maps and Google search ranking, your registrations, both websites, and what AI assistants say about you. Every finding below has a link to where we saw it.</p>
+  <div class="meta">
+    <span>Company <b>Eternalgy Sdn Bhd</b> (202301029164)</span>
+    <span>Checked <b>25–26 Oct 2026</b></span>
+    <span>Sites <b>solarpanels.my</b>, <b>eternalgy.me</b> (eternalgy.com redirects)</span>
+  </div>
+</header>
+
+<section class="snap" aria-label="Summary">
+  <div class="snap-row"><a href="#reviews">What customers say</a><span class="chip urgent">Urgent</span><p>Good ratings (4.7★ and 5★), but you have answered none of 45 reviews, including a 1★ about a roof leak.</p></div>
+  <div class="snap-row"><a href="#findability">Can customers find you</a><span class="chip fix">Needs work</span><p>#12 on Maps in Johor Bahru, missing in Kuala Lumpur, and your website is rarely on the first page of Google.</p></div>
+  <div class="snap-row"><a href="#credentials">Are your claims backed</a><span class="chip fix">You undersell</span><p>CIDB lists you as G7, but your site and portfolio page still say G3. Two other claims are labelled wrongly.</p></div>
+  <div class="snap-row"><a href="#website">Website health</a><span class="chip urgent">Urgent</span><p>A masked phone number nobody can call, two sites that disagree on your phone, address and founding date, and visible typos.</p></div>
+  <div class="snap-row"><a href="#ai">What AI says about you</a><span class="chip fix">Needs work</span><p>When someone asks AI for a solar installer in Johor Bahru, it names you in 1 of 16 answers.</p></div>
+</section>
+
+<section class="angle" aria-labelledby="fixes-h">
+  <div class="angle-head"><h2 id="fixes-h">Top 5 fixes, in order</h2><p class="q">The ones that cost least and help most come first.</p></div>
+  <ol class="fixes">
+    <li>
+      <h3>Make every phone number real and the same</h3>
+      <p class="why">eternalgy.me shows <code>+601****0099</code>, a masked number. It is in the page and in the hidden data Google and AI read, and tapping it dials nothing. Your two sites share no phone number, and the Kluang Maps listing gives a number that neither site shows.</p>
+      <p class="how">Pick one main number. Put it on both sites, in the page data, and on all 3 Maps listings. Check whether 011-2067 2875 should be 2895. Make the eternalgy.me WhatsApp a business account named Eternalgy.</p>
+      <div class="tags"><span class="chip info">About 1 hour</span><span class="chip urgent">High impact</span></div>
+    </li>
+    <li>
+      <h3>Reply to your Google reviews, starting with the 1★ roof leak</h3>
+      <p class="why">0 of 45 reviews have an owner reply. A 1★ from Aug 2025 says the roof leaked after installation, several visits did not fix it, and an inspection was missed. It has been unanswered for 14 months, and it is the first complaint a new customer reads.</p>
+      <p class="how">Answer the two 1★ reviews today: say what you did, or offer to visit. Then thank the 5★ reviewers. 10 minutes a week keeps it up.</p>
+      <div class="tags"><span class="chip info">1 hour, then 10 min a week</span><span class="chip urgent">High impact</span></div>
+    </li>
+    <li>
+      <h3>Show your real CIDB grade, G7, everywhere</h3>
+      <p class="why">CIDB's own register lists you as <b>G7, valid</b>. eternalgy.me (“CIDB G3 · LICENSED”) and your MyDigital Kontraktor page still say G3. A tender reviewer who sees G3 assumes a G3 limit.</p>
+      <p class="how">Update the badge and the MyDigital page. While you are there, call MyHijau MyHS00025/25 a service certificate (that is what it is), and label the Golden Bull award 2025, not 2024.</p>
+      <div class="tags"><span class="chip info">About 30 minutes</span><span class="chip fix">Medium impact</span></div>
+    </li>
+    <li>
+      <h3>Get a Google Maps listing for your KL branch</h3>
+      <p class="why">Your sites list a KL branch, but you have no Maps listing in Kuala Lumpur and do not appear in the top 60 there. In Johor Bahru you are #12, behind firms with up to 203 reviews. Seremban's listing has 0 reviews.</p>
+      <p class="how">Create and verify a KL listing with the branch address and its own number. Ask recent Seremban and KL customers for a review.</p>
+      <div class="tags"><span class="chip info">1 day + Google verification</span><span class="chip fix">Medium impact</span></div>
+    </li>
+    <li>
+      <h3>Clean up the two websites</h3>
+      <p class="why">One site says founded July 2023, the other September 2023. One says HQ unit 23-01, the other 21-01. The Products menu goes to a 404, four service pages say only “Coming Soon”, and the /news page shows a leftover AI note.</p>
+      <p class="how">Pick one founding month and one address. Remove the AI note, fix or hide the empty pages, and correct the typos listed under Website health.</p>
+      <div class="tags"><span class="chip info">Half a day</span><span class="chip fix">Medium impact</span></div>
+    </li>
+  </ol>
+</section>
+
+<section class="angle" id="reviews" aria-labelledby="reviews-h">
+  <div class="angle-head"><p class="eyebrow">How the public sees you</p><h2 id="reviews-h">What customers say</h2><p class="q">All 45 Google reviews on your 3 Maps listings, read one by one.</p></div>
+  <div class="facts">
+    <div class="fact"><span class="v">4.7★</span><span class="k">Johor Bahru HQ, 30 reviews</span></div>
+    <div class="fact"><span class="v">5.0★</span><span class="k">Kluang, 15 reviews</span></div>
+    <div class="fact"><span class="v">0</span><span class="k">Seremban reviews</span></div>
+    <div class="fact"><span class="v">0 / 45</span><span class="k">reviews with an owner reply</span></div>
+  </div>
+  <ul class="findings">
+    <li class="urgent"><span class="t">A 1★ complaint about a roof leak, unanswered for 14 months</span><span class="d">Aug 2025, Johor Bahru listing: <q>Our roof started leaking after the solar system was installed, and despite several visits, the problem remains</q>. It also says the inspector did not arrive on time. No reply.</span><a class="src" href="https://www.google.com/maps/place/data=!3m1!4b1!4m2!3m1!1s0x31da6db9f2e0d68f:0xe30f21260dcdbc70" target="_blank" rel="noopener">Johor Bahru listing on Google Maps</a></li>
+    <li class="fix"><span class="t">A second 1★ with no text and no reply (Aug 2026)</span><span class="d">The account's name matches one of your listed staff. Check internally whether it is a staff account.</span></li>
+    <li class="fix"><span class="t">17 of your 45 reviews were posted on one day, 16 May 2026</span><span class="d">4 on the HQ listing and 13 on Kluang, the day Kluang opened: about 130 times your usual daily rate. 3 people reviewed both listings, 2 of them on that day. Google can hold back reviews that arrive in a burst, and to customers it can look arranged.</span></li>
+    <li class="good"><span class="t">What customers praise</span><span class="d">Good service (18 reviews), professional and knowledgeable staff (10), clear and patient explanations (9). The HQ average over the last 6 months is 4.64★, against 4.74★ before.</span></li>
+    <li class="fix"><span class="t">None of your 17 good written reviews appear on your websites</span><span class="d">Neither site has a testimonials section or a review widget. A strong one to reuse: <q>Eternalgy Sdn Bhd has exceeded all my expectations</q>.</span></li>
+  </ul>
+</section>
+
+<section class="angle" id="findability" aria-labelledby="find-h">
+  <div class="angle-head"><p class="eyebrow">How the internet sees you</p><h2 id="find-h">Can customers find you</h2><p class="q">Google Maps searches a customer would type, in each town you serve, and a web search for the same.</p></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Town</th><th>Google Maps</th><th>Shown before you</th></tr></thead>
+    <tbody>
+      <tr><td>Johor Bahru</td><td><b>#12</b> “solar panel installer” · #14 “solar panel installation”</td><td>Solana Tec (203 reviews), SunGate Energy, SS Solar Malaysia</td></tr>
+      <tr><td>Kuala Lumpur</td><td><b>Not in the top 60</b>; no listing</td><td>SOLS Energy (294 reviews), ERS Energy, Progressture Solar</td></tr>
+      <tr><td>Seremban</td><td><b>#13 of 13</b>; listing has 0 reviews</td><td>Inhome Solar Seremban, X Solar, Pumar Solar</td></tr>
+      <tr><td>Kluang</td><td><b>#1</b> (only 2–3 businesses listed)</td><td>–</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="findings">
+    <li class="urgent"><span class="t">You have a KL branch but no Google Maps listing in Kuala Lumpur</span><span class="d">A customer searching in KL cannot find you on Maps at all.</span><a class="src" href="https://www.google.com/maps/search/solar%20panel%20installer%20in%20Kuala%20Lumpur" target="_blank" rel="noopener">Maps search: solar panel installer in Kuala Lumpur</a></li>
+    <li class="fix"><span class="t">Your website is on Google's first two pages for only 2 of 8 customer searches</span><span class="d">For “solar panel installer Johor Bahru”, the results are sungate.energy, biipower.com, trexon.my and aq.energy, and your site is not in the top 20. (Measured with Brave Search, set to Malaysia.)</span><a class="src" href="https://search.brave.com/search?q=solar%20panel%20installer%20Johor%20Bahru" target="_blank" rel="noopener">The search</a></li>
+    <li class="fix"><span class="t">A job site calls you “Eternalgy Pte Ltd”</span><span class="d">Maukerja's company page shows up when people search your name, and it uses the wrong company type.</span><a class="src" href="https://www.maukerja.my/en/company/eternalgy-sdn-bhd" target="_blank" rel="noopener">maukerja.my</a></li>
+    <li class="fix"><span class="t">Google still lists a dead page of yours</span><span class="d"><code>eternalgy.com/admin</code> appears in search for your name and lands on a 404 page. It is also linked from your homepage menu, together with <code>/agent</code>, which is also a 404.</span></li>
+  </ul>
+</section>
+
+<section class="angle" id="credentials" aria-labelledby="cred-h">
+  <div class="angle-head"><p class="eyebrow">Are your claims backed</p><h2 id="cred-h">Registrations and awards</h2><p class="q">Each claim on your sites, looked up in the issuing body's own register.</p></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Claim</th><th>Register says</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>CIDB Grade G3 (eternalgy.me, MyDigital Kontraktor)</td><td>G7, valid (CIDB CIMS, by SSM number)</td><td><span class="chip fix">You undersell</span></td></tr>
+      <tr><td>Highest CIDB Grade G7 (Why Choose page)</td><td>G7, valid</td><td><span class="chip good">Verified</span></td></tr>
+      <tr><td>SEDA Registered PV Service Provider</td><td>Listed in SEDA's directory</td><td><span class="chip good">Verified</span></td></tr>
+      <tr><td>SEDA Registered PV Investor</td><td>Listed in SEDA's RPVI directory</td><td><span class="chip good">Verified</span></td></tr>
+      <tr><td>MyHijau certification for SAJ inverters</td><td>MyHS00025/25 is for “Solar System Provider”, a service</td><td><span class="chip urgent">Wrong label</span></td></tr>
+      <tr><td>Golden Bull “2024 Outstanding Bull Award”</td><td>Winner, 2025 edition</td><td><span class="chip fix">Wrong year</span></td></tr>
+      <tr><td>MPIA corporate member</td><td>MPSEA list: full member</td><td><span class="chip good">Verified</span></td></tr>
+      <tr><td>SHRDC Centre of Excellence partner</td><td>No mention on SHRDC's site</td><td><span class="chip info">Not found</span></td></tr>
+    </tbody>
+  </table></div>
+  <ul class="findings">
+    <li class="fix"><span class="t">The MyHijau date on eternalgy.me has passed</span><span class="d">The about page shows a validity date of 21 May 2026. Update it or show the renewed certificate.</span><a class="src" href="https://eternalgy.me/about-solar-pv-epc-company" target="_blank" rel="noopener">eternalgy.me/about</a></li>
+  </ul>
+  <div class="src" style="font-size:13px"><a href="https://cims.cidb.gov.my/smis/regcontractor/reglocalsearchcontractor.vbhtml" target="_blank" rel="noopener">CIDB CIMS search</a> · <a href="https://www.seda.gov.my/directory/registered-pv-service-provider-directory/" target="_blank" rel="noopener">SEDA directory</a> · <a href="https://goldenbullaward.com/winners/my-hall-of-fame/malaysia-2025/outstanding-bull-award-my-2025/eternalgy-sdn-bhd/" target="_blank" rel="noopener">Golden Bull winners</a></div>
+</section>
+
+<section class="angle" id="website" aria-labelledby="web-h">
+  <div class="angle-head"><p class="eyebrow">Website health</p><h2 id="web-h">solarpanels.my and eternalgy.me</h2><p class="q">30 pages read, every link and phone number tested.</p></div>
+  <ul class="findings">
+    <li class="urgent"><span class="t">A masked phone number nobody can call</span><span class="d"><code>+601****0099</code> is shown on eternalgy.me and its about page, used as the tap-to-call link, and stored in the page data Google reads as your phone.</span><a class="src" href="https://eternalgy.me/about-solar-pv-epc-company" target="_blank" rel="noopener">eternalgy.me/about</a></li>
+    <li class="urgent"><span class="t">The two sites give different phones, address and founding date</span><span class="d">Phones: solarpanels.my 011-2067 2895, 011-2067 2875, 014-341 9327 · eternalgy.me 011-2100 0099; none on both. HQ unit: 23-01 vs 21-01. Founded: July 2023 vs September 2023.</span></li>
+    <li class="fix"><span class="t">The WhatsApp button on eternalgy.me opens a personal account</span><span class="d">Customers see a person's name, not Eternalgy.</span></li>
+    <li class="urgent"><span class="t">A leftover AI note is visible on /news</span><span class="d"><q>The article body was not included in the submission — only the NST website navigation HTML was provided.</q></span><a class="src" href="https://eternalgy.me/news" target="_blank" rel="noopener">eternalgy.me/news</a></li>
+    <li class="fix"><span class="t">Dead ends on solarpanels.my</span><span class="d">The Products menu (<code>/ourproducts</code>) is a 404. Four service pages show only “Coming Soon”.</span><a class="src" href="https://www.solarpanels.my/ourproducts" target="_blank" rel="noopener">solarpanels.my/ourproducts</a></li>
+    <li class="fix"><span class="t">Typos in headings customers read first</span><span class="d">“Renewal Energy Installation” (Renewable), “DISCOVERY MORE” (Discover), “WHAT'S THE SPECIAL OF ETERNALGY?”, “Jingko Solar” (Jinko), “Astronegry” (Astronergy), “Optimese”, “1000+ of projects completed”.</span><a class="src" href="https://www.solarpanels.my/" target="_blank" rel="noopener">solarpanels.my</a></li>
+    <li class="fix"><span class="t">Figures that do not add up</span><span class="d">“1.65 MWp (1,653.55 MWh)” mixes capacity and energy. One project page says 1,680 MWh a year, more than the 1.65 GWh total on the homepage.</span><a class="src" href="https://eternalgy.me/" target="_blank" rel="noopener">eternalgy.me</a></li>
+    <li class="info"><span class="t">Smaller items</span><span class="d">No enquiry form on eternalgy.me. 11 of 14 page titles on solarpanels.my are too long for Google to show in full. 50 images on eternalgy.me have code instead of alt text.</span></li>
+  </ul>
+</section>
+
+<section class="angle" id="ai" aria-labelledby="ai-h">
+  <div class="angle-head"><p class="eyebrow">How AI sees you</p><h2 id="ai-h">What AI assistants say</h2><p class="q">11 questions a customer might ask, put to two assistants (DeepSeek and GPT): 3 times each from their own knowledge, then once with web search results in front of them, as ChatGPT search or Perplexity would work.</p></div>
+  <div class="facts">
+    <div class="fact"><span class="v">1 / 16</span><span class="k">answers to “who should I hire in JB” that name you</span></div>
+    <div class="fact"><span class="v">0 wrong</span><span class="k">facts about you when AI can search</span></div>
+    <div class="fact"><span class="v">13 / 27</span><span class="k">answers about you that were “I don't know”, from memory (each assistant)</span></div>
+  </div>
+  <ul class="findings">
+    <li class="urgent"><span class="t">AI does not suggest you for solar in Johor Bahru</span><span class="d">Asked “Who are the best solar installers in Johor Bahru?” or “I live in JB and want solar, who should I contact?”, AI names Solarvest, Plus Solar, Sunview, Solana Tec, Amiya Energy and Trexon. It named you once in 16 answers. With web search it named you 0 times, and a web search for those questions returns none of your pages in the top 6.</span></li>
+    <li class="fix"><span class="t">From memory, AI gives a wrong address and a website that does not exist</span><span class="d">GPT gave “1-2, Jalan PJU 5/20, The Strand, Kota Damansara” as your office in 2 of 3 answers. Both assistants gave <code>eternalgy.com.my</code>, which does not exist.</span></li>
+    <li class="good"><span class="t">When AI can search, what it says about you is right</span><span class="d">With search results in front of them, both assistants described your services, registrations, CEO and HQ correctly, with no wrong claims. They also repeated your own conflicts: the July vs September founding month and the 21-01 vs 23-01 unit. That is one more reason to fix the websites.</span></li>
+  </ul>
+</section>
+
+<section class="private" aria-labelledby="priv-h">
+  <h2 id="priv-h">Private: for you only</h2>
+  <ul>
+    <li>SEDA's and MyHijau's public directory data for your company include staff <b>MyKad numbers</b>. They are not shown on screen, but anyone who opens the page data can read them. Ask SEDA and MyHijau to remove them.</li>
+    <li>Search engines had indexed customer invoice links on eternalgy.com (<code>/inv-m2/…</code>). They now return 404. Make sure invoice links need a login and are excluded from search.</li>
+  </ul>
+</section>
+
+<section class="cant" aria-labelledby="cant-h">
+  <h3 id="cant-h" style="color: var(--ink)">What we could not check</h3>
+  <ul>
+    <li>Maybank appointed installer and SAJ sole distributor: neither publishes a list.</li>
+    <li>The 3-year MSIG insurance cover: a private contract.</li>
+    <li>Project counts (1,000+, 925+, 10.75 MWp): only you hold these. Your sites give four different figures, so pick one.</li>
+    <li>Paid-up capital: SSM records are paid.</li>
+    <li>Facebook reviews and posts: Facebook blocks automated reading.</li>
+  </ul>
+</section>
+
+<footer>
+  <p>Draft report from the dive-deeper prototype, round 3. Checked 25–26 Oct 2026. Findings were checked by hand against their sources.</p>
+  <p>Maps ranks come from Google Maps searches without a phone's location, so a customer standing in JB may see a slightly different order. Web ranks come from Brave Search set to Malaysia, used as a stand-in for Google. AI answers come from DeepSeek V4.1 Flash and GPT-6.1 Sol.</p>
+</footer>
+
+</div>
+
+</body>
+</html>
