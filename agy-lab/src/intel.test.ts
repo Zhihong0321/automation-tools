@@ -616,10 +616,10 @@ test('a run where no round produced output is failed, not partial', () => {
   // the lab's live-worker table, and every round was refused before it queued.
   const offline = [
     'No mini worker is claiming fb.company right now.',
-    'No mini worker is claiming chatgpt.ask right now.',
-    'No mini worker is claiming chatgpt.ask right now.',
-    'No mini worker is claiming chatgpt.ask right now.',
-    'No mini worker is claiming meta.ask right now.',
+    'No mini worker is claiming x.subject right now.',
+    'No mini worker is claiming x.subject right now.',
+    'No mini worker is claiming x.subject right now.',
+    'No mini worker is claiming fb.person right now.',
     'No mini worker is claiming fb.company right now.',
   ];
   const out = publishOutcome(0, offline);

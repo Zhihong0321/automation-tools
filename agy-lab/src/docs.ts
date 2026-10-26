@@ -166,7 +166,7 @@ export function body(): string {
     <a href="#intel">Pipeline reference</a>
     <a href="#company-dive">Company dive</a>
     <a href="#telemarketing">Telemarketer API (Auth by UID)</a>
-    <a href="#engines">The three engines</a>
+    <a href="#engines">The engine</a>
     <span class="nav-label">Gateway</span>
     <a href="#chat">Chat completions</a>
     <a href="#stream">Streaming</a>
@@ -175,14 +175,10 @@ export function body(): string {
     <a href="#queue">Queue &amp; backpressure</a>
     <span class="nav-label">Engines</span>
     <a href="#pi">Pi</a>
-    <a href="#chatgpt">ChatGPT</a>
-    <a href="#meta">Meta AI &mdash; retired</a>
     <span class="nav-label">Home worker</span>
     <a href="#jobs">Jobs</a>
     <a href="#social">Social research</a>
     <span class="nav-label">Operating it</span>
-    <a href="#sessions">Sessions</a>
-    <a href="#observe">Observation layer</a>
     <a href="#logs">Logs</a>
     <a href="#service">Service</a>
     <span class="nav-label">Reference</span>
@@ -333,7 +329,7 @@ curl -sS https://ee-auto.up.railway.app/api/business-search \
   <code>data.final</code>; the matching Simplified Chinese rendering is at <code>data.final_cn</code>.
   Chinese translation preserves evidence IDs, source URLs, email addresses, phone numbers and published contact values exactly.
   Raw rounds are at <code>research_run.round01</code> through <code>round04</code>:
-  Pi discovery, three split ChatGPT audits, the <a href="#social">Facebook crawl</a>,
+  Pi discovery, three split Pi audits, the <a href="#social">Facebook crawl</a>,
   then Pi synthesis with fidelity validation. Contacts, people and signals need direct HTTPS
   evidence to enter the validated ledger; <code>candidate_people</code> retains named public-source
   leads separately and never qualifies for VIP research until verified.
@@ -647,20 +643,17 @@ const companyId = search.data.companies[0].id;</code></pre>
 </section>
 
 <section id="engines">
-  <h2>The three engines</h2>
-  <p>One is a hosted model with two web tools; the browser engines are a real Chrome doing
-  what a person would do, and the limits further down follow from that.</p>
+  <h2>The engine</h2>
+  <p>One hosted model with two web tools. The ChatGPT and Meta AI browser engines were
+  removed on 2026-10-26: Cloudflare began refusing ChatGPT chats from this container, and
+  Meta AI was already region-blocked. Their model names still resolve, to Pi &mdash; see
+  <a href="#models">Models</a>.</p>
   <div class="tbl"><table>
     <thead><tr><th>Model</th><th>What actually runs</th><th>Short answer</th><th>Streams</th></tr></thead>
     <tbody>
       <tr><td><code>pi</code></td><td>the Pi agent SDK in this process, on MiniMax (<code>MiniMax-M3.1-Flash-Preview</code>), with two tools: <code>web_search</code> (Tavily) and <code>web_fetch</code> (reads a public page). No shell, no files.</td><td class="num">2–15 s</td><td><span class="pill">one chunk</span></td></tr>
-      <tr><td><code>chatgpt</code></td><td>a signed-in chatgpt.com session in a real Chrome, typed into and read back</td><td class="num">13–15 s</td><td><span class="pill ok">incremental</span></td></tr>
     </tbody>
   </table></div>
-  <p>Timings are measurements from 2026-08-20, not estimates: one-line answers over the
-  public URL. A 4,751-character multi-line prompt answered in 12.7 s on <code>chatgpt</code>
-  — prompt size costs almost nothing, because the text goes in through one insert rather
-  than keystroke by keystroke.</p>
 </section>
 
 <section id="chat">
@@ -673,7 +666,7 @@ const companyId = search.data.companies[0].id;</code></pre>
       <tr><td><code>model</code> <span class="req">required</span></td><td>string</td><td>Routed as in <a href="#models">Models</a>. Empty or <code>auto</code> resolves to <code>DEFAULT_MODEL</code>.</td></tr>
       <tr><td><code>messages</code> <span class="req">required</span></td><td>array</td><td>Flattened into one prompt. <code>system</code> and <code>developer</code> parts come first verbatim, then <code>User:</code> / <code>Assistant:</code> / <code>Tool:</code> turns. A lone user message is passed through unlabelled.</td></tr>
       <tr><td><code>stream</code></td><td>boolean</td><td>Server-sent events. See <a href="#stream">Streaming</a>.</td></tr>
-      <tr><td><code>timeoutMs</code></td><td>number</td><td>Per-call deadline. Defaults to 300000 for <code>pi</code>, 180000 for the browser engines. <code>timeout_ms</code> is accepted too.</td></tr>
+      <tr><td><code>timeoutMs</code></td><td>number</td><td>Per-call deadline. Defaults to 300000. <code>timeout_ms</code> is accepted too.</td></tr>
       <tr><td><code>tools</code></td><td><code>true</code></td><td><strong>Not OpenAI function calling.</strong> Ignored: <code>pi</code> always runs with its two web tools and nothing else. An OpenAI tools <em>array</em> does nothing — see the note below.</td></tr>
       <tr><td><code>n</code></td><td>number</td><td>Must be 1. Anything else is a 400: each call is one real model run, not a sample.</td></tr>
       <tr><td colspan="3" style="color:var(--faint)">Accepted, ignored, and listed back in <code>agy_lab.ignored</code>: <code>temperature</code>, <code>top_p</code>, <code>max_tokens</code>, <code>max_completion_tokens</code>, <code>presence_penalty</code>, <code>frequency_penalty</code>, <code>logprobs</code>, <code>logit_bias</code>, <code>seed</code>, <code>stop</code>, <code>tool_choice</code>, <code>response_format</code>.</td></tr>
@@ -681,7 +674,7 @@ const companyId = search.data.companies[0].id;</code></pre>
   </table></div>
 
   <div class="call stop"><span class="h">tools means something else here</span>
-  <p>A browser session has no temperature knob and the Pi worker runs fixed settings, so
+  <p>The Pi worker runs fixed settings, so
   sampling parameters cannot be honoured and are never approximated. They come back in
   <code>agy_lab.ignored</code> so a caller can see they had no effect. No function calling, no logprobs, no image input: an image part in a message
   is replaced with <code>[unsupported content part: image_url]</code> rather than dropped, so a
@@ -691,21 +684,21 @@ const companyId = search.data.companies[0].id;</code></pre>
   <div class="tbl"><table>
     <thead><tr><th>Field</th><th>Means</th></tr></thead>
     <tbody>
-      <tr><td><code>model</code></td><td>The model that <em>actually ran</em>, fully qualified — <code>chatgpt:openai-waynecollins</code>, not the alias you asked for. Substitution is never silent.</td></tr>
-      <tr><td><code>choices[0].finish_reason</code></td><td><code>stop</code>, or <code>length</code> when a browser answer was still growing as the clock ran out — the text is real but partial.</td></tr>
+      <tr><td><code>model</code></td><td>The model that <em>actually ran</em>, — <code>pi</code>, whatever alias you asked for. Substitution is never silent.</td></tr>
+      <tr><td><code>choices[0].finish_reason</code></td><td><code>stop</code></td></tr>
       <tr><td><code>usage</code></td><td>Characters &divide; 4, marked <code>"estimated": true</code>. No engine here reports real token usage.</td></tr>
-      <tr><td><code>agy_lab</code></td><td>Non-standard block: <code>engine</code>, <code>ms</code>, <code>settled</code> (browser engines), <code>ignored</code>.</td></tr>
+      <tr><td><code>agy_lab</code></td><td>Non-standard block: <code>engine</code>, <code>ms</code>, <code>queuedMs</code>, <code>ignored</code>.</td></tr>
     </tbody>
   </table></div>
-  <p>Every call to a browser engine starts a new chat — a temporary chat on ChatGPT. There
-  is no server-side conversation to continue, so send the history you want considered.</p>
+  <p>Every call is a fresh Pi session. There is no server-side conversation to continue, so
+  send the history you want considered.</p>
 </section>
 
 <section id="stream">
   <h2>Streaming</h2>
-  <p>Real for the browser engines: the answer is polled as it renders, so chunks arrive at
-  roughly 1.5-second granularity. Pi answers when its run is finished, so its answer arrives
-  as a single content chunk. Both end the same way.</p>
+  <p>Pi answers when its run is finished, so the answer arrives as a single content chunk.
+  The stream is still worth using for long calls: a queued call narrates its wait, which
+  keeps intermediaries from closing a silent socket.</p>
 <pre><code>data: {"object":"chat.completion.chunk","choices":[{"delta":{"role":"assistant","content":""},...}]}
 data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"one\ntwo\nthree"},...}]}
 data: {"object":"chat.completion.chunk","choices":[{"delta":{},"finish_reason":"stop"}]}
@@ -723,27 +716,17 @@ data: [DONE]</code></pre>
 <section id="models">
   <h2>Models</h2>
   <div class="ep"><span class="m get">GET</span><code class="path">/v1/models</code><span class="tag">also /api/models</span></div>
-  <p>Lists what this box can route to right now, with each browser session's last probe —
-  which is how you tell a signed-in account from one that needs attention before you send it
-  work.</p>
+  <p>Lists what this box can route to: <code>pi</code>, with whether its key is configured.</p>
   <div class="tbl"><table>
     <thead><tr><th>Name</th><th>Routes to</th></tr></thead>
     <tbody>
       <tr><td><code>pi</code>, <code>minimax</code></td><td>the Pi worker (MiniMax). <code>agy</code>, <code>gemini</code> and <code>google</code> still route here, for callers set up before the Gemini engine was removed.</td></tr>
-      <tr><td><code>chatgpt</code>, <code>openai</code></td><td>the default ChatGPT session</td></tr>
-      <tr><td><code>chatgpt:&lt;id&gt;</code></td><td>that ChatGPT session — one per account</td></tr>
-      <tr><td><code>gpt-4o</code>, <code>gpt-*</code>, <code>o1*</code>, <code>o3*</code>, <code>o4*</code></td><td>the default ChatGPT session</td></tr>
+      <tr><td><code>chatgpt</code>, <code>openai</code>, <code>gpt-*</code>, <code>o1*</code>, <code>o3*</code>, <code>o4*</code>, <code>meta</code>, <code>llama-*</code></td><td>Pi. These named the removed browser engines; they still route, so a tool that hard-coded one keeps working.</td></tr>
       <tr><td><em>empty</em>, <code>auto</code></td><td><code>DEFAULT_MODEL</code>, which is <code>pi</code> unless set</td></tr>
     </tbody>
   </table></div>
-  <p><code>gpt-*</code> maps to the signed-in ChatGPT account because tools hard-code a model
-  id far more often than they let you choose one. A bare <code>chatgpt</code> resolves to
-  <code>CGPT_DEFAULT_SESSION</code> when set; otherwise calls take turns across every session whose
-  last probe said <code>ready</code>, so each extra signed-in account adds its own free allowance. <code>@mini</code> and <code>@container</code> pin a location for ChatGPT; a bare
-  <code>chatgpt</code> prefers a live mini worker and falls back to the container. Pi runs in the
-  container only. <code>meta</code> and
-  <code>llama-*</code> still parse, for callers that have not been updated, but nothing
-  claims them &mdash; see <a href="#meta">Meta AI &mdash; retired</a>.</p>
+  <p><code>@container</code> is accepted and changes nothing; <code>@mini</code> is a 404, because
+  nothing runs on the mini through this gateway any more.</p>
 </section>
 
 <section id="ask">
@@ -753,20 +736,17 @@ data: [DONE]</code></pre>
   answer out, no chat-completion wrapper to unpack.</p>
 <pre><code>curl -s https://ee-auto.up.railway.app/api/ask \
   -H "Authorization: Bearer $LAB_TOKEN" -H 'content-type: application/json' \
-  -d '{"model":"chatgpt","prompt":"...","timeoutMs":240000}'
+  -d '{"model":"pi","prompt":"...","timeoutMs":240000}'
 
-{"model":"chatgpt:openai-waynecollins","engine":"chatgpt","answer":"...","ms":13024,"settled":true}</code></pre>
+{"model":"pi","engine":"pi","answer":"...","ms":13024}</code></pre>
   <p>Takes <code>model</code> (or <code>engine</code>), <code>prompt</code> (or <code>messages</code>, flattened
-  the same way), <code>timeoutMs</code> and <code>tools</code>. <code>settled: false</code> means the answer
-  stopped growing because the clock ran out, not because the model had finished.</p>
+  the same way), <code>timeoutMs</code> and <code>tools</code>.</p>
 </section>
 
 <section id="queue">
   <h2>Queue &amp; backpressure</h2>
-  <p>Every engine here is a personal account with a human usage limit attached, so
-  calls are admitted rather than accepted. Ten at once do not make ten answers arrive
-  faster — they make one Chrome profile thrash, and they make the traffic look like
-  precisely what a bot-detection system is built to catch.</p>
+  <p>Calls are admitted rather than accepted. Ten at once do not make ten answers arrive
+  faster — past <code>PI_MAX_CONCURRENT</code> they only get the MiniMax account rate-limited.</p>
   <p><strong>A call that is admitted waits; it does not fail.</strong> An answer at +40 s
   is worth more than an error at +0 s, so the request is held. It is refused up front
   only when waiting would be worse than being told no.</p>
@@ -775,14 +755,11 @@ data: [DONE]</code></pre>
   <div class="tbl"><table>
     <thead><tr><th>Lane</th><th>Runs at once</th><th>Engines</th><th>Spacing</th></tr></thead>
     <tbody>
-      <tr><td><code>browser</code></td><td class="num">1</td><td><code>chatgpt</code> — the container has one Chrome</td><td class="num">2 s between calls</td></tr>
       <tr><td><code>pi</code></td><td class="num">6</td><td><code>pi</code></td><td class="num">none</td></tr>
     </tbody>
   </table></div>
-  <p>Slots are per lane; spacing, caps and counters are per engine — because the lane
-  is a machine limit and the account that gets rate-limited is not. The gap is not
-  about capacity: two seconds against a twelve-second answer costs nothing and keeps a
-  burst from arriving as a burst.</p>
+  <p>Spacing (<code>PI_MIN_GAP_MS</code>) and an hourly cap (<code>PI_HOURLY_LIMIT</code>) exist
+  and are off by default.</p>
 
   <h3>The three refusals</h3>
   <div class="tbl"><table>
@@ -797,9 +774,9 @@ data: [DONE]</code></pre>
 retry-after: 47
 
 {
-  "error": { "message": "System busy: 10 calls are already waiting for the browser and the queue is capped at 10. Retry in about 47s.",
+  "error": { "message": "System busy: 10 calls are already waiting for Pi and the queue is capped at 10. Retry in about 47s.",
              "type": "queue_full", "code": 429, "retry_after": 47 },
-  "queue": { "engine": "chatgpt", "lane": "browser", "minGapMs": 2000, "maxQueue": 10,
+  "queue": { "engine": "pi", "lane": "pi", "minGapMs": 0, "maxQueue": 10,
              "usedThisHour": 14, "estimatedWaitMs": 46800, "averageMs": 13100 }
 }</code></pre>
   <p>Both numbers are on purpose: <code>retry-after</code> is what a client can act on
@@ -821,9 +798,6 @@ data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"..."}}]}
   <p>Live: what is running, what is waiting, the rolling average per lane, and how much
   of each engine's hourly allowance is gone. The first thing to read when a call comes
   back 429 or takes a minute to start.</p>
-  <p><code>POST /api/cgpt/:id/ask</code> — the older, per-session route — goes through the
-  same queue. A path to an account that skips the spacing is not a shortcut; it is the
-  one call that gets the account limited.</p>
 </section>
 
 <section id="pi">
@@ -848,62 +822,6 @@ data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"..."}}]}
   </table></div>
   <p>Errors map to status codes the way a caller can act on: no key or a rejected key is 503
   <code>engine_unavailable</code>, a MiniMax rate limit is 503, a run past its deadline is 504.</p>
-</section>
-
-<section id="chatgpt">
-  <h2>ChatGPT</h2>
-  <p>One persistent Chrome profile per account on the volume, holding the session cookies.
-  Asking sends the prompt into a fresh temporary chat and reads the answer back from the
-  rendered page.</p>
-  <p>Login is unattended: the TOTP secret is stored beside the profile and the code is
-  derived in-container at the moment of submit, so nobody reads a phone. A clean run takes
-  about 14 seconds.</p>
-  <div class="tbl"><table>
-    <thead><tr><th>Route</th><th>Does</th><th>Typical</th></tr></thead>
-    <tbody>
-      <tr><td><code>POST /api/cgpt</code></td><td>create a session: <code>{id, label, kind}</code></td><td class="num">instant</td></tr>
-      <tr><td><code>POST /api/cgpt/:id/totp</code></td><td>store the shared secret — base32, <code>otpauth://</code> or an authenticator export link. Answers with a live code, the only honest proof it matches the phone.</td><td class="num">instant</td></tr>
-      <tr><td><code>POST /api/cgpt/:id/login</code></td><td><code>{email, password}</code>, unattended</td><td class="num">~14 s</td></tr>
-      <tr><td><code>POST /api/cgpt/:id/otp</code></td><td>resume a login that stopped for a code</td><td class="num">~5 s</td></tr>
-      <tr><td><code>POST /api/cgpt/:id/probe</code></td><td>is it still signed in</td><td class="num">~4 s</td></tr>
-      <tr><td><code>POST /api/cgpt/:id/ask</code></td><td>the pre-gateway ask, still here</td><td class="num">~13 s</td></tr>
-    </tbody>
-  </table></div>
-  <div class="call stop"><span class="h">A signed-out session is a 503, deliberately</span>
-  <p>Logged out, chatgpt.com still ships a working composer. A naive wrapper types into it
-  and returns an anonymous answer that looks completely fine and is worthless. The gateway
-  checks for a sign-in wall first and refuses instead. Fix it with
-  <code>POST /api/cgpt/:id/login</code> — nothing re-authenticates on its own.</p>
-  <p>If a login reports that the code was submitted twice and the page stayed put, the
-  challenge has gone stale: navigate to <code>auth.openai.com/log-out</code> first and run it
-  again. A stale challenge rejects every correct code and renders no error at all.</p></div>
-</section>
-
-<section id="meta">
-  <h2>Meta AI &mdash; retired</h2>
-  <p><b>There is no Meta engine any more.</b> Do not route to <code>meta</code>,
-  <code>meta:&lt;id&gt;</code>, <code>meta@mini</code> or <code>llama-*</code>; nothing
-  answers on any of them.</p>
-  <div class="call stop"><span class="h">Both routes to it are gone</span>
-  <p><b>The container is region-blocked.</b> Railway's address is served
-  <em>"Meta AI isn't available yet in your country."</em> even with an imported signed-in
-  profile. The gate applies on ordinary page loads, not only at login, so replaying cookies
-  there was never going to be enough.</p>
-  <p><b>The mini no longer claims it.</b> Meta AI was never activated on that machine — no
-  browser profile there ever held a <code>meta.ai</code> cookie — and the muse 1.2 stand-in
-  that answered under the <code>meta.*</code> job types through OpenCode has been removed.
-  No lane claims <code>meta.ask</code>, so <code>meta@mini</code> is refused up front rather
-  than queueing a job nothing will take.</p></div>
-  <p>The container's session machinery still understands a <code>meta</code> profile kind,
-  so an imported storageState is not rejected — but no traffic is routed to it and none
-  should be. The measurements behind the region gate are kept in
-  <code>META-AI.md</code>.</p>
-  <div class="call"><span class="h">What replaced it</span>
-  <p>Meta was wanted for one thing this API actually needed: what a company's Facebook
-  presence says about it. That is <a href="#social"><code>fb.*</code></a> now — a read-only
-  crawler that visits the pages and returns the facebook.com URL every field was read from,
-  rather than a model asked to describe what it can see. Company research Round 03 was
-  re-pointed onto it.</p></div>
 </section>
 
 <section id="jobs">
@@ -1097,58 +1015,6 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
   second arriving early fails with <code>busy</code> and is worth retrying.</p>
 </section>
 
-<section id="sessions">
-  <h2>Sessions</h2>
-  <p>Both browser engines share one session surface. <code>kind</code> is
-  <code>chatgpt</code> or <code>meta</code> and decides which site a profile is driven against,
-  which probe runs, and which model name it is published under.</p>
-  <div class="tbl"><table>
-    <thead><tr><th>Route</th><th>Does</th></tr></thead>
-    <tbody>
-      <tr><td><code>GET /api/cgpt</code></td><td>every session, its kind, last probe, and whether its browser is open</td></tr>
-      <tr><td><code>POST /api/cgpt/:id/import</code></td><td>apply a Playwright storageState — cookies through CDP, localStorage per origin. How a session minted on another machine gets here at all.</td></tr>
-      <tr><td><code>GET /api/cgpt/:id/export</code></td><td>lift the session out, unredacted. Treat the response as the credential it is.</td></tr>
-      <tr><td><code>POST /api/cgpt/:id/open</code> &middot; <code>/close</code> &middot; <code>/goto</code></td><td>hold a browser open on a URL, release it, or drive it somewhere</td></tr>
-      <tr><td><code>POST /api/cgpt/:id/delete</code></td><td>remove the profile and its manifest entry</td></tr>
-      <tr><td><code>GET /api/cgpt/:id/frame</code></td><td>a JPEG of the page, read-only</td></tr>
-    </tbody>
-  </table></div>
-  <div class="call warn"><span class="h">An imported session is not a portable one</span>
-  <p>What an import cannot carry is the fingerprint the session was created under. A cookie
-  minted at a residential IP and replayed from a datacenter is exactly the pattern account
-  security looks for. The import succeeding is not the same claim as the session surviving —
-  the probe afterwards is the real test.</p></div>
-</section>
-
-<section id="observe">
-  <h2>Observation layer</h2>
-  <div class="ep"><span class="m get">GET</span><code class="path">/api/cgpt/:id/dom</code><span class="tag">?goto= ?click= ?wait= ?steps=</span></div>
-  <p>Everything the automation decides from, dumped from the <em>server's own</em> browser —
-  same profile, same launch args as a real login. A fresh local Chrome is a different
-  experiment and proves nothing about this one.</p>
-  <p>Returns <code>url</code>, <code>title</code>, <code>bodyText</code>, every clickable and every
-  input (with value, readOnly, disabled, focused), plus four things no screenshot can show:
-  <code>focus</code> (activeElement, <code>document.hasFocus()</code>, and
-  <code>elementFromPoint</code> at the viewport centre — where a top-layer dialog or an
-  invisible overlay appears), <code>frames</code> (every frame including cross-origin ones,
-  with rects in viewport coordinates), <code>console</code>, and <code>tabs</code>.</p>
-  <div class="tbl"><table>
-    <thead><tr><th>Step</th><th>Does</th></tr></thead>
-    <tbody>
-      <tr><td><code>{goto}</code> <code>{click}</code> <code>{fill, value}</code> <code>{press}</code></td><td>the ordinary ones; each takes an optional <code>wait</code></td></tr>
-      <tr><td><code>{type, delay}</code> <code>{selectall}</code></td><td>real keystrokes, and a clear that works where <code>fill('')</code> does not</td></tr>
-      <tr><td><code>{insert}</code></td><td><code>Input.insertText</code> — hands text to the focused node and fires <code>beforeinput</code>/<code>input</code> without key events. What makes a react-controlled field accept a value.</td></tr>
-      <tr><td><code>{mouse:[x,y]}</code></td><td>a CDP click at viewport coordinates. The only way into a cross-origin iframe, and the only way to solve a Turnstile checkbox.</td></tr>
-      <tr><td><code>{eval}</code></td><td>an expression against the live page. Turns the next question into one API call instead of one deploy.</td></tr>
-    </tbody>
-  </table></div>
-  <div class="call info"><span class="h">A field that reads back correct is not proof</span>
-  <p>The DOM value and the app's own state are two different claims. <code>fill()</code>
-  satisfies the first and not the second, which is why both composers here are filled with
-  <code>insertText</code> and then <em>verified</em> by reading them back before the prompt is
-  sent.</p></div>
-</section>
-
 <section id="logs">
   <h2>Logs</h2>
   <div class="ep"><span class="m get">GET</span><code class="path">/api/logs</code><span class="tag">?limit= ?errors=1 ?engine= ?status= ?since= ?date= ?path=</span></div>
@@ -1174,7 +1040,7 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
 
 {"source":"memory","count":3,"entries":[
   {"id":214,"at":"2026-08-20T09:14:02.111Z","method":"POST","path":"/v1/chat/completions",
-   "engine":"chatgpt","model":"chatgpt:openai-waynecollins","promptChars":88,
+   "engine":"pi","model":"pi","promptChars":88,
    "queuedMs":41230,"ms":54900,"status":429,
    "error":{"type":"queue_full","message":"System busy: 10 calls are already waiting..."}}
 ]}</code></pre>
@@ -1195,15 +1061,13 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
     <thead><tr><th>Route</th><th>Does</th></tr></thead>
     <tbody>
       <tr><td><code>GET /healthz</code></td><td>unauthenticated liveness</td></tr>
-      <tr><td><code>GET /api/status</code></td><td>Pi worker status, container memory, open browsers, uptime, and the last crash it survived</td></tr>
-      <tr><td><code>GET /api/net</code></td><td>egress IP and what Cloudflare says to a bare fetch. A 403 here is the expected answer to something that is obviously not a browser — read it for the address and the mitigation, not as a verdict.</td></tr>
+      <tr><td><code>GET /api/status</code></td><td>Pi worker status, container memory, uptime, and the last crash it survived</td></tr>
       <tr><td><code>POST /api/exec</code></td><td>run a shell command in the container</td></tr>
       <tr><td><code>GET /</code></td><td>the operator console</td></tr>
     </tbody>
   </table></div>
   <div class="call stop"><span class="h">This token is a root shell</span>
-  <p><code>/api/exec</code> runs arbitrary commands in a container holding API keys and live
-  ChatGPT sessions, and <code>/api/cgpt/:id/export</code> hands out the cookies.
+  <p><code>/api/exec</code> runs arbitrary commands in a container holding API keys.
   <code>LAB_TOKEN</code> is not an API key in the ordinary sense — treat it as SSH access.
   The service refuses to start if it is shorter than 16 characters.</p></div>
 </section>
@@ -1216,10 +1080,9 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
     <tbody>
       <tr><td class="num">401</td><td><code>invalid_request_error</code></td><td>bad or missing token</td></tr>
       <tr><td class="num">400</td><td><code>invalid_request_error</code></td><td>a request the gateway will not fake — <code>n&gt;1</code>, empty messages, a prompt with no text</td></tr>
-      <tr><td class="num">404</td><td><code>model_not_found</code></td><td>unknown model name, or a session that does not exist</td></tr>
+      <tr><td class="num">404</td><td><code>model_not_found</code></td><td>unknown model name or location</td></tr>
       <tr><td class="num">429</td><td><code>queue_full</code> &middot; <code>queue_too_slow</code> &middot; <code>rate_limit_exceeded</code></td><td>system busy — see <a href="#queue">Queue</a>. Carries <code>Retry-After</code> and a queue snapshot.</td></tr>
-      <tr><td class="num">503</td><td><code>engine_unavailable</code></td><td>the engine exists but is signed out or has no key</td></tr>
-      <tr><td class="num">503</td><td><code>no_session</code></td><td>no session of that kind exists yet</td></tr>
+      <tr><td class="num">503</td><td><code>engine_unavailable</code></td><td>Pi has no key, or MiniMax is rate limiting</td></tr>
       <tr><td class="num">504</td><td><code>timeout</code></td><td>the engine ran past <code>timeoutMs</code></td></tr>
       <tr><td class="num">502</td><td><code>engine_error</code></td><td>it ran and failed — the message says how</td></tr>
     </tbody>
@@ -1230,31 +1093,9 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
 
 <section id="limits">
   <h2>Limits</h2>
-  <h3>One browser, one slot</h3>
-  <p><code>MAX_OPEN_BROWSERS=1</code>, least-recently-used eviction, closed after five idle
-  minutes. Every ChatGPT account competes for that one slot: calls serialise, and
-  alternating between accounts evicts the other profile — measured at about a second,
-  9.6 s for a warm call against 10.4 s for the same one straight after a different
-  account. Pi is an API client and runs alongside. This is a pipeline back-end, not a fan-out one — send work at it
-  as fast as you like and the <a href="#queue">queue</a> will hold it, but the throughput
-  ceiling is roughly one browser answer every fifteen seconds.</p>
-
-  <h3>Answers are read from a rendered page</h3>
-  <p>Both browser engines read <code>innerText</code>, minus the buttons the page renders
-  inside a message. Consequences worth designing around: a long fenced code block does not
-  always read back whole, and a prompt asking for one big JSON blob is the shape most likely
-  to come back truncated. <strong>Ask for line records instead.</strong></p>
-
-  <h3>Nothing re-authenticates itself</h3>
-  <p><code>GET /v1/models</code> reports each session's last probe. A pipeline that cares
-  should probe and re-login on a schedule rather than discover a dead session as a 503 in the
-  middle of a run.</p>
-
-  <h3>Cloudflare passes, for now</h3>
-  <p>ChatGPT's bot check clears from this container's address today, and the interactive
-  Turnstile checkbox is solved with a coordinate click. If that is ever escalated to
-  something harder, this stops working and a residential proxy
-  (<code>PROXY_URL</code>) becomes the next move.</p>
+  <p>Pi runs at most <code>PI_MAX_CONCURRENT</code> (6) calls at once; contact research holds up
+  to <code>CONTACT_LANES</code> (3) of them. Everything past that queues &mdash; see
+  <a href="#queue">Queue</a>.</p>
 </section>
 
 <section id="env">
@@ -1270,28 +1111,21 @@ curl -s $LAB/api/jobs/$ID -H "authorization: Bearer $LAB_TOKEN" | jq .job.result
       <tr><td><code>TRANSLATION_BATCH</code></td><td class="num">60</td><td>strings per translation call</td></tr>
       <tr><td><code>TRANSLATION_CONCURRENCY</code></td><td class="num">2</td><td>translation calls in flight; match it to the lanes serving <code>TRANSLATION_MODEL</code>, since wider only queues them one hop later</td></tr>
       <tr><td><code>DEFAULT_MODEL</code></td><td class="num">pi</td><td>what an empty or <code>auto</code> model resolves to</td></tr>
-      <tr><td><code>CGPT_DEFAULT_SESSION</code></td><td class="num">rotate ready</td><td>pins the account a bare <code>chatgpt</code> means; unset, calls rotate across ready accounts</td></tr>
       <tr><td><code>MINIMAX_API_KEY</code></td><td class="num">&mdash;</td><td>the Pi worker's MiniMax key; see <a href="#pi">Pi</a> for the other <code>PI_*</code> settings</td></tr>
       <tr><td><code>PI_ASK_TIMEOUT_MS</code></td><td class="num">300000</td><td></td></tr>
-      <tr><td><code>CGPT_ASK_TIMEOUT_MS</code></td><td class="num">180000</td><td></td></tr>
       <tr><td><code>PI_MAX_CONCURRENT</code></td><td class="num">6</td><td>Pi runs in flight at once</td></tr>
-      <tr><td><code>MAX_OPEN_BROWSERS</code></td><td class="num">1</td><td>Chrome profiles open at once — the browser lane's width</td></tr>
-      <tr><td><code>CGPT_MIN_GAP_MS</code></td><td class="num">2000</td><td>spacing between calls to that account</td></tr>
       <tr><td><code>PI_MIN_GAP_MS</code></td><td class="num">0</td><td></td></tr>
-      <tr><td><code>QUEUE_MAX_DEPTH</code></td><td class="num">10</td><td>waiting calls before 429; <code>CGPT_MAX_QUEUE</code> etc. override per engine</td></tr>
+      <tr><td><code>QUEUE_MAX_DEPTH</code></td><td class="num">10</td><td>waiting calls before 429 when <code>QUEUE_REJECT=true</code>; <code>PI_MAX_QUEUE</code> overrides it</td></tr>
       <tr><td><code>QUEUE_MAX_WAIT_MS</code></td><td class="num">300000</td><td>longest wait the gateway will promise; past it, 429</td></tr>
-      <tr><td><code>CGPT_HOURLY_LIMIT</code> &middot; <code>PI_HOURLY_LIMIT</code></td><td class="num">off</td><td>calls per rolling hour, per engine</td></tr>
+      <tr><td><code>PI_HOURLY_LIMIT</code></td><td class="num">off</td><td>calls per rolling hour</td></tr>
       <tr><td><code>LOG_MEMORY</code></td><td class="num">1000</td><td>records kept in memory for <code>/api/logs</code></td></tr>
       <tr><td><code>LOG_PROMPTS</code></td><td class="num">on</td><td><code>0</code> drops prompt previews from the log</td></tr>
-      <tr><td><code>BROWSER_IDLE_MS</code></td><td class="num">300000</td><td>close a profile nobody has touched</td></tr>
-      <tr><td><code>PROXY_URL</code></td><td class="num">unset</td><td><code>http://user:pass@host:port</code> for the browser</td></tr>
     </tbody>
   </table></div>
 </section>
 
 <footer>
-  <p>Served by the deploy it documents. The repo's <code>API.md</code>,
-  <code>CHATGPT-PROGRESS.md</code> and <code>META-AI.md</code> carry the measurements behind
+  <p>Served by the deploy it documents. The repo's <code>API.md</code> carries the detail behind
   every claim here.</p>
 </footer>
 </main>

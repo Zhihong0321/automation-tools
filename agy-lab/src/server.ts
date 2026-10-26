@@ -5,14 +5,12 @@
 // a fixed API. Those two facts together are why LAB_TOKEN is mandatory and the
 // process refuses to start without it. There is no "dev mode" that skips it: an
 // open /api/exec on a public hostname is a root shell for whoever scans the port
-// first, and this container holds signed-in ChatGPT sessions and API keys.
+// first, and this container holds API keys.
 import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { exec } from 'node:child_process';
 import * as pi from './pi.ts';
-import * as browser from './browser.ts';
-import * as cgpt from './cgptroutes.ts';
 import * as gateway from './gateway.ts';
 import * as jobs from './jobs.ts';
 import * as queue from './queue.ts';
@@ -38,6 +36,23 @@ import { missingPage } from './nav.ts';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const HOME = process.env.HOME ?? '/data';
+
+/** Container memory from cgroup v2, plus this process's own RSS. */
+function memory(): Record<string, unknown> {
+  const read = (p: string): number | null => {
+    try {
+      return Number(fs.readFileSync(p, 'utf8').trim());
+    } catch {
+      return null;
+    }
+  };
+  const mb = (n: number | null) => (n === null || !Number.isFinite(n) ? null : Math.round(n / 1024 / 1024));
+  return {
+    containerUsedMb: mb(read('/sys/fs/cgroup/memory.current')),
+    containerLimitMb: mb(read('/sys/fs/cgroup/memory.max')),
+    rssMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+  };
+}
 const TOKEN = process.env.LAB_TOKEN ?? '';
 const PORTAL_TOKEN = process.env.PORTAL_TOKEN?.trim() ?? '';
 
@@ -301,14 +316,6 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // route added below must never shadow one that other tools are calling.
   if (await gateway.handle(req, res, url, { json, readJson })) return;
 
-  // ---- ChatGPT sessions --------------------------------------------------
-  // Delegated wholesale. These routes own a browser process each and have their
-  // own locking discipline; interleaving them with the routes here would put
-  // that discipline somewhere it is easy to miss.
-  if (p.startsWith('/api/cgpt') || p === '/api/net') {
-    if (await cgpt.handle(req, res, url, { json, readJson })) return;
-  }
-
   // ---- the job broker -----------------------------------------------------
   // Work handed to a machine this service cannot reach. The Mac mini long-polls
   // /api/jobs/next from home, runs the job on a residential IP, and posts the
@@ -355,7 +362,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     return json(res, 200, {
       home: HOME,
       pi: pi.status(),
-      memory: browser.memory(),
+      memory: memory(),
       startedAt: STARTED_AT,
       uptimeSec: Math.round(process.uptime()),
       lastCrash,
@@ -460,9 +467,6 @@ server.listen(PORT, '0.0.0.0', () => {
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
-    // Close the browsers before the process goes. A Chrome killed with its profile
-    // lock still held leaves a SingletonLock behind, and the next deploy opens to
-    // "profile is already in use" on a profile nothing is using.
-    void browser.releaseAll().finally(() => server.close(() => process.exit(0)));
+    server.close(() => process.exit(0));
   });
 }

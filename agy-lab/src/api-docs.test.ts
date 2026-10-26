@@ -74,6 +74,10 @@ test('OpenAPI contract exposes each research workflow and resolves local referen
   assert.match(document.components.schemas.CompanyResearchRequest.description, /identical current VIP pipeline/);
   assert.deepEqual(resolveModel('gemini@container'), { engine: 'pi', model: 'pi', location: 'container' });
   assert.deepEqual(resolveModel('pi'), { engine: 'pi', model: 'pi', location: 'container' });
+  // The removed browser engines' names still route, to Pi, so a hard-coded caller keeps working.
+  for (const old of ['chatgpt', 'chatgpt:openai-main', 'gpt-4o', 'o3-mini', 'meta', 'llama-3'])
+    assert.deepEqual(resolveModel(old), { engine: 'pi', model: 'pi', location: 'container' }, old);
+  assert.throws(() => resolveModel('chatgpt@mini'), (e: { status?: number }) => e.status === 404);
 
   const root = document as unknown as Record<string, unknown>;
   const refs: string[] = [];

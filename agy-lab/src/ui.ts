@@ -50,7 +50,7 @@ export function page(): string {
   .kv b { font-weight:500; color:var(--muted); }
   .kv span { font-family:ui-monospace,Consolas,monospace; word-break:break-all; }
   .pill { font-size:11.5px; font-weight:600; padding:2px 9px; border-radius:999px; border:1px solid currentColor; }
-  .ready,.ok { color:var(--ok); } .logged_out,.bad { color:var(--bad); }
+  .ok { color:var(--ok); } .bad { color:var(--bad); }
   .not_installed { color:var(--warn); } .unknown { color:var(--idk); }
   a { color:var(--accent); word-break:break-all; }
   .hint { color:var(--muted); font-size:12px; margin:8px 0 0; }
@@ -61,7 +61,7 @@ export function page(): string {
 <body>
 <div class="wrap">
   <h1>agy-lab</h1>
-  <p class="sub">The research hub: the Pi worker (MiniMax), contact research, and signed-in ChatGPT browser sessions.</p>
+  <p class="sub">The research hub: the Pi worker (MiniMax) and contact research.</p>
   <nav class="sitenav" aria-label="Site">${navHtml(OPERATOR_NAV, '/')}</nav>
 
   <div class="card">
@@ -101,64 +101,6 @@ export function page(): string {
     </div>
   </div>
 
-  <div class="card">
-    <h2>Egress</h2>
-    <p class="hint" style="margin:0 0 10px">What the outside world sees when this container connects. <b>A 403 with <code>cf-mitigated: challenge</code> is normal here</b> — a bare fetch is not a browser and Cloudflare says so from any address, including a home connection whose real Chrome works fine. What matters is the egress IP, and <code>challenge</code> (a browser can pass) versus <code>block</code> (only a residential proxy fixes it). The real verdict is a session probe.</p>
-    <div class="row"><button onclick="netCheck()">Check egress + chatgpt.com</button></div>
-    <pre id="net" style="display:none"></pre>
-  </div>
-
-  <div class="card">
-    <h2>ChatGPT sessions</h2>
-    <div class="row">
-      <input id="newSession" placeholder="session id, e.g. openai-main" style="flex:1;min-width:180px">
-      <button onclick="createSession()">Create</button>
-      <button onclick="loadSessions()">Refresh</button>
-    </div>
-    <div id="sessionList" style="margin-top:14px"></div>
-  </div>
-
-  <div class="card">
-    <h2>Log in <span id="rcLabel" style="color:var(--muted);text-transform:none;letter-spacing:0"></span></h2>
-    <div class="row">
-      <input id="loginId" placeholder="session id" style="min-width:150px">
-      <input id="loginEmail" placeholder="email" autocomplete="off" style="flex:1;min-width:180px">
-      <input id="loginPass" type="password" placeholder="password" autocomplete="new-password" style="flex:1;min-width:160px">
-      <button class="primary" onclick="doLogin()">Log in</button>
-    </div>
-    <div class="row" style="margin-top:8px">
-      <input id="loginOtp" placeholder="one-time code (only if asked)" style="flex:1;min-width:200px"
-             onkeydown="if(event.key==='Enter'){doOtp();event.preventDefault();}">
-      <button onclick="doOtp()">Submit code</button>
-      <button onclick="shot()">Screenshot</button>
-      <button onclick="closeBrowser()">Close browser</button>
-    </div>
-    <p class="hint">Credentials are typed into the page and discarded with the request — the profile keeps the session cookies, nothing keeps the password. If a code is needed the login stops and holds the page; enter it above and the flow resumes where it left off.</p>
-    <pre id="loginOut" style="display:none"></pre>
-    <img id="rcFrame" style="display:none;width:100%;max-width:1280px;border:1px solid var(--line);border-radius:8px;margin-top:10px">
-  </div>
-
-  <div class="card">
-    <h2>Import a session from your PC</h2>
-    <p class="hint" style="margin:0 0 10px">Paste a Playwright <code>storageState</code> JSON. Cookies and localStorage are replayed into the profile. Importing succeeding is not the same as the session surviving — probe afterwards.</p>
-    <textarea id="stateJson" rows="4" placeholder='{"cookies":[...],"origins":[...]}'></textarea>
-    <div class="row" style="margin-top:8px">
-      <input id="importTarget" placeholder="target session id" style="flex:1;min-width:160px">
-      <button class="primary" onclick="importState()">Import</button>
-      <button onclick="exportState()">Export that session</button>
-    </div>
-    <pre id="importOut" style="display:none"></pre>
-  </div>
-
-  <div class="card">
-    <h2>Ask through a session</h2>
-    <div class="row">
-      <input id="askId" placeholder="session id" style="min-width:150px">
-      <input id="askPrompt" value="Reply with exactly: OK" style="flex:1;min-width:220px">
-      <button class="primary" onclick="ask()">Ask</button>
-    </div>
-    <pre id="askOut" style="display:none"></pre>
-  </div>
 </div>
 
 <script>
@@ -186,14 +128,6 @@ async function api(path, opts = {}) {
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-function ago(iso) {
-  if (!iso) return 'never';
-  const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
-  if (s < 60) return Math.round(s) + 's ago';
-  if (s < 3600) return Math.round(s / 60) + 'm ago';
-  return Math.round(s / 3600) + 'h ago';
-}
-
 async function refresh() {
   const { status, body } = await api('/api/status');
   if (status !== 200) { $('status').innerHTML = '<b>error</b><span>' + (body.error || status) + '</span>'; return; }
@@ -206,12 +140,11 @@ async function refresh() {
     ['HOME', body.home],
     ['memory', body.memory
       ? body.memory.containerUsedMb + ' / ' + body.memory.containerLimitMb + ' MB, node ' +
-        body.memory.rssMb + ' MB, browsers ' + body.memory.openBrowsers + '/' + body.memory.maxOpenBrowsers
+        body.memory.rssMb + ' MB'
       : '(unknown)'],
     ['uptime', body.uptimeSec != null ? Math.round(body.uptimeSec / 60) + 'm (since ' + body.startedAt + ')' : '(unknown)'],
   ];
-  // A restart wipes every open browser, so a recent one explains far more
-  // symptoms than it looks like it should.
+  // A recent restart explains far more symptoms than it looks like it should.
   if (body.lastCrash) {
     rows.push(['LAST CRASH', body.lastCrash.kind + ' at ' + body.lastCrash.at + ' - ' +
       String(body.lastCrash.message).split('
@@ -239,164 +172,8 @@ async function execCmd() {
 ' + (body.stdout || '') + (body.stderr || '');
 }
 
-// ---- ChatGPT sessions ------------------------------------------------------
-// Point the login form at a session and scroll it into view, so "Log in" on a row
-// lands you on the form already filled in rather than somewhere below the fold.
-function pickForLogin(id) {
-  $('loginId').value = id;
-  $('rcLabel').textContent = '- ' + id;
-  $('loginId').scrollIntoView({ behavior: 'smooth', block: 'center' });
-  $('loginEmail').focus();
-}
-
-const CGPT_LABEL = {
-  ready: 'Signed in', logged_out: 'Needs sign-in', challenged: 'Bot check',
-  busy: 'Profile in use', never_used: 'Never opened', unknown: 'Could not tell',
-};
-
-async function netCheck() {
-  $('net').style.display = 'block';
-  $('net').textContent = 'checking...';
-  const { body } = await api('/api/net');
-  $('net').textContent = JSON.stringify(body, null, 2);
-}
-
-async function loadSessions() {
-  const { body } = await api('/api/cgpt');
-  const rows = (body.sessions || []).map((s) => {
-    const st = s.lastProbe ? s.lastProbe.status : 'never_used';
-    return '<div style="border-top:1px solid var(--line);padding:10px 0">' +
-      '<div class="row"><b style="font-family:ui-monospace,Consolas,monospace">' + s.id + '</b>' +
-      '<span class="pill ' + (st === 'ready' ? 'ready' : st === 'logged_out' ? 'logged_out' : 'unknown') + '">' +
-        (CGPT_LABEL[st] || st) + '</span>' +
-      (s.open ? '<span class="pill ok">browser open</span>' : '') +
-      '<span style="flex:1"></span>' +
-      '<button onclick="cgpt(\'' + s.id + '\',\'probe\')">Probe</button>' +
-      '<button onclick="pickForLogin(\'' + s.id + '\')">Log in</button>' +
-      '<button onclick="cgpt(\'' + s.id + '\',\'close\')">Close</button>' +
-      '<button onclick="delSession(\'' + s.id + '\')">Delete</button></div>' +
-      (s.lastProbe ? '<p class="hint">' + esc(s.lastProbe.detail) + ' - ' + ago(s.lastProbe.at) + '</p>' : '') +
-    '</div>';
-  }).join('');
-  $('sessionList').innerHTML = rows || '<p class="hint">No sessions yet. Create one above.</p>';
-}
-
-async function createSession() {
-  const id = $('newSession').value.trim();
-  if (!id) return;
-  await api('/api/cgpt', { method: 'POST', body: JSON.stringify({ id }) });
-  $('newSession').value = '';
-  loadSessions();
-}
-
-async function delSession(id) {
-  if (!confirm('Delete profile "' + id + '"? Its login is gone for good.')) return;
-  await api('/api/cgpt/' + id + '/delete', { method: 'POST', body: '{}' });
-  loadSessions();
-}
-
-async function cgpt(id, action, payload) {
-  const el = $('sessionList');
-  el.style.opacity = '.5';
-  await api('/api/cgpt/' + id + '/' + action, { method: 'POST', body: JSON.stringify(payload || {}) });
-  el.style.opacity = '1';
-  loadSessions();
-}
-
-// Scripted login. No coordinates, no frame loop: fill the named fields, submit,
-// and let the server walk the flow. The only picture taken is a diagnostic one,
-// on demand, when the answer is "it stopped on a page I do not recognise".
-async function doLogin() {
-  const id = $('loginId').value.trim() || $('newSession').value.trim();
-  if (!id) return alert('Which session?');
-  $('loginId').value = id;
-  $('rcLabel').textContent = '- ' + id;
-  $('loginOut').style.display = 'block';
-  $('loginOut').textContent = 'logging in - this drives a real browser and takes 20-60s...';
-  const { body } = await api('/api/cgpt/' + id + '/login', {
-    method: 'POST',
-    body: JSON.stringify({
-      email: $('loginEmail').value.trim(),
-      password: $('loginPass').value,
-      otp: $('loginOtp').value.trim() || undefined,
-    }),
-  });
-  // Clear the password field on the way out. It is already sent; leaving it in a
-  // form field only widens where it can be read from.
-  $('loginPass').value = '';
-  showLogin(body);
-}
-
-async function doOtp() {
-  const id = $('loginId').value.trim();
-  if (!id) return alert('Which session?');
-  const code = $('loginOtp').value.trim();
-  if (!code) return alert('No code entered.');
-  $('loginOut').style.display = 'block';
-  $('loginOut').textContent = 'submitting code...';
-  const { body } = await api('/api/cgpt/' + id + '/otp', { method: 'POST', body: JSON.stringify({ code }) });
-  $('loginOtp').value = '';
-  showLogin(body);
-}
-
-function showLogin(body) {
-  $('loginOut').textContent = JSON.stringify(body, null, 2);
-  // A stall is the case where a picture actually earns its place, so take one
-  // automatically rather than making someone think to ask.
-  if (body.state === 'needs_otp') $('loginOtp').focus();
-  else if (body.state === 'failed') shot();
-  loadSessions();
-}
-
-function shot() {
-  const id = $('loginId').value.trim();
-  if (!id) return alert('Which session?');
-  const img = $('rcFrame');
-  img.style.display = 'block';
-  img.src = '/api/cgpt/' + id + '/frame?token=' + encodeURIComponent(tok()) + '&t=' + Date.now();
-}
-
-async function closeBrowser() {
-  const id = $('loginId').value.trim();
-  if (!id) return;
-  await api('/api/cgpt/' + id + '/close', { method: 'POST', body: '{}' });
-  $('rcFrame').style.display = 'none';
-  loadSessions();
-}
-
-async function importState() {
-  const id = $('importTarget').value.trim();
-  if (!id) return alert('Which session should it go into?');
-  let state;
-  try { state = JSON.parse($('stateJson').value); }
-  catch (e) { return alert('That is not valid JSON.'); }
-  $('importOut').style.display = 'block';
-  $('importOut').textContent = 'importing...';
-  const { body } = await api('/api/cgpt/' + id + '/import', { method: 'POST', body: JSON.stringify({ state }) });
-  $('importOut').textContent = JSON.stringify(body, null, 2);
-  loadSessions();
-}
-
-async function exportState() {
-  const id = $('importTarget').value.trim();
-  if (!id) return alert('Which session?');
-  const { body } = await api('/api/cgpt/' + id + '/export');
-  $('importOut').style.display = 'block';
-  $('importOut').textContent = JSON.stringify(body, null, 2);
-}
-
-async function ask() {
-  const id = $('askId').value.trim();
-  if (!id) return alert('Which session?');
-  $('askOut').style.display = 'block';
-  $('askOut').textContent = 'asking - this drives the real UI and can take a minute...';
-  const { body } = await api('/api/cgpt/' + id + '/ask', { method: 'POST', body: JSON.stringify({ prompt: $('askPrompt').value }) });
-  $('askOut').textContent = JSON.stringify(body, null, 2);
-}
-
 $('token').value = tok();
 refresh();
-loadSessions();
 setInterval(refresh, 15000);
 </script>
 </body>

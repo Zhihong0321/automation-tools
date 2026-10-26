@@ -849,8 +849,6 @@ const TIME_BUDGET = 'HARD TIME BUDGET: you have about four minutes of wall clock
   + 'JSON with what you already have, even if sections are thin or empty -- a short answer is a result '
   + 'and a missed deadline is not. Do not narrate the deadline; just meet it.';
 
-/** Contact research on a large company routinely needs far more than five minutes. */
-const CONTACT_RESEARCH_TIMEOUT_MS = 20 * 60_000;
 const CONTACT_TIME_BUDGET = 'HARD TIME BUDGET: you have about eighteen minutes of wall clock. The run is '
   + 'killed at twenty minutes and anything not yet printed is lost, so treat eighteen minutes as a deadline, '
   + 'not a target. Keep researching until you have the decision-makers, dialable numbers, and emails the '
@@ -1124,7 +1122,7 @@ function round02Prompt(kind: 'contacts' | 'people' | 'signals', company: Record<
     people: 'people: name,current_role,relevance,evidence_class,role_evidence_url,personal_profile_url,source_date; candidate_people: name,current_role,source_name,source_url,relevance,verification_note',
     signals: 'signals: date,fact,evidence_class,evidence_url,outreach_use',
   };
-  return `You are ChatGPT Round 02 auditing Round 01 for ${str(company.name)}. Do fresh web research; Round 01 is untrusted.
+  return `You are Round 02 auditing Round 01 for ${str(company.name)}. Do fresh web research; Round 01 is untrusted.
 COMPANY BASELINE: ${companyBaseline(company)}
 ROUND 01 PARSED LEADS: ${JSON.stringify(r1).slice(0, 28_000)}
 Focus only on ${kind}. Confirm, correct, reject and add missed evidence. For contacts inspect subscription/campaign/careers/vendor pages. For people inspect SSM/e-Info, CTOS/CreditScan, MyHIJAU, SEDA, CIDB, job boards, LinkedIn people/company pages, official team pages, awards and associations. Prioritize CEO, commercial, partnerships, procurement, operations and HR, but retain directors, registry contacts, team members and employees as candidate_people when the named source is public but the current role lacks direct evidence. For signals use direct issuer or specific company pages.
@@ -1925,7 +1923,7 @@ async function runCompanyResearch(
     // produce, and it runs on a different machine down a different lane -- so
     // awaiting it in file order was buying nothing and costing its whole duration
     // (159s on the run this was measured against). Started here, it overlaps the
-    // Pi and ChatGPT rounds and is collected below, before the ledger is
+    // Pi rounds and is collected below, before the ledger is
     // built. `catch` is attached immediately so a rejection while nobody is
     // awaiting it cannot become an unhandled rejection.
     // Stamped inside the chain, not at collection: the round finishes while
@@ -1955,18 +1953,11 @@ async function runCompanyResearch(
     const round02: Record<string, unknown> = { calls: {} };
     const KINDS = ['contacts', 'people', 'signals'] as const;
     // The three audits read the same Round 01 context and write nothing the other
-    // two read: they were serial only because they were written as a loop. They
-    // now go out together.
-    //
-    // This is safe now and was not before. The mini runs one ChatGPT lane per
-    // signed-in account -- three of them -- so three calls land on three accounts
-    // in three ego lite task spaces. Sent concurrently into a single lane they
-    // would have queued, and queue.ts refuses on ESTIMATED WAIT rather than making
-    // a caller sit: the third call would have come back 429 instead of slow. Width
-    // has to exist before fan-out is an improvement.
+    // two read, so they go out together. Pi's lane is wide enough (PI_MAX_CONCURRENT)
+    // for all three at once.
     const settled = await Promise.all(KINDS.map(async (kind) => {
       try {
-        return { kind, call: await ask('chatgpt', round02Prompt(kind, company, r1Context), 300_000) };
+        return { kind, call: await ask('pi', round02Prompt(kind, company, r1Context), 300_000) };
       } catch (err) {
         return { kind, error: err as Error };
       }
@@ -1994,7 +1985,7 @@ async function runCompanyResearch(
     // moment to seize -- it still starts before the company report completes.
     await triggerAutoPersonResearch();
     const r2Ok = Object.values(object(round02.calls)).some((v) => object(v).parsed);
-    await db.saveRound(reportId, 'round02', round02, r2Ok ? (failures.length ? 'partial' : 'completed') : 'failed', { model: 'chatgpt', split_calls: 3 });
+    await db.saveRound(reportId, 'round02', round02, r2Ok ? (failures.length ? 'partial' : 'completed') : 'failed', { model: 'pi', split_calls: 3 });
 
     // Collected, not started, here: by now it has usually already finished.
     const r3Settled = await r3Pending;
@@ -2417,9 +2408,9 @@ async function runPersonResearch(
       parsedForLedger.push(scout.parsed);
     }
 
-    let auditMetadata: Record<string, unknown> = { status: 'failed', model: 'chatgpt' };
+    let auditMetadata: Record<string, unknown> = { status: 'failed', model: 'pi' };
     try {
-      const audit = await ask('chatgpt', personAuditPrompt(company, person, parsedForLedger[0] ?? {}), 300_000);
+      const audit = await ask('pi', personAuditPrompt(company, person, parsedForLedger[0] ?? {}), 300_000);
       if (audit.parsed) {
         const redacted = redactIdentityHintsFromDiscovery(audit.parsed, identityHints);
         for (const row of [...rows(redacted.contacts), ...rows(redacted.facts), ...rows(redacted.signals)]) row._round = 'person_independent_audit';
@@ -2429,7 +2420,7 @@ async function runPersonResearch(
       if (!audit.parsed) auditMetadata = { status: 'invalid_output', model: audit.model, engine: audit.engine, ms: audit.ms };
     } catch (err) {
       hadFailure = true;
-      auditMetadata = { status: 'failed', model: 'chatgpt', error: (err as Error).message ?? String(err) };
+      auditMetadata = { status: 'failed', model: 'pi', error: (err as Error).message ?? String(err) };
     }
 
     const ledger = buildPersonLedger(company, person, parsedForLedger);
@@ -2440,15 +2431,15 @@ async function runPersonResearch(
       metadata: { discovery: discoveryMetadata, facebook_scout: facebookScout.metadata, xai_x_scout: xScout.metadata, independent_audit: auditMetadata },
     });
     let finalReport: Record<string, unknown> = { ...ledger, summary: null, research_angles: [], synthesis_mode: 'validated_ledger_fallback' };
-    let synthesisMetadata: Record<string, unknown> = { status: 'failed', model: 'chatgpt' };
+    let synthesisMetadata: Record<string, unknown> = { status: 'failed', model: 'pi' };
     try {
-      const synthesis = await ask('chatgpt', personSynthesisPrompt(ledger), 300_000);
+      const synthesis = await ask('pi', personSynthesisPrompt(ledger), 300_000);
       // Repair formatting, then judge integrity, then publish the repaired
       // object -- not the raw one, and not nothing.
       const personFinal = synthesis.parsed ? normaliseUrls(synthesis.parsed) : null;
       const fidelityErrors = personFinal ? validatePersonFinal(personFinal, ledger) : [synthesis.parse_error ?? 'invalid final output'];
       if (personFinal && !fidelityErrors.length) {
-        finalReport = { ...personFinal, synthesis_mode: 'chatgpt_validated' };
+        finalReport = { ...personFinal, synthesis_mode: 'pi_validated' };
       } else {
         hadFailure = true;
         // Same as the company report: keep the validated rows, keep the prose,
@@ -2468,7 +2459,7 @@ async function runPersonResearch(
       synthesisMetadata = { status: fidelityErrors.length ? 'rejected_fallback_used' : 'completed', model: synthesis.model, engine: synthesis.engine, ms: synthesis.ms, fidelity_errors: fidelityErrors };
     } catch (err) {
       hadFailure = true;
-      synthesisMetadata = { status: 'failed', model: 'chatgpt', error: (err as Error).message ?? String(err) };
+      synthesisMetadata = { status: 'failed', model: 'pi', error: (err as Error).message ?? String(err) };
     }
     await db.savePersonResearchRun(reportId, {
       synthesis: { synthesis_mode: finalReport.synthesis_mode, contact_count: rows(finalReport.contacts).length, fact_count: rows(finalReport.facts).length, signal_count: rows(finalReport.signals).length },
@@ -2553,20 +2544,7 @@ async function runContactResearch(
         await jobs.wait(job.id, 0);
         return;
       }
-      if (jobType !== 'chatgpt.ask') {
-        throw new Error('contact research needs a live contact worker');
-      }
-      {
-        await db.updateReport(publicId, { status: 'running', error: null });
-        const askResult = await ask(model, contactResearchPrompt(company, targetRole), CONTACT_RESEARCH_TIMEOUT_MS);
-        discoveryMeta = { model: askResult.model, engine: askResult.engine, ms: askResult.ms };
-        if (askResult.parsed) {
-          discoveryRaw = askResult.parsed;
-          discoveryMeta.status = 'completed';
-        } else {
-          discoveryMeta.status = 'invalid_output';
-        }
-      }
+      throw new Error('contact research needs a live contact worker');
     } catch (err) {
       discoveryMeta.status = 'failed';
       discoveryMeta.error = (err as Error).message ?? String(err);

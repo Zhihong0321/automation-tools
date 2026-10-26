@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type http from 'node:http';
 import { activate, coolDown, create, finish, get, handle, liveTypes, quotaRetryAfterMs, snapshot, take, wait } from './jobs.ts';
 
-const ASK_TYPES = ['chatgpt.ask', 'meta.ask', 'fb.company'];
+const ASK_TYPES = ['fb.person', 'x.subject', 'fb.company'];
 
 /** POST /api/jobs/heartbeat exactly as worker/macmini.mjs sends it. */
 async function heartbeat(worker: string, types: string[]): Promise<unknown> {
@@ -19,8 +19,8 @@ async function heartbeat(worker: string, types: string[]): Promise<unknown> {
   return captured;
 }
 
-test('a browser ask keeps its short lease when the payload budget is longer', () => {
-  const job = create('chatgpt.ask', { prompt: 'audit', timeoutMs: 300_000 }, 120_000);
+test('a job keeps its short lease when the payload budget is longer', () => {
+  const job = create('fb.person', { prompt: 'audit', timeoutMs: 300_000 }, 120_000);
   assert.equal(job.timeoutMs, 120_000);
 });
 
@@ -29,7 +29,7 @@ test('a beat registers a worker the table has never seen, types and all', async 
   // mini is mid-job, so the beat has to be able to introduce the lane from
   // nothing — re-registering the name alone would read as "serving nothing".
   assert.equal(liveTypes().includes('fb.company'), false);
-  await heartbeat('macmini-ask', ASK_TYPES);
+  await heartbeat('macmini-fb', ASK_TYPES);
   for (const type of ASK_TYPES) assert.equal(liveTypes().includes(type), true);
 });
 

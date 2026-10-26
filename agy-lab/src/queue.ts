@@ -1,11 +1,8 @@
-// The admission queue: what stands between a burst of API calls and an account
-// getting rate-limited by the site it belongs to.
+// The admission queue: what stands between a burst of API calls and the MiniMax
+// account getting rate-limited.
 //
-// Every engine here is somebody's personal account with a human usage limit
-// attached. Ten parallel calls do not make ten answers arrive faster - they make
-// one profile thrash (MAX_OPEN_BROWSERS=1, so each call evicts the last) and they
-// make the traffic look like exactly what a bot-detection system is built to
-// catch. So calls are admitted one lane at a time, spaced, and counted.
+// Calls are admitted a lane at a time, spaced, and counted, so a burst queues
+// here instead of arriving at the provider as a burst.
 //
 // Three refusals, in order of how early they fire:
 //
@@ -18,27 +15,14 @@
 // Anything that passes all three WAITS rather than fails: the caller asked for an
 // answer, and an answer at +40s is worth more than an error at +0s. Callers that
 // disagree set their own client timeout.
-//
-// Slots are per LANE, not per engine: ChatGPT and Meta AI share one browser, so
-// they share one lane. Gaps, caps and statistics are per ENGINE, because the
-// account that gets rate-limited is per engine.
 
-export type Engine = 'pi' | 'chatgpt' | 'meta';
-/** Where the work runs. The container is this process; the mini is a worker on the job queue. */
-export type Location = 'container' | 'mini';
-type Lane = 'pi' | 'browser' | 'mini';
+// Pi is the only engine left. The ChatGPT and Meta AI browser engines, and the
+// lanes they ran in, were removed on 2026-10-26 once Cloudflare refused ChatGPT
+// from this container.
+export type Engine = 'pi';
+type Lane = 'pi';
 
-/**
- * The mini is its own lane, not extra width on `browser`.
- *
- * `browser` is width 1 because the container has exactly one Chrome. The mini is
- * a DIFFERENT machine with a DIFFERENT ChatGPT account and its own browser, so
- * sharing a lane with the container would serialize two things that have no
- * reason to wait for each other and throw away the capacity the mini was added
- * for. Separate lane, separate width, separate gap.
- */
-const laneOf = (engine: Engine, location: Location = 'container'): Lane =>
-  location === 'mini' ? 'mini' : engine === 'pi' ? 'pi' : 'browser';
+const laneOf = (_engine: Engine): Lane => 'pi';
 
 const int = (name: string, fallback: number): number => {
   const raw = Number(process.env[name]);
@@ -64,12 +48,12 @@ function policy(engine: Engine): {
   hourlyLimit: number;
   neverReject: boolean;
 } {
-  const prefix = engine === 'chatgpt' ? 'CGPT' : engine.toUpperCase();
+  const prefix = engine.toUpperCase();
   // Never reject by default: requests queue FIFO and wait their turn instead of being shed with 429.
   // Set QUEUE_REJECT=true to opt into legacy 429 load shedding.
   const neverReject = process.env.QUEUE_REJECT !== 'true';
   return {
-    minGapMs: int(prefix + '_MIN_GAP_MS', engine === 'pi' ? 0 : 2000),
+    minGapMs: int(prefix + '_MIN_GAP_MS', 0),
     maxDepth: int(prefix + '_MAX_QUEUE', int('QUEUE_MAX_DEPTH', 10)),
     maxWaitMs: int(prefix + '_MAX_WAIT_MS', int('QUEUE_MAX_WAIT_MS', 300_000)),
     hourlyLimit: int(prefix + '_HOURLY_LIMIT', 0),
@@ -77,23 +61,8 @@ function policy(engine: Engine): {
   };
 }
 
-/** How many run at once in a lane. One browser is a hard limit of the container, not a policy. */
-const laneConcurrency = (lane: Lane): number =>
-  lane === 'pi'
-    ? Math.max(1, int('PI_MAX_CONCURRENT', 6))
-    : lane === 'mini'
-      // ego lite runs each account in its own task space, so the mini's ceiling is
-      // accounts, not browsers — unlike the container, where it is literally one
-      // Chrome. Three is what the worker's LANES actually run: one ChatGPT lane
-      // per signed-in account (Zhihong PRO, 三专, gan gemini).
-      //
-      // This number must equal the lane count and never exceed it, because a width
-      // wider than the lanes behind it does not admit more work — it just moves the
-      // queue one hop later, into the job broker, where the extra calls sit
-      // `pending` and nothing measures them: two calls admitted here in the same
-      // millisecond once waited 306 seconds for the single lane that served them.
-      ? Math.max(1, int('MINI_MAX_CONCURRENT', 3))
-      : Math.max(1, int('MAX_OPEN_BROWSERS', 1));
+/** How many run at once in a lane. */
+const laneConcurrency = (_lane: Lane): number => Math.max(1, int('PI_MAX_CONCURRENT', 6));
 
 interface LaneState {
   inflight: number;
@@ -115,15 +84,10 @@ interface EngineState {
 
 const lanes: Record<Lane, LaneState> = {
   pi: { inflight: 0, waiting: [], emaMs: 20_000, samples: 0 },
-  browser: { inflight: 0, waiting: [], emaMs: 13_000, samples: 0 },
-  // Seeded from measured mini round trips (~7.5s end to end including the job hop).
-  mini: { inflight: 0, waiting: [], emaMs: 8_000, samples: 0 },
 };
 
 const engines: Record<Engine, EngineState> = {
   pi: fresh(),
-  chatgpt: fresh(),
-  meta: fresh(),
 };
 
 function fresh(): EngineState {
@@ -193,9 +157,9 @@ export interface Admitted<T> {
 export async function run<T>(
   engine: Engine,
   fn: () => Promise<T>,
-  hooks: { onQueued?: (info: QueueInfo) => void; location?: Location } = {},
+  hooks: { onQueued?: (info: QueueInfo) => void } = {},
 ): Promise<Admitted<T>> {
-  const lane = laneOf(engine, hooks.location);
+  const lane = laneOf(engine);
   const l = lanes[lane];
   const p = policy(engine);
   const arrived = Date.now();
@@ -218,7 +182,7 @@ export async function run<T>(
       const wait = estimateWaitMs(lane, engine);
       throw busy(
         'queue_full',
-        `System busy: ${l.waiting.length} calls are already waiting for ${lane === 'pi' ? 'Pi' : lane === 'mini' ? 'the mini' : 'the browser'} and the queue is capped at ${p.maxDepth}. Retry in about ${Math.ceil(wait / 1000)}s.`,
+        `System busy: ${l.waiting.length} calls are already waiting for Pi and the queue is capped at ${p.maxDepth}. Retry in about ${Math.ceil(wait / 1000)}s.`,
         wait / 1000,
         engine,
       );
@@ -324,20 +288,20 @@ export function snapshot(engine?: Engine): Record<string, unknown> {
   };
   if (engine) return { engine, ...engineView(engine), lanes: { [laneOf(engine)]: laneView(laneOf(engine)) } };
   return {
-    lanes: { pi: laneView('pi'), browser: laneView('browser'), mini: laneView('mini') },
-    engines: { pi: engineView('pi'), chatgpt: engineView('chatgpt'), meta: engineView('meta') },
+    lanes: { pi: laneView('pi') },
+    engines: { pi: engineView('pi') },
   };
 }
 
 /** Reset in-memory queue and engine state for deterministic test suites. */
 export function resetForTests(): void {
-  for (const lane of ['pi', 'browser', 'mini'] as Lane[]) {
+  for (const lane of ['pi'] as Lane[]) {
     lanes[lane].inflight = 0;
     lanes[lane].waiting = [];
     lanes[lane].samples = 0;
-    lanes[lane].emaMs = lane === 'mini' ? 8000 : lane === 'browser' ? 13000 : 20000;
+    lanes[lane].emaMs = 20000;
   }
-  for (const eng of ['pi', 'chatgpt', 'meta'] as Engine[]) {
+  for (const eng of ['pi'] as Engine[]) {
     engines[eng] = fresh();
   }
 }

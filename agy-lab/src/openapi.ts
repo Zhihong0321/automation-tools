@@ -672,7 +672,7 @@ export const document = {
           contacts: { type: 'array', items: { type: 'object', additionalProperties: true } },
           facts: { type: 'array', items: { type: 'object', additionalProperties: true } }, signals: { type: 'array', items: { type: 'object', additionalProperties: true } },
           research_angles: { type: 'array', items: { type: 'string' } },
-          synthesis_mode: { type: 'string', enum: ['chatgpt_validated', 'validated_ledger_fallback'] },
+          synthesis_mode: { type: 'string', enum: ['pi_validated', 'chatgpt_validated', 'validated_ledger_fallback'], description: 'chatgpt_validated appears only on reports written before 2026-10-26.' },
         }, additionalProperties: true,
       },
       ResearchRun: {
@@ -680,7 +680,7 @@ export const document = {
         properties: {
           report_id: { type: 'string' },
           round01: { type: ['object', 'null'], additionalProperties: true, description: 'Pi discovery.' },
-          round02: { type: ['object', 'null'], additionalProperties: true, description: 'Three split ChatGPT audits: contacts, people, signals.' },
+          round02: { type: ['object', 'null'], additionalProperties: true, description: 'Three split Pi audits: contacts, people, signals.' },
           round03: { type: ['object', 'null'], additionalProperties: true, description: 'Facebook evidence from the read-only fb-recon crawler on the home worker. access_mode is live_facebook_pages or no_live_access; rows carry the facebook.com URL each field was read from. Status is skipped when no worker is claiming fb.company.' },
           round04: { type: ['object', 'null'], additionalProperties: true, description: 'Pi synthesis, rejected and replaced by the ledger if it invents a row or a URL.' },
           validated_ledger: { type: ['object', 'null'], additionalProperties: true }, final_report: { oneOf: [{ $ref: '#/components/schemas/FinalCompanyReport' }, { type: 'null' }] },

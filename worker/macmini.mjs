@@ -33,7 +33,6 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { scan as gmapScan } from './gmap.mjs';
-import * as chatgpt from './chatgpt-ego.mjs';
 import * as fb from './fb.mjs';
 import * as x from './x.mjs';
 import * as ads from './ads.mjs';
@@ -62,15 +61,14 @@ const BEAT_MS = 30_000;
  * LANES. One claim loop per lane, running side by side in this one process.
  *
  * A single loop was right while the only job was a scan. It stops being right
- * the moment a 15-second ChatGPT call can end up queued behind a 60-second Maps
+ * the moment a short wrapper call can end up queued behind a 60-second Maps
  * scan: the caller of the first is an HTTP request somebody is waiting on, and
  * the second holds the loop for minutes by design.
  *
  * The split is by duration, not by engine. `scan` is the slow residential-line
  * work that must stay one-at-a-time — that is what a home connection can do
- * without looking like something other than a person. `ask` is everything that
- * answers in seconds. Each lane is serial within itself, which is also what
- * keeps one Chrome per profile true for ChatGPT without any lock of our own.
+ * without looking like something other than a person. Each lane is serial
+ * within itself, which keeps one browser per task space without any lock of our own.
  *
  * Each lane checks in under its own name, so a lane that dies is visible in
  * GET /api/jobs instead of being covered for by its neighbour still polling.
@@ -80,59 +78,21 @@ const LANES = (() => {
   // those types. It predates lanes and is kept because it is the switch that
   // pins a machine to one kind of work — the reason to reach for it now is to
   // run the wrappers on one box and the scan on another.
-  // agy.* is dropped even when an installed plist still names it: there is no
-  // handler for it any more, and a lane that claims a type it cannot run makes
-  // the gateway think the engine is here.
-  const pinned = (process.env.WORKER_TYPES ?? '').split(',').map((t) => t.trim()).filter((t) => t && !t.startsWith('agy.'));
-  // WORKER_SESSIONS widens a pinned worker without unpinning it. A pin is one
-  // lane by definition, and that is still right for `gmap.scan`; it stopped being
-  // right for `chatgpt.ask` the moment the machine had three signed-in accounts.
-  // The ask job is pinned in its plist precisely so it does not inherit the scan
-  // daemon's WORKER_TYPES from ~/.gmap-worker.env, so unpinning it is not an
-  // option -- it has to widen in place.
-  //
-  // One lane per signed-in ChatGPT account. The agy lanes that ran beside them
-  // are gone: the Google accounts were banned, and the Pi worker that replaced
-  // agy runs in the hub, not here.
-  const sessions = (process.env.WORKER_SESSIONS ?? '').split(',').map((t) => t.trim()).filter(Boolean);
-  if (pinned.length) {
-    const chatgptOnly = pinned.filter((t) => t.startsWith('chatgpt.'));
-    // A single-purpose pin stays one lane. This is the scan daemon
-    // (WORKER_TYPES=ping,gmap.scan): nothing to split, and one scan at a time is
-    // the point of it.
-    if (sessions.length < 2) return [{ suffix: '', types: pinned, session: sessions[0] }];
-    // Whatever the pin asked for that is not chatgpt still has to be
-    // claimed by somebody, or the pin silently stops serving it.
-    const rest = pinned.filter((t) => !chatgptOnly.includes(t));
-    const accounts = sessions.length ? sessions : [undefined];
-    const lanes = accounts.map((session, i) => ({
-      suffix: i === 0 ? '' : '-' + (i + 1),
-      types: i === 0 ? [...chatgptOnly, ...rest] : chatgptOnly,
-      session,
-    }));
-    return lanes.filter((l) => l.types.length);
-  }
+  // agy.*, chatgpt.* and meta.* are dropped even when an installed plist still
+  // names them: there is no handler for them any more, and a lane that claims a
+  // type it cannot run makes the gateway think the engine is here.
+  const RETIRED = /^(agy|chatgpt|meta|muse)\./;
+  const requested = (process.env.WORKER_TYPES ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+  const pinned = requested.filter((t) => !RETIRED.test(t));
+  // A pin that named ONLY retired types (the old ChatGPT ask LaunchAgent) must
+  // claim nothing. Falling through to the default lanes below would start a second
+  // gmap.scan lane beside the scan daemon on the same residential line.
+  if (requested.length && !pinned.length) return [];
+  if (pinned.length) return [{ suffix: '', types: pinned }];
   return [
     { suffix: '', types: ['ping', 'gmap.scan'] },
-    // Three ChatGPT lanes, one per signed-in account, because that is what the
-    // machine actually has: Profile 3 (Zhihong PRO), Profile 2 (三专) and
-    // Profile 5 (gan gemini) are three separate ChatGPT logins in three separate
-    // ego lite task spaces. One lane meant Round 02's three audit calls queued
-    // behind each other on one account while the other two sat idle.
-    //
-    // `session` is the lane's identity, not the job's: nothing upstream knows or
-    // should know which account answers, so the lane supplies it when the payload
-    // does not. A job that names its own `id` still wins -- that is how a caller
-    // pins a specific account on purpose.
-    //
-    { suffix: '-ask', types: ['chatgpt.ask', 'chatgpt.probe'], session: 'mini-main' },
-    { suffix: '-ask2', types: ['chatgpt.ask', 'chatgpt.probe'], session: 'mini-2' },
-    { suffix: '-ask3', types: ['chatgpt.ask', 'chatgpt.probe'], session: 'mini-3' },
-    // Its own lane for the same reason `-ask` is not the scan lane, one step
-    // further out: a lead takes 1-2 minutes of paced page loads, so it would sit
-    // in front of every wrapper call if it shared theirs -- and it holds ego
-    // lite's single crawl space for that whole time, which the scan lane's
-    // Chrome does not care about but a `chatgpt.ask` in the same process would.
+    // Its own lane, not the scan lane: a lead takes 1-2 minutes of paced page
+    // loads, and it holds ego lite's single crawl space for that whole time.
     { suffix: '-fb', types: ['fb.company', 'fb.person', 'fb.discover', 'fb.probe'] },
     // Its own lane again, and for a stronger version of the fb reason: one Grok
     // ask is 40-120s and a lead may spend four of them, so an x.* job can hold a
@@ -200,16 +160,8 @@ async function ping(payload) {
 const handlers = {
   ping,
   'gmap.scan': gmapScan,
-  // The wrappers this machine runs alongside the cloud's. A different ChatGPT
-  // account, so these are a second lane rather than a copy of the container's.
-  'chatgpt.ask': chatgpt.ask,
-  'chatgpt.probe': chatgpt.probe,
-  // No `meta.*` / `muse.*` here any more. Meta AI was never activated on this
-  // machine (no ego lite profile ever held a meta.ai cookie), and the muse 1.2
-  // stand-in that answered under those names is retired. A lane that no longer
-  // claims a type is how the gateway learns it is gone: `meta@mini` stops being
-  // listed `ready` in GET /v1/models and a pinned call 503s up front instead of
-  // queueing a job nothing will ever take.
+  // No `chatgpt.*` or `meta.*` here any more: both engines were removed on
+  // 2026-10-26, here and in the hub.
   // Facebook lead enrichment through fb-recon: the Claude CLI picks which rung
   // of the search ladder to try, a read-only crawler drives ego lite. Same
   // reason as gmap.scan for living here -- the Facebook session is a login a
@@ -319,7 +271,7 @@ function beat(name, types, cooldownGroup) {
 
 const cooldowns = new Map();
 
-async function run(name, job, session, cooldownGroup) {
+async function run(name, job, cooldownGroup) {
   const handler = handlers[job.type];
   const at = Date.now();
   if (!handler) {
@@ -331,12 +283,7 @@ async function run(name, job, session, cooldownGroup) {
   }
   say('job ' + job.id + ' type=' + job.type + ' — running');
   try {
-    // The lane's session is a default, never an override: a payload that names an
-    // `id` has chosen its account deliberately.
-    const payload = session && job.type.startsWith('chatgpt.')
-      ? { ...(job.payload ?? {}), id: job.payload?.id ?? session }
-      : job.payload;
-    const result = await handler(payload, job);
+    const result = await handler(job.payload, job);
     await report(name, job.id, true, result, null);
     // The hub writes the scan to its database. Report a failed local recovery
     // copy because it is the backup if the hub cannot save the returned rows.
@@ -384,20 +331,10 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
   });
 }
 
-const DEFAULT_CGPT_COOLDOWN_MIN = 2500;
-const DEFAULT_CGPT_COOLDOWN_MAX = 4500;
-
-function calculateCooldown(type) {
-  if (process.env.WORKER_COOLDOWN_MS !== undefined) {
-    const override = Number(process.env.WORKER_COOLDOWN_MS);
-    return Number.isFinite(override) && override >= 0 ? override : 0;
-  }
-  if (typeof type === 'string') {
-    if (type.startsWith('chatgpt.')) {
-      return DEFAULT_CGPT_COOLDOWN_MIN + Math.floor(Math.random() * (DEFAULT_CGPT_COOLDOWN_MAX - DEFAULT_CGPT_COOLDOWN_MIN));
-    }
-  }
-  return 0;
+function calculateCooldown() {
+  if (process.env.WORKER_COOLDOWN_MS === undefined) return 0;
+  const override = Number(process.env.WORKER_COOLDOWN_MS);
+  return Number.isFinite(override) && override >= 0 ? override : 0;
 }
 
 /**
@@ -408,8 +345,8 @@ function calculateCooldown(type) {
  * The backoff is per lane. A lane whose engine is sick should not slow the one
  * beside it that is fine.
  */
-async function lane(name, types, session, cooldownGroup) {
-  say('lane "' + name + '" -> ' + LAB + ' (' + types.join(', ') + ')' + (session ? ' as ' + session : ''));
+async function lane(name, types, cooldownGroup) {
+  say('lane "' + name + '" -> ' + LAB + ' (' + types.join(', ') + ')');
   let backoff = 0;
   while (!stopping) {
     try {
@@ -427,13 +364,12 @@ async function lane(name, types, session, cooldownGroup) {
       if (job) {
         const stop = beat(name, types, cooldownGroup);
         try {
-          await run(name, job, session, cooldownGroup);
+          await run(name, job, cooldownGroup);
         } finally {
           stop();
         }
-        // Human cooldown jitter between jobs to avoid machine-burst detection.
-        // A real user doesn't open temporary chats or send CLI queries 2ms after finishing one.
-        const cooldown = calculateCooldown(job.type);
+        // Optional pause between jobs (WORKER_COOLDOWN_MS).
+        const cooldown = calculateCooldown();
         if (cooldown > 0 && !stopping) {
           await new Promise((r) => setTimeout(r, cooldown));
         }
@@ -451,6 +387,13 @@ async function lane(name, types, session, cooldownGroup) {
 }
 
 say('worker "' + NAME + '" -> ' + LAB);
-// Promise.all rather than await in sequence: the lanes are the concurrency. If
-// one ever settles the process should end, which is what a rejection here does.
-await Promise.all(LANES.map((l) => lane(NAME + l.suffix, l.types, l.session, NAME + l.suffix)));
+if (!LANES.length) {
+  // Idle rather than exit: launchd's KeepAlive would restart an exiting process
+  // in a loop. Unload the LaunchAgent to make this go away.
+  say('WORKER_TYPES names only retired types (' + process.env.WORKER_TYPES + '); claiming nothing. Unload this LaunchAgent.');
+  setInterval(() => {}, 1 << 30);
+} else {
+  // Promise.all rather than await in sequence: the lanes are the concurrency. If
+  // one ever settles the process should end, which is what a rejection here does.
+  await Promise.all(LANES.map((l) => lane(NAME + l.suffix, l.types, NAME + l.suffix)));
+}

@@ -66,10 +66,9 @@
       This daemon is the SCAN worker, and only that.
 
       A daemon has no GUI session, and ego lite will not start without one, so
-      the ChatGPT lanes cannot run here — they run in a LaunchAgent that
-      starts with the desktop. But a claim with no types asks for ANY job, so
-      without this line the daemon happily takes a chatgpt.ask off the queue and
-      fails it with "no handler", stealing it from the wrapper worker that could
+      the fb, x and ads lanes cannot run here. But a claim with no types asks for
+      ANY job, so without this line the daemon would take an fb.* job off the
+      queue and fail it with "no handler", stealing it from the worker that could
       have answered. WORKER_TYPES collapses this process to the one lane it can
       actually serve.
     -->

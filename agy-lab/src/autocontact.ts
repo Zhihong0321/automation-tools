@@ -12,26 +12,22 @@ function modelName(): string {
   return model.split(/[:@/]/)[0] ?? model;
 }
 
-function chatgptModel(name: string): boolean {
-  return name.startsWith('chatgpt') || name.startsWith('openai') || name.startsWith('gpt') || /^o[134]/.test(name);
-}
-
 /**
  * Job type a live contact worker must claim.
  *
  * Pi is the in-hub worker: Tavily finds the pages, Pi (MiniMax) reads them for
  * people and contacts. A MiniMax or Tavily key owns the contact queue. Gemini and
- * agy names from before the Google ban route here too, so an old
- * CONTACT_RESEARCH_MODEL value cannot strand the queue on a worker that is gone.
+ * agy names from before the Google ban, and ChatGPT names from before that engine
+ * was removed, route here too, so an old CONTACT_RESEARCH_MODEL value cannot
+ * strand the queue on a worker that is gone.
  */
 export function contactResearchJobType(): string {
   const name = modelName();
-  if (chatgptModel(name)) return 'chatgpt.ask';
   if (
     process.env.MINIMAX_API_KEY?.trim() ||
     process.env.TAVILY_API_KEY?.trim() ||
     process.env.TAVILY_API_KEYS?.trim() ||
-    /^(pi|minimax|tavily|gemini|gamini|agy)/.test(name)
+    /^(pi|minimax|tavily|gemini|gamini|agy|chatgpt|openai|gpt|o[134])/.test(name)
   ) {
     return 'research.contact.pi';
   }

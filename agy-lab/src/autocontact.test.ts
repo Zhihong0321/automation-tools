@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as autoContact from './autocontact.ts';
 
 const company = (id: string) => ({ id, name: 'Co ' + id });
-const live = () => ['research.contact', 'chatgpt.ask'];
+const live = () => ['research.contact'];
 
 const ROUTING_ENV = ['CONTACT_RESEARCH_MODEL', 'MINIMAX_API_KEY', 'TAVILY_API_KEY', 'TAVILY_API_KEYS'] as const;
 
@@ -83,7 +83,7 @@ test('a leftover gemini or agy model name routes to the pi worker, not a retired
     });
   }
   withEnv({ CONTACT_RESEARCH_MODEL: 'chatgpt' }, () => {
-    assert.equal(autoContact.contactResearchJobType(), 'chatgpt.ask');
+    assert.equal(autoContact.contactResearchJobType(), 'research.contact.pi');
   });
 });
 

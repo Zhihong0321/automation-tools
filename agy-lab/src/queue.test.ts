@@ -8,9 +8,7 @@ test.beforeEach(() => {
   delete process.env.QUEUE_MAX_DEPTH;
   delete process.env.QUEUE_MAX_WAIT_MS;
   delete process.env.PI_MIN_GAP_MS;
-  delete process.env.CGPT_MIN_GAP_MS;
   delete process.env.PI_HOURLY_LIMIT;
-  delete process.env.CGPT_HOURLY_LIMIT;
 });
 
 test.afterEach(() => {
