@@ -3354,25 +3354,48 @@ export async function assignTamanLeadsToOwners(state?: string): Promise<{
   );
   for (const row of owners.rows) {
     const ids = await findTamanCompanyIds({ queryPlace: row.query_place ?? undefined, taman: row.taman });
-    if (!ids.length) continue;
-    const open = await sql<{ id: string }>(
-      `select id::text as id from company_data
-       where id = any($1::bigint[]) and merged_into is null
-         and (assigned_to is null or trim(assigned_to) = '')`,
-      [ids.map(Number)],
-    );
-    if (!open.rows.length) continue;
     try {
-      const res = await assignLeads(open.rows.map((r) => r.id), row.assigned_to);
-      if (!res.updated) continue;
+      const updated = await assignOpenLeads(ids, row.assigned_to);
+      if (!updated) continue;
       out.tamans++;
-      out.updated += res.updated;
-      out.byAgent[row.assigned_to] = (out.byAgent[row.assigned_to] ?? 0) + res.updated;
+      out.updated += updated;
+      out.byAgent[row.assigned_to] = (out.byAgent[row.assigned_to] ?? 0) + updated;
     } catch (err) {
       out.skipped.push({ taman: row.taman, reason: err instanceof Error ? err.message : String(err) });
     }
   }
   return out;
+}
+
+// A finished scan at an assigned taman hands its new leads to the taman's
+// telemarketer, matched on the scan's place the same way the migrate() backfill does.
+export async function assignScanLeadsToTamanOwner(publicId: string, place: string): Promise<{ taman: string; assignedTo: string; updated: number } | null> {
+  if (!configured() || !place.trim()) return null;
+  await migrate();
+  const owner = await sql<{ taman: string; assigned_to: string }>(
+    `select taman, assigned_to from taman_assignment
+     where lower(trim(coalesce(query_place, ''))) = lower(trim($1)) or lower(trim(taman)) = lower(trim($1))
+     order by (lower(trim(coalesce(query_place, ''))) = lower(trim($1))) desc, updated_at desc
+     limit 1`,
+    [place],
+  );
+  const row = owner.rows[0];
+  if (!row) return null;
+  const updated = await assignOpenLeads(await findTamanCompanyIds({ publicId }), row.assigned_to);
+  return { taman: row.taman, assignedTo: row.assigned_to, updated };
+}
+
+// Assign the leads among companyIds that nobody has yet; returns how many.
+async function assignOpenLeads(companyIds: string[], assignedTo: string): Promise<number> {
+  if (!companyIds.length) return 0;
+  const open = await sql<{ id: string }>(
+    `select id::text as id from company_data
+     where id = any($1::bigint[]) and merged_into is null
+       and (assigned_to is null or trim(assigned_to) = '')`,
+    [companyIds.map(Number)],
+  );
+  if (!open.rows.length) return 0;
+  return (await assignLeads(open.rows.map((r) => r.id), assignedTo)).updated;
 }
 
 export async function unassignTamanLeads(options: {
