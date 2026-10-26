@@ -3333,6 +3333,48 @@ export async function assignTamanLeads(options: {
   };
 }
 
+// Leads scanned at a taman after it was assigned stay unassigned: the backfill in
+// migrate() only runs at startup. This gives every unassigned lead at an assigned
+// taman to that taman's telemarketer. Leads already with someone are left alone,
+// and a taman whose telemarketer is gone is skipped, not fatal.
+export async function assignTamanLeadsToOwners(state?: string): Promise<{
+  tamans: number;
+  updated: number;
+  byAgent: Record<string, number>;
+  skipped: { taman: string; reason: string }[];
+}> {
+  const out = { tamans: 0, updated: 0, byAgent: {} as Record<string, number>, skipped: [] as { taman: string; reason: string }[] };
+  if (!configured()) return out;
+  await migrate();
+  const owners = await sql<{ taman: string; query_place: string | null; assigned_to: string }>(
+    `select taman, query_place, assigned_to from taman_assignment
+     where $1::text is null or lower(state) = lower($1)
+     order by taman`,
+    [state?.trim() || null],
+  );
+  for (const row of owners.rows) {
+    const ids = await findTamanCompanyIds({ queryPlace: row.query_place ?? undefined, taman: row.taman });
+    if (!ids.length) continue;
+    const open = await sql<{ id: string }>(
+      `select id::text as id from company_data
+       where id = any($1::bigint[]) and merged_into is null
+         and (assigned_to is null or trim(assigned_to) = '')`,
+      [ids.map(Number)],
+    );
+    if (!open.rows.length) continue;
+    try {
+      const res = await assignLeads(open.rows.map((r) => r.id), row.assigned_to);
+      if (!res.updated) continue;
+      out.tamans++;
+      out.updated += res.updated;
+      out.byAgent[row.assigned_to] = (out.byAgent[row.assigned_to] ?? 0) + res.updated;
+    } catch (err) {
+      out.skipped.push({ taman: row.taman, reason: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return out;
+}
+
 export async function unassignTamanLeads(options: {
   state?: string;
   taman: string;

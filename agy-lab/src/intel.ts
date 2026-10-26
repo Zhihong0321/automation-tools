@@ -3512,6 +3512,16 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
     return true;
   }
 
+  // One click on Lead Assignment: unassigned leads at assigned tamans go to the
+  // taman's telemarketer. Body: { state? } — every state when left out.
+  if (method === 'POST' && p === '/api/territories/assign-owners') {
+    const body = await ctx.readJson(req);
+    const result = await db.assignTamanLeadsToOwners(str(body.state).trim() || undefined);
+    console.log(`[territories] assigned ${result.updated} leads across ${result.tamans} tamans to their owners${result.skipped.length ? `, ${result.skipped.length} tamans skipped` : ''}`);
+    ctx.json(res, 200, result);
+    return true;
+  }
+
   if (method === 'POST' && p === '/api/territories/contact-research') {
     const body = await ctx.readJson(req);
     const taman = str(body.taman || body.name).trim();

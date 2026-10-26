@@ -435,6 +435,7 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
           </div>
           <button class="filter" type="button" onclick="selectAssignmentTele('all')" style="height:32px;padding:0 10px;font-size:9.5px;">Show All Leads</button>
           <button class="filter" type="button" onclick="selectAssignmentTele('unassigned')" style="height:32px;padding:0 10px;font-size:9.5px;color:var(--warn);border-color:var(--warn);background:#fffbeb;">View Unassigned →</button>
+          <button class="filter" id="assignOwnersBtn" type="button" onclick="assignTamanLeadsToOwners()" title="Give every unassigned lead at an assigned taman to that taman's telemarketer" style="height:32px;padding:0 10px;font-size:9.5px;color:var(--accent);border-color:var(--accent);">🏘️ Assign Taman Leads to Owners</button>
         </div>
       </div>
 
@@ -1263,6 +1264,25 @@ async function loadAssignmentView(){
   if(!state.token)return;
   await loadAssignmentAgents();
   await loadAssignmentLeads();
+}
+
+async function assignTamanLeadsToOwners(){
+  if(!confirm('Assign every unassigned lead at an assigned taman to that taman\'s telemarketer? Leads already with someone are not changed.'))return;
+  var btn=el('assignOwnersBtn');
+  var label=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent='Assigning…'}
+  try{
+    var res=await api('/api/territories/assign-owners',{method:'POST',body:JSON.stringify({})});
+    var who=Object.keys(res.byAgent||{}).map(function(k){return k+' '+res.byAgent[k]}).join(', ');
+    var msg=res.updated?('Assigned '+res.updated+' leads across '+res.tamans+' tamans'+(who?' ('+who+')':'')):'No unassigned leads at assigned tamans.';
+    if(res.skipped&&res.skipped.length)msg+=' · '+res.skipped.length+' tamans skipped: '+res.skipped.map(function(s){return s.taman}).join(', ');
+    showToast(msg);
+    await loadAssignmentView();
+  }catch(err){
+    if(!authLost(err))showToast('Failed to assign taman leads: '+err.message);
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent=label}
+  }
 }
 
 async function loadAssignmentAgents(){
