@@ -45,7 +45,7 @@ export const GROUPS: Record<string, Group> = {
       'mr\\.? ?diy', 'daiso', 'watsons', 'guardian', 'caring pharmacy', 'big pharmacy', 'alpro pharmacy', 'aa pharmacy',
       'health lane', 'am pm pharmacy', 'senheng', 'harvey norman', 'senq', 'uniqlo', 'padini', 'brands outlet',
       'the body shop', 'bata', 'popular book', 'mph', 'toys ?.?r.? ?us', 'poh kong', 'habib jewel', 'wah chan', 'tomei',
-      'sk jewellery', 'sasa', 'crocs']),
+      'sk jewellery', 'sasa', 'crocs', 'lionmas']),
   },
   chain_fnb: {
     categories: ['Fast food restaurant'],
