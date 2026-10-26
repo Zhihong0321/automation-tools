@@ -1875,8 +1875,20 @@ export interface LeadStats {
   not_interested: number;
   do_not_call: number;
   contacts_found: number;
+  deep_researched: number;
   hidden: number;
 }
+
+/** A finished contact research report, `crep` being the latest one. */
+const DEEP_RESEARCHED = `(crep.public_id is not null and crep.status in ('completed', 'partial'))`;
+const jsonCount = (path: string) => `case when jsonb_typeof(${path}) = 'array' then jsonb_array_length(${path}) else 0 end`;
+/**
+ * A lead we can reach: the phone Maps gave us, or a phone or email that contact
+ * research found. A finished report that found nothing is not a contact.
+ */
+const CONTACT_FOUND = `(nullif(trim(c.phone), '') is not null or (${DEEP_RESEARCHED} and (`
+  + [`crep.result->'phone_contacts'`, `crep.result->'contacts'`, `crep.result->'email_contacts'`, `crep.result->'emails'`].map(jsonCount).join(' + ')
+  + ` + coalesce((crep.result->'preview'->>'phones')::int, 0) + coalesce((crep.result->'preview'->>'emails')::int, 0)) > 0))`;
 
 export async function getLeadStats(): Promise<LeadStats> {
   if (!configured()) {
@@ -1889,6 +1901,7 @@ export async function getLeadStats(): Promise<LeadStats> {
       not_interested: 0,
       do_not_call: 0,
       contacts_found: 0,
+      deep_researched: 0,
       hidden: 0,
     };
   }
@@ -1902,6 +1915,7 @@ export async function getLeadStats(): Promise<LeadStats> {
     not_interested: string;
     do_not_call: string;
     contacts_found: string;
+    deep_researched: string;
     hidden: string;
   }>(
     `select
@@ -1912,11 +1926,12 @@ export async function getLeadStats(): Promise<LeadStats> {
        count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'interested')::text as interested,
        count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'not_interested')::text as not_interested,
        count(*) filter (where coalesce(c.is_hidden, false) = false and c.lead_status = 'do_not_call')::text as do_not_call,
-       count(distinct c.id) filter (where coalesce(c.is_hidden, false) = false and crep.public_id is not null and crep.status in ('completed', 'partial'))::text as contacts_found,
+       count(*) filter (where coalesce(c.is_hidden, false) = false and ${CONTACT_FOUND})::text as contacts_found,
+       count(*) filter (where coalesce(c.is_hidden, false) = false and ${DEEP_RESEARCHED})::text as deep_researched,
        count(*) filter (where coalesce(c.is_hidden, false) = true)::text as hidden
      from company_data c
      left join lateral (
-       select public_id, status from published_report
+       select public_id, status, result from published_report
        where company_id = c.id and report_type = 'contact_research'
        order by version desc, created_at desc limit 1
      ) crep on true
@@ -1932,6 +1947,7 @@ export async function getLeadStats(): Promise<LeadStats> {
     not_interested: Number(statsRow?.not_interested ?? 0),
     do_not_call: Number(statsRow?.do_not_call ?? 0),
     contacts_found: Number(statsRow?.contacts_found ?? 0),
+    deep_researched: Number(statsRow?.deep_researched ?? 0),
     hidden: Number(statsRow?.hidden ?? 0),
   };
 }
@@ -2009,6 +2025,7 @@ export async function listLeads(options: {
         not_interested: 0,
         do_not_call: 0,
         contacts_found: 0,
+        deep_researched: 0,
         hidden: 0,
       },
       limit: Math.min(Math.max(Math.round(options.limit ?? 50), 1), 100),
@@ -2053,7 +2070,9 @@ export async function listLeads(options: {
   }
 
   if (options.researchStatus === 'contacts_found') {
-    whereConditions.push(`crep.public_id is not null and crep.status in ('completed', 'partial')`);
+    whereConditions.push(CONTACT_FOUND);
+  } else if (options.researchStatus === 'deep_researched') {
+    whereConditions.push(DEEP_RESEARCHED);
   } else if (options.researchStatus === 'no_contacts') {
     whereConditions.push(`crep.public_id is null`);
   } else if (options.researchStatus === 'researched') {
@@ -2161,7 +2180,7 @@ export async function listLeads(options: {
          order by version desc, created_at desc limit 1
        ) rep on true
        left join lateral (
-         select public_id, status from published_report
+         select public_id, status, result from published_report
          where company_id = c.id and report_type = 'contact_research'
          order by version desc, created_at desc limit 1
        ) crep on true

@@ -98,6 +98,7 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
 .vip.contact-vip{background:#0a6b47;color:#fff;border-color:#0a6b47;font-weight:750}
 .vip.contact-vip:hover{background:#085739;border-color:#085739}
 .result-summary.lead-summary-grid{grid-template-columns:repeat(6,1fr)}
+#leadsSummary.result-summary.lead-summary-grid{grid-template-columns:repeat(7,1fr)}
 .lead-check{width:18px;height:18px;margin-top:3px;cursor:pointer;accent-color:var(--accent)}
 .branch-tag{display:inline-block;padding:2px 6px;margin-left:6px;font:600 9px/1 var(--mono);background:var(--soft);color:var(--muted);border-radius:3px;text-transform:uppercase}
 .status-select{height:34px;padding:0 8px;font:700 9px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--line);background:var(--sheet);border-radius:3px;cursor:pointer}
@@ -144,7 +145,7 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
 .modal-dialog{background:#fff;border-radius:8px;box-shadow:0 10px 25px rgba(0,0,0,.15);max-width:440px;width:100%;padding:22px 24px;border:1px solid var(--line)}
 .modal-head{display:flex;align-items:start;justify-content:space-between;gap:12px;border-bottom:1px solid var(--soft);padding-bottom:12px}
 @media(max-width:820px){
-  .result-summary.lead-summary-grid{grid-template-columns:repeat(2,1fr)}
+  .result-summary.lead-summary-grid,#leadsSummary.result-summary.lead-summary-grid{grid-template-columns:repeat(2,1fr)}
   .lead-row{grid-template-columns:26px 1fr;gap:12px 10px;padding:18px 0}
   .lead-row.has-contact-research{margin:0 -8px;padding:18px 8px}
   .lead-row>div:nth-child(3),.lead-row>div:nth-child(4),.lead-row>div:nth-child(5){grid-column:2}
@@ -815,7 +816,8 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
         <div class="metric"><strong id="statUnassigned" style="color:var(--accent);">0</strong><span>Unassigned Leads</span></div>
         <div class="metric"><strong id="statAssigned">0</strong><span>Assigned</span></div>
         <div class="metric"><strong id="statContacted" style="color:var(--ok);">0</strong><span>Contacted / Won</span></div>
-        <div class="metric" onclick="switchView('contacts')" style="cursor:pointer;" title="View Contacts Master list"><strong id="statContacts" style="color:var(--ok);">0</strong><span>Contacts Found →</span></div>
+        <div class="metric" onclick="setLeadResearchFilter('contacts_found')" style="cursor:pointer;" title="Leads with a phone from Google Maps, or a phone or email found by contact research"><strong id="statContacts" style="color:var(--ok);">0</strong><span>Contacts Found →</span></div>
+        <div class="metric" onclick="switchView('contacts')" style="cursor:pointer;" title="Leads whose deep contact research finished; opens the Contacts Master list"><strong id="statDeepResearched">0</strong><span>Deep Contact Research Run →</span></div>
         <div class="metric" onclick="setLeadStatusFilter('hidden')" style="cursor:pointer;" title="View hidden companies"><strong id="statHidden" style="color:var(--muted);">0</strong><span>Hidden Leads</span></div>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin:24px 0 16px;">
@@ -828,8 +830,9 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
           </select>
           <select class="input select" id="leadResearchFilter" onchange="applyLeadFilter()" style="max-width:190px;height:40px;font-size:13px;">
             <option value="all">All Research</option>
-            <option value="contacts_found">📞 Contacts Found (Highlighted)</option>
-            <option value="no_contacts">No Contact Research</option>
+            <option value="contacts_found">📞 Contacts Found (Maps or research)</option>
+            <option value="deep_researched">Deep Contact Research Run</option>
+            <option value="no_contacts">No Deep Contact Research</option>
             <option value="researched">Dossier Ready</option>
             <option value="unresearched">No Dossier</option>
           </select>
@@ -2488,8 +2491,9 @@ function renderAdsLeads(leads){
   }).join('');
 }
 async function loadLeads(){if(!state.token)return;var wrapper=el('leadTableWrapper');if(!wrapper)return;var q='/api/leads?limit='+leadState.limit+'&offset='+(leadState.page*leadState.limit);if(leadState.statusFilter!=='all')q+='&status='+encodeURIComponent(leadState.statusFilter);if(leadState.search)q+='&search='+encodeURIComponent(leadState.search);if(leadState.nameKeyword)q+='&nameKeyword='+encodeURIComponent(leadState.nameKeyword);if(leadState.teleFilter!=='all')q+='&assignedTo='+encodeURIComponent(leadState.teleFilter);if(leadState.researchFilter!=='all')q+='&researchStatus='+encodeURIComponent(leadState.researchFilter);wrapper.innerHTML='<div class="empty">Loading company master list…</div>';try{var body=await api(q);leadState.leads=body.leads||[];leadState.total=body.total||0;renderLeadsSummary(body.stats||{});renderLeads(body.leads||[]);renderLeadsPagination(body.total||0)}catch(err){wrapper.innerHTML='<div class="empty error">'+esc(err.message)+'</div>';if(!authLost(err))showToast(err.message)}}
-function renderLeadsSummary(stats){var sTotal=el('statTotal');var sUnassigned=el('statUnassigned');var sAssigned=el('statAssigned');var sContacted=el('statContacted');var sContacts=el('statContacts');var sHidden=el('statHidden');if(sTotal)sTotal.textContent=stats.total||0;if(sUnassigned)sUnassigned.textContent=stats.unassigned||0;if(sAssigned)sAssigned.textContent=stats.assigned||0;if(sContacted)sContacted.textContent=(stats.contacted||0)+(stats.interested||0);if(sContacts)sContacts.textContent=stats.contacts_found||0;if(sHidden)sHidden.textContent=stats.hidden||0;var cAll=el('countAll');var cUn=el('countUnassigned');var cAss=el('countAssigned');var cCon=el('countContacted');var cInt=el('countInterested');var cNot=el('countNotInterested');var cDnc=el('countDnc');var cHid=el('countHidden');if(cAll)cAll.textContent=stats.total||0;if(cUn)cUn.textContent=stats.unassigned||0;if(cAss)cAss.textContent=stats.assigned||0;if(cCon)cCon.textContent=stats.contacted||0;if(cInt)cInt.textContent=stats.interested||0;if(cNot)cNot.textContent=stats.not_interested||0;if(cDnc)cDnc.textContent=stats.do_not_call||0;if(cHid)cHid.textContent=stats.hidden||0}
+function renderLeadsSummary(stats){var sTotal=el('statTotal');var sUnassigned=el('statUnassigned');var sAssigned=el('statAssigned');var sContacted=el('statContacted');var sContacts=el('statContacts');var sHidden=el('statHidden');if(sTotal)sTotal.textContent=stats.total||0;if(sUnassigned)sUnassigned.textContent=stats.unassigned||0;if(sAssigned)sAssigned.textContent=stats.assigned||0;if(sContacted)sContacted.textContent=(stats.contacted||0)+(stats.interested||0);if(sContacts)sContacts.textContent=stats.contacts_found||0;var sDeep=el('statDeepResearched');if(sDeep)sDeep.textContent=stats.deep_researched||0;if(sHidden)sHidden.textContent=stats.hidden||0;var cAll=el('countAll');var cUn=el('countUnassigned');var cAss=el('countAssigned');var cCon=el('countContacted');var cInt=el('countInterested');var cNot=el('countNotInterested');var cDnc=el('countDnc');var cHid=el('countHidden');if(cAll)cAll.textContent=stats.total||0;if(cUn)cUn.textContent=stats.unassigned||0;if(cAss)cAss.textContent=stats.assigned||0;if(cCon)cCon.textContent=stats.contacted||0;if(cInt)cInt.textContent=stats.interested||0;if(cNot)cNot.textContent=stats.not_interested||0;if(cDnc)cDnc.textContent=stats.do_not_call||0;if(cHid)cHid.textContent=stats.hidden||0}
 function setLeadStatusFilter(status){leadState.statusFilter=status;leadState.page=0;document.querySelectorAll('[data-lead-status]').forEach(function(node){node.classList.toggle('active',node.getAttribute('data-lead-status')===status)});loadLeads()}
+function setLeadResearchFilter(value){var researchSelect=el('leadResearchFilter');if(researchSelect)researchSelect.value=value;applyLeadFilter()}
 function applyLeadFilter(){var searchInput=el('leadSearch');var teleSelect=el('leadTeleFilter');var researchSelect=el('leadResearchFilter');leadState.search=searchInput?searchInput.value.trim():'';leadState.teleFilter=teleSelect?teleSelect.value:'all';leadState.researchFilter=researchSelect?researchSelect.value:'all';leadState.page=0;loadLeads()}
 function prevLeadsPage(){if(leadState.page>0){leadState.page--;loadLeads()}}
 function nextLeadsPage(){if((leadState.page+1)*leadState.limit<leadState.total){leadState.page++;loadLeads()}}

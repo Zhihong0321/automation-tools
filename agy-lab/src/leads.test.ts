@@ -72,7 +72,10 @@ test('leads with contact research are highlighted with contact numbers found', (
 
   // Filter option includes contacts_found
   assert.match(html, /value="contacts_found"/);
-  assert.match(html, /Contacts Found \(Highlighted\)/);
+  assert.match(html, /Contacts Found \(Maps or research\)/);
+  // Deep research has its own tile and filter, so it is never passed off as contacts found
+  assert.match(html, /id="statDeepResearched"/);
+  assert.match(html, /value="deep_researched"/);
 
   // CSS classes for highlight and badge
   assert.match(html, /\.lead-row\.has-contact-research/);
