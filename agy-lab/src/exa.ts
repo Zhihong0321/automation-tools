@@ -42,10 +42,61 @@ export async function flush(): Promise<void> {
   }
 }
 
+// Keys saved as "us:<key>" are called through the Exa proxy in US West
+// (G:\exa-api-proxy, Railway service exa-proxy), so Exa sees those calls from
+// the US, not from this server. They share the one pool with the direct keys.
+// The proxy's URL and token are one row of kind 'exa_proxy', saved as JSON
+// {url, token} through /api/contact-keys.
+export const PROXY_PREFIX = 'us:';
+const DIRECT_API = 'https://api.exa.ai';
+
+export type ProxyConfig = { url: string; token: string };
+let proxyConfig: ProxyConfig | null = null;
+
+export function parseProxy(saved: unknown): ProxyConfig | null {
+  let p: { url?: unknown; token?: unknown };
+  try { p = typeof saved === 'string' ? JSON.parse(saved) : (saved as typeof p); } catch { return null; }
+  const url = String(p?.url ?? '').trim().replace(/\/+$/, '');
+  const token = String(p?.token ?? '').trim();
+  return /^https?:\/\/\S+$/.test(url) && token ? { url, token } : null;
+}
+
+export function proxy(): ProxyConfig | null {
+  return proxyConfig;
+}
+
+export function setProxy(config: ProxyConfig | null): void {
+  proxyConfig = config;
+}
+
+export function via(secret: string): 'us' | 'direct' {
+  return secret.startsWith(PROXY_PREFIX) ? 'us' : 'direct';
+}
+
+/** Where one key's call goes, with its headers. A us: key with no proxy saved gets a 'quota' error, so only that key rests. */
+export function endpoint(secret: string, path: string): { url: string; headers: Record<string, string> } {
+  if (via(secret) === 'direct') return { url: `${DIRECT_API}/${path}`, headers: { 'x-api-key': secret, 'content-type': 'application/json' } };
+  if (!proxyConfig) throw Object.assign(new Error('exa proxy is not saved: POST exaProxy {url, token} to /api/contact-keys'), { code: 'quota', provider: 'exa' });
+  return {
+    url: `${proxyConfig.url}/${path}`,
+    headers: { 'x-api-key': secret.slice(PROXY_PREFIX.length), 'x-proxy-token': proxyConfig.token, 'content-type': 'application/json' },
+  };
+}
+
+/** What the proxy says about its keys (GET /usage): spend, estimated credit left, resting keys. */
+export async function proxyUsage(fetchImpl: FetchImpl = fetch): Promise<Record<string, any> | null> {
+  if (!proxyConfig) return null;
+  const res = await fetchImpl(`${proxyConfig.url}/usage`, { headers: { 'x-proxy-token': proxyConfig.token }, signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error(`exa proxy /usage answered ${res.status}`);
+  return res.json();
+}
+
 export async function loadKeys(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
   let keys: string[] = [];
   try {
-    keys = (await db.listGeminiContactKeys()).filter((row) => row.kind === 'exa').map((row) => row.secret);
+    const rows = await db.listGeminiContactKeys();
+    keys = rows.filter((row) => row.kind === 'exa').map((row) => row.secret);
+    proxyConfig = parseProxy(rows.find((row) => row.kind === 'exa_proxy')?.secret ?? '');
   } catch { /* database table created on migrate; caller without db uses env */ }
   if (!keys.length) {
     keys = String(env.EXA_API_KEYS ?? env.EXA_API_KEY ?? '').split(/[,\n]/).map((k) => k.trim()).filter(Boolean);
@@ -79,11 +130,12 @@ export async function searchWithKey(query: string, apiKey: string, opts: SearchO
 }
 
 async function searchOnce(query: string, apiKey: string, opts: SearchOpts): Promise<{ hits: SearchHit[]; dollars: number }> {
+  const target = endpoint(apiKey, 'search');
   let res: Response;
   try {
-    res = await (opts.fetchImpl ?? fetch)('https://api.exa.ai/search', {
+    res = await (opts.fetchImpl ?? fetch)(target.url, {
       method: 'POST',
-      headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
+      headers: target.headers,
       body: JSON.stringify({
         query,
         numResults: opts.numResults ?? 8,

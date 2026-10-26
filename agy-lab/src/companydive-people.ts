@@ -19,7 +19,6 @@ import * as reportdb from './reportdb.ts';
 import { ask, askJson, type DiveRow, type DiveResult, type LlmUse, type Warn } from './companydive.ts';
 
 export const MAX_EXA_CALLS = 20;
-const API = 'https://api.exa.ai';
 
 export type ExaQuery = { query: string; kind: 'people' | 'web'; purpose?: string };
 
@@ -69,11 +68,20 @@ export async function exaSearch(body: Record<string, unknown>, fetchImpl: typeof
   for (let attempt = 0; attempt < tries; attempt++) {
     if (!exa.available()) break;
     const lease = await exa.pool.acquire();
+    let target: ReturnType<typeof exa.endpoint>;
+    try {
+      target = exa.endpoint(lease.secret, 'search');
+    } catch (cause) {
+      exa.record(lease.secret, { error: (cause as Error).message });
+      exa.releaseFor(lease, cause);
+      lastErr = (cause as Error).message;
+      continue;
+    }
     let res: Response;
     try {
-      res = await fetchImpl(`${API}/search`, {
+      res = await fetchImpl(target.url, {
         method: 'POST',
-        headers: { 'x-api-key': lease.secret, 'content-type': 'application/json' },
+        headers: target.headers,
         body: JSON.stringify(body),
       });
     } catch (cause) {

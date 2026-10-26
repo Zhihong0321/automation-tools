@@ -2,7 +2,8 @@
 // spends has left, from the provider itself wherever it will say.
 //
 //   Tavily        GET /usage per key (tavily.ts refreshes it every ten minutes)
-//   Exa           no usage endpoint; the hub counts costDollars per key (exa.record)
+//   Exa           no usage endpoint; the hub counts costDollars per key (exa.record),
+//                 and the US proxy's GET /usage counts its own keys' spend
 //   scraper.tech  no usage endpoint; the hub counts requests (maps_usage) plus the finder's
 //   MiniMax       GET /v1/api/openplatform/coding_plan/remains, the Token Plan windows
 //   Extract LLM   CONTACT_LLM_URL's /dashboard/billing/{subscription,usage} (one-api style)
@@ -133,6 +134,7 @@ async function exaKeys() {
     const s = spend.get(k.secret);
     return {
       tail: k.tail,
+      via: exa.via(k.secret),
       cooling: k.cooling,
       spentUsd: s ? Math.round(s.dollars * 1000) / 1000 : 0,
       calls: s?.calls ?? 0,
@@ -145,7 +147,27 @@ async function exaKeys() {
   });
   const usable = keys.filter((k) => !k.cooling).length;
   const level: Level = !keys.length ? 'unknown' : !usable ? 'bad' : usable < keys.length / 2 ? 'warn' : 'ok';
-  return { level, keys: keys.length, usable, spentUsd: Math.round(keys.reduce((n, k) => n + k.spentUsd, 0) * 100) / 100, perKey: keys };
+  // One pool, split by where the call leaves from: this server, or the US proxy.
+  const split = (via: 'direct' | 'us') => {
+    const some = keys.filter((k) => k.via === via);
+    return { keys: some.length, usable: some.filter((k) => !k.cooling).length, spentUsd: Math.round(some.reduce((n, k) => n + k.spentUsd, 0) * 100) / 100 };
+  };
+  return {
+    level, keys: keys.length, usable, spentUsd: Math.round(keys.reduce((n, k) => n + k.spentUsd, 0) * 100) / 100,
+    direct: split('direct'), us: split('us'), proxy: await cached('exa-proxy', exaProxy), perKey: keys,
+  };
+}
+
+/** The US proxy's own count: what its keys spent and an estimate of the credit they have left. */
+async function exaProxy() {
+  const saved = exa.proxy();
+  if (!saved) return null;
+  try {
+    const usage = await exa.proxyUsage();
+    return { url: saved.url, reachable: true, creditAssumedUsd: usage?.creditAssumedUsd ?? null, ...(usage?.totals ?? {}) };
+  } catch (err) {
+    return { url: saved.url, reachable: false, error: (err as Error).message };
+  }
 }
 
 async function scraperTech() {

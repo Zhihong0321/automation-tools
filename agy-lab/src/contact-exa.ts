@@ -17,7 +17,6 @@ import * as exa from './exa.ts';
 
 type FetchImpl = typeof fetch;
 
-const API = 'https://api.exa.ai';
 const SEARCH_RESULTS = 10;
 const PAGE_CHARS = 8_000;
 const MAX_SEARCH_PAGES = 8;
@@ -52,11 +51,12 @@ async function call(endpoint: string, body: Record<string, unknown>, apiKey: str
 
 /** Quota and rate-limit errors carry the codes exa.releaseFor reads. */
 async function callOnce(endpoint: string, body: Record<string, unknown>, apiKey: string, fetchImpl: FetchImpl, timeoutMs: number): Promise<ExaAnswer> {
+  const target = exa.endpoint(apiKey, endpoint);
   let res: Response;
   try {
-    res = await fetchImpl(`${API}/${endpoint}`, {
+    res = await fetchImpl(target.url, {
       method: 'POST',
-      headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
+      headers: target.headers,
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
     });
