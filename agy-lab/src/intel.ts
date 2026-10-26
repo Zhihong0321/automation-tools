@@ -1776,9 +1776,11 @@ async function runBusinessSearch(publicId: string, reportId: string, request: Re
       completed: true,
     });
     // Mark the new leads before anything can queue research on them.
-    void db.applyLeadBlacklist().catch((e: Error) => console.warn('[blacklist] could not check new leads: ' + e.message));
-    // A taman already given to a telemarketer keeps getting its new leads.
-    void db.assignScanLeadsToTamanOwner(publicId, place)
+    // A taman already given to a telemarketer then gets its new leads, apart
+    // from the ones the blacklist just made do-not-call.
+    void db.applyLeadBlacklist()
+      .catch((e: Error) => console.warn('[blacklist] could not check new leads: ' + e.message))
+      .then(() => db.assignScanLeadsToTamanOwner(publicId, place))
       .then((r) => { if (r?.updated) console.log(`[territories] ${r.updated} new leads at ${r.taman} assigned to ${r.assignedTo}`); })
       .catch((e: Error) => console.warn(`[territories] could not assign new leads from ${place} to the taman's telemarketer: ${e.message}`));
   } catch (err) {

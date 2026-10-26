@@ -648,7 +648,9 @@ export function migrate(): Promise<void> {
       join search_report_company sc on (sc.report_id = r.id or sc.report_id = r.source_search_report_id)
       where c.id = sc.company_id
         and c.merged_into is null
-        and (c.assigned_to is null or trim(c.assigned_to) = '');
+        and (c.assigned_to is null or trim(c.assigned_to) = '')
+        and c.blacklist_checked_at is not null and c.blacklist_reason is null
+        and coalesce(c.lead_status, 'unassigned') <> 'do_not_call';
 
       insert into telemarketer (uid, name, phone, email, notes, active)
       values ('TM-SARAH', 'Sarah Tan', '+6012-3456789', 'sarah@example.com', 'Demo telemarketer for API testing and documentation', true)
@@ -1201,26 +1203,47 @@ export async function requeueAbandonedContactReports(since: string): Promise<num
  * so a changed rule reaches old leads); otherwise only leads never checked,
  * which is every lead a scan or lookup added since. The backlog only takes
  * checked leads, so an unchecked one cannot slip into research first.
+ *
+ * A new lead (never checked, nobody's, still unassigned) that is blacklisted
+ * also becomes do-not-call, so it never reaches a telemarketer. Old leads keep
+ * their status when a changed rule re-checks them.
  */
-export async function applyLeadBlacklist(opts: { all?: boolean } = {}): Promise<{ checked: number; blacklisted: number }> {
+export async function applyLeadBlacklist(opts: { all?: boolean } = {}): Promise<{ checked: number; blacklisted: number; doNotCall: number }> {
   await migrate();
-  const rows = await sql<{ id: string; name: string | null; category: string | null }>(
-    `select id::text, name, category from company_data
+  const rows = await sql<{ id: string; name: string | null; category: string | null; fresh: boolean }>(
+    `select id::text, name, category,
+       (blacklist_checked_at is null and coalesce(lead_status, 'unassigned') = 'unassigned'
+        and coalesce(trim(assigned_to), '') = '') as fresh
+     from company_data
      where merged_into is null${opts.all ? '' : ' and blacklist_checked_at is null'}`,
   );
   let blacklisted = 0;
+  let doNotCall = 0;
   for (let start = 0; start < rows.rows.length; start += 1000) {
     const batch = rows.rows.slice(start, start + 1000);
     const reasons = batch.map((r) => blacklistReason(r.name, r.category));
     blacklisted += reasons.filter(Boolean).length;
-    await sql(
-      `update company_data c set blacklist_reason = v.reason, blacklist_checked_at = now()
-       from unnest($1::bigint[], $2::text[]) as v(id, reason)
-       where c.id = v.id`,
-      [batch.map((r) => Number(r.id)), reasons],
+    const res = await sql<{ id: string; reason: string; made_dnc: boolean }>(
+      `update company_data c set blacklist_reason = v.reason, blacklist_checked_at = now(),
+         lead_status = case when v.dnc and c.blacklist_checked_at is null then 'do_not_call' else c.lead_status end,
+         lead_updated_at = case when v.dnc and c.blacklist_checked_at is null then now() else c.lead_updated_at end
+       from unnest($1::bigint[], $2::text[], $3::boolean[]) as v(id, reason, dnc)
+       where c.id = v.id
+       returning c.id::text as id, v.reason, (v.dnc and c.lead_status = 'do_not_call') as made_dnc`,
+      [batch.map((r) => Number(r.id)), reasons, batch.map((r, i) => r.fresh && reasons[i] != null)],
     );
+    const made = res.rows.filter((r) => r.made_dnc);
+    doNotCall += made.length;
+    if (made.length) {
+      await sql(
+        `insert into lead_activity_log (company_id, action, previous_status, new_status, notes, is_mock, created_at)
+         select v.id, 'status_change', 'unassigned', 'do_not_call', 'Blacklist: ' || v.reason, false, now()
+         from unnest($1::bigint[], $2::text[]) as v(id, reason)`,
+        [made.map((r) => Number(r.id)), made.map((r) => r.reason)],
+      ).catch(() => {});
+    }
   }
-  return { checked: rows.rows.length, blacklisted };
+  return { checked: rows.rows.length, blacklisted, doNotCall };
 }
 
 /**
@@ -3386,12 +3409,16 @@ export async function assignScanLeadsToTamanOwner(publicId: string, place: strin
 }
 
 // Assign the leads among companyIds that nobody has yet; returns how many.
+// Blacklisted and do-not-call leads are never handed out, so new leads are
+// checked against the blacklist first.
 async function assignOpenLeads(companyIds: string[], assignedTo: string): Promise<number> {
   if (!companyIds.length) return 0;
+  await applyLeadBlacklist();
   const open = await sql<{ id: string }>(
     `select id::text as id from company_data
      where id = any($1::bigint[]) and merged_into is null
-       and (assigned_to is null or trim(assigned_to) = '')`,
+       and (assigned_to is null or trim(assigned_to) = '')
+       and blacklist_reason is null and coalesce(lead_status, 'unassigned') <> 'do_not_call'`,
     [companyIds.map(Number)],
   );
   if (!open.rows.length) return 0;

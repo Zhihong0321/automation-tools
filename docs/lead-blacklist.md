@@ -120,6 +120,7 @@ What it is **not** kept out of:
 
 - **2026-10-26: petrol stations are no longer blacklisted.** The team has petrol station clients. The Petrol Station and Gas station categories and the station brand words (petronas, shell, petron, caltex, bhpetrol) were removed, and the group was renamed `telco_courier`. 334 leads became researchable. A chain shop at a station still matches its own chain: "Subway @ Caltex" is `chain_fnb` and "FamilyMart Petron" is `chain_store`.
 - **2026-10-26: Lionmas is blacklisted** (`chain_store`), a furniture chain. Econsave and AEON were already in `hypermarket_mall`. All Econsave, AEON Big and Lionmas leads were also set to do-not-call with the Leads Master keyword rule, so telemarketers stop getting them.
+- **2026-10-26: new blacklisted leads become do-not-call.** A lead the blacklist checks for the first time, unassigned and with nobody, is set to do-not-call as well as kept out of research, with a "Blacklist: <group>" entry in the lead activity log. Blacklisted and do-not-call leads are never auto-assigned: not by a finished scan at an assigned taman, not by the Assign Taman Leads to Owners button, and not by the startup backfill. Old leads keep their status when a changed rule re-checks them.
 
 ## Changing the rules
 
