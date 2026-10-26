@@ -25,6 +25,17 @@ test('one chat call returns the answer', async () => {
   assert.equal(sent.temperature, 0);
 });
 
+test('half an emoji left by a page cut is replaced, not sent', async () => {
+  let body = '';
+  const fetchImpl = (async (_url: string, init: RequestInit) => {
+    body = String(init.body);
+    return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '{}' } }] }));
+  }) as unknown as typeof fetch;
+  await ask('call us 📞'.slice(0, -1), {}, cfg, fetchImpl);
+  assert.doesNotMatch(body, /\\ud83d/i);
+  assert.equal(JSON.parse(body).messages[0].content, 'call us �');
+});
+
 test('failures carry the codes the extract retry and lane cooldown read', async () => {
   const code = async (fetchImpl: typeof fetch) => {
     try { await ask('x', { maxTokens: 10 }, cfg, fetchImpl); return 'ok'; } catch (e) { return (e as { code?: string }).code; }

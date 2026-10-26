@@ -37,7 +37,9 @@ export async function ask(
       headers: { authorization: 'Bearer ' + cfg.key, 'content-type': 'application/json' },
       body: JSON.stringify({
         model: cfg.model,
-        messages: [{ role: 'user', content: prompt }],
+        // Page text cut mid-emoji leaves half a surrogate pair, and Vectide
+        // rejects the whole request with HTTP 400 VectorTide_invalid_request.
+        messages: [{ role: 'user', content: prompt.toWellFormed() }],
         temperature: 0,
         ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
       }),
