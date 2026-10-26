@@ -9,11 +9,23 @@
 // already has them: EE_AUTO_LAB_TOKEN, SCRAPER_TECH_KEY, ZM_AI_FIXED_KEY,
 // EXA_API_KEY, BRAVE_SEARCH_API_KEY.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const OUT = path.join(HERE, 'out');
+export const SECTIONS = path.join(HERE, 'sections');
+// Lane outputs and caches. On this machine: agy-lab/scripts/dive-deeper/out (gitignored).
+// In the hub's container the scripts folder is not shipped, so a temp folder; the hub keeps
+// what matters in the dive_deeper table.
+const LOCAL_OUT = path.join(HERE, '..', '..', 'scripts', 'dive-deeper', 'out');
+export const OUT = process.env.DD_OUT_DIR
+  ?? (fs.existsSync(path.dirname(LOCAL_OUT)) ? LOCAL_OUT : path.join(os.tmpdir(), 'dive-deeper'));
+
+/** The hub plugs in its own key sources and Exa route (its keys can sit behind a proxy). */
+type Hooks = { secret?: (name: string) => string | undefined; exaSearch?: (body: Record<string, unknown>) => Promise<Response> };
+let hooks: Hooks = {};
+export function configure(h: Hooks): void { hooks = { ...hooks, ...h }; }
 const VAULT = process.env.VAULT_PATH ?? 'D:/Tools/my-vault/vault.json';
 const LAB = (process.env.LAB_URL ?? 'https://ee-auto.up.railway.app').replace(/\/+$/, '');
 // deepseek goes to Vectide (the 1B-token pack, as the hub does since 2026-10-26); anything else
@@ -43,7 +55,7 @@ function vault(): Cred[] {
 }
 
 export function secret(name: string): string {
-  return (process.env[name] ?? vault().find((c) => c.name === name)?.secret ?? '').trim();
+  return (process.env[name] ?? hooks.secret?.(name) ?? vault().find((c) => c.name === name)?.secret ?? '').trim();
 }
 
 export type Finding = {
@@ -151,18 +163,21 @@ export function makeCtx(diveId: string, section: string, lane: string) {
   async function exa(query: string, opts: { numResults?: number; text?: boolean | number; type?: string; includeDomains?: string[]; startPublishedDate?: string } = {}): Promise<any[]> {
     meter.exa.calls++;
     try {
-      const res = await fetch('https://api.exa.ai/search', {
-        method: 'POST',
-        headers: { 'x-api-key': secret('EXA_API_KEY'), 'content-type': 'application/json' },
-        body: JSON.stringify({
-          query,
-          numResults: opts.numResults ?? 10,
-          type: opts.type ?? 'auto',
-          ...(opts.includeDomains ? { includeDomains: opts.includeDomains } : {}),
-          ...(opts.startPublishedDate ? { startPublishedDate: opts.startPublishedDate } : {}),
-          ...(opts.text ? { contents: { text: typeof opts.text === 'number' ? { maxCharacters: opts.text } : true } } : {}),
-        }),
-      });
+      const body = {
+        query,
+        numResults: opts.numResults ?? 10,
+        type: opts.type ?? 'auto',
+        ...(opts.includeDomains ? { includeDomains: opts.includeDomains } : {}),
+        ...(opts.startPublishedDate ? { startPublishedDate: opts.startPublishedDate } : {}),
+        ...(opts.text ? { contents: { text: typeof opts.text === 'number' ? { maxCharacters: opts.text } : true } } : {}),
+      };
+      const res = hooks.exaSearch
+        ? await hooks.exaSearch(body)
+        : await fetch('https://api.exa.ai/search', {
+          method: 'POST',
+          headers: { 'x-api-key': secret('EXA_API_KEY'), 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
       const raw = await res.text();
       if (!res.ok) { warn(`exa HTTP ${res.status}: ${raw.slice(0, 200)}`); meter.exa.failed++; return []; }
       const results = JSON.parse(raw).results ?? [];
