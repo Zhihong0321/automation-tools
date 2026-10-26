@@ -16,7 +16,16 @@ export const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const OUT = path.join(HERE, 'out');
 const VAULT = process.env.VAULT_PATH ?? 'D:/Tools/my-vault/vault.json';
 const LAB = (process.env.LAB_URL ?? 'https://ee-auto.up.railway.app').replace(/\/+$/, '');
-const LLM_URL = (process.env.DD_LLM_URL ?? 'https://asiasouth.up.railway.app/v1').replace(/\/+$/, '');
+// deepseek goes to Vectide (the 1B-token pack, as the hub does since 2026-10-26); anything else
+// (gpt-6.1-sol in section G) stays on the ZM router. DD_LLM_URL / DD_LLM_KEY_NAME override both.
+const ROUTES = {
+  deepseek: { url: 'https://vectide.cn/v1', key: 'VECTIDE_DEEPSEEK_KEY' },
+  other: { url: 'https://asiasouth.up.railway.app/v1', key: 'ZM_AI_FIXED_KEY' },
+};
+function route(model: string): { url: string; key: string } {
+  const r = model.startsWith('deepseek') ? ROUTES.deepseek : ROUTES.other;
+  return { url: (process.env.DD_LLM_URL ?? r.url).replace(/\/+$/, ''), key: secret(process.env.DD_LLM_KEY_NAME ?? r.key) };
+}
 export const DEFAULT_MODEL = process.env.DD_LLM_MODEL ?? 'deepseek-v4.1-flash-1017';
 
 type Cred = { name: string; secret: string; baseUrl?: string };
@@ -79,15 +88,17 @@ export function makeCtx(diveId: string, section: string, lane: string) {
   /** One chat call on the OpenAI-compatible router. Retries once on 429/5xx/transport; '' on failure. */
   async function llm(prompt: string, opts: { model?: string; system?: string; temperature?: number } = {}): Promise<string> {
     const model = opts.model ?? DEFAULT_MODEL;
-    const messages = [...(opts.system ? [{ role: 'system', content: opts.system }] : []), { role: 'user', content: prompt }];
+    // toWellFormed: page text cut mid-emoji leaves half a surrogate pair, which Vectide rejects (HTTP 400).
+    const messages = [...(opts.system ? [{ role: 'system', content: opts.system.toWellFormed() }] : []), { role: 'user', content: prompt.toWellFormed() }];
+    const { url, key } = route(model);
     meter.llm.calls++;
     meter.llm.byModel[model] = (meter.llm.byModel[model] ?? 0) + 1;
     meter.llm.promptChars += prompt.length + (opts.system?.length ?? 0);
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const res = await fetch(LLM_URL + '/chat/completions', {
+        const res = await fetch(url + '/chat/completions', {
           method: 'POST',
-          headers: { authorization: 'Bearer ' + secret('ZM_AI_FIXED_KEY'), 'content-type': 'application/json' },
+          headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' },
           body: JSON.stringify({ model, messages, temperature: opts.temperature ?? 0 }),
         });
         const raw = await res.text();
@@ -98,7 +109,7 @@ export function makeCtx(diveId: string, section: string, lane: string) {
         meter.llm.answerChars += answer.length;
         meter.llm.tokensIn += Number(body.usage?.prompt_tokens ?? 0);
         meter.llm.tokensOut += Number(body.usage?.completion_tokens ?? 0);
-        if (!answer) warn(`llm ${model} returned an empty answer`);
+        if (!answer) { warn(`llm ${model} returned an empty answer (attempt ${attempt + 1}, finish_reason ${body.choices?.[0]?.finish_reason ?? '?'}, ${body.usage?.completion_tokens ?? '?'} output tokens)`); continue; }
         return answer;
       } catch (e) {
         warn(`llm ${model} failed: ${(e as Error).message} (attempt ${attempt + 1})`);
