@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lead Blacklist Report Card</title>
+<style>
+  @page { size: A4; margin: 0; }
+  :root {
+    --ink: #14181f; --muted: #5b6573; --line: #e3e7ec; --soft: #f5f7f9;
+    --brand: #0f6d5f; --brand-soft: #e3f2ef; --warn: #b4531a; --warn-soft: #fbeee5;
+    --bar: #0f6d5f; --bar-bg: #edf1f4;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #fff; }
+  body {
+    width: 210mm; height: 297mm; overflow: hidden;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    color: var(--ink); font-size: 10.5pt; line-height: 1.4;
+  }
+  .page { padding: 14mm 15mm 11mm; height: 100%; display: flex; flex-direction: column; gap: 6.5mm; }
+  header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid var(--ink); padding-bottom: 4mm; }
+  .eyebrow { font-size: 8.5pt; letter-spacing: .12em; text-transform: uppercase; color: var(--brand); font-weight: 700; }
+  h1 { font-size: 22pt; line-height: 1.1; margin-top: 1.5mm; letter-spacing: -.01em; }
+  .meta { text-align: right; font-size: 8.5pt; color: var(--muted); }
+  .meta b { color: var(--ink); font-size: 10pt; display: block; }
+  .kpis { display: grid; grid-template-columns: 1.25fr 1fr 1fr 1fr; gap: 3.5mm; }
+  .kpi { border: 1px solid var(--line); border-radius: 3mm; padding: 3.5mm 4mm; background: var(--soft); }
+  .kpi.main { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .kpi .label { font-size: 8pt; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .kpi.main .label { color: #b9c2cc; }
+  .kpi .value { font-size: 20pt; font-weight: 700; line-height: 1.15; margin-top: 1mm; font-variant-numeric: tabular-nums; }
+  .kpi .sub { font-size: 8.5pt; color: var(--muted); margin-top: .5mm; }
+  .kpi.main .sub { color: #d6dde4; }
+  .share { height: 2.2mm; background: #3a414b; border-radius: 1mm; margin-top: 2.2mm; overflow: hidden; }
+  .share > span { display: block; height: 100%; width: 13.8%; background: #f0a36b; }
+  h2 { font-size: 11pt; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 2.5mm; }
+  .grid2 { display: grid; grid-template-columns: 1.15fr 1fr; gap: 6mm; }
+  .bars { display: flex; flex-direction: column; gap: 2.1mm; }
+  .bar-row { display: grid; grid-template-columns: 40mm 1fr 15mm; align-items: center; gap: 2.5mm; font-size: 9pt; }
+  .bar-row .name { font-weight: 600; }
+  .bar-row .name small { display: block; font-weight: 400; color: var(--muted); font-size: 7.5pt; line-height: 1.2; }
+  .track { height: 4.2mm; background: var(--bar-bg); border-radius: 1mm; overflow: hidden; }
+  .track > span { display: block; height: 100%; background: var(--bar); border-radius: 1mm; }
+  .bar-row .n { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+  table { width: 100%; border-collapse: collapse; font-size: 8.8pt; }
+  th { text-align: left; font-size: 7.5pt; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; padding: 0 0 1.5mm; border-bottom: 1px solid var(--line); }
+  td { padding: 1.35mm 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; padding-right: 2mm; width: 15mm; }
+  td.grp { color: var(--muted); font-size: 8pt; }
+  .callout { display: flex; gap: 4mm; align-items: center; background: var(--brand-soft); border-left: 1.2mm solid var(--brand); border-radius: 2mm; padding: 3.2mm 4mm; }
+  .callout .big { font-size: 18pt; font-weight: 700; color: var(--brand); line-height: 1; white-space: nowrap; }
+  .callout p { font-size: 9.2pt; }
+  .callout p b { display: block; font-size: 10pt; margin-bottom: .5mm; }
+  .cards { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 3.5mm; }
+  .card { border: 1px solid var(--line); border-radius: 2.5mm; padding: 3mm 3.5mm; font-size: 8.6pt; }
+  .card h3 { font-size: 9.2pt; margin-bottom: 1.5mm; }
+  .card ul { padding-left: 4mm; display: flex; flex-direction: column; gap: .8mm; }
+  .card.warn { background: var(--warn-soft); border-color: #f1d3bf; }
+  .card.warn h3 { color: var(--warn); }
+  footer { margin-top: auto; display: flex; justify-content: space-between; font-size: 7.5pt; color: var(--muted); border-top: 1px solid var(--line); padding-top: 2.5mm; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 7.5pt; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header>
+    <div>
+      <div class="eyebrow">Eternalgy · Lead pipeline</div>
+      <h1>Lead Blacklist — Report Card</h1>
+    </div>
+    <div class="meta"><b>26 October 2026</b>Source: hub database, all leads</div>
+  </header>
+
+  <section class="kpis">
+    <div class="kpi main">
+      <div class="label">Blacklisted leads</div>
+      <div class="value">17,052</div>
+      <div class="sub">13.8% of all leads, kept out of contact research</div>
+      <div class="share"><span></span></div>
+    </div>
+    <div class="kpi">
+      <div class="label">All leads</div>
+      <div class="value">123,727</div>
+      <div class="sub">from Google Maps scans</div>
+    </div>
+    <div class="kpi">
+      <div class="label">Open for research</div>
+      <div class="value">106,675</div>
+      <div class="sub">86.2%, checked and clean</div>
+    </div>
+    <div class="kpi">
+      <div class="label">Not yet checked</div>
+      <div class="value">0</div>
+      <div class="sub">every lead has been judged</div>
+    </div>
+  </section>
+
+  <section class="grid2">
+    <div>
+      <h2>Blacklisted, by group</h2>
+      <div class="bars">
+        <div class="bar-row"><div class="name">Not a business<small>housing, condos, parks, worship</small></div><div class="track"><span style="width:100%"></span></div><div class="n">8,166</div></div>
+        <div class="bar-row"><div class="name">Hypermarket &amp; mall<small>incl. shops inside malls</small></div><div class="track"><span style="width:20.24%"></span></div><div class="n">1,653</div></div>
+        <div class="bar-row"><div class="name">Franchise &amp; agent<small>insurance, MLM, franchises</small></div><div class="track"><span style="width:18.96%"></span></div><div class="n">1,548</div></div>
+        <div class="bar-row"><div class="name">Chain store<small>convenience, pharmacy, retail</small></div><div class="track"><span style="width:17.62%"></span></div><div class="n">1,439</div></div>
+        <div class="bar-row"><div class="name">Telco &amp; courier<small>telco outlets, courier counters</small></div><div class="track"><span style="width:16.21%"></span></div><div class="n">1,324</div></div>
+        <div class="bar-row"><div class="name">Government<small>offices, police, schools, utilities</small></div><div class="track"><span style="width:13.62%"></span></div><div class="n">1,112</div></div>
+        <div class="bar-row"><div class="name">Chain F&amp;B<small>coffee, tea, fast food</small></div><div class="track"><span style="width:12.25%"></span></div><div class="n">1,000</div></div>
+        <div class="bar-row"><div class="name">Bank &amp; finance<small>banks, ATMs, Ar-Rahnu</small></div><div class="track"><span style="width:6.83%"></span></div><div class="n">558</div></div>
+        <div class="bar-row"><div class="name">Competitor solar<small>other solar companies</small></div><div class="track"><span style="width:3.09%"></span></div><div class="n">252</div></div>
+      </div>
+    </div>
+    <div>
+      <h2>Top Google categories caught</h2>
+      <table>
+        <thead><tr><th>Category</th><th>Group</th><th style="text-align:right;padding-right:2mm">Leads</th></tr></thead>
+        <tbody>
+          <tr><td>Housing society</td><td class="grp">Not a business</td><td class="num">1,973</td></tr>
+          <tr><td>Housing complex</td><td class="grp">Not a business</td><td class="num">1,865</td></tr>
+          <tr><td>Housing Estate</td><td class="grp">Not a business</td><td class="num">1,613</td></tr>
+          <tr><td>Apartment building</td><td class="grp">Not a business</td><td class="num">974</td></tr>
+          <tr><td>Convenience store <small>(by name)</small></td><td class="grp">Chain store</td><td class="num">804</td></tr>
+          <tr><td>Insurance agency</td><td class="grp">Franchise &amp; agent</td><td class="num">619</td></tr>
+          <tr><td>No category (place name)</td><td class="grp">Not a business</td><td class="num">602</td></tr>
+          <tr><td>Courier service</td><td class="grp">Telco &amp; courier</td><td class="num">571</td></tr>
+          <tr><td>Telecom service provider</td><td class="grp">Telco &amp; courier</td><td class="num">466</td></tr>
+          <tr><td>Shopping mall</td><td class="grp">Hypermarket &amp; mall</td><td class="num">415</td></tr>
+          <tr><td>Fast food restaurant</td><td class="grp">Chain F&amp;B</td><td class="num">360</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="callout">
+    <div class="big">+334</div>
+    <p><b>Petrol stations are back in as leads (26 Oct 2026).</b>
+      The team has petrol station clients, so the Petrol Station and Gas station categories and the station brands
+      (Petronas, Shell, Petron, Caltex, BHPetrol) were removed from the blacklist. 334 station leads are now open for
+      contact research. Chain shops at a station still count as their chain (Subway @ Caltex, FamilyMart Petron).</p>
+  </section>
+
+  <section class="cards">
+    <div class="card">
+      <h3>How a lead is judged</h3>
+      <ul>
+        <li>Landmarks are stripped first: “beside Burger King” is not Burger King.</li>
+        <li>Out if its Google category is on a group’s list, or its name has a group’s word.</li>
+        <li>“Solar” alone is not a competitor (tint, watch and LPG shops stay in).</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>What it stops</h3>
+      <ul>
+        <li>The contact research auto-queue.</li>
+        <li>A taman’s “Research N pending” count and button.</li>
+        <li><b>Not</b> stopped: research started by hand, the lead list, telemarketing.</li>
+      </ul>
+    </div>
+    <div class="card warn">
+      <h3>Worth knowing</h3>
+      <ul>
+        <li>715 blacklisted leads were researched before the blacklist existed. Their reports are kept.</li>
+        <li>Office and shop-lot tenants (consultants, salons, agencies) are left in on purpose.</li>
+        <li>Every lead is re-checked on each deploy.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    <span>Rules: <code>agy-lab/src/lead-blacklist.ts</code> · Explainer: <code>docs/lead-blacklist.md</code></span>
+    <span>Counts: <code>company_data.blacklist_reason</code>, merged leads excluded</span>
+  </footer>
+
+</div>
+</body>
+</html>
