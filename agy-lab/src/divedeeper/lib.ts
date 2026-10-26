@@ -9,7 +9,9 @@
 // already has them: EE_AUTO_LAB_TOKEN, SCRAPER_TECH_KEY, ZM_AI_FIXED_KEY,
 // EXA_API_KEY, BRAVE_SEARCH_API_KEY.
 import fs from 'node:fs';
+import https from 'node:https';
 import os from 'node:os';
+import tls from 'node:tls';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -55,6 +57,47 @@ function llmRelease(): void {
   llmWaiting.shift()?.();
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Servers that leave their intermediate certificate out of the TLS handshake. Seen 2026-10-26:
+// cims.cidb.gov.my answers the hub (Railway, Southeast Asia) with only its leaf, signed by
+// Sectigo Public Server Authentication CA OV R36, so verification fails there while it passes
+// from Malaysia. Only these hosts get the extra intermediate; every other request is plain fetch.
+const EXTRA_CA: Array<{ domain: string; file: string }> = [{ domain: 'cidb.gov.my', file: 'sectigo-ov-r36.pem' }];
+const caCache = new Map<string, string[]>();
+function extraCaFor(url: string): string[] | null {
+  let h = '';
+  try { h = new URL(url).hostname; } catch { return null; }
+  const hit = EXTRA_CA.find((x) => h === x.domain || h.endsWith('.' + x.domain));
+  if (!hit) return null;
+  if (!caCache.has(hit.file)) {
+    let pem = '';
+    try { pem = fs.readFileSync(path.join(HERE, 'certs', hit.file), 'utf8'); } catch { /* fall back to the default store */ }
+    caCache.set(hit.file, [...tls.rootCertificates, ...(pem ? [pem] : [])]);
+  }
+  return caCache.get(hit.file)!;
+}
+
+/** A GET/POST over node:https with an explicit CA list, following redirects. Throws like fetch does. */
+async function httpsWithCa(url: string, init: { method?: string; headers: Record<string, string>; body?: string }, ca: string[], hops = 0): Promise<{ url: string; status: number; headers: Record<string, string>; text: string }> {
+  const r = await new Promise<{ status: number; headers: Record<string, string>; text: string }>((resolve, reject) => {
+    const req = https.request(url, { method: init.method ?? 'GET', headers: { ...init.headers, ...(init.body ? { 'content-length': String(Buffer.byteLength(init.body)) } : {}) }, ca }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: Object.fromEntries(Object.entries(res.headers).map(([k, v]) => [k, Array.isArray(v) ? v.join(', ') : String(v ?? '')])), text: Buffer.concat(chunks).toString('utf8') }));
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    if (init.body) req.write(init.body);
+    req.end();
+  });
+  const loc = r.headers.location;
+  if ([301, 302, 303, 307, 308].includes(r.status) && loc && hops < 5) {
+    const next = new URL(loc, url).href;
+    const keep = r.status === 307 || r.status === 308;
+    return httpsWithCa(next, { headers: init.headers, ...(keep ? { method: init.method, body: init.body } : {}) }, ca, hops + 1);
+  }
+  return { url, ...r };
+}
 
 type Cred = { name: string; secret: string; baseUrl?: string };
 
@@ -242,7 +285,13 @@ export function makeCtx(diveId: string, section: string, lane: string) {
     meter.http.calls++;
     const t = Date.now();
     try {
-      const res = await fetch(url, { redirect: 'follow', ...init, headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36', ...init.headers } });
+      const headers = { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36', ...(init.headers as Record<string, string>) };
+      const ca = extraCaFor(url);
+      if (ca) {
+        const r = await httpsWithCa(url, { method: init.method, headers, body: init.body as string | undefined }, ca);
+        return { url, finalUrl: r.url, status: r.status, ms: Date.now() - t, headers: r.headers, html: r.text };
+      }
+      const res = await fetch(url, { redirect: 'follow', ...init, headers });
       const html = await res.text();
       return { url, finalUrl: res.url, status: res.status, ms: Date.now() - t, headers: Object.fromEntries(res.headers), html };
     } catch (e) {
