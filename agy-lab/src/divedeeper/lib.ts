@@ -40,6 +40,22 @@ function route(model: string): { url: string; key: string } {
 }
 export const DEFAULT_MODEL = process.env.DD_LLM_MODEL ?? 'deepseek-v4.1-flash-1017';
 
+// One queue of LLM calls for the whole process, shared by every lane running at once.
+const LLM_CONCURRENCY = Math.max(1, Number(process.env.DD_LLM_CONCURRENCY ?? 3) || 3);
+const LLM_429_RETRIES = 8;
+let llmInFlight = 0;
+const llmWaiting: Array<() => void> = [];
+async function llmSlot(): Promise<void> {
+  if (llmInFlight < LLM_CONCURRENCY) { llmInFlight++; return; }
+  await new Promise<void>((resolve) => llmWaiting.push(resolve));
+  llmInFlight++;
+}
+function llmRelease(): void {
+  llmInFlight--;
+  llmWaiting.shift()?.();
+}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 type Cred = { name: string; secret: string; baseUrl?: string };
 
 let vaultCache: Cred[] | null = null;
@@ -106,29 +122,38 @@ export function makeCtx(diveId: string, section: string, lane: string) {
     meter.llm.calls++;
     meter.llm.byModel[model] = (meter.llm.byModel[model] ?? 0) + 1;
     meter.llm.promptChars += prompt.length + (opts.system?.length ?? 0);
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const res = await fetch(url + '/chat/completions', {
-          method: 'POST',
-          headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' },
-          body: JSON.stringify({ model, messages, temperature: opts.temperature ?? 0 }),
-        });
-        const raw = await res.text();
-        if (res.status === 429 || res.status >= 500) { warn(`llm ${model} HTTP ${res.status} (attempt ${attempt + 1})`); continue; }
-        if (!res.ok) { warn(`llm ${model} HTTP ${res.status}: ${raw.slice(0, 200)}`); break; }
-        const body = JSON.parse(raw);
-        const answer = String(body.choices?.[0]?.message?.content ?? '').trim();
-        meter.llm.answerChars += answer.length;
-        meter.llm.tokensIn += Number(body.usage?.prompt_tokens ?? 0);
-        meter.llm.tokensOut += Number(body.usage?.completion_tokens ?? 0);
-        if (!answer) { warn(`llm ${model} returned an empty answer (attempt ${attempt + 1}, finish_reason ${body.choices?.[0]?.finish_reason ?? '?'}, ${body.usage?.completion_tokens ?? '?'} output tokens)`); continue; }
-        return answer;
-      } catch (e) {
-        warn(`llm ${model} failed: ${(e as Error).message} (attempt ${attempt + 1})`);
+    // Vectide takes about 3 calls at once and answers 429 to the rest, so every call waits for
+    // a slot, and a 429 is asked again after a growing pause. Patience, not a cap: no timeout.
+    await llmSlot();
+    try {
+      let busy = 0;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const res = await fetch(url + '/chat/completions', {
+            method: 'POST',
+            headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' },
+            body: JSON.stringify({ model, messages, temperature: opts.temperature ?? 0 }),
+          });
+          const raw = await res.text();
+          if (res.status === 429 && busy < LLM_429_RETRIES) { await sleep(Math.min(30_000, 2_000 * 2 ** busy++)); attempt--; continue; }
+          if (res.status === 429 || res.status >= 500) { warn(`llm ${model} HTTP ${res.status} (attempt ${attempt + 1})`); continue; }
+          if (!res.ok) { warn(`llm ${model} HTTP ${res.status}: ${raw.slice(0, 200)}`); break; }
+          const body = JSON.parse(raw);
+          const answer = String(body.choices?.[0]?.message?.content ?? '').trim();
+          meter.llm.answerChars += answer.length;
+          meter.llm.tokensIn += Number(body.usage?.prompt_tokens ?? 0);
+          meter.llm.tokensOut += Number(body.usage?.completion_tokens ?? 0);
+          if (!answer) { warn(`llm ${model} returned an empty answer (attempt ${attempt + 1}, finish_reason ${body.choices?.[0]?.finish_reason ?? '?'}, ${body.usage?.completion_tokens ?? '?'} output tokens${body.error ? ', ' + String(body.error.code ?? body.error.message ?? '').slice(0, 80) : ''})`); continue; }
+          return answer;
+        } catch (e) {
+          warn(`llm ${model} failed: ${(e as Error).message} (attempt ${attempt + 1})`);
+        }
       }
+      meter.llm.failed++;
+      return '';
+    } finally {
+      llmRelease();
     }
-    meter.llm.failed++;
-    return '';
   }
 
   /** One scraper.tech Maps MCP tool call. Returns the API's parsed JSON, or null. */

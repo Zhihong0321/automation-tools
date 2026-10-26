@@ -296,7 +296,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
   if (one && method === 'GET') {
     const row = (await reportdb.sql<Row>(`select id, public_id, company, dive_id, status, stage, log, lanes, error, created_at, finished_at from dive_deeper where id = $1`, [Number(one[1])])).rows[0];
     if (!row) { ctx.json(res, 404, { error: 'no such run' }); return true; }
-    const lanes = Object.fromEntries(Object.entries(row.lanes ?? {}).map(([k, v]) => [k, { status: v.status, findings: v.findings_count, warnings: v.warnings?.length ?? 0, ms: v.ms }]));
+    const lanes = Object.fromEntries(Object.entries(row.lanes ?? {}).map(([k, v]) => [k, { status: v.status, findings: v.findings_count, warnings: v.warnings?.length ?? 0, first_warnings: (v.warnings ?? []).slice(0, 3).map((w) => w.slice(0, 240)), ms: v.ms }]));
     ctx.json(res, 200, { ...row, lanes, ...links(req, row.public_id) });
     return true;
   }
