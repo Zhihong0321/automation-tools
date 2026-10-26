@@ -55,10 +55,11 @@ export const GROUPS: Record<string, Group> = {
       'inside scoop', "dunkin'?", 'krispy kreme', 'richiamo', 'tea garden', 'thai odyssey', 'absolute thai', 'jom ch[aá]',
       'bingxue', 'richeese']),
   },
-  telco_courier_fuel: {
-    categories: ['Petrol Station', 'Gas station', 'Telecommunications service provider', 'Courier service',
-      'Shipping and mailing service'],
-    names: words(['petronas', 'shell', 'petron', 'caltex', 'bhpetrol', 'u ?mobile', 'celcom(?:digi)?', 'digi', 'maxis',
+  // Petrol stations are not here: the team has petrol station clients (2026-10-26).
+  // A chain shop at a station ("Subway @ Caltex", "FamilyMart Petron") still matches its own chain.
+  telco_courier: {
+    categories: ['Telecommunications service provider', 'Courier service', 'Shipping and mailing service'],
+    names: words(['u ?mobile', 'celcom(?:digi)?', 'digi', 'maxis',
       'unifi', 'redone', 'onexox', 'tunetalk', 'hotlink', 'tm point', 'ninja ?van', 'j ?& ?t', 'dhl', 'pos ?laju', 'gdex',
       'city-?link', 'flash express', 'shopee express', 'spx', 'lazada express', 'lalamove', 'mail boxes etc', 'skynet',
       'best express', 'collectco']),

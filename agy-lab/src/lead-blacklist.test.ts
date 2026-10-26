@@ -14,8 +14,10 @@ test('each group catches its leads by category or by name', () => {
     ['MR.DIY', 'Home improvement store', 'chain_store'],
     ['ZUS Coffee - Taman Universiti, Skudai', 'Cafe', 'chain_fnb'],
     ['KFC Taman Daya', 'Restaurant', 'chain_fnb'],
-    ['J&T Express Skudai', 'Courier service', 'telco_courier_fuel'],
-    ['Petron Taman Saujana', 'Petrol Station', 'telco_courier_fuel'],
+    ['J&T Express Skudai', 'Courier service', 'telco_courier'],
+    // A chain shop at a petrol station is still its chain.
+    ['Subway @ Caltex Taman Daya', 'Sandwich shop', 'chain_fnb'],
+    ['FamilyMart Petron Kangkar Pulai', 'Convenience store', 'chain_store'],
     ['COWAY JOHOR BAHRU', 'Water filter supplier', 'franchise_agent'],
     ['Pacific Risk Agency', 'Insurance agency', 'franchise_agent'],
     ['Pangsapuri Pulai', 'Apartment building', 'not_a_business'],
@@ -34,6 +36,11 @@ test('the leads a solar EPC sells to stay in', () => {
     ['SKS Mart Skudai', 'Supermarket'],
     ['Sky Furniture & Decoration', 'Furniture store'],
     ['Kilang', null],
+    // Petrol stations are clients (2026-10-26).
+    ['Petron Taman Saujana', 'Petrol Station'],
+    ['PETRONAS - Nusa Perintis', 'Gas station'],
+    ['Shell', null],
+    ['Hawk Tyre Service Sdn Bhd - Shell', 'Tire shop'],
     // A place-name start only counts when Google gave no category.
     ['Taman Daya Hardware', 'Hardware store'],
     // "Solar" alone is a tint, watch or gas brand, not a competitor.
