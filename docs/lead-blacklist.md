@@ -4,31 +4,31 @@
 not sell to, so contact research never spends money on them. It was approved on 2026-10-24 and has been
 live since then (73561ef).
 
-## Count today (2026-10-26)
+## Count today (2026-10-26, after petrol stations came off)
 
 Read straight from the hub database (`company_data.blacklist_reason`, merged leads excluded):
 
 | | Leads |
 |---|---|
 | All leads | **123,727** |
-| Blacklisted | **17,386 (14.1%)** |
-| Not blacklisted, so contact research may run | 106,341 |
+| Blacklisted | **17,052 (13.8%)** |
+| Not blacklisted, so contact research may run | 106,675 |
 | Not checked yet | 0 |
-| Blacklisted, but contact research had already run on them (mostly before the blacklist went live) | 722 |
+| Blacklisted, but contact research had already run on them (mostly before the blacklist went live) | 715 |
 
 By group, in the order the code checks them:
 
 | Group | Leads | Share of blacklisted | What it is |
 |---|---|---|---|
-| `not_a_business` | 8,164 | 47.0% | Housing estates, apartments, condos, parks, places of worship, and place names with no category |
-| `telco_courier_fuel` | 1,660 | 9.5% | Petrol stations, telco outlets, courier counters |
-| `hypermarket_mall` | 1,653 | 9.5% | Hypermarkets and malls, and shops inside them |
-| `franchise_agent` | 1,548 | 8.9% | Insurance agents, MLM distributors (Coway, Amway, Shaklee), franchise outlets |
-| `chain_store` | 1,439 | 8.3% | Convenience, pharmacy, electronics and fashion chains |
-| `government` | 1,112 | 6.4% | Government offices, police, post offices, public schools and clinics, utilities |
-| `chain_fnb` | 1,000 | 5.8% | Coffee, tea, dessert and fast-food chains |
-| `bank_finance` | 558 | 3.2% | Banks, ATMs, pawn (Ar-Rahnu), money transfer |
-| `competitor_solar` | 252 | 1.4% | Other solar companies |
+| `not_a_business` | 8,166 | 47.9% | Housing estates, apartments, condos, parks, places of worship, and place names with no category |
+| `hypermarket_mall` | 1,653 | 9.7% | Hypermarkets and malls, and shops inside them |
+| `franchise_agent` | 1,548 | 9.1% | Insurance agents, MLM distributors (Coway, Amway, Shaklee), franchise outlets |
+| `chain_store` | 1,439 | 8.4% | Convenience, pharmacy, electronics and fashion chains |
+| `telco_courier` | 1,324 | 7.8% | Telco outlets and courier counters |
+| `government` | 1,112 | 6.5% | Government offices, police, post offices, public schools and clinics, utilities |
+| `chain_fnb` | 1,000 | 5.9% | Coffee, tea, dessert and fast-food chains |
+| `bank_finance` | 558 | 3.3% | Banks, ATMs, pawn (Ar-Rahnu), money transfer |
+| `competitor_solar` | 252 | 1.5% | Other solar companies |
 
 The categories that contribute most:
 
@@ -41,11 +41,10 @@ The categories that contribute most:
 | 804 | chain_store | Convenience store (matched by name: 99 Speedmart, 7-Eleven, KK Mart…) |
 | 619 | franchise_agent | Insurance agency |
 | 602 | not_a_business | no category (a place name such as "Taman …" or "Kampung …") |
-| 571 | telco_courier_fuel | Courier service |
-| 466 | telco_courier_fuel | Telecommunications service provider |
+| 571 | telco_courier | Courier service |
+| 466 | telco_courier | Telecommunications service provider |
 | 415 | hypermarket_mall | Shopping mall |
 | 360 | chain_fnb | Fast food restaurant |
-| 271 | telco_courier_fuel | Petrol Station |
 | 243 | bank_finance | Bank |
 | 201 | government | Government office |
 | 175 | competitor_solar | Solar energy company |
@@ -116,6 +115,10 @@ What it is **not** kept out of:
 - **Starting research on one company by hand.** That still works, on purpose.
 - **The lead list and telemarketing.** Blacklisted leads stay visible and can still be assigned. The
   blacklist only stops contact research.
+
+## Changes since approval
+
+- **2026-10-26: petrol stations are no longer blacklisted.** The team has petrol station clients. The Petrol Station and Gas station categories and the station brand words (petronas, shell, petron, caltex, bhpetrol) were removed, and the group was renamed `telco_courier`. 334 leads became researchable. A chain shop at a station still matches its own chain: "Subway @ Caltex" is `chain_fnb` and "FamilyMart Petron" is `chain_store`.
 
 ## Changing the rules
 
