@@ -109,7 +109,9 @@ export function contactLinks(html: string, pageUrl: string, max = 2): string[] {
   return [...contact, ...about].slice(0, max);
 }
 
-type Fetched = { url: string; html: string } | null;
+type Page = { url: string; html: string };
+/** A page, or why it could not be read (HTTP status or network error code). */
+type Fetched = Page | { error: string } | null;
 
 async function fetchPage(url: string): Promise<Fetched> {
   try {
@@ -118,13 +120,14 @@ async function fetchPage(url: string): Promise<Fetched> {
       headers: { 'user-agent': UA, accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5', 'accept-language': 'en-MY,en;q=0.9,ms;q=0.8' },
       signal: AbortSignal.timeout(PAGE_WAIT_MS),
     });
-    if (!res.ok) return null;
+    if (!res.ok) return { error: 'HTTP ' + res.status };
     const type = res.headers.get('content-type') ?? '';
-    if (type && !/html|text\/plain|xml/i.test(type)) return null;
+    if (type && !/html|text\/plain|xml/i.test(type)) return { error: 'not html: ' + type };
     const html = (await res.text()).slice(0, MAX_HTML);
     return { url: res.url || url, html };
-  } catch {
-    return null;
+  } catch (err) {
+    const cause = (err as { cause?: NodeJS.ErrnoException }).cause;
+    return { error: String(cause?.code ?? cause?.message ?? (err as Error).name ?? 'fetch failed') };
   }
 }
 
@@ -132,25 +135,34 @@ export type SiteResult = {
   status: 'found' | 'none' | 'unreachable' | 'no_site';
   emails: { email: string; source_url: string }[];
   pages: string[];
+  /** Pages that could not be read, with why. */
+  errors?: string[];
 };
 
 /** Read one site: homepage, then its contact page (or /contact-us and /contact when it links none). */
 export async function scanSite(website: string | null | undefined, fetcher: (url: string) => Promise<Fetched> = fetchPage): Promise<SiteResult> {
   const start = ownSiteUrl(website);
   if (!start) return { status: 'no_site', emails: [], pages: [] };
-  // Plain http as the fallback, for sites with a broken certificate.
-  const home = await fetcher(start) ?? (start.startsWith('https://') ? await fetcher('http://' + start.slice(8)) : null);
-  if (!home) return { status: 'unreachable', emails: [], pages: [] };
+  const errors: string[] = [];
+  const get = async (url: string): Promise<Page | null> => {
+    const got = await fetcher(url);
+    if (got && 'html' in got) return got;
+    errors.push(`${url}: ${got?.error ?? 'no answer'}`);
+    return null;
+  };
+  // Plain http as the fallback, for sites that do not answer on https.
+  const home = await get(start) ?? (start.startsWith('https://') ? await get('http://' + start.slice(8)) : null);
+  if (!home) return { status: 'unreachable', emails: [], pages: [], errors };
   const seen = new Map<string, string>();
   const pages = [home.url];
-  const keep = (page: { url: string; html: string }) => {
+  const keep = (page: Page) => {
     for (const email of extractEmails(page.html)) if (!seen.has(email)) seen.set(email, page.url);
   };
   keep(home);
   const linked = contactLinks(home.html, home.url);
   const next = linked.length ? linked : ['/contact-us', '/contact'].map((p) => new URL(p, home.url).toString());
   for (const url of next) {
-    const page = await fetcher(url);
+    const page = await get(url);
     if (!page) continue;
     pages.push(page.url);
     keep(page);
@@ -158,7 +170,7 @@ export async function scanSite(website: string | null | undefined, fetcher: (url
     if (!linked.length) break;
   }
   const emails = [...seen].map(([email, source_url]) => ({ email, source_url }));
-  return { status: emails.length ? 'found' : 'none', emails, pages };
+  return { status: emails.length ? 'found' : 'none', emails, pages, errors };
 }
 
 // ---- storage -----------------------------------------------------------------
