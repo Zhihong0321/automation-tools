@@ -10,6 +10,7 @@ import * as db from './reportdb.ts';
 import * as ui from './reportui.ts';
 import * as territories from './territories.ts';
 import * as contacts from './contacts.ts';
+import * as emailList from './email-list.ts';
 import { normalizePhoneNumber } from './phone.ts';
 import { importSalesAgents } from './atap-import.ts';
 import { searchParallelPeople } from './parallel-contact.ts';
@@ -3939,6 +3940,25 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       'cache-control': 'no-store',
     });
     res.end(csvData);
+    return true;
+  }
+
+  // ---- Email marketing list: every email, one row per company + email -------
+  if (method === 'GET' && (p === '/api/contacts/emails' || p === '/api/contacts/emails/export')) {
+    const rows = await emailList.allRows(url.searchParams.get('fresh') === '1');
+    const shown = emailList.filter(rows, { search: url.searchParams.get('search'), source: url.searchParams.get('source') });
+    if (p.endsWith('/export')) {
+      res.writeHead(200, {
+        'content-type': 'text/csv; charset=utf-8',
+        'content-disposition': `attachment; filename="email-list-${new Date().toISOString().slice(0, 10)}.csv"`,
+        'cache-control': 'no-store',
+      });
+      res.end(emailList.toCsv(shown));
+      return true;
+    }
+    const limit = Math.min(Math.max(Math.round(Number(url.searchParams.get('limit') ?? 50) || 50), 1), 200);
+    const offset = Math.max(Math.round(Number(url.searchParams.get('offset') ?? 0) || 0), 0);
+    ctx.json(res, 200, { stats: emailList.stats(rows), total: shown.length, limit, offset, rows: shown.slice(offset, offset + limit) });
     return true;
   }
 
