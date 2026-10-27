@@ -242,8 +242,7 @@ async function save(companyId: string, result: SiteResult): Promise<void> {
     );
   }
   await db.sql(`update company_data set site_email_status = $2, site_email_error = $3, site_email_checked_at = now() where id = $1`,
-    [companyId, result.status, result.status === 'unreachable' ? (result.errors ?? []).join('
-').slice(0, 1000) || null : null]);
+    [companyId, result.status, result.status === 'unreachable' ? (result.errors ?? []).join(' | ').slice(0, 1000) || null : null]);
 }
 
 /** Read one lead's site and save what it finds, whatever its checked state. */
