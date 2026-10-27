@@ -11,8 +11,7 @@
 //    (out/H-maps-<id>.json), street unit vs the dive, broken internal links (15 checked), wa.me business
 //    name, tel:, mailto: MX, forms (never submitted), stale news, placeholder pages, plus feed hygiene
 //    (duplicate cards, leaked AI/pipeline notes), junk image alt text, third-party credit links, and
-//    brand-name variants ("Jingko" next to "Jinko"). Google PageSpeed Insights on each homepage (mobile and
-//    desktop): scores, lab and real-user speed, and Google's own suggestions (env/vault PAGESPEED_API_KEY).
+//    brand-name variants ("Jingko" next to "Jinko").
 // 4. LLM (deepseek): only the company's own prose pages (no news/blog listings), on cleaner text: images
 //    become "[image]", inline tags do not add spaces, JS counters show their target value, review and
 //    cookie widgets are removed. At most 5 issues a page; a finding is kept only when its exact quote is in
@@ -22,7 +21,7 @@ import path from 'node:path';
 import tls from 'node:tls';
 import dns from 'node:dns/promises';
 import type { Ctx, Finding } from '../lib.ts';
-import { OUT, secret } from '../lib.ts';
+import { OUT } from '../lib.ts';
 
 const PER_DOMAIN = Number(process.env.C_PER_DOMAIN ?? 15);
 const TOTAL_PAGES = Number(process.env.C_TOTAL_PAGES ?? 50);
@@ -260,48 +259,6 @@ function sslCert(host: string): Promise<{ host: string; ok: boolean; error?: str
     s.on('error', (e) => resolve({ host, ok: false, error: e.message }));
   });
 }
-// Google PageSpeed Insights (Lighthouse + Chrome real-user data) for one URL. Never throws.
-type Psi = { url: string; strategy: 'mobile' | 'desktop'; ok: boolean; error?: string; scores?: Record<string, number>; lab?: Record<string, string>; field?: { scope: string; overall: string; metrics: Record<string, string> }; fixes?: string[]; flags?: string[] };
-async function pageSpeed(url: string, strategy: 'mobile' | 'desktop', key: string): Promise<Psi> {
-  const q = new URLSearchParams({ url, strategy });
-  for (const c of ['performance', 'accessibility', 'best-practices', 'seo']) q.append('category', c);
-  if (key) q.set('key', key);
-  let last = '';
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const res = await fetch(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?${q}`);
-      const d = await res.json() as any;
-      if (!res.ok || !d.lighthouseResult) {
-        last = `HTTP ${res.status}: ${String(d.error?.message ?? 'no Lighthouse result').slice(0, 200)}`;
-        if (res.status >= 500) { await new Promise((r) => setTimeout(r, 5000)); continue; }
-        break;
-      }
-      const lr = d.lighthouseResult;
-      const a = lr.audits ?? {};
-      const scores = Object.fromEntries(Object.entries(lr.categories ?? {}).map(([k, v]: [string, any]) => [k, Math.round((v.score ?? 0) * 100)]));
-      const lab = Object.fromEntries([['FCP', 'first-contentful-paint'], ['LCP', 'largest-contentful-paint'], ['TBT', 'total-blocking-time'], ['CLS', 'cumulative-layout-shift'], ['Speed Index', 'speed-index']].filter(([, k]) => a[k]?.displayValue).map(([n, k]) => [n, String(a[k].displayValue)]));
-      const le = d.loadingExperience?.metrics ? d.loadingExperience : d.originLoadingExperience?.metrics ? d.originLoadingExperience : null;
-      const fm: Record<string, string> = {};
-      for (const [n, k, unit] of [['LCP', 'LARGEST_CONTENTFUL_PAINT_MS', 'ms'], ['INP', 'INTERACTION_TO_NEXT_PAINT', 'ms'], ['CLS', 'CUMULATIVE_LAYOUT_SHIFT_SCORE', 'cls'], ['FCP', 'FIRST_CONTENTFUL_PAINT_MS', 'ms']] as const) {
-        const m = le?.metrics?.[k];
-        if (m) fm[n] = `${unit === 'cls' ? (m.percentile / 100).toFixed(2) : m.percentile >= 1000 ? (m.percentile / 1000).toFixed(1) + ' s' : m.percentile + ' ms'} (${String(m.category).toLowerCase()})`;
-      }
-      const field = le ? { scope: le === d.loadingExperience && !le.origin_fallback ? 'this page' : 'the whole site', overall: String(le.overall_category ?? '').toLowerCase(), metrics: fm } : undefined;
-      // Google's own suggestions: failing performance audits with an estimated saving, biggest first.
-      const savings = (x: any) => Number(x.details?.overallSavingsMs ?? 0) || Math.max(0, ...Object.values(x.metricSavings ?? {}).map(Number).filter(Number.isFinite));
-      const perfIds = (lr.categories?.performance?.auditRefs ?? []).map((r: any) => r.id);
-      const fixes = perfIds.map((id: string) => a[id]).filter((x: any) => x && x.score !== null && x.score < 0.9 && savings(x) > 0)
-        .sort((x: any, y: any) => savings(y) - savings(x)).slice(0, 4)
-        .map((x: any) => `${x.title}${x.displayValue ? ` (${x.displayValue})` : ''}`);
-      const flags = ['seo', 'accessibility', 'best-practices'].flatMap((c) => (lr.categories?.[c]?.auditRefs ?? [])
-        .filter((r: any) => r.weight > 0).map((r: any) => a[r.id]).filter((x: any) => x && x.score === 0 && x.scoreDisplayMode === 'binary').map((x: any) => x.title)).slice(0, 6);
-      return { url, strategy, ok: true, scores, lab, field, fixes, flags };
-    } catch (e) {
-      last = (e as Error).message;
-    }
-  }
-  return { url, strategy, ok: false, error: last };
-}
 const attr = (tag: string, name: string) => tag.match(new RegExp(`\\b${name}\\s*=\\s*(["'])(.*?)\\1`, 'is'))?.[2] ?? null;
 const metaContent = (html: string, name: string) => {
   for (const m of html.matchAll(/<meta\b[^>]*>/gi)) if ((attr(m[0], 'name') ?? attr(m[0], 'property') ?? '').toLowerCase() === name) return attr(m[0], 'content');
@@ -374,15 +331,6 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   const allHosts = new Set(sites.flatMap((s) => [s.host, s.domain, ...s.aliases]));
   const isInternal = (u: string) => allHosts.has(bareHost(u));
   const pageByUrl = new Map(crawled.flatMap((p) => [[normUrl(p.finalUrl), p], [normUrl(p.url), p]] as [string, CPage][]));
-
-  // Google PageSpeed Insights on each homepage, mobile and desktop. Slow (20-60 s a call), so it runs
-  // alongside the rest and is read at the end.
-  ctx.meter.other.psi = 0;
-  const psiKey = secret('PAGESPEED_API_KEY');
-  const psiRuns = Promise.all(sites.filter((s) => s.pages[0]?.status === 200).flatMap((s) => (['mobile', 'desktop'] as const).map(async (st) => {
-    ctx.meter.other.psi++;
-    return { site: s.host, ...(await pageSpeed(s.pages[0].finalUrl, st, psiKey)) };
-  })));
 
   for (const rd of redirects) add('redirect-domain', { title: `${rd.domain} redirects to ${bareHost(rd.to)}`, detail: `Typing ${rd.domain} lands on ${rd.to}. Fine if intended.`, severity: 'info', source: `https://${rd.domain}/`, evidence: rd.to });
 
@@ -690,28 +638,6 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
       if (pa && pb && quoteOnPage(String(it.quote_a), pa.text) && quoteOnPage(String(it.quote_b), pb.text)) llmFindings.push(f); else dropped.push({ ...f, reason: 'cross quote not on page' });
     }
   }
-  // Google PageSpeed Insights: one finding per homepage and device, in Google's own words.
-  const psi = await psiRuns;
-  for (const x of psi.filter((x) => !x.ok)) ctx.warn(`PageSpeed Insights ${x.strategy} ${x.url}: ${x.error}${psiKey ? '' : ' (no PAGESPEED_API_KEY set)'}`);
-  for (const x of psi.filter((x) => x.ok)) {
-    const sc = x.scores!;
-    const perf = sc.performance ?? 0;
-    const parts = [
-      `Google scores the ${x.strategy} homepage: performance ${perf}, accessibility ${sc.accessibility ?? '?'}, best practices ${sc['best-practices'] ?? '?'}, SEO ${sc.seo ?? '?'} (out of 100; 90+ is good, under 50 is poor).`,
-      Object.keys(x.lab!).length ? `Lab test: ${Object.entries(x.lab!).map(([k, v]) => `${k} ${v}`).join(', ')}.` : '',
-      x.field && Object.keys(x.field.metrics).length ? `Real Chrome users on ${x.field.scope} (last 28 days)${x.field.overall ? `, rated ${x.field.overall}` : ''}: ${Object.entries(x.field.metrics).map(([k, v]) => `${k} ${v}`).join(', ')}.` : 'Google has too few real visitors on record to show real-user speed.',
-      x.fixes!.length ? `Google suggests: ${x.fixes!.join('; ')}.` : '',
-      x.flags!.length ? `Google also flags: ${x.flags!.join('; ')}.` : '',
-    ];
-    add('pagespeed', {
-      title: `Google PageSpeed Insights (${x.strategy}) for ${x.site}: performance ${perf}/100`,
-      detail: parts.filter(Boolean).join(' '),
-      severity: perf < 50 ? 'high' : perf < 90 ? 'medium' : 'info',
-      source: `https://pagespeed.web.dev/analysis?url=${encodeURIComponent(x.url)}&form_factor=${x.strategy}`,
-      evidence: Object.entries(sc).map(([k, v]) => `${k} ${v}`).join(', '),
-    });
-  }
-
   // Same quote on several pages -> one finding.
   const byQuote = new Map<string, Finding>();
   for (const f of llmFindings) {
@@ -732,7 +658,7 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   return {
     findings: [...uniq.values()],
     notes: {
-      redirects, certs, pagespeed: psi, linkStatus, waStatus, mailStatus, forms,
+      redirects, certs, linkStatus, waStatus, mailStatus, forms,
       defaced: allSites.filter((s) => s.defaced).map((s) => ({ domain: s.domain, ...s.defaced })),
       sitePhones: Object.fromEntries([...sitePhones].map(([k, v]) => [fmtPhone(k), [...v]])),
       divePhones: [...divePhones].map(fmtPhone), mapsPhones: mapsListings ? [...mapsPhones].map(fmtPhone) : 'not checked',
