@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanEmail, contactLinks, decodeCfEmail, extractEmails, ownSiteUrl, scanSite } from './site-emails.ts';
+import { cleanEmail, contactLinks, decodeCfEmail, extractEmails, ownSiteUrl, scanSite, siteHost } from './site-emails.ts';
 import { extractCompanyContacts } from './contacts.ts';
 
 test('ownSiteUrl keeps company domains and drops social pages and marketplaces', () => {
@@ -11,6 +11,8 @@ test('ownSiteUrl keeps company domains and drops social pages and marketplaces',
   assert.equal(ownSiteUrl('wa.me/60123456789'), null);
   assert.equal(ownSiteUrl(''), null);
   assert.equal(ownSiteUrl(null), null);
+  assert.equal(siteHost('http://www.myinfo.my/ce/index.php?x=1'), 'myinfo.my');
+  assert.equal(siteHost('https://facebook.com/acme'), null);
 });
 
 test('extractEmails reads mailto links, visible text, entities, Cloudflare and [at] spellings', () => {

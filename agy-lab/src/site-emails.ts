@@ -171,6 +171,32 @@ const ELIGIBLE = `c.merged_into is null and coalesce(c.is_hidden, false) = false
 
 type Lead = { id: string; name: string; website: string };
 
+/** Hosts listed as the website of this many leads are a directory or a chain's head office, not the lead's own site. */
+const SHARED_HOST_LEADS = 3;
+const HOST_SQL = `regexp_replace(lower(website), '^([a-z]+://)?(www\\.)?([^/:?#]+).*$', '\\3')`;
+let shared: { hosts: Set<string>; at: number } | null = null;
+
+export function siteHost(website: string | null | undefined): string | null {
+  const url = ownSiteUrl(website);
+  return url ? new URL(url).hostname.toLowerCase().replace(/^www\./, '') : null;
+}
+
+async function sharedHosts(): Promise<Set<string>> {
+  if (shared && Date.now() - shared.at < 3_600_000) return shared.hosts;
+  const res = await db.sql<{ host: string }>(
+    `select ${HOST_SQL} as host from company_data where merged_into is null and coalesce(website, '') <> ''
+      group by 1 having count(*) >= $1`, [SHARED_HOST_LEADS]);
+  shared = { hosts: new Set(res.rows.map((r) => r.host)), at: Date.now() };
+  return shared.hosts;
+}
+
+/** scanSite, except a site shared with other leads is not read: its emails would belong to the directory or head office. */
+async function scanLead(website: string | null | undefined): Promise<SiteResult> {
+  const host = siteHost(website);
+  if (host && (await sharedHosts()).has(host)) return { status: 'no_site', emails: [], pages: [] };
+  return scanSite(website);
+}
+
 /** Claim the next leads no lane has read yet, so parallel slots never take the same one. */
 async function claim(limit: number): Promise<Lead[]> {
   const res = await db.sql<Lead>(`
@@ -198,7 +224,7 @@ export async function runOne(companyId: string): Promise<SiteResult & { company_
   const row = (await db.sql<{ id: string; name: string; website: string | null }>(
     `select id::text, name, website from company_data where id = $1`, [companyId])).rows[0];
   if (!row) throw new Error('no lead with id ' + companyId);
-  const result = await scanSite(row.website);
+  const result = await scanLead(row.website);
   await save(row.id, result);
   return { company_id: row.id, name: row.name, website: row.website, ...result };
 }
@@ -225,7 +251,7 @@ async function slot(): Promise<void> {
       if (!lead) { running = false; console.log('[site-emails] every eligible lead has been read'); break; }
       let result: SiteResult;
       try {
-        result = await scanSite(lead.website);
+        result = await scanLead(lead.website);
       } catch (err) {
         lastError = (err as Error).message;
         result = { status: 'unreachable', emails: [], pages: [] };
