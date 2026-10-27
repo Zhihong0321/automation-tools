@@ -1,16 +1,17 @@
 // Website email lane: reads the homepage and contact page of every lead with its
 // own website, keeps the emails it finds, and saves them to company_email. No LLM.
 //
-// Off until switched on: SITE_EMAIL_AUTO=1 (Railway env) or POST /api/site-emails/start.
+// Off until switched on: SITE_EMAIL_AUTO=1 (Railway env) or POST /api/site-emails/start {limit?}.
 // POST /api/site-emails/run {company_id} checks one lead on demand.
 import type http from 'node:http';
 import * as db from './reportdb.ts';
 
-const CONCURRENCY = 4;
+// Reading a site is mostly waiting on it, so many run at once.
+const CONCURRENCY = Number(process.env.SITE_EMAIL_LANES ?? 50);
 const IDLE_MS = 60_000;
 // The one guard in this lane: a site that never answers would hold its slot
 // forever. The page counts as unreachable and the lane moves on.
-const PAGE_WAIT_MS = 20_000;
+const PAGE_WAIT_MS = 8_000;
 const MAX_HTML = 2_000_000;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 
@@ -173,12 +174,13 @@ export async function scanSite(website: string | null | undefined, fetcher: (url
   keep(home);
   const linked = contactLinks(home.html, home.url);
   const next = linked.length ? linked : ['/contact-us', '/contact'].map((p) => new URL(p, home.url).toString());
-  for (const url of next) {
-    const page = await get(url);
+  // All at once; read in link order so an email is credited to the first page that shows it.
+  const read = await Promise.all(next.map(get));
+  for (const page of read) {
     if (!page) continue;
     pages.push(page.url);
     keep(page);
-    // The guessed paths are alternatives: stop at the first that answers.
+    // The guessed paths are alternatives: keep the first that answers.
     if (!linked.length) break;
   }
   const emails = [...seen].map(([email, source_url]) => ({ email, source_url }));
@@ -259,11 +261,19 @@ let running = /^(1|true|yes|on)$/i.test(process.env.SITE_EMAIL_AUTO?.trim() ?? '
 let slots = 0;
 const totals = { checked: 0, found: 0, emails: 0, unreachable: 0 };
 let lastError: string | null = null;
+/** Leads the current run may still claim; null runs until the backlog is empty. */
+let budget: number | null = null;
+/** The current or last run started through /start, for timing it. */
+let run: { limit: number | null; startedAt: number; finishedAt: number | null; checked: number; found: number; emails: number; unreachable: number } | null = null;
 
 async function slot(): Promise<void> {
   slots++;
   try {
     while (running) {
+      if (budget !== null) {
+        if (budget <= 0) { running = false; break; }
+        budget--;
+      }
       let lead: Lead | undefined;
       try {
         [lead] = await claim(1);
@@ -286,12 +296,15 @@ async function slot(): Promise<void> {
         lastError = (err as Error).message;
         continue;
       }
-      totals.checked++;
-      if (result.status === 'found') { totals.found++; totals.emails += result.emails.length; }
-      if (result.status === 'unreachable') totals.unreachable++;
+      for (const t of run ? [totals, run] : [totals]) {
+        t.checked++;
+        if (result.status === 'found') { t.found++; t.emails += result.emails.length; }
+        if (result.status === 'unreachable') t.unreachable++;
+      }
     }
   } finally {
     slots--;
+    if (!slots && run && !run.finishedAt) run.finishedAt = Date.now();
   }
 }
 
@@ -322,7 +335,8 @@ export async function status(): Promise<Record<string, unknown>> {
            count(*) filter (where c.site_email_status = 'no_site')::int as no_site,
            (select count(*)::int from company_email where source = 'website') as emails
       from company_data c`)).rows[0];
-  return { running, slots, concurrency: CONCURRENCY, thisProcess: totals, lastError, ...counts };
+  const lastRun = run && { ...run, seconds: Math.round(((run.finishedAt ?? Date.now()) - run.startedAt) / 1000) };
+  return { running, slots, concurrency: CONCURRENCY, lastRun, thisProcess: totals, lastError, ...counts };
 }
 
 type Ctx = {
@@ -351,7 +365,13 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     }
     return true;
   }
+  // {limit: N} reads N leads and stops; no limit runs until the backlog is empty.
   if (p === '/api/site-emails/start' && method === 'POST') {
+    if (slots) { ctx.json(res, 409, { error: 'a run is still going; stop it first', ...(await status()) }); return true; }
+    const body = await ctx.readJson(req).catch(() => ({} as Record<string, unknown>));
+    const limit = Number(body.limit);
+    budget = Number.isFinite(limit) && limit > 0 ? Math.round(limit) : null;
+    run = { limit: budget, startedAt: Date.now(), finishedAt: null, checked: 0, found: 0, emails: 0, unreachable: 0 };
     running = true;
     fillSlots();
     ctx.json(res, 200, await status());

@@ -65,7 +65,7 @@ test('scanSite falls back to http, guesses /contact-us when nothing is linked, a
     if (url === 'http://acme.my/contact-us') return { url, html: 'hello@acme.my' };
     return null;
   });
-  assert.deepEqual(asked, ['https://acme.my/', 'http://acme.my/', 'http://acme.my/contact-us']);
+  assert.deepEqual(asked, ['https://acme.my/', 'http://acme.my/', 'http://acme.my/contact-us', 'http://acme.my/contact']);
   assert.deepEqual(result.emails, [{ email: 'hello@acme.my', source_url: 'http://acme.my/contact-us' }]);
   assert.equal((await scanSite('dead.my', async () => null)).status, 'unreachable');
   assert.equal((await scanSite('https://facebook.com/acme', async () => null)).status, 'no_site');
