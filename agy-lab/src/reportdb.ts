@@ -526,6 +526,7 @@ export function migrate(): Promise<void> {
       comment on column company_data.blacklist_reason is 'lead-blacklist.ts group that keeps this lead out of contact research; null when it may be researched';
       alter table company_data add column if not exists site_email_checked_at timestamptz;
       alter table company_data add column if not exists site_email_status text;
+      alter table company_data add column if not exists site_email_error text;
       comment on column company_data.site_email_status is 'site-emails.ts outcome: checking, found, none, unreachable or no_site';
 
       create table if not exists company_email (

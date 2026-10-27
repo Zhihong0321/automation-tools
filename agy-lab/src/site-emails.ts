@@ -241,7 +241,9 @@ async function save(companyId: string, result: SiteResult): Promise<void> {
       [companyId, e.email, e.source_url],
     );
   }
-  await db.sql(`update company_data set site_email_status = $2, site_email_checked_at = now() where id = $1`, [companyId, result.status]);
+  await db.sql(`update company_data set site_email_status = $2, site_email_error = $3, site_email_checked_at = now() where id = $1`,
+    [companyId, result.status, result.status === 'unreachable' ? (result.errors ?? []).join('
+').slice(0, 1000) || null : null]);
 }
 
 /** Read one lead's site and save what it finds, whatever its checked state. */
@@ -352,6 +354,12 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
   const method = req.method ?? 'GET';
   if (p === '/api/site-emails' && method === 'GET') {
     ctx.json(res, 200, await status());
+    return true;
+  }
+  if (p === '/api/site-emails/unreachable' && method === 'GET') {
+    const out = await db.sql(`select id::text, name, website, site_email_error as error, site_email_checked_at as checked_at
+      from company_data where site_email_status = 'unreachable' order by site_email_checked_at desc limit 200`);
+    ctx.json(res, 200, { leads: out.rows });
     return true;
   }
   if (p === '/api/site-emails/run' && method === 'POST') {
