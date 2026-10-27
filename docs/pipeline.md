@@ -183,6 +183,25 @@ found, each with the page it came from. On `/telemarketing` the team lead assign
 row shows its scans, the Business / Factory / Shop scan buttons, and "Research N pending" for leads
 still waiting for contact research.
 
+## 9. Website emails (no LLM)
+
+`agy-lab/src/site-emails.ts` reads the homepage and contact page of each lead with its own website
+(social pages, marketplaces and link shorteners do not count) and keeps every email printed there:
+mailto links, plain text, `&#64;` entities, Cloudflare-protected addresses and `[at]` spellings.
+Emails go to the `company_email` table with the page they came from, and show in Contacts Master
+labelled **Website**. Each lead gets `company_data.site_email_status`: `found`, `none`,
+`unreachable` or `no_site`.
+
+- A host listed as the website of 3 or more leads is a directory (myinfo.my) or a chain's head
+  office, so it is skipped as `no_site`. Otherwise one email would land on hundreds of leads.
+- Blacklisted, do-not-call, hidden and merged leads are skipped.
+- Each page waits up to 20 s. A DNS or connection blip gets one more try, then https falls back to
+  http. A page that still fails is recorded with its reason, and the lane moves on.
+- It costs nothing per lead: plain page fetches from the hub, 4 leads at a time.
+- **Off by default.** `POST /api/site-emails/run {"company_id": N}` checks one lead.
+  `POST /api/site-emails/start` and `/stop` run or halt the lane until the next deploy.
+  `GET /api/site-emails` shows the counts.
+
 ## Switches
 
 All Railway variables on the hub.
@@ -203,6 +222,7 @@ All Railway variables on the hub.
 | `CONTACT_LANES` | 3 | contact research jobs at once |
 | `CONTACT_TIMEOUT_MS` | 180,000 | time limit per contact job |
 | `EXA_API_KEYS`, `TAVILY_API_KEYS` | not set | search keys, used only when none are stored in the hub |
+| `SITE_EMAIL_AUTO` | off | `1` runs the website email lane from boot |
 | `MINIMAX_API_KEY` | not set | Pi on MiniMax: report rounds, translation, and the reading fallback |
 
 ## Where the money goes

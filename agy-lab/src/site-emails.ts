@@ -113,7 +113,19 @@ type Page = { url: string; html: string };
 /** A page, or why it could not be read (HTTP status or network error code). */
 type Fetched = Page | { error: string } | null;
 
+/** DNS and connection blips worth one more try; Railway's resolver answers EAI_AGAIN now and then. */
+const TRANSIENT = /^(EAI_AGAIN|ECONNRESET|ETIMEDOUT|ECONNREFUSED|UND_ERR_SOCKET|UND_ERR_CONNECT_TIMEOUT)$/;
+
 async function fetchPage(url: string): Promise<Fetched> {
+  const first = await fetchOnce(url);
+  if (first && 'error' in first && TRANSIENT.test(first.error)) {
+    await new Promise((r) => setTimeout(r, 2_000));
+    return fetchOnce(url);
+  }
+  return first;
+}
+
+async function fetchOnce(url: string): Promise<Fetched> {
   try {
     const res = await fetch(url, {
       redirect: 'follow',
