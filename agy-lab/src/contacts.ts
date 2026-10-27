@@ -351,6 +351,16 @@ export function extractCompanyContacts(row: RawCompanyContactRow): CompanyContac
     });
   }
 
+  // 9. Emails the website email lane read off the company's own site
+  for (const se of row.site_emails ?? []) {
+    const emailStr = String(se.email || '').trim();
+    if (!emailStr) continue;
+    const key = emailStr.toLowerCase();
+    if (seenEmails.has(key)) continue;
+    seenEmails.add(key);
+    emails.push({ email: emailStr, label: 'Website', evidence_url: se.source_url || null });
+  }
+
   // A published company line with no identified person is still a contact row.
   if (people.length === 0) {
     for (const ph of phones) people.push(unnamedFromPhone(ph, row.maps_url));

@@ -524,6 +524,19 @@ export function migrate(): Promise<void> {
       alter table company_data add column if not exists blacklist_reason text;
       alter table company_data add column if not exists blacklist_checked_at timestamptz;
       comment on column company_data.blacklist_reason is 'lead-blacklist.ts group that keeps this lead out of contact research; null when it may be researched';
+      alter table company_data add column if not exists site_email_checked_at timestamptz;
+      alter table company_data add column if not exists site_email_status text;
+      comment on column company_data.site_email_status is 'site-emails.ts outcome: checking, found, none, unreachable or no_site';
+
+      create table if not exists company_email (
+        company_id bigint not null references company_data(id) on delete cascade,
+        email      text not null,
+        source     text not null default 'website',
+        source_url text,
+        found_at   timestamptz not null default now(),
+        primary key (company_id, email)
+      );
+      create index if not exists company_email_email_idx on company_email (email);
 
       create table if not exists maps_usage (
         month text primary key,
@@ -3477,6 +3490,8 @@ export interface RawCompanyContactRow {
   research_public_id: string | null;
   research_status: string | null;
   research_result: Record<string, unknown> | null;
+  /** Emails read off the company's own website by site-emails.ts. */
+  site_emails?: { email: string; source_url: string | null }[] | null;
 }
 
 export async function getCompanyContactRows(options: {
@@ -3491,7 +3506,8 @@ export async function getCompanyContactRows(options: {
   if (options.researchedOnly) {
     whereConditions.push(`(crep.public_id is not null or rep.public_id is not null)`);
   } else {
-    whereConditions.push(`(crep.public_id is not null or rep.public_id is not null or (c.phone is not null and c.phone <> ''))`);
+    whereConditions.push(`(crep.public_id is not null or rep.public_id is not null or (c.phone is not null and c.phone <> '')
+      or exists (select 1 from company_email ce where ce.company_id = c.id))`);
   }
 
   if (options.assignedTo) {
@@ -3521,7 +3537,9 @@ export async function getCompanyContactRows(options: {
          and pr.status in ('completed', 'partial') and pr.result is not null) as contact_results,
       rep.public_id as research_public_id,
       rep.status as research_status,
-      rep.result as research_result
+      rep.result as research_result,
+      (select jsonb_agg(jsonb_build_object('email', ce.email, 'source_url', ce.source_url) order by ce.found_at)
+       from company_email ce where ce.company_id = c.id) as site_emails
     from company_data c
     left join lateral (
       select public_id, status, version, result
