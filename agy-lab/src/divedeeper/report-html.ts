@@ -15,6 +15,7 @@
 // built in here. Used by the hub (divedeeper.ts) and by scripts/dive-deeper/report.ts.
 // A missing lane only drops its block; the report still builds.
 import { AREAS, resolve, type Item } from './editor.ts';
+import { isPrivateUrl, publicSources, scrub } from './privacy.ts';
 
 /** Why each area matters, said once for every client. No market statistics we cannot source. */
 export const OPENERS: Record<string, { q: [string, string]; body: (t: { trade: string; town: string }) => string }> = {
@@ -300,7 +301,7 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   const pathOf = (u: string) => { try { const p = new URL(u).pathname; return p === '/' ? '' : p; } catch { return ''; } };
   /** Links read as where they go ("See it on Google Maps"), never as the raw URL. */
   const seeIt = (u: string | null | undefined) => {
-    if (!u || !/^https?:\/\//.test(u)) return '';
+    if (!u || !/^https?:\/\//.test(u) || isPrivateUrl(u)) return '';
     const h = hostOf(u);
     const where = /google\.[a-z.]+$/.test(h) && /\/maps/.test(u) ? 'Google Maps' : /search\.brave\.com/.test(h) ? 'search results' : h;
     return `<a class="see" href="${esc(u)}" target="_blank" rel="noopener">${esc(where)} ↗</a>`;
@@ -313,10 +314,10 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   const sevWord = (s: string) => (s === 'high' ? 'Urgent' : s === 'medium' ? 'Needs work' : s === 'low' ? 'Minor' : 'Note');
   /** The lane's machine labels, stripped, for when the editor did not run. */
   const rawTitle = (t: string) => t.replace(/^(VERIFIED|CONTRADICTED|NOT FOUND|CAN'T CHECK AUTOMATICALLY|PRIVATE):\s*/i, '').replace(/\s*\[\d+ of \d+ asks[^\]]*\]/g, '').replace(/deepseek-v[\d.]+-flash(-\d+)?/gi, 'DeepSeek').replace(/gpt-[\d.]+-?\w*/gi, 'GPT');
-  /** Stage-2 text built from raw finding titles keeps their machine bits; strip them for print. */
-  const scrub = (t: unknown) => rawTitle(String(t ?? '')).replace(/\s*\((?:DNS )?ENOTFOUND\)/g, '').replace(/doesnt_know/g, "don't know").replace(/\s*;?\s*others: [a-z_]+/g, '').replace(/\s{2,}/g, ' ');
-  const T = (x: Item) => plain[x.key]?.title || rawTitle(x.title);
-  const why = (x: Item) => plain[x.key]?.why || '';
+  /** Stage-2 text built from raw finding titles keeps their machine bits; strip them for print (and any private link). */
+  const tidy = (t: unknown) => scrub(rawTitle(String(t ?? ''))).replace(/\s*\((?:DNS )?ENOTFOUND\)/g, '').replace(/doesnt_know/g, "don't know").replace(/\s*;?\s*others: [a-z_]+/g, '').replace(/\s{2,}/g, ' ');
+  const T = (x: Item) => scrub(plain[x.key]?.title || rawTitle(x.title));
+  const why = (x: Item) => scrub(plain[x.key]?.why || '');
   const stars = (n: number) => '★★★★★'.slice(0, Math.max(0, Math.min(5, n))) + '☆☆☆☆☆'.slice(0, 5 - Math.max(0, Math.min(5, n)));
   const areaOf = (id: string) => R.areas.find((a) => a.id === id);
   const byArea = (id: string) => R.items.filter((x) => x.area === id).sort((a, b) => (sevRank[a.severity] ?? 9) - (sevRank[b.severity] ?? 9));
@@ -441,7 +442,8 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   const ai = s2.ai ?? null;
   const replies = s2.replies ?? null;
   const targets: any[] = s2.reply_targets ?? [];
-  const sources = (r.sources ?? []) as any[];
+  // The client's own report may name their staff, but lists no private document and no source the dive judged unrelated.
+  const sources = publicSources(r.sources) as any[];
 
   // The five measured numbers on the dark "at a glance" page.
   const okClaims = R.credentials.list.filter((c: any) => c.verdict === 'verified' || c.direction === 'undersell').length;
@@ -548,9 +550,9 @@ ${chapters.map(chapter).join('\n')}
   ${(replies?.replies ?? []).length ? `${replies.replies.map((x: any) => { const t = targets[x.i] ?? {}; return `<div class="reply"><div><p class="small"><span class="stars">${stars(Number(t.stars) || 0)}</span> <span class="muted">${esc(t.author ?? '')} · ${esc(dateOf(t.date))}</span></p>${t.text ? `<p class="q">${esc(clip(String(t.text), 260))}</p>` : '<p class="q">(star rating only)</p>'}</div><div><p class="a">${esc(x.reply)}</p>${x.reply_en ? `<p class="a muted">${esc(x.reply_en)}</p>` : ''}${x.note ? `<p class="small muted" style="margin-top:4px"><b>Before posting:</b> ${esc(x.note)}</p>` : ''}</div></div>`; }).join('')}
   <div class="grid2" style="margin-top:6px">${replies.template_5star ? `<div class="box"><h4>Thank-you reply for 5★ reviews</h4><p>${esc(replies.template_5star)}</p></div>` : ''}${replies.ask_message ? `<div class="box"><h4>WhatsApp message asking for a review</h4><p>${esc(replies.ask_message)}</p></div>` : ''}</div>` : '<p class="note">No unanswered reviews needed a draft.</p>'}
   <h3 class="sub" id="d-ai">Getting recommended by AI assistants</h3>
-  ${ai ? `${(ai.actions ?? []).length ? `<div class="fixes">${ai.actions.map((a: any) => `<div><div><h4>${esc(scrub(a.action))}</h4><p class="w">${esc(scrub(a.why))}</p><p class="small" style="margin-top:3px">${esc(scrub(a.how))}</p></div><div class="tags"><span class="pill info">${esc(a.effort)}</span><span class="pill ${a.impact === 'high' ? 'urgent' : 'fix'}">${esc(a.impact)} impact</span></div></div>`).join('')}</div>` : ''}
+  ${ai ? `${(ai.actions ?? []).length ? `<div class="fixes">${ai.actions.map((a: any) => `<div><div><h4>${esc(tidy(a.action))}</h4><p class="w">${esc(tidy(a.why))}</p><p class="small" style="margin-top:3px">${esc(tidy(a.how))}</p></div><div class="tags"><span class="pill info">${esc(a.effort)}</span><span class="pill ${a.impact === 'high' ? 'urgent' : 'fix'}">${esc(a.impact)} impact</span></div></div>`).join('')}</div>` : ''}
   ${(ai.faq ?? []).length ? `<h4 class="tbl-h">FAQ for your website</h4><div class="grid2">${ai.faq.map((x: any) => `<div class="box"><h4>${esc(x.q)}</h4><p>${esc(x.a)}</p></div>`).join('')}</div>` : ''}
-  ${ai.measure ? `<p class="note"><b>How to track it:</b> ${esc(scrub(ai.measure))}</p>` : ''}` : '<p class="note">The AI plan was not written in this run.</p>'}
+  ${ai.measure ? `<p class="note"><b>How to track it:</b> ${esc(tidy(ai.measure))}</p>` : ''}` : '<p class="note">The AI plan was not written in this run.</p>'}
   ${s2.jsonld ? `<h4 class="tbl-h">Business details for Google and AI</h4><p class="note">Ask your web developer to paste this into the &lt;head&gt; of every page, after checking the phone and address are the ones you want everywhere.</p><pre>${esc('<script type="application/ld+json">\n' + JSON.stringify(s2.jsonld, null, 2) + '\n</script>')}</pre>` : ''}
   ${foot()}
 </section>
@@ -576,7 +578,7 @@ ${chapters.map(chapter).join('\n')}
   <p class="eyebrow">Appendix</p>
   <h2 class="display">The full checklist.<br><span class="g">Every finding, area by area.</span></h2>
   ${AREAS.filter((a) => byArea(a.id).length).map((a) => { const list = byArea(a.id); return `<div id="appx-${a.id}"><h3 class="sub" style="font-size:17px">${esc(a.title)} <span class="muted" style="font-family:var(--body);font-size:11px;font-weight:400;letter-spacing:0">${list.filter((x) => x.severity === 'high').length} urgent · ${list.filter((x) => x.severity === 'medium').length} need work · ${list.length} in all</span></h3>${itemRows(list)}</div>`; }).join('')}
-  <details><summary>Background research on the company</summary><p class="note" style="margin:4px 0 10px">Written from public sources on ${esc(dateOf(dive.finished_at))}, before the checks in this report. Where they differ, the checks are newer and win.</p><div class="dossier">${md(String(dive.dossier ?? ''))}</div></details>
+  <details><summary>Background research on the company</summary><p class="note" style="margin:4px 0 10px">Written from public sources on ${esc(dateOf(dive.finished_at))}, before the checks in this report. Where they differ, the checks are newer and win.</p><div class="dossier">${md(scrub(dive.dossier))}</div></details>
   ${sources.length ? `<details><summary>Sources (${sources.length})</summary><ol class="sources">${sources.map((s: any) => `<li id="src-${esc(s.id)}" value="${esc(s.id)}">${/^https?:\/\//.test(s.url) ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(clip(String(s.title || hostOf(s.url)), 90))}</a> · ${esc(hostOf(s.url))}` : esc(s.title)}</li>`).join('')}</ol></details>` : ''}
   <div class="note" style="margin-top:8px"><p class="lbl">How we checked</p><p>Every Google review on your Maps listings was read. Maps ranks come from Google Maps searches without a phone’s location, so a customer nearby may see a slightly different order; web ranks come from Brave Search set to Malaysia. Each licence and award was looked up in its issuer’s own register. Every page of your websites was read and its links and numbers tested. AI answers come from ${esc(aiModels)}, asked each question several times, from memory and with a web search. The ready-to-use drafts were written with AI from these findings. Checked ${esc(checkedOn)}; background research from ${esc(dateOf(dive.finished_at))}.</p></div>
   ${foot()}

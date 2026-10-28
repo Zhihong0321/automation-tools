@@ -329,7 +329,19 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
   const row = (await reportdb.sql<Row>(`select id, public_id, company, dive_id, status, stage, log, report_html, error, created_at, finished_at from dive_deeper where public_id = $1`, [m[1]])).rows[0];
   const headers = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' };
   if (!row) { res.writeHead(404, headers); res.end('<!doctype html><title>Not found</title><p>No such report.</p>'); return true; }
-  if (row.report_html) { res.writeHead(200, headers); res.end(row.report_html); return true; }
+  if (row.report_html) {
+    // Drawn again from the stored results on each visit, so report and privacy fixes reach reports
+    // already delivered; the page saved when the run finished is the fallback.
+    let html = row.report_html;
+    try {
+      const full = (await reportdb.sql<{ lanes: Record<string, LaneResult> }>(`select lanes from dive_deeper where id = $1`, [row.id])).rows[0];
+      const dive = row.dive_id ? await diveRow(row.dive_id) : null;
+      if (full?.lanes && dive?.result) html = buildReport(dive, full.lanes);
+    } catch (err) {
+      console.warn(`[dive-deeper ${row.id}] report redraw failed, serving the saved page: ${(err as Error).message}`);
+    }
+    res.writeHead(200, headers); res.end(html); return true;
+  }
   const live = !['failed'].includes(row.status);
   res.writeHead(200, headers);
   res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${live ? '<meta http-equiv="refresh" content="20">' : ''}

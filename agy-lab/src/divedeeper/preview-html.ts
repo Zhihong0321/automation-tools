@@ -6,7 +6,12 @@
 // Then what the full report unlocks, the done-for-you work, how it works, and the order panel.
 // Same look as the full report (Inter, two-tone headlines, near-black bands), laid out as one
 // responsive page rather than A4 sheets.
-import { CHAPTER_EYEBROW, CHAPTER_ORDER, OPENERS, esc, md } from './report-html.ts';
+//
+// It sits on a public link and goes to someone who has not paid, so it names only the company and
+// its publicly named leadership: no staff names, no phone numbers, no private document links, and
+// no research write-up (privacy.ts). Sources are the ones the company-dive judged to be about them.
+import { CHAPTER_EYEBROW, CHAPTER_ORDER, OPENERS, esc } from './report-html.ts';
+import { isLeadership, publicSources, scrub } from './privacy.ts';
 import type { PreviewNotes } from './preview-editor.ts';
 
 /** What the seller shows on the order panel; every field optional. */
@@ -39,10 +44,14 @@ export function buildPreview(dive: any, offer: Offer = {}, notes: PreviewNotes |
   const name = String(id.legal_name ?? dive?.company ?? 'Your company');
   const short = shortName(name);
   const facts: any[] = r.facts ?? [];
-  const sources: any[] = r.sources ?? [];
+  const sources: any[] = publicSources(r.sources);
   const contradictions: string[] = (r.contradictions ?? []).filter(Boolean);
   const gaps: string[] = (r.gaps ?? []).filter(Boolean);
-  const people = (r.people?.people ?? []).filter((p: any) => p.name);
+  const everyone = (r.people?.people ?? []).filter((p: any) => p.name);
+  const people = everyone.filter((p: any) => isLeadership(p.role));
+  const staff = everyone.filter((p: any) => !isLeadership(p.role)).map((p: any) => String(p.name));
+  /** Text written from the research, made fit for a public page. */
+  const P = (t: unknown) => noCites(scrub(t, { phones: true, staff }));
   const domains: string[] = id.official_domains ?? [];
   const ssm = (id.registration_numbers ?? []).find((x: string) => /^\d{12}$/.test(x)) ?? (id.registration_numbers ?? [])[0] ?? null;
   const town = String(id.address ?? '').match(/\b\d{5}\s+([^,]+)/)?.[1]?.trim() ?? 'your town';
@@ -61,12 +70,12 @@ export function buildPreview(dive: any, offer: Offer = {}, notes: PreviewNotes |
     (id.aliases ?? []).length && { label: 'Also known as', value: id.aliases.join(', ') },
     people[0] && { label: 'Leadership', value: `${people[0].name}${people[0].role ? `, ${people[0].role}` : ''}` },
   ].filter(Boolean) as { label: string; value: string }[];
-  const warnings = notes?.warnings?.length ? notes.warnings : fallbackWarnings(r);
+  const warnings = (notes?.warnings?.length ? notes.warnings : fallbackWarnings(r)).map((w) => ({ ...w, title: P(w.title), detail: P(w.detail), risk: P(w.risk) }));
   const shown = warnings.slice(0, 5);
   // Every sign we hold beyond what this page shows stays locked for the full report.
   const moreSigns = Math.max(warnings.length - shown.length, contradictions.length + gaps.length - shown.length, 0);
   const typesFound = [...new Set(warnings.map((w) => w.type))];
-  const hook = notes?.hook || `This preview was prepared for ${name} alone, from ${sources.length} public sources. Here is what they say about you, and where they do not agree.`;
+  const hook = notes?.hook ? P(notes.hook) : `This preview was prepared for ${name} alone, from ${sources.length} public sources. Here is what they say about you, and where they do not agree.`;
 
   const ctaHref = offer.order_url && /^https?:\/\//.test(offer.order_url) ? offer.order_url : '#order';
   const ctaAttrs = ctaHref === '#order' ? '' : ' target="_blank" rel="noopener"';
@@ -165,7 +174,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
 
   const warnCard = (w: NonNullable<PreviewNotes['warnings']>[number], first = false) => {
     const [label, cls] = TYPE[w.type] ?? TYPE.contradiction;
-    return `<article class="warn ${cls}${first ? ' first' : ''}"><span class="tag ${cls}">${esc(label)}</span><h3>${esc(noCites(w.title))}</h3>${w.detail ? `<p class="d">${esc(noCites(w.detail))}</p>` : ''}${w.risk ? `<p class="risk">${esc(noCites(w.risk))}</p>` : ''}</article>`;
+    return `<article class="warn ${cls}${first ? ' first' : ''}"><span class="tag ${cls}">${esc(label)}</span><h3>${esc(w.title)}</h3>${w.detail ? `<p class="d">${esc(w.detail)}</p>` : ''}${w.risk ? `<p class="risk">${esc(w.risk)}</p>` : ''}</article>`;
   };
   const lockedCard = (n: number) => `<article class="locked" aria-label="${n} more warning signs, in the full report"><div class="bar s"></div><div class="bar m"></div><div class="bar"></div><div class="bar m"></div><div class="bar s"></div><div class="lockmsg"><b>+${n}</b><span>more warning signs we found,<br>shown in your full report</span></div></article>`;
 
@@ -199,7 +208,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
       ${ssm ? `<div><dt>Registration</dt><dd>SSM ${esc(ssm)}</dd></div>` : ''}
       ${id.address ? `<div><dt>Head office</dt><dd>${esc(clip(String(id.address), 90))}</dd></div>` : ''}
       ${domains.length ? `<div><dt>Websites</dt><dd>${esc(domains.join(', '))}</dd></div>` : ''}
-      ${people.length ? `<div><dt>People found</dt><dd>${esc(people.slice(0, 3).map((p: any) => p.name).join(', '))}${people.length > 3 ? ` and ${people.length - 3} more` : ''}</dd></div>` : ''}
+      ${people.length ? `<div><dt>Leadership</dt><dd>${esc(people.slice(0, 3).map((p: any) => p.name).join(', '))}</dd></div>` : ''}
       ${warnings.length ? `<div><dt>Warning signs</dt><dd><b style="color:var(--wrong)">${esc(Math.max(warnings.length, contradictions.length + gaps.length))} found</b> before the audit began</dd></div>` : ''}
     </dl>
     <p class="foot">Researched ${esc(made)} from ${esc(sources.length)} public sources</p>
@@ -217,7 +226,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
   <div class="head"><p class="eyebrow">What we already know about you</p>
     <h2>Not a template.<br><span class="g">Every line here is about ${esc(short)}.</span></h2>
     <p class="lead">Before a customer calls, before a bank lends or a tender panel shortlists, this is what public sources tell them about you.</p></div>
-  <div class="known">${known.map((k) => `<div><span class="k">${esc(k.label)}</span><span class="v">${esc(noCites(k.value))}</span></div>`).join('')}</div>
+  <div class="known">${known.map((k) => `<div><span class="k">${esc(k.label)}</span><span class="v">${esc(P(k.value))}</span></div>`).join('')}</div>
   ${people.length ? `<div class="people">${people.slice(0, 8).map((p: any) => `<span><b>${esc(p.name)}</b>${p.role ? ` · ${esc(clip(String(p.role), 40))}` : ''}</span>`).join('')}</div>` : ''}
 </section>
 
@@ -279,8 +288,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
 </section>
 
 <footer>
-  <details><summary>The research behind this preview</summary><p style="margin:6px 0 12px">Written from public sources on ${esc(made)}.</p><div class="dossier">${md(String(dive?.dossier ?? ''))}</div></details>
-  ${sources.length ? `<details><summary>Sources (${sources.length})</summary><ol class="sources">${sources.map((s: any) => `<li id="src-${esc(s.id)}" value="${esc(s.id)}">${/^https?:\/\//.test(s.url) ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(clip(String(s.title || hostOf(s.url)), 90))}</a> · ${esc(hostOf(s.url))}` : esc(s.title)}</li>`).join('')}</ol></details>` : ''}
+  ${sources.length ? `<details><summary>The public sources behind this preview (${sources.length})</summary><ol class="sources">${sources.map((s: any) => `<li id="src-${esc(s.id)}" value="${esc(s.id)}">${/^https?:\/\//.test(s.url) ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(clip(String(s.title || hostOf(s.url)), 90))}</a> · ${esc(hostOf(s.url))}` : esc(s.title)}</li>`).join('')}</ol></details>` : ''}
   <p>Online Presence Audit ${esc(year)} · Preview prepared for ${esc(name)}. Built from public sources only; nothing here has been checked against official registers yet.</p>
 </footer>
 

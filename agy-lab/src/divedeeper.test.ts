@@ -90,3 +90,31 @@ test('the preview landing page builds from the company-dive alone, uses the edit
   const edited = buildPreview(dive, {}, { hook: 'Your award label is a year out.', known: [{ label: 'Founded', value: 'July 2023' }], warnings: [{ type: 'outdated', title: 'Award label still says 2024', detail: 'd', risk: 'r' }] });
   for (const s of ['Your award label is a year out.', 'Award label still says 2024', 'Outdated', 'July 2023']) assert.ok(edited.includes(s), s);
 });
+
+test('the public preview names only leadership and shows no phone, private document or unrelated source', () => {
+  const dive = {
+    company: 'Acme Sdn Bhd', finished_at: '2026-10-25T10:00:00Z', dossier: '| Phone | +60 11-2341 1550 (Ali Staff) | [3] |',
+    result: {
+      identity: { legal_name: 'Acme Sdn Bhd', official_domains: ['acme.my'] },
+      people: { people: [{ name: 'Boss Bin Owner', role: 'CEO & Founder' }, { name: 'Ali Staff', role: 'Site manager, phone +60 11-2341 1550' }] },
+      sources: [{ id: 1, url: 'https://acme.my/', title: 'Acme', relevant: true }, { id: 2, url: 'https://quote-app.example/proposal?uid=abc', title: 'Proposal', relevant: true }, { id: 3, url: 'https://eternally.example/', title: 'Eternally', relevant: false }],
+      contradictions: ['Phone: Ali Staff gives +60 11-2341 1550 vs 012-7165685 on the site.'], gaps: [],
+    },
+  };
+  const notes = { hook: 'Ali Staff answers on +60 11-2341 1550.', known: [{ label: 'Team', value: 'Ali Staff runs sites' }], warnings: [{ type: 'missing' as const, title: 'See ee-proposal-production.up.railway.app?uid=abc', detail: 'Ali Staff, 012-7165685', risk: 'r' }] };
+  for (const html of [buildPreview(dive), buildPreview(dive, {}, notes)]) {
+    for (const bad of ['Ali Staff', '2341', '7165685', 'uid=', 'proposal-production', 'quote-app.example', 'eternally.example']) assert.ok(!html.includes(bad), bad);
+    assert.ok(html.includes('Boss Bin Owner'), 'leadership stays');
+    assert.ok(html.includes('We read 1 public sources'), 'only relevant, non-private sources are counted');
+  }
+});
+
+test('the full report lists no private document or unrelated source, and its write-up hides private links', () => {
+  const dive = {
+    company: 'Acme Sdn Bhd', finished_at: '2026-10-25T10:00:00Z', dossier: '| Proposal app | ee-proposal-production.up.railway.app, one per customer via uid | [2] |',
+    result: { identity: { legal_name: 'Acme Sdn Bhd' }, sources: [{ id: 1, url: 'https://acme.my/', title: 'Acme', relevant: true }, { id: 2, url: 'https://x.example/inv-m2/123', title: 'Invoice', relevant: true }, { id: 3, url: 'https://other.example/', title: 'Other', relevant: false }] },
+  };
+  const html = buildReport(dive, {});
+  for (const bad of ['ee-proposal-production', 'inv-m2', 'other.example']) assert.ok(!html.includes(bad), bad);
+  assert.ok(html.includes('a private customer document') && html.includes('acme.my'));
+});

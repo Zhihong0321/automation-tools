@@ -33,7 +33,8 @@ export async function editPreview(dive: any, llm: (prompt: string) => Promise<st
     `"warnings": [{"type": "contradiction | missing | outdated | wrong", "title": "at most 11 words, plain, specific", "detail": "1-2 sentences with the actual values the sources give", "risk": "1 sentence: who notices this and what it can cost the business"}] (6 to 8, most damaging first, use at least three different types)}\n\n` +
     `Types: contradiction = two sources give different values for the same thing; missing = something a buyer checks that no public source shows; ` +
     `outdated = a date, certificate, promotion or figure that has passed or no longer matches today; wrong = a source states something the stronger evidence shows is not so (e.g. a different legal form or address). ` +
-    `Rules: use only the material above; never invent facts or numbers; do not accuse the company of dishonesty: say what the sources show; drop the [n] citation markers; British English; speak to the owner as "you".`;
+    `Rules: use only the material above; never invent facts or numbers; do not accuse the company of dishonesty: say what the sources show; drop the [n] citation markers; British English; speak to the owner as "you". ` +
+    `This preview is public and unpaid: name no person except publicly named leadership (founder, CEO, director); give no phone numbers, ID numbers, emails or links; never mention proposals, invoices or other documents meant for one customer.`;
   for (let attempt = 1; attempt <= 2; attempt++) {
     const got = parseJson(await llm(prompt));
     if (got && Array.isArray(got.warnings)) {
