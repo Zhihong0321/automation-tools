@@ -22,7 +22,7 @@ test('served docs explain the complete search-to-research handoff', () => {
   assert.match(html, /\/api\/telemarketer\/leads/);
   assert.match(html, /\/api\/telemarketer\/me/);
   assert.match(html, /\/openapi\.json/);
-  assert.doesNotMatch(html, /eternalgy2026/i);
+  assert.ok(!process.env.LAB_TOKEN || !html.includes(process.env.LAB_TOKEN), 'the operator token never reaches a served page');
 });
 
 test('served docs introduce the social research workers and their honesty contract', () => {

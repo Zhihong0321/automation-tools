@@ -22,7 +22,7 @@ test('the worker dashboard ships no credential of its own', () => {
   const html = page();
   // The page is served without a token and must stay worth nothing to a scanner.
   assert.doesNotMatch(html, /Bearer\s+[A-Za-z0-9_\-.]{20,}/);
-  assert.doesNotMatch(html, /eternalgy2026/i);
+  assert.ok(!process.env.LAB_TOKEN || !html.includes(process.env.LAB_TOKEN), 'the operator token never reaches a served page');
 });
 
 test('the worker dashboard renders liveness, current task and the pending queue', () => {

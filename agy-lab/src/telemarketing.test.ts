@@ -938,14 +938,14 @@ test('Telemarketer API endpoints handle auth by Telemarketer UID, lead reading, 
 
   // 4i. Operator telemarketers routes (/api/telemarketers) must NEVER be hijacked by handleTelemarketerApi
   {
-    const reqGet: any = { method: 'GET', headers: { 'authorization': 'Bearer eternalgy2026eternalgy2026' } };
+    const reqGet: any = { method: 'GET', headers: { 'authorization': 'Bearer operator-test-token' } };
     const resGet: any = {};
     const urlGet = new URL('http://localhost/api/telemarketers');
     const { ctx: ctxGet } = makeCtx();
     const handledGet = await intel.handleTelemarketerApi(reqGet, resGet, urlGet, ctxGet as any);
     assert.equal(handledGet, false, 'handleTelemarketerApi must ignore /api/telemarketers (operator route)');
 
-    const reqPost: any = { method: 'POST', headers: { 'authorization': 'Bearer eternalgy2026eternalgy2026' } };
+    const reqPost: any = { method: 'POST', headers: { 'authorization': 'Bearer operator-test-token' } };
     const resPost: any = {};
     const urlPost = new URL('http://localhost/api/telemarketers/import');
     const { ctx: ctxPost } = makeCtx();
@@ -1005,7 +1005,7 @@ test('Telemarketer API endpoints handle auth by Telemarketer UID, lead reading, 
 
   // 4m. Operator bearer token does NOT collide with UID and allows operator to read all leads or agent leads
   {
-    const reqAll: any = { method: 'GET', headers: { 'authorization': 'Bearer eternalgy2026eternalgy2026' } };
+    const reqAll: any = { method: 'GET', headers: { 'authorization': 'Bearer operator-test-token' } };
     const resAll: any = {};
     const urlAll = new URL('http://localhost/api/telemarketer/leads');
     const { ctx: ctxAll, getStatus: getStatusAll, getBody: getBodyAll } = makeCtx();
@@ -1017,7 +1017,7 @@ test('Telemarketer API endpoints handle auth by Telemarketer UID, lead reading, 
     assert.equal(getBodyAll().leads.length, 1);
 
     // Operator querying specific telemarketer via ?uid=
-    const reqAgent: any = { method: 'GET', headers: { 'authorization': 'Bearer eternalgy2026eternalgy2026' } };
+    const reqAgent: any = { method: 'GET', headers: { 'authorization': 'Bearer operator-test-token' } };
     const resAgent: any = {};
     const urlAgent = new URL('http://localhost/api/telemarketer/leads?uid=uid-sarah');
     const { ctx: ctxAgent, getStatus: getStatusAgent, getBody: getBodyAgent } = makeCtx();

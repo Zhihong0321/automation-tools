@@ -56,7 +56,7 @@ test('the guide keeps the honesty contract the reports depend on', () => {
 
 test('the guide carries no credential and never asks for one', () => {
   const html = guidePage();
-  assert.doesNotMatch(html, /eternalgy2026/i);
+  assert.ok(!process.env.LAB_TOKEN || !html.includes(process.env.LAB_TOKEN), 'the operator token never reaches a served page');
   assert.doesNotMatch(html, /LAB_TOKEN|PORTAL_TOKEN/);
   assert.doesNotMatch(html, /type="password"/);
   // It is a static page: no bearer header, no fetch, nothing to authorize.

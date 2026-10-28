@@ -6,9 +6,9 @@
 // over HTTP and upserts each eligible user into the `telemarketer` table that
 // lead assignment already reads.
 //
-// Auth is one header (X-Api-Password); the password lives in
-// ATAP_INTEGRATION_PASSWORD, with a development fallback because the roster is
-// not a secret on the order of a payment credential. Users paginate at
+// Auth is one header (X-Api-Password); the password lives only in
+// ATAP_INTEGRATION_PASSWORD (never in code: this repo is public). Without it the
+// import refuses with a clear error and nothing else changes. Users paginate at
 // limit<=100, so the fetcher walks offset pages until a short page comes back.
 //
 // Who counts as a sales agent: the access_level array carries roles like
@@ -123,7 +123,8 @@ export async function importSalesAgents(input: ImportOptions = {}): Promise<Impo
 
 async function fetchAtapUsers(input: ImportOptions = {}): Promise<AtapUser[]> {
   const baseUrl = (input.baseUrl ?? process.env.ATAP_API_BASE_URL ?? 'https://calculator.atap.solar').replace(/\/$/, '');
-  const password = input.password ?? process.env.ATAP_INTEGRATION_PASSWORD ?? 'eternalgy2026eternalgy2026';
+  const password = input.password ?? process.env.ATAP_INTEGRATION_PASSWORD;
+  if (!password) throw new Error('ATAP_INTEGRATION_PASSWORD is not set on this server, so the Atap roster cannot be read');
   const doFetch = input.fetchImpl ?? fetch;
 
   const users: AtapUser[] = [];

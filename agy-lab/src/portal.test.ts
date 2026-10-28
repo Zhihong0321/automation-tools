@@ -28,7 +28,7 @@ test('end-user portal combines discovery, deep research, and report library', ()
   assert.match(html, /document\.cookie/);
   assert.match(html, /eeKey\.read\(\)/);
   assert.doesNotMatch(html, /sessionStorage\.getItem\('ee_portal_token'\)/);
-  assert.doesNotMatch(html, /eternalgy2026/i);
+  assert.ok(!process.env.LAB_TOKEN || !html.includes(process.env.LAB_TOKEN), 'the operator token never reaches a served page');
   const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1];
   assert.ok(script);
   assert.doesNotThrow(() => new Function(script));
