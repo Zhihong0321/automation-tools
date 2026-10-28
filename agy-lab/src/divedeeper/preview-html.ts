@@ -154,6 +154,9 @@ h2 { font-size:clamp(34px,4.4vw,58px); max-width:16em; } .lead { font-size:19px;
 .steps { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; counter-reset:st; }
 .steps div { counter-increment:st; display:grid; gap:6px; } .steps div::before { content:counter(st, decimal-leading-zero); font-family:var(--display); font-size:36px; font-weight:500; letter-spacing:-0.04em; color:var(--muted); }
 .steps h3 { font-size:18px; } .steps p { font-size:14.5px; color:var(--grey); } .steps .now { color:var(--good); font-weight:600; font-size:12px; letter-spacing:.1em; text-transform:uppercase; }
+.uses { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; counter-reset:us; }
+.uses div { counter-increment:us; background:var(--band); padding:22px; display:grid; gap:8px; align-content:start; } .uses div::before { content:counter(us, decimal-leading-zero); font-family:var(--display); font-size:32px; font-weight:500; letter-spacing:-0.04em; line-height:1; color:var(--muted); }
+.uses h3 { font-size:19px; letter-spacing:-0.015em; line-height:1.2; } .uses p { font-size:14.5px; color:var(--grey); }
 /* order */
 .order { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,1fr); gap:56px; align-items:center; }
 .order .panel { background:var(--dark2); padding:32px; display:grid; gap:14px; } .order .price { font-family:var(--display); font-size:48px; font-weight:600; letter-spacing:-0.03em; line-height:1; }
@@ -167,9 +170,10 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
 @media (max-width:900px) {
   section { padding-top:64px; padding-bottom:64px; } .hero { grid-template-columns:1fr; gap:40px; padding-top:56px; } .file { transform:none; }
   .strip { grid-template-columns:1fr 1fr; } .warns { grid-template-columns:1fr; } .five { grid-template-columns:1fr 1fr; } .band-cta, .order { grid-template-columns:1fr; }
-  .done { grid-template-columns:1fr; } .steps { grid-template-columns:1fr 1fr; } .top span.for { display:none; } .lead { font-size:17px; }
+  .done { grid-template-columns:1fr; } .uses { grid-template-columns:1fr 1fr; } .steps { grid-template-columns:1fr 1fr; } .top span.for { display:none; } .lead { font-size:17px; }
 }
-@media print { .top, .ctas, .band-cta .btn { display:none; } section { padding:36px 24px; break-inside:avoid; } .warn, .chapter, .locked { break-inside:avoid; } }
+@media (max-width:560px) { .uses { grid-template-columns:1fr; } }
+@media print { .top, .ctas, .band-cta .btn { display:none; } section { padding:36px 24px; break-inside:avoid; } .warn, .chapter, .locked, .uses div { break-inside:avoid; } }
 `;
 
   const warnCard = (w: NonNullable<PreviewNotes['warnings']>[number], first = false) => {
@@ -271,6 +275,17 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
     <div><h3>You order</h3><p>${offer.contact ? esc(offer.contact) : 'Reply to the message that brought you this preview.'}</p></div>
     <div><h3>We run the full audit</h3><p>Your reviews, Google Maps in every town you serve, AI assistants, every page of your websites, and each claim in its official register.</p></div>
     <div><h3>You get your report</h3><p>One link: desktop, mobile, and A4 to print or save as PDF.</p></div>
+  </div>
+</section>
+
+<section id="protect" style="padding-top:0">
+  <div class="head"><p class="eyebrow">Why it protects you</p><h2>One audit,<br><span class="g">four ways it guards your interest.</span></h2>
+    <p class="lead">The same research we ran on ${esc(short)} works on any company you deal with.</p></div>
+  <div class="uses">
+    <div><h3>See yourself as customers do</h3><p>Customers search you before they call. Know what they find, so you fix it before it costs you a sale.</p></div>
+    <div><h3>Check a vendor before you sign</h3><p>Running a tender or choosing a supplier? See their registration, licences, reviews and warning signs before you commit money to them.</p></div>
+    <div><h3>Know your competitors</h3><p>How rivals show up on Google, in reviews and to AI assistants, and where you are already stronger than them.</p></div>
+    <div><h3>Win the client before the meeting</h3><p>Research a prospect first. Walk in knowing their business, their people and their gaps, and write a proposal that speaks to them.</p></div>
   </div>
 </section>
 
