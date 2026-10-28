@@ -1,0 +1,9 @@
+# Country industry research
+
+The operator page at `/country-industry` starts a `country.industry` job using a country and industry keyword. It polls the job, shows worker connection and progress, and downloads `result.csv` as a CSV. The page shell is public like the other operator pages; the job API still requires `LAB_TOKEN`.
+
+The country worker lives in the separate `local-worker` checkout. It discovers Maps listings, researches public company websites with deterministic code, and returns the complete CSV, summary, and coverage warning in the job result. No LLM is used in the contact stage. Jobs are checkpointed on the worker by job ID. A live country worker needs `WORKER_TYPES=country.industry` and a distinct `WORKER_NAME`.
+
+Country jobs renew their five-minute lease through a job-specific heartbeat from the current lease holder. Progress is accepted only from that holder. A silent worker's lease expires and the broker may reassign the job. A restart on the same worker can resume its local checkpoint; reassignment to a different machine starts its own checkpoint. Completed CSVs and country job state are saved atomically under `$HOME/.agy-lab/country-jobs` in production; Railway must mount the persistent `/data` volume. `COUNTRY_JOB_STORE_DIR` overrides the location. Other broker jobs retain their existing persistence and lease behavior.
+
+The broker's worker result limit is controlled by `RESULT_BODY_LIMIT` (32 MiB by default), including JSON overhead; CSVs larger than the limit cannot be delivered through this route. Google Maps may return capped, incomplete, geographically imprecise or irrelevant listings; summary fields flag possible limits, not complete coverage. Website access failures and missing websites are included in the CSV's status fields. Search and contact information should be reviewed before use.

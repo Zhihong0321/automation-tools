@@ -1,3 +1,4 @@
+import { countryIndustryPage } from './country-industry-page.ts';
 // agy-lab: the HTTP surface.
 //
 // This binds 0.0.0.0 because Railway requires it, and it exposes a shell endpoint
@@ -227,6 +228,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (method === 'GET' && (p === '/auto-queue' || p === '/auto-queue/')) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
     return void res.end(autoQueuePage.page());
+  }
+
+  if (method === 'GET' && (p === '/country-industry' || p === '/country-industry/')) {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
+    return void res.end(countryIndustryPage());
   }
 
   if (method === 'GET' && (p === '/company-dive' || p === '/company-dive/')) {

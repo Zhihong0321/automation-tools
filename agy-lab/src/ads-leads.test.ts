@@ -116,7 +116,8 @@ test('renderAdsLeads renders lead cards with consumer solar info, WhatsApp links
     lead_notes: 'Customer interested in 6.5kWp system',
     raw_data: { lead_id: 'LEAD-ATAP-1380', source: 'google_ads' },
     is_hidden: false,
-    created_at: '2026-09-28T06:12:32.947Z'
+    // Keep the fixture recent so the NEW INCOMING assertion does not expire.
+    created_at: new Date().toISOString()
   };
 
   const hiddenLead = {

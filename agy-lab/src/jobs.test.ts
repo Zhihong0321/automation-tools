@@ -205,3 +205,51 @@ test('m4-mini is retired from gmap.scan: never handed one, never counted live fo
   assert.equal(await claim('scan-host'), job.id);
   finish(job.id, true, {}, null);
 });
+
+test('country research heartbeat renews only the current worker lease', async () => {
+  const job = create('country.industry', {country:'Malaysia',industry:'advertising'}, 1000);
+  assert.equal((await take('country-owner',{types:['country.industry'],waitMs:0}))?.id,job.id);
+  const req = {method:'POST',headers:{},socket:{}} as unknown as http.IncomingMessage;
+  const res = {} as http.ServerResponse;
+  const call = async (worker:string) => handle(req,res,new URL('http://lab/api/jobs/heartbeat'),{json:()=>{},readJson:async()=>({worker,types:['country.industry'],jobId:job.id})});
+  job.startedAt = new Date(Date.now()-2000).toISOString();
+  job.leaseUpdatedAt = new Date(Date.now()-500).toISOString();
+  const before = job.leaseUpdatedAt;
+  await call('other-worker');
+  assert.equal(job.leaseUpdatedAt, before);
+  await call('country-owner');
+  assert.ok(Date.now()-Date.parse(job.leaseUpdatedAt!)<1000);
+  assert.equal(get(job.id)?.status,'running');
+  finish(job.id,true,{},null);
+});
+
+test('country progress requires the current lease holder', async () => {
+  const job=create('country.industry',{country:'Malaysia',industry:'advertising'});
+  await take('progress-owner',{types:['country.industry'],waitMs:0});
+  const req={method:'POST',headers:{},socket:{}} as unknown as http.IncomingMessage;
+  let status=0;let output:any;
+  const send=async(worker:string)=>handle(req,{} as http.ServerResponse,new URL('http://lab/api/jobs/'+job.id+'/progress'),{json:(_r,s,b)=>{status=s;output=b;},readJson:async()=>({worker,progress:{phase:'maps',completed:3,total:10,message:'Searching'}})});
+  await send('wrong-worker');assert.equal(status,409);assert.equal(job.progress,undefined);
+  await send('progress-owner');assert.equal(status,200);assert.equal(output.progress.completed,3);assert.equal(get(job.id)?.progress?.total,10);
+  finish(job.id,true,{},null);
+});
+
+test('country CSV stays available on its job without inflating the job-list response', async()=>{
+  const job=create('country.industry',{country:'Malaysia',industry:'advertising'});
+  await take('csv-owner',{types:['country.industry'],waitMs:0});
+  finish(job.id,true,{filename:'report.csv',csv:'name,email\nExample,a@example.com\n'},null);
+  const listed=snapshot().jobs.find(j=>j.id===job.id)!;
+  assert.equal((listed.result as any).csv,undefined);
+  assert.equal((listed.result as any).csvAvailable,true);
+  assert.match((get(job.id)?.result as any).csv,/a@example.com/);
+});
+
+test('country result from a stale worker cannot overwrite the active lease', async()=>{
+  const job=create('country.industry',{country:'Malaysia',industry:'advertising'});
+  await take('current-owner',{types:['country.industry'],waitMs:0});
+  const req={method:'POST',headers:{},socket:{}} as unknown as http.IncomingMessage;
+  let status=0;
+  await handle(req,{} as http.ServerResponse,new URL('http://lab/api/jobs/'+job.id+'/result'),{json:(_r,s)=>{status=s;},readJson:async()=>({worker:'stale-owner',ok:true,result:{csv:'wrong'}})});
+  assert.equal(status,409);assert.equal(get(job.id)?.status,'running');assert.equal(get(job.id)?.result,null);
+  finish(job.id,true,{csv:'correct'},null);
+});

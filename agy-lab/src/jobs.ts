@@ -23,6 +23,7 @@
 import http from 'node:http';
 import * as db from './reportdb.ts';
 import crypto from 'node:crypto';
+import {saveCountryJob, loadCountryJob, loadCountryJobs} from './country-job-store.ts';
 
 export interface Ctx {
   json: (res: http.ServerResponse, status: number, body: unknown) => void;
@@ -49,6 +50,9 @@ export interface Job {
   error: string | null;
   /** Contact jobs become claimable only after their report stores this id. */
   ready?: boolean;
+  /** Country jobs renew their lease only from the worker currently holding them. */
+  leaseUpdatedAt?: string | null;
+  progress?: { phase: string; completed: number; total: number | null; message: string; updatedAt: string } | null;
 }
 
 export interface WorkerInfo {
@@ -90,6 +94,7 @@ const MAX_JOBS = 500;
 const MAX_WAIT_MS = 25_000;
 
 const jobs = new Map<string, Job>();
+for (const restored of loadCountryJobs()) jobs.set(restored.id, restored);
 const workers = new Map<string, WorkerInfo>();
 const cooldowns = new Map<string, { until: number; reason: string }>();
 
@@ -216,17 +221,18 @@ function sweep(): void {
     // 5-minute default is taken back while the worker is still heartbeating.
     const holdMs = leaseMs(job.type, job.payload, job.timeoutMs);
     if (holdMs > job.timeoutMs) job.timeoutMs = holdMs;
-    if (at - Date.parse(job.startedAt) <= job.timeoutMs) continue;
+    const leaseStart = job.type === 'country.industry' && job.leaseUpdatedAt ? job.leaseUpdatedAt : job.startedAt;
+    if (at - Date.parse(leaseStart) <= job.timeoutMs) continue;
     if (job.attempts >= MAX_ATTEMPTS) {
-      job.status = 'failed';
-      job.finishedAt = now();
-      job.error = 'lease expired ' + job.attempts + 'x without a result (last worker: ' + (job.worker ?? 'unknown') + ')';
+      const failed = { ...job, status: 'failed' as const, finishedAt: now(), error: 'lease expired ' + job.attempts + 'x without a result (last worker: ' + (job.worker ?? 'unknown') + ')' };
+      saveCountryJob(failed);
+      Object.assign(job, failed);
       settleFinished(job);
       continue;
     }
-    job.status = 'pending';
-    job.startedAt = null;
-    job.worker = null;
+    const requeued = { ...job, status: 'pending' as const, startedAt: null, worker: null };
+    saveCountryJob(requeued);
+    Object.assign(job, requeued);
   }
 
   if (jobs.size <= MAX_JOBS) return;
@@ -250,10 +256,11 @@ function pending(types: string[] | null): Job | null {
 }
 
 function lease(job: Job, worker: string): Job {
-  job.status = 'running';
-  job.startedAt = now();
-  job.worker = worker;
-  job.attempts += 1;
+  const startedAt = now();
+  const leased = { ...job, status: 'running' as const, startedAt, worker, attempts: job.attempts + 1,
+    ...(job.type === 'country.industry' ? { leaseUpdatedAt: startedAt } : {}) };
+  saveCountryJob(leased);
+  Object.assign(job, leased);
   const info = workers.get(worker);
   if (info) info.taken += 1;
   return job;
@@ -298,6 +305,7 @@ export function create(type: string, payload: unknown, timeoutMs = DEFAULT_TIMEO
     error: null,
     ready,
   };
+  saveCountryJob(job);
   jobs.set(job.id, job);
   // `reportId` rides the payload when the caller has one. Fire-and-forget: the
   // broker is synchronous and a trail write must never be able to delay or fail
@@ -408,10 +416,10 @@ export function finish(id: string, ok: boolean, result: unknown, error: string |
   // genuinely happened, and refusing it would mean re-running a scan that has
   // already spent its Google budget. It may arrive after a retry was handed out;
   // last writer wins, and `attempts` is what records that it happened twice.
-  job.status = ok ? 'done' : 'failed';
-  job.finishedAt = now();
-  job.result = ok ? (result ?? null) : null;
-  job.error = ok ? null : (error ?? 'worker reported failure with no message');
+  const finished = { ...job, status: (ok ? 'done' : 'failed') as JobStatus, finishedAt: now(),
+    result: ok ? (result ?? null) : null, error: ok ? null : (error ?? 'worker reported failure with no message') };
+  saveCountryJob(finished);
+  Object.assign(job, finished);
   const info = job.worker ? workers.get(job.worker) : undefined;
   if (info) {
     if (ok) info.done += 1;
@@ -435,9 +443,9 @@ export function cancel(id: string, reason: string): Job | null {
   const job = jobs.get(id);
   if (!job) return null;
   if (job.status === 'done' || job.status === 'failed') return job;
-  job.status = 'failed';
-  job.finishedAt = now();
-  job.error = reason;
+  const cancelled = { ...job, status: 'failed' as const, finishedAt: now(), error: reason };
+  saveCountryJob(cancelled);
+  Object.assign(job, cancelled);
   void db.logEvent({
     reportId: (job.payload as { reportId?: string })?.reportId ?? null,
     jobId: job.id, stage: job.type, event: 'job.cancelled',
@@ -477,7 +485,11 @@ export function wait(id: string, timeoutMs: number): Promise<Job | null> {
 
 export function get(id: string): Job | null {
   sweep();
-  return jobs.get(id) ?? null;
+  const existing = jobs.get(id);
+  if (existing) return existing;
+  const restored = /^[a-f0-9]{12}$/.test(id) ? loadCountryJob(id) : null;
+  if (restored) jobs.set(id, restored);
+  return restored;
 }
 
 export function snapshot(): {
@@ -492,7 +504,13 @@ export function snapshot(): {
   return {
     counts,
     waiting: waiters.length,
-    jobs: [...jobs.values()].reverse(),
+    jobs: [...jobs.values()].reverse().map((job) => {
+      if (job.type !== 'country.industry' || !job.result || typeof job.result !== 'object') return job;
+      // A nationwide CSV can be large; it is available from GET /api/jobs/:id,
+      // not copied into every worker-dashboard poll of GET /api/jobs.
+      const {csv: _csv, ...metadata} = job.result as Record<string, unknown>;
+      return {...job, result: {...metadata, csvAvailable: typeof _csv === 'string'}};
+    }),
     workers: [...workers.values()].map((w) => {
       const cooldown = cooldownFor(w.cooldownGroup);
       return { ...w,
@@ -610,6 +628,10 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       .filter((type) => !isRetired(worker, type));
     const group = str(body.cooldownGroup).trim();
     touch(worker, callerIp(req), types, group);
+    sweep();
+    const activeJobId = str(body.jobId);
+    const activeJob = activeJobId ? jobs.get(activeJobId) : null;
+    if (activeJob?.type === 'country.industry' && activeJob.status === 'running' && activeJob.worker === worker) { const renewed = {...activeJob, leaseUpdatedAt: now()}; saveCountryJob(renewed); Object.assign(activeJob, renewed); }
     // A cooling worker keeps beating. Restore its deadline after a broker
     // restart without extending it by another full retry interval on each beat.
     const until = Date.parse(str(body.cooldownUntil));
@@ -637,12 +659,33 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     return true;
   }
 
+  const progress = /^\/api\/jobs\/([a-f0-9]{12})\/progress$/.exec(p);
+  if (method === 'POST' && progress) {
+    const body = await readJson(req);
+    sweep();
+    const job = jobs.get(progress[1]!);
+    const worker = str(body.worker).trim();
+    if (!job || job.type !== 'country.industry') { json(res, 404, { error: 'no such country industry job' }); return true; }
+    if (job.status !== 'running' || !worker || job.worker !== worker) { json(res, 409, { error: 'job is not held by this worker' }); return true; }
+    const data = body.progress && typeof body.progress === 'object' ? body.progress as Record<string, unknown> : {};
+    const total = num(data.total, 0);
+    const updated = { ...job, progress: { phase: str(data.phase).slice(0, 40), completed: Math.max(0, Math.floor(num(data.completed, 0))), total: total > 0 ? Math.floor(total) : null, message: str(data.message).slice(0, 300), updatedAt: now() }, leaseUpdatedAt: now() };
+    saveCountryJob(updated);
+    Object.assign(job, updated);
+    json(res, 200, { progress: job.progress });
+    return true;
+  }
+
   const result = /^\/api\/jobs\/([a-f0-9]{12})\/result$/.exec(p);
   if (method === 'POST' && result) {
     const body = await readJson(req);
     const worker = str(body.worker).trim();
     if (worker) touch(worker, callerIp(req));
     const current = get(result[1]!);
+    if (current?.type === 'country.industry' && (current.status !== 'running' || !worker || current.worker !== worker)) {
+      json(res, 409, { error: 'country job is not held by this worker' });
+      return true;
+    }
     let reportId = str(body.reportId || (current?.payload as { reportId?: unknown } | null)?.reportId);
     let savedContact = false;
     if (!reportId && (!current || isDurableContactJob(current.type)))
