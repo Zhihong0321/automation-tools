@@ -154,8 +154,8 @@ h2 { font-size:clamp(34px,4.4vw,58px); max-width:16em; } .lead { font-size:19px;
 .steps { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; counter-reset:st; }
 .steps div { counter-increment:st; display:grid; gap:6px; } .steps div::before { content:counter(st, decimal-leading-zero); font-family:var(--display); font-size:36px; font-weight:500; letter-spacing:-0.04em; color:var(--muted); }
 .steps h3 { font-size:18px; } .steps p { font-size:14.5px; color:var(--grey); } .steps .now { color:var(--good); font-weight:600; font-size:12px; letter-spacing:.1em; text-transform:uppercase; }
-.uses { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; counter-reset:us; }
-.uses div { counter-increment:us; background:var(--band); padding:22px; display:grid; gap:8px; align-content:start; } .uses div::before { content:counter(us, decimal-leading-zero); font-family:var(--display); font-size:32px; font-weight:500; letter-spacing:-0.04em; line-height:1; color:var(--muted); }
+.uses { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }
+.uses div { background:var(--band); padding:22px; display:grid; gap:8px; align-content:start; border-top:3px solid var(--ink); }
 .uses h3 { font-size:19px; letter-spacing:-0.015em; line-height:1.2; } .uses p { font-size:14.5px; color:var(--grey); }
 /* order */
 .order { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,1fr); gap:56px; align-items:center; }
