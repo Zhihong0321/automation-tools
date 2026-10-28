@@ -217,6 +217,45 @@ export async function failInterrupted(): Promise<void> {
                        where status in ('queued', 'waiting_dive', 'running')`);
 }
 
+// ---------------------------------------------------------------- previews, written on their own
+
+/** On unless DD_PREVIEW_AUTO says off: every finished company-dive gets its preview written, nobody has to open it first. */
+export const previewAuto = (env: NodeJS.ProcessEnv = process.env): boolean => !/^(0|false|off|no)$/i.test(String(env.DD_PREVIEW_AUTO ?? '').trim());
+const PREVIEW_SWEEP_MS = 120_000;
+let sweeping = false;
+
+/** One finished company-dive without a preview, newest first, written now. One at a time; never throws. */
+async function previewSweep(): Promise<void> {
+  if (sweeping || !enabled() || !previewAuto() || !reportdb.configured()) return;
+  sweeping = true;
+  try {
+    await ensureTable();
+    for (;;) {
+      const dive = (await reportdb.sql(`select c.id, c.public_id, c.company, c.status, c.result, c.dossier, c.finished_at from company_dive c
+                                          left join dive_preview p on p.dive_id = c.id
+                                         where p.dive_id is null and c.status in ('done', 'partial') and c.result is not null
+                                         order by c.finished_at desc nulls last limit 1`)).rows[0] as any;
+      if (!dive || editing.has(dive.id)) break;
+      console.log(`[dive-preview ${dive.id}] writing the preview for ${dive.company}`);
+      await writePreviewNotes(dive);
+      // A failed write leaves no row; stop this sweep so the next one retries instead of looping.
+      const saved = (await reportdb.sql(`select 1 from dive_preview where dive_id = $1`, [dive.id])).rows[0];
+      if (!saved) break;
+    }
+  } catch (err) {
+    console.warn(`[dive-preview] sweep failed: ${(err as Error).message}`);
+  } finally {
+    sweeping = false;
+  }
+}
+
+/** Starts the preview writer: a sweep now, then every two minutes. */
+export function startPreviewWorker(): void {
+  if (!enabled() || !reportdb.configured()) return;
+  void previewSweep();
+  setInterval(() => void previewSweep(), PREVIEW_SWEEP_MS).unref();
+}
+
 // ---------------------------------------------------------------- HTTP
 
 type Ctx = {
@@ -308,6 +347,30 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
   if (!reportdb.configured()) { ctx.json(res, 503, { error: 'no report database configured' }); return true; }
   await ensureTable();
   const method = req.method ?? 'GET';
+
+  // The whole pipeline per company: its company-dive, its preview, and its full report if ordered.
+  if (p === '/api/dive-deeper/pipeline' && method === 'GET') {
+    const out = await reportdb.sql(`
+      select c.id as dive_id, c.public_id as dive_public_id, c.company, c.status as dive_status, c.finished_at as dive_finished_at,
+             p.created_at as preview_written_at, (p.notes ? 'warnings') as preview_edited,
+             d.id as run_id, d.public_id as run_public_id, d.status as run_status, d.finished_at as run_finished_at
+        from company_dive c
+        left join dive_preview p on p.dive_id = c.id
+        left join lateral (select id, public_id, status, finished_at from dive_deeper where dive_id = c.id order by id desc limit 1) d on true
+       order by c.id desc limit 200`);
+    const proto = String(req.headers['x-forwarded-proto'] ?? 'https').split(',')[0];
+    const base = `${proto}://${req.headers['x-forwarded-host'] ?? req.headers.host}`;
+    ctx.json(res, 200, {
+      auto_preview: previewAuto(),
+      companies: out.rows.map((r: any) => ({
+        dive_id: Number(r.dive_id), company: r.company, dive_status: r.dive_status, dive_finished_at: r.dive_finished_at,
+        preview: r.preview_written_at ? (r.preview_edited ? 'ready' : 'ready, fallback wording') : editing.has(Number(r.dive_id)) ? 'writing' : ['done', 'partial'].includes(r.dive_status) ? 'waiting' : 'no dive yet',
+        preview_url: r.dive_public_id ? `${base}/dp/${r.dive_public_id}` : null,
+        report: r.run_id ? { run_id: Number(r.run_id), status: r.run_status, finished_at: r.run_finished_at, report_url: `${base}/dd/${r.run_public_id}` } : null,
+      })),
+    });
+    return true;
+  }
 
   if (p === '/api/dive-deeper' && method === 'GET') {
     const out = await reportdb.sql(`

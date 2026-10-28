@@ -453,7 +453,8 @@ server.listen(PORT, '0.0.0.0', () => {
     .then(() => companyDivePeople.failInterrupted())
     .catch((err: Error) => console.warn('could not close interrupted company dives: ' + err.message));
   void diveDeeper.failInterrupted()
-    .catch((err: Error) => console.warn('could not close interrupted dive-deeper runs: ' + err.message));
+    .catch((err: Error) => console.warn('could not close interrupted dive-deeper runs: ' + err.message))
+    .finally(() => diveDeeper.startPreviewWorker());
   // Every lead, so a rule changed in this deploy reaches the ones already saved.
   if (reportdb.configured()) {
     void reportdb.applyLeadBlacklist({ all: true })

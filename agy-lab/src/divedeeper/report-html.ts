@@ -466,6 +466,9 @@ export function buildReport(dive: any, L: Record<string, any>): string {
 
   const mismatch: any[] = ed.mismatch?.length ? ed.mismatch : (r.contradictions ?? []).slice(0, 5).map((c: string) => ({ issue: c.replace(/\[\d+\]/g, '').replace(/\s+/g, ' ').trim(), settled: null }));
   const checkedOn = dateOf(R.checked_on);
+  // The assistants section G actually asked (the hub asks DeepSeek only), named for the method note.
+  const modelNames = [...new Set(['G-fixed', 'G-grounded'].flatMap((l) => L[l]?.notes?.models ?? []).map((m: string) => (/deepseek/i.test(m) ? 'DeepSeek V4.1 Flash' : /gpt-6\.1/i.test(m) ? 'GPT-6.1' : m)))];
+  const aiModels = modelNames.length ? modelNames.join(' and ') : 'AI assistants';
 
   // ---------- one chapter per area ----------
   function chapter(id: string): string {
@@ -575,7 +578,7 @@ ${chapters.map(chapter).join('\n')}
   ${AREAS.filter((a) => byArea(a.id).length).map((a) => { const list = byArea(a.id); return `<div id="appx-${a.id}"><h3 class="sub" style="font-size:17px">${esc(a.title)} <span class="muted" style="font-family:var(--body);font-size:11px;font-weight:400;letter-spacing:0">${list.filter((x) => x.severity === 'high').length} urgent · ${list.filter((x) => x.severity === 'medium').length} need work · ${list.length} in all</span></h3>${itemRows(list)}</div>`; }).join('')}
   <details><summary>Background research on the company</summary><p class="note" style="margin:4px 0 10px">Written from public sources on ${esc(dateOf(dive.finished_at))}, before the checks in this report. Where they differ, the checks are newer and win.</p><div class="dossier">${md(String(dive.dossier ?? ''))}</div></details>
   ${sources.length ? `<details><summary>Sources (${sources.length})</summary><ol class="sources">${sources.map((s: any) => `<li id="src-${esc(s.id)}" value="${esc(s.id)}">${/^https?:\/\//.test(s.url) ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(clip(String(s.title || hostOf(s.url)), 90))}</a> · ${esc(hostOf(s.url))}` : esc(s.title)}</li>`).join('')}</ol></details>` : ''}
-  <div class="note" style="margin-top:8px"><p class="lbl">How we checked</p><p>Every Google review on your Maps listings was read. Maps ranks come from Google Maps searches without a phone’s location, so a customer nearby may see a slightly different order; web ranks come from Brave Search set to Malaysia. Each licence and award was looked up in its issuer’s own register. Every page of your websites was read and its links and numbers tested. AI answers come from DeepSeek V4.1 Flash and GPT-6.1, asked each question several times, from memory and with a web search. The ready-to-use drafts were written with AI from these findings. Checked ${esc(checkedOn)}; background research from ${esc(dateOf(dive.finished_at))}.</p></div>
+  <div class="note" style="margin-top:8px"><p class="lbl">How we checked</p><p>Every Google review on your Maps listings was read. Maps ranks come from Google Maps searches without a phone’s location, so a customer nearby may see a slightly different order; web ranks come from Brave Search set to Malaysia. Each licence and award was looked up in its issuer’s own register. Every page of your websites was read and its links and numbers tested. AI answers come from ${esc(aiModels)}, asked each question several times, from memory and with a web search. The ready-to-use drafts were written with AI from these findings. Checked ${esc(checkedOn)}; background research from ${esc(dateOf(dive.finished_at))}.</p></div>
   ${foot()}
 </section>
 

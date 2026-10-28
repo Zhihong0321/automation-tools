@@ -82,14 +82,33 @@ Sample: [dive-deeper-report-eternalgy.html](dive-deeper-report-eternalgy.html).
 | Your websites | Does your website win the customer, or lose them? | Urgent faults on your sites |
 | Licences and awards | Can a stranger verify what you claim? | Claims the registers confirm |
 
+## Fully automatic, on Railway
+
+Everything runs inside the hub on Railway (`ee-auto`). Nothing needs this PC, and nothing calls
+Claude: every AI step uses DeepSeek (`deepseek-v4.1-flash-1017` through Vectide, the hub's
+`CONTACT_LLM_*` settings).
+
+| Step | Trigger | Runs where | AI used | Stored in (Postgres on Railway) | Link |
+|---|---|---|---|---|---|
+| Company dive | `POST /api/company-dive` (by whoever adds the prospect) | Hub, its own queue | DeepSeek | `company_dive` (research, dossier, sources) | `/d/<public id>` |
+| Preview | Automatic: the hub checks every 2 minutes for finished company dives without a preview, one at a time | Hub | One DeepSeek call per company | `dive_preview` (the notes); the page is drawn from them on each visit, so design changes reach old previews too | `/dp/<public id>` |
+| Full report | After payment: `POST /api/dive-deeper` with `{"dive_id": …}` (a payment webhook can call this once a provider is chosen) | Hub, one run at a time, with headless Chromium for the screenshots | DeepSeek for every stage | `dive_deeper`: every lane's results in `lanes`, the finished page in `report_html` | `/dd/<public id>` |
+
+One list shows where every company stands: `GET /api/dive-deeper/pipeline` returns each company
+dive with its preview status and link, and its full report status and link when one was ordered.
+
+Both links are public: the long random ID in the link is the permission, as with company dives,
+and the pages tell search engines not to index them. The API needs the hub token.
+
 ## How to run it
 
 | Task | How |
 |---|---|
-| Get a preview link | Run a company dive; its report link `/d/<public id>` becomes `/dp/<public id>` for the preview. The dive-deeper console lists a **Preview** link next to each company dive. |
+| See every company, preview and report | `GET /api/dive-deeper/pipeline` |
+| Get a preview link | Nothing to do: it is written within a few minutes of the company dive finishing. The link is the company dive's `/d/<public id>` with `/dp/`, and the dive-deeper console shows a **Preview** link next to each run. |
 | Start the full report after payment | Dive-deeper console, or `POST /api/dive-deeper` with `{"dive_id": <company dive id>}`, so the run reuses that dive |
 | Set the order panel on the preview | Hub settings `DD_PREVIEW_PRICE` (e.g. `RM 990`), `DD_PREVIEW_CONTACT` (how to order) and `DD_PREVIEW_ORDER_URL` (an order or payment page). Empty, the preview asks the client to reply to the message that brought it. |
-| Switch on | `DIVE_DEEPER_ENABLED` on the hub (the preview and the full report are both off without it) |
+| Switches | `DIVE_DEEPER_ENABLED` turns previews and full reports on; `DD_PREVIEW_AUTO=off` stops previews being written on their own (they are then written on first open) |
 | Build either one on this PC | `node agy-lab/scripts/dive-deeper/preview.ts <diveId>` and `node agy-lab/scripts/dive-deeper/report.ts <diveId>`, from the files in `scripts/dive-deeper/out` |
 
 ## Not decided yet

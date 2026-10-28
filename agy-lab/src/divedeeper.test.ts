@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { enabled, handle, handlePage, handlePublic } from './divedeeper.ts';
+import { enabled, handle, handlePage, handlePublic, previewAuto } from './divedeeper.ts';
 import { buildReport } from './divedeeper/report-html.ts';
 import { buildPreview } from './divedeeper/preview-html.ts';
 import { runLane } from './divedeeper/runner.ts';
@@ -13,6 +13,13 @@ test('dive-deeper is off unless DIVE_DEEPER_ENABLED says on', () => {
   assert.equal(enabled({ DIVE_DEEPER_ENABLED: '0' }), false);
   assert.equal(enabled({ DIVE_DEEPER_ENABLED: 'true' }), true);
   assert.equal(enabled({ DIVE_DEEPER_ENABLED: '1' }), true);
+});
+
+test('previews are written automatically unless DD_PREVIEW_AUTO says off', () => {
+  assert.equal(previewAuto({}), true);
+  assert.equal(previewAuto({ DD_PREVIEW_AUTO: 'on' }), true);
+  assert.equal(previewAuto({ DD_PREVIEW_AUTO: 'off' }), false);
+  assert.equal(previewAuto({ DD_PREVIEW_AUTO: '0' }), false);
 });
 
 test('with the switch off every handler declines, so the hub behaves as before', async () => {
