@@ -66,7 +66,7 @@ test('a lane that cannot load comes back partial instead of throwing', async () 
   assert.match(r.warnings[0], /no lane file/);
 });
 
-test('the preview builds from the company-dive alone and keeps the five numbers locked', () => {
+test('the preview landing page builds from the company-dive alone, uses the editor notes, and keeps the five numbers locked', () => {
   const dive = {
     company: 'Acme Sdn Bhd', finished_at: '2026-10-25T10:00:00Z', dossier: '## Identity\n\nAcme makes widgets [1].',
     result: {
@@ -76,8 +76,10 @@ test('the preview builds from the company-dive alone and keeps the five numbers 
     },
   };
   const html = buildPreview(dive, { price: 'RM 990' }).replace(/<style[\s\S]*?<\/style>/, '');
-  for (const s of ['Preview', 'Founding month: July 2023 vs September 2023.', 'Claims CIDB Grade G7 registration.', 'Not yet checked', 'Locked', 'RM 990', 'How important is an AI recommendation', 'id="src-1"']) assert.ok(html.includes(s), s);
+  for (const s of ['Prepared for Acme Sdn Bhd', 'July 2023 vs September 2023.', 'Directors are not named.', 'Contradiction', 'Missing', 'Locked', 'RM 990', 'How important is an AI recommendation', 'id="src-1"']) assert.ok(html.includes(s), s);
   assert.ok(!/undefined|\[object Object\]|NaN/.test(html));
   assert.ok(!/\[\d+\]/.test(html.replace(/<details[\s\S]*<\/details>/g, '')), 'no [n] citations outside the research appendix');
   assert.ok(buildPreview({ company: 'Empty' }).includes('Empty'), 'a dive with no result still builds');
+  const edited = buildPreview(dive, {}, { hook: 'Your award label is a year out.', known: [{ label: 'Founded', value: 'July 2023' }], warnings: [{ type: 'outdated', title: 'Award label still says 2024', detail: 'd', risk: 'r' }] });
+  for (const s of ['Your award label is a year out.', 'Award label still says 2024', 'Outdated', 'July 2023']) assert.ok(edited.includes(s), s);
 });

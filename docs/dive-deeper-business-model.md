@@ -10,7 +10,7 @@ We research a company **before** they pay, show them a free **preview** of their
 | Step | When | What runs | What the client sees |
 |---|---|---|---|
 | 1. Company dive | Before the client pays | Stage 1: research from public sources only (web search, company registers, directories) | Nothing yet |
-| 2. Preview | Right after the company dive | No extra work: the preview is built from the company dive alone | The free preview, at `/dp/<public id>` |
+| 2. Preview | When the preview link is first opened | One AI pass over the company dive, run once and kept | The free preview landing page, at `/dp/<public id>` |
 | 3. Full report | After the client pays | The dive-deeper pipeline: reviews, Google Maps, AI assistants, websites, registers, then advice and editing | The full report, at `/dd/<public id>` |
 
 ### 1. The company dive is done before the client buys
@@ -19,26 +19,36 @@ The company dive researches the company from public sources: who they are, their
 people, claims, projects and footprint. For Eternalgy it read 181 sources and recorded 91 facts.
 It also lists where those sources disagree (13 places) and what they cannot answer (10 questions).
 
-It is the cheap part: one company dive per prospect, and the preview adds no further cost. The
+It is the cheap part: one company dive per prospect, and the preview adds a single AI pass. The
 expensive work (Maps, reviews, AI questions, the website crawl, advice and editing) only runs
 once the client has paid.
 
 ### 2. The preview is an early look at the full report
 
-The preview turns the company dive into a short report in the same style as the full report:
-A4, desktop and mobile versions, with the same chapters and look. It does three jobs:
+The preview is a one-page landing page for the owner, built from the company dive. It is
+written to hook them in two ways, then ask for the order:
 
-- **It proves the work is real.** It shows the company's own details, the people linked to it and
-  its claims, all from public sources. The owner recognises their business at once.
-- **It raises the questions the owner cannot ignore.** For example, "13 places where your story
-  changes from source to source": founding month, headcount, CIDB grade, project counts, warranty
-  terms. Each claim is marked *Not yet checked* against its register.
-- **It tells them exactly what they get when they order.** The five numbers customers decide on
-  are shown **locked**: reviews answered, Google Maps rank, AI recommendations, urgent website
-  faults, and claims confirmed by the registers. Each chapter of the full report is described
-  with the question it answers, what we will do and what they will know. The ready-to-use work
-  (rewritten homepage, review replies, pages to add, AI plan, business data, 30-day plan) is
-  listed, and the page ends with how to order.
+- **It is about them and nobody else.** The opening line names their company and how many
+  sources we read about it. A "prepared for you" file card shows their registration, head office,
+  websites and the people we found. A section of what public sources already say about them
+  (founded, leadership, services, registrations, claimed projects, awards) makes it plain this is
+  not a template.
+- **It shows warning signs, and holds most of them back.** Each warning is tagged as a
+  *contradiction*, *missing* information, *outdated* or *wrong information*, with what the
+  sources say and who notices (a customer, a bank, a tender officer). Five are shown in full. The
+  rest are counted on a locked card ("+18 more warning signs, shown in your full report"), and
+  the five numbers customers decide on are shown **locked**: reviews answered, Google Maps rank,
+  AI recommendations, urgent website faults, claims confirmed by the registers.
+
+After that comes what each chapter of the full report unlocks, the work done for them
+(rewritten homepage, review replies, pages to add, AI plan, business data, 30-day plan), how it
+works, and the order panel. "Get my full report" buttons sit in the top bar, the opening, the
+middle and the end.
+
+One AI pass writes the opening line, the "what we know" items and the typed warnings from the
+company dive. It runs the first time the preview link is opened (about a minute, behind a page
+that refreshes itself) and is kept, so every later visit is instant and costs nothing. If it
+fails, the page uses the company dive's own contradictions and gaps instead.
 
 Sample: [dive-preview-eternalgy.html](dive-preview-eternalgy.html).
 

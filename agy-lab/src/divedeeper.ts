@@ -17,10 +17,11 @@ import crypto from 'node:crypto';
 import * as reportdb from './reportdb.ts';
 import * as brave from './brave.ts';
 import * as exa from './exa.ts';
-import { configure } from './divedeeper/lib.ts';
+import { configure, makeCtx } from './divedeeper/lib.ts';
 import { runLane, stageDive, type LaneResult } from './divedeeper/runner.ts';
 import { buildReport } from './divedeeper/report-html.ts';
 import { buildPreview, type Offer } from './divedeeper/preview-html.ts';
+import { editPreview } from './divedeeper/preview-editor.ts';
 import { page as browsePage } from './divedeeper-page.ts';
 
 export const enabled = (env: NodeJS.ProcessEnv = process.env): boolean => /^(1|true|on|yes)$/i.test(String(env.DIVE_DEEPER_ENABLED ?? '').trim());
@@ -61,6 +62,11 @@ function ensureTable(): Promise<unknown> {
       finished_at timestamptz
     );
     create index if not exists dive_deeper_created_idx on dive_deeper (created_at desc);
+    create table if not exists dive_preview (
+      dive_id bigint primary key,
+      notes jsonb not null default '{}',
+      created_at timestamptz not null default now()
+    );
   `).catch((err) => { tableReady = null; throw err; });
   return tableReady;
 }
@@ -227,17 +233,41 @@ function links(req: http.IncomingMessage, publicId: string, divePublicId?: strin
 /** What the preview's order page shows; set on the hub, all optional. */
 const offer = (): Offer => ({ price: process.env.DD_PREVIEW_PRICE, contact: process.env.DD_PREVIEW_CONTACT, order_url: process.env.DD_PREVIEW_ORDER_URL });
 
-/** /dp/<company-dive public id>: the free preview, built from the company-dive alone, before anything is paid for. */
+/** Company-dives whose preview notes are being written in this process right now. */
+const editing = new Set<number>();
+
+/** Writes the preview's notes once and keeps them; a failed pass is kept as {} so the page falls back. Never throws. */
+async function writePreviewNotes(dive: any): Promise<void> {
+  editing.add(dive.id);
+  try {
+    configureKeys();
+    const ctx = makeCtx(String(dive.id), 'P', 'preview');
+    const notes = await editPreview(dive, (p) => ctx.llm(p), ctx.parseJson, ctx.warn);
+    await reportdb.sql(`insert into dive_preview (dive_id, notes) values ($1, $2::jsonb) on conflict (dive_id) do update set notes = excluded.notes, created_at = now()`, [dive.id, JSON.stringify(notes ?? {})]);
+  } catch (err) {
+    console.error(`[dive-preview ${dive.id}] notes failed`, err);
+  } finally {
+    editing.delete(dive.id);
+  }
+}
+
+/** /dp/<company-dive public id>: the free preview, built from the company-dive alone, before anything is paid for.
+ *  The first open writes its notes (one LLM pass, about a minute) behind a page that refreshes itself. */
 async function handlePreview(res: http.ServerResponse, publicId: string): Promise<void> {
   const dive = (await reportdb.sql(`select id, public_id, company, status, stage, result, dossier, finished_at from company_dive where public_id = $1`, [publicId])).rows[0] as any;
   const headers = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' };
   if (!dive) { res.writeHead(404, headers); res.end('<!doctype html><title>Not found</title><p>No such preview.</p>'); return; }
-  if (dive.result && ['done', 'partial'].includes(dive.status)) { res.writeHead(200, headers); res.end(buildPreview(dive, offer())); return; }
+  const ready = dive.result && ['done', 'partial'].includes(dive.status);
+  if (ready) {
+    const saved = (await reportdb.sql(`select notes from dive_preview where dive_id = $1`, [dive.id])).rows[0] as any;
+    if (saved) { res.writeHead(200, headers); res.end(buildPreview(dive, offer(), saved.notes?.warnings ? saved.notes : null)); return; }
+    if (!editing.has(dive.id)) void writePreviewNotes(dive);
+  }
   const live = dive.status !== 'failed';
   res.writeHead(200, headers);
-  res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${live ? '<meta http-equiv="refresh" content="20">' : ''}
+  res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${live ? `<meta http-equiv="refresh" content="${ready ? 10 : 20}">` : ''}
 <title>${esc(dive.company)} preview</title><style>body{font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 16px;line-height:1.5;color:#111418}</style></head>
-<body><h1>${esc(dive.company)}</h1><p>${live ? 'Your preview is being prepared. This page refreshes every 20 seconds.' : 'The research for this preview did not finish.'}</p><p style="color:#5c636d">${esc(dive.stage ?? dive.status)}</p></body></html>`);
+<body><h1>${esc(dive.company)}</h1><p>${!live ? 'The research for this preview did not finish.' : ready ? 'Your preview is being written. This takes about a minute, and this page refreshes itself.' : 'Your preview is being prepared. This page refreshes every 20 seconds.'}</p>${ready ? '' : `<p style="color:#5c636d">${esc(dive.stage ?? dive.status)}</p>`}</body></html>`);
 }
 
 /** The console page at /dive-deeper (a shell; its data comes from the token-guarded API). */
@@ -253,7 +283,7 @@ const esc = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g,
 /** /dd/<public id>: the report, or its live progress until it is ready. The opaque id is the share capability, like /d/. */
 export async function handlePublic(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
   const pv = url.pathname.match(/^\/dp\/([A-Za-z0-9_-]{16,40})\/?$/);
-  if (pv && enabled() && req.method === 'GET' && reportdb.configured()) { await handlePreview(res, pv[1]); return true; }
+  if (pv && enabled() && req.method === 'GET' && reportdb.configured()) { await ensureTable(); await handlePreview(res, pv[1]); return true; }
   const m = url.pathname.match(/^\/dd\/([A-Za-z0-9_-]{16,40})\/?$/);
   if (!enabled() || !m || req.method !== 'GET' || !reportdb.configured()) return false;
   await ensureTable();
