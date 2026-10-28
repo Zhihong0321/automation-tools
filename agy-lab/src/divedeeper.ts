@@ -20,6 +20,7 @@ import * as exa from './exa.ts';
 import { configure } from './divedeeper/lib.ts';
 import { runLane, stageDive, type LaneResult } from './divedeeper/runner.ts';
 import { buildReport } from './divedeeper/report-html.ts';
+import { buildPreview, type Offer } from './divedeeper/preview-html.ts';
 import { page as browsePage } from './divedeeper-page.ts';
 
 export const enabled = (env: NodeJS.ProcessEnv = process.env): boolean => /^(1|true|on|yes)$/i.test(String(env.DIVE_DEEPER_ENABLED ?? '').trim());
@@ -220,7 +221,23 @@ type Ctx = {
 function links(req: http.IncomingMessage, publicId: string, divePublicId?: string | null): Record<string, string> {
   const proto = String(req.headers['x-forwarded-proto'] ?? 'https').split(',')[0];
   const base = `${proto}://${req.headers['x-forwarded-host'] ?? req.headers.host}`;
-  return { report_url: `${base}/dd/${publicId}`, ...(divePublicId ? { dive_report_url: `${base}/d/${divePublicId}` } : {}) };
+  return { report_url: `${base}/dd/${publicId}`, ...(divePublicId ? { dive_report_url: `${base}/d/${divePublicId}`, preview_url: `${base}/dp/${divePublicId}` } : {}) };
+}
+
+/** What the preview's order page shows; set on the hub, all optional. */
+const offer = (): Offer => ({ price: process.env.DD_PREVIEW_PRICE, contact: process.env.DD_PREVIEW_CONTACT, order_url: process.env.DD_PREVIEW_ORDER_URL });
+
+/** /dp/<company-dive public id>: the free preview, built from the company-dive alone, before anything is paid for. */
+async function handlePreview(res: http.ServerResponse, publicId: string): Promise<void> {
+  const dive = (await reportdb.sql(`select id, public_id, company, status, stage, result, dossier, finished_at from company_dive where public_id = $1`, [publicId])).rows[0] as any;
+  const headers = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' };
+  if (!dive) { res.writeHead(404, headers); res.end('<!doctype html><title>Not found</title><p>No such preview.</p>'); return; }
+  if (dive.result && ['done', 'partial'].includes(dive.status)) { res.writeHead(200, headers); res.end(buildPreview(dive, offer())); return; }
+  const live = dive.status !== 'failed';
+  res.writeHead(200, headers);
+  res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${live ? '<meta http-equiv="refresh" content="20">' : ''}
+<title>${esc(dive.company)} preview</title><style>body{font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 16px;line-height:1.5;color:#111418}</style></head>
+<body><h1>${esc(dive.company)}</h1><p>${live ? 'Your preview is being prepared. This page refreshes every 20 seconds.' : 'The research for this preview did not finish.'}</p><p style="color:#5c636d">${esc(dive.stage ?? dive.status)}</p></body></html>`);
 }
 
 /** The console page at /dive-deeper (a shell; its data comes from the token-guarded API). */
@@ -235,6 +252,8 @@ const esc = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g,
 
 /** /dd/<public id>: the report, or its live progress until it is ready. The opaque id is the share capability, like /d/. */
 export async function handlePublic(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+  const pv = url.pathname.match(/^\/dp\/([A-Za-z0-9_-]{16,40})\/?$/);
+  if (pv && enabled() && req.method === 'GET' && reportdb.configured()) { await handlePreview(res, pv[1]); return true; }
   const m = url.pathname.match(/^\/dd\/([A-Za-z0-9_-]{16,40})\/?$/);
   if (!enabled() || !m || req.method !== 'GET' || !reportdb.configured()) return false;
   await ensureTable();

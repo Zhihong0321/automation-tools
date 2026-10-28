@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { enabled, handle, handlePage, handlePublic } from './divedeeper.ts';
 import { buildReport } from './divedeeper/report-html.ts';
+import { buildPreview } from './divedeeper/preview-html.ts';
 import { runLane } from './divedeeper/runner.ts';
 
 const fakeReq = (method: string, path: string) => ({ method, url: path, headers: { host: 'x' } }) as any;
@@ -22,6 +23,7 @@ test('with the switch off every handler declines, so the hub behaves as before',
     assert.equal(await handle(fakeReq('GET', '/api/dive-deeper'), fakeRes(), new URL('http://x/api/dive-deeper'), ctx), false);
     assert.equal(handlePage(fakeReq('GET', '/dive-deeper'), fakeRes(), new URL('http://x/dive-deeper')), false);
     assert.equal(await handlePublic(fakeReq('GET', '/dd/abcdefghijklmnopqrst'), fakeRes(), new URL('http://x/dd/abcdefghijklmnopqrst')), false);
+    assert.equal(await handlePublic(fakeReq('GET', '/dp/abcdefghijklmnopqrst'), fakeRes(), new URL('http://x/dp/abcdefghijklmnopqrst')), false);
   } finally {
     if (before !== undefined) process.env.DIVE_DEEPER_ENABLED = before;
   }
@@ -62,4 +64,20 @@ test('a lane that cannot load comes back partial instead of throwing', async () 
   const r = await runLane('Z', 'missing', 'test-0', { company: 'Acme' });
   assert.equal(r.status, 'partial');
   assert.match(r.warnings[0], /no lane file/);
+});
+
+test('the preview builds from the company-dive alone and keeps the five numbers locked', () => {
+  const dive = {
+    company: 'Acme Sdn Bhd', finished_at: '2026-10-25T10:00:00Z', dossier: '## Identity\n\nAcme makes widgets [1].',
+    result: {
+      identity: { legal_name: 'Acme Sdn Bhd', address: '1 Jalan Satu, 81100 Johor Bahru, Johor', official_domains: ['acme.my'], registration_numbers: ['202301000001'], industry: 'Widget installation' },
+      facts: [{ fact: 'Claims CIDB Grade G7 registration [2].' }], sources: [{ id: 1, url: 'https://acme.my/', title: 'Acme' }],
+      contradictions: ['Founding month: July 2023 in [1] vs September 2023 in [2].'], gaps: ['Directors are not named.'], people: { people: [{ name: 'Ali', role: 'CEO' }] },
+    },
+  };
+  const html = buildPreview(dive, { price: 'RM 990' }).replace(/<style[\s\S]*?<\/style>/, '');
+  for (const s of ['Preview', 'Founding month: July 2023 vs September 2023.', 'Claims CIDB Grade G7 registration.', 'Not yet checked', 'Locked', 'RM 990', 'How important is an AI recommendation', 'id="src-1"']) assert.ok(html.includes(s), s);
+  assert.ok(!/undefined|\[object Object\]|NaN/.test(html));
+  assert.ok(!/\[\d+\]/.test(html.replace(/<details[\s\S]*<\/details>/g, '')), 'no [n] citations outside the research appendix');
+  assert.ok(buildPreview({ company: 'Empty' }).includes('Empty'), 'a dive with no result still builds');
 });

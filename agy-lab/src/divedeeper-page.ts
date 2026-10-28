@@ -78,7 +78,7 @@ async function load() {
     rows.innerHTML = runs.length ? runs.map((r) => {
       const cls = r.status === 'done' ? 'done' : r.status === 'partial' ? 'partial' : r.status === 'failed' ? 'failed' : 'run';
       const report = (r.status === 'done' || r.status === 'partial') ? '<a href="' + esc(r.report_url) + '" target="_blank" rel="noopener">Open report</a>' : '<a href="' + esc(r.report_url) + '" target="_blank" rel="noopener">Progress</a>';
-      const dive = r.dive_report_url ? '<a href="' + esc(r.dive_report_url) + '" target="_blank" rel="noopener">#' + esc(r.dive_id) + '</a>' : (r.dive_id ? '#' + esc(r.dive_id) : '–');
+      const dive = r.dive_report_url ? '<a href="' + esc(r.dive_report_url) + '" target="_blank" rel="noopener">#' + esc(r.dive_id) + '</a> · <a href="' + esc(r.preview_url) + '" target="_blank" rel="noopener">Preview</a>' : (r.dive_id ? '#' + esc(r.dive_id) : '–');
       const retry = r.status === 'failed' ? '<button class="ghost" data-retry="' + esc(r.id) + '" title="' + esc(r.error) + '">Retry</button>' : '';
       return '<tr><td class="co">' + esc(r.company) + '</td><td><span class="chip ' + cls + '">' + esc(label[r.status] || r.status) + '</span></td><td>' + when(r.created_at) + '</td><td>' + when(r.finished_at) + '</td><td>' + report + '</td><td>' + dive + '</td><td>' + retry + '</td></tr>';
     }).join('') : '<tr><td colspan="7" class="muted">No runs yet. Type a company name above to start one.</td></tr>';
