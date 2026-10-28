@@ -10,13 +10,19 @@
 # Chrome, Xvfb and the browser fonts went with the ChatGPT and Meta AI engines on
 # 2026-10-26. The old browser profiles under /data/profiles are inert; delete
 # them from the volume when convenient.
+#
+# Debian's headless Chromium came back on 2026-10-28 for one job: the dive-deeper
+# editor's proof screenshots of a client's own pages (src/divedeeper/shots.ts, via
+# puppeteer-core). One browser per report, closed after its few shots.
 FROM node:24-slim
 
 # curl, git, less, procps, util-linux - for the /api/exec shell
+# chromium, fonts-* - proof screenshots; without CJK fonts Chinese pages render as boxes
 # tini - a real init. Without one, node is PID 1, and PID 1 must reap orphaned
 #        children; anything /api/exec spawns and abandons would pile up as zombies.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       curl ca-certificates util-linux procps git less tini \
+      chromium fonts-liberation fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # HOME is the volume mount point. Pi's working folder lives under $HOME/.pi-lab:

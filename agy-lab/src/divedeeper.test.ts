@@ -38,8 +38,24 @@ test('the report builds all three parts from data alone, and survives missing la
     'S2-consult': { notes: { top: { summary: 'Short summary.', top5: [{ fix: 'Reply to reviews', why: 'none answered', effort: '1 hour', impact: 'high' }] } } },
   };
   const html = buildReport(dive, lanes);
-  for (const part of ['Part 1', 'Part 2', 'Part 3', 'Company dossier', '1★ review with no reply', 'Reply to reviews', 'id="src-1"']) assert.ok(html.includes(part), part);
-  assert.ok(!/undefined|\[object Object\]/.test(html.replace(/<style[\s\S]*?<\/style>/, '')));
+  for (const part of ['id="stories"', 'Your fixes, in order', 'What a stranger sees', 'The full checklist', 'Background research', '1★ review with no reply', 'Reply to reviews', 'id="src-1"']) assert.ok(html.includes(part), part);
+  assert.ok(!/undefined|\[object Object\]|NaN/.test(html.replace(/<style[\s\S]*?<\/style>/, '')));
+});
+
+test('the report speaks the editor\'s plain words and never shows the lanes\' machine labels', () => {
+  const dive = { company: 'Acme Sdn Bhd', finished_at: '2026-10-25T10:00:00Z', dossier: '', result: { identity: { legal_name: 'Acme Sdn Bhd' } } };
+  const lanes = {
+    'D-registry': { ran_at: '2026-10-26T01:00:00Z', findings: [{ title: 'CONTRADICTED: CIDB Grade G3', detail: 'register says G7', severity: 'high', verdict: 'contradicted', direction: 'undersell', source: 'https://cims.cidb.gov.my/' }] },
+    'G-fixed': { ran_at: '2026-10-26T01:00:00Z', findings: [{ title: 'gpt-6.1-sol, asked "Where?": 1 wrong claim about you. [2 of 3 asks; others: doesnt_know]', detail: 'Outcomes: what=correct', severity: 'high', source: null }] },
+    'S3-editor': { notes: {
+      plain: { 'G-fixed#0': { title: 'An AI assistant gives customers the wrong office address', why: 'They may turn up at the wrong place.' } },
+      verdict: 'You are better than your website says.',
+      stories: [{ theme: 'ai', headline: 'AI assistants send customers to the wrong address', body: 'b', cost: 'c', fix: 'f' }],
+    } },
+  };
+  const html = buildReport(dive, lanes).replace(/<style[\s\S]*?<\/style>/, '');
+  for (const s of ['An AI assistant gives customers the wrong office address', 'AI assistants send customers to the wrong address', 'You are better than your website says.', 'Better than you claim']) assert.ok(html.includes(s), s);
+  for (const bad of ['CONTRADICTED:', 'doesnt_know', 'gpt-6.1-sol', 'what=correct']) assert.ok(!html.includes(bad), bad);
 });
 
 test('a lane that cannot load comes back partial instead of throwing', async () => {

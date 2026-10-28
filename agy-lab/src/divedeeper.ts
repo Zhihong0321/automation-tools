@@ -2,7 +2,7 @@
 //
 // One run per company: the company-dive first (started through its own public API, never
 // touched), then dive-deeper stage 1 (reviews, Maps and web findability, registers, website
-// health, what AI says) and stage 2 (consultation), then one three-part report stored in the
+// health, what AI says), stage 2 (consultation) and stage 3 (the editor), then one report stored in the
 // dive_deeper table and served at /dd/<public id>.
 //
 // Isolation from company-dive (plan §2): own files, own table, own queue (one run at a time,
@@ -32,6 +32,8 @@ process.env.DD_G_JUDGE ??= 'deepseek-v4.1-flash-1017';
 export const STAGE1_FIRST = [['H', 'maps'], ['H', 'web'], ['D', 'registry'], ['G', 'fixed'], ['G', 'grounded']] as const;
 export const STAGE1_AFTER_H = [['E', 'maps'], ['C', 'merged']] as const;
 export const STAGE2 = ['S2', 'consult'] as const;
+/** The editor reads everything, S2 included, and writes the report's words and screenshots. */
+export const STAGE3 = ['S3', 'editor'] as const;
 
 type Row = {
   id: number; public_id: string; company: string; dive_id: number | null;
@@ -177,6 +179,8 @@ async function execute(id: number): Promise<void> {
     await say('stage2', 'Writing the consultation');
     const s2 = await runLane(STAGE2[0], STAGE2[1], diveKey, dive);
     lanes['S2-consult'] = s2;
+    await say('stage3', 'Editing the report and taking screenshots');
+    lanes['S3-editor'] = await runLane(STAGE3[0], STAGE3[1], diveKey, dive);
 
     // 3. The report.
     const html = buildReport(dive, lanes);

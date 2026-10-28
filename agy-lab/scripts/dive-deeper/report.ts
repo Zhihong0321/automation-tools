@@ -9,7 +9,7 @@ import path from 'node:path';
 import { OUT } from '../../src/divedeeper/lib.ts';
 import { buildReport } from '../../src/divedeeper/report-html.ts';
 
-export const LANES = ['E-maps', 'H-maps', 'H-web', 'D-registry', 'C-merged', 'G-fixed', 'G-grounded', 'S2-consult'];
+export const LANES = ['E-maps', 'H-maps', 'H-web', 'D-registry', 'C-merged', 'G-fixed', 'G-grounded', 'S2-consult', 'S3-editor'];
 
 const diveId = process.argv[2];
 if (!diveId) { console.error('usage: node scripts/dive-deeper/report.ts <diveId> [out.html]'); process.exit(2); }
