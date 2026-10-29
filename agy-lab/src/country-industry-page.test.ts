@@ -8,6 +8,8 @@ test('country research page offers inputs, status and CSV download',()=>{
   for(const id of ['country','industry','start','maps-state','contacts-state','csv-state','download']) assert.match(html,new RegExp('id="'+id+'"'));
   assert.match(html,/type:'country\.industry'/);
   assert.match(html,/job\.progress/);
+  assert.match(html,/URLSearchParams\(location.search\)/);
+  assert.match(html,/searchParams.set\('job',jobId\)/);
   assert.match(html,/new Blob\(\[csv\]/);
   const script=/<script>([\s\S]*)<\/script>/.exec(html)?.[1];
   assert.ok(script); assert.doesNotThrow(()=>new vm.Script(script));
