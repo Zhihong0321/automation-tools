@@ -539,6 +539,17 @@ export function migrate(): Promise<void> {
       );
       create index if not exists company_email_email_idx on company_email (email);
 
+      create table if not exists email_marketing_lead (
+        campaign_id   bigint not null,
+        email         text not null,
+        company_id    bigint,
+        campaign_name text,
+        pushed_at     timestamptz not null default now(),
+        primary key (campaign_id, email)
+      );
+      comment on table email_marketing_lead is 'email-marketing.ts: which lead email the hub sent into which Smartlead campaign';
+      create index if not exists email_marketing_lead_email_idx on email_marketing_lead (email);
+
       create table if not exists maps_usage (
         month text primary key,
         requests integer not null default 0,
