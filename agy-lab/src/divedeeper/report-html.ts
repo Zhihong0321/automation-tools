@@ -61,7 +61,9 @@ export function md(src: string): string {
       i--;
       const cells = (row: string) => row.replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
       const body = rows.filter((x) => !/^\|[\s:|-]+\|$/.test(x));
-      out.push(`<table class="band"><thead><tr>${cells(body[0]).map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${body.slice(1).map((row) => `<tr>${cells(row).map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
+      // Each cell carries its column name, for pages that stack rows into labelled cards on phones.
+      const heads = cells(body[0]);
+      out.push(`<table class="band"><thead><tr>${heads.map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${body.slice(1).map((row) => `<tr>${cells(row).map((c, j) => `<td${heads[j] ? ` data-label="${esc(heads[j])}"` : ''}>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
       continue;
     }
     if (/^\s*[-*]\s+/.test(ln) || /^\s*\d+\.\s+/.test(ln)) {
@@ -235,8 +237,8 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:10px; color:var
 }
 `;
 
-/** One standalone document: the shared style, the version switcher and the given pages. */
-export function shell(title: string, body: string): string {
+/** One standalone document: the shared style (plus any page-specific css), the version switcher and the given pages. */
+export function shell(title: string, body: string, css = ''): string {
   return `<!doctype html>
 <html lang="en" class="v-desktop">
 <head>
@@ -247,7 +249,7 @@ export function shell(title: string, body: string): string {
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600&family=Inter:wght@400;500;600&display=swap">
 <style>
-${CSS}</style>
+${CSS}${css}</style>
 <script>
 // Pick the version before first paint: ?view=a4|desktop|mobile wins, else the screen width decides.
 (function () {
