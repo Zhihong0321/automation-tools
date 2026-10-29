@@ -18,3 +18,13 @@ export function parseCountryCsv(text) {
   if (field!=='' || row.length) {row.push(field);rows.push(row);}
   return rows;
 }
+
+// Count only rows with a named company, an accessible website and a found email.
+export function countQualifiedLeads(rows) {
+  if (!rows.length) return null;
+  const headers=rows[0].map(x=>x.trim().toLowerCase());
+  const indexes=['name','website','emails','research_status'].map(name=>headers.indexOf(name));
+  if (indexes.some(i=>i<0)) return null;
+  const [name,website,email,status]=indexes;
+  return rows.slice(1).filter(row=>String(row[name]||'').trim() && String(row[website]||'').trim() && String(row[email]||'').trim() && ['ok','partial'].includes(String(row[status]||'').trim().toLowerCase())).length;
+}
