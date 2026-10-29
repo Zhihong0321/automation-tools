@@ -297,8 +297,9 @@ export async function dashboard() {
     leads: {
       emails: new Set(all.map((r) => r.email)).size,
       companies: new Set(all.map((r) => r.company_id)).size,
-      in_campaign: all.filter((r) => r.campaigns.length).length,
-      not_yet: all.filter((r) => !r.campaigns.length).length,
+      // Unique addresses, like emails above: one address can belong to two companies.
+      in_campaign: new Set(all.filter((r) => r.campaigns.length).map((r) => r.email)).size,
+      not_yet: new Set(all.filter((r) => !r.campaigns.length).map((r) => r.email)).size,
     },
     sending: {
       campaigns: campaigns.length, active: campaigns.filter((c) => c.status === 'ACTIVE').length,
