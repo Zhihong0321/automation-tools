@@ -642,6 +642,22 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     return true;
   }
 
+  // Import already completed research without putting it on a worker queue.
+  if (method === 'POST' && p === '/api/jobs/import-country') {
+    const body = await readJson(req);
+    const country = str(body.country).trim(), industry = str(body.industry).trim();
+    const csv = str(body.csv), filename = str(body.filename).trim();
+    const summary = body.summary;
+    if (!country || country.length > 120 || !industry || industry.length > 160 || !csv || !filename || !summary || typeof summary !== 'object' || Array.isArray(summary)) {
+      json(res, 400, {error: 'country, industry, filename, CSV and summary are required'});
+      return true;
+    }
+    const job = create('country.industry', {country, industry, imported: true}, DEFAULT_TIMEOUT_MS, false);
+    finish(job.id, true, {country, industry, filename, contentType: 'text/csv; charset=utf-8', csv, summary, imported: true}, null);
+    json(res, 201, {job: {...job, result: {imported: true, csvAvailable: true}}});
+    return true;
+  }
+
   if (method === 'POST' && p === '/api/jobs') {
     const body = await readJson(req);
     const type = str(body.type).trim();

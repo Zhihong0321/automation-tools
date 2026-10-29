@@ -253,3 +253,19 @@ test('country result from a stale worker cannot overwrite the active lease', asy
   assert.equal(status,409);assert.equal(get(job.id)?.status,'running');assert.equal(get(job.id)?.result,null);
   finish(job.id,true,{csv:'correct'},null);
 });
+
+test('imports a completed country report without offering it to a worker', async () => {
+  const req = { method: 'POST', headers: {}, socket: {} } as unknown as http.IncomingMessage;
+  let status = 0, result: any;
+  await handle(req, {} as http.ServerResponse, new URL('http://lab/api/jobs/import-country'), {
+    json: (_res, code, body) => {status=code;result=body;},
+    readJson: async () => ({country:'West Malaysia',industry:'advertising',filename:'report.csv',csv:'name,website,emails,research_status\n',summary:{processed:0}}),
+  });
+  assert.equal(status,201);
+  const job=get(result.job.id);
+  assert.equal(job?.status,'done');
+  assert.equal(job?.worker,null);
+  assert.equal((job?.result as any).imported,true);
+  assert.equal((job?.result as any).csv,'name,website,emails,research_status\n');
+  assert.equal(await take('import-test-worker',{types:['country.industry'],waitMs:0}),null);
+});
