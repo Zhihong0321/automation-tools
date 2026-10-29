@@ -58,7 +58,7 @@ td{padding:7px 8px;border-bottom:1px solid #1e222a;vertical-align:top}tr.click{c
 <section id="tab-leads" hidden>
 <div class="card">
 <div class="row"><input id="leadSearch" class="grow" placeholder="Search company, email or person"><select id="leadSource"><option value="all">All sources</option><option value="research">Contact research</option><option value="website">Website</option><option value="person">Has a person name</option></select>
-<select id="leadStatus"><option value="new">Not in a campaign yet</option><option value="pushed">Already in a campaign</option><option value="all">All</option></select><button id="leadGo">Search</button></div>
+<select id="leadStatus"><option value="new">Not in a campaign yet</option><option value="pushed">Already in a campaign</option><option value="replied">Replied</option><option value="stopped">Bounced or unsubscribed</option><option value="all">All</option></select><button id="leadGo">Search</button></div>
 <div class="row" style="margin-top:12px"><span class="muted" id="leadCount"></span><span class="grow"></span><select id="pushCampaign"><option value="">Choose a campaign…</option></select><button id="pushSelected" disabled>Add selected</button><button id="pushAll" class="primary" disabled>Add all matching</button></div>
 </div>
 <div class="card"><div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="checkAll"></th><th>Company</th><th>Email</th><th>Person</th><th>Source</th><th>Campaigns</th></tr></thead><tbody id="leadRows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody></table></div>
@@ -146,7 +146,14 @@ td{padding:7px 8px;border-bottom:1px solid #1e222a;vertical-align:top}tr.click{c
         check(boxes.length>0,boxes.length+' sending mailbox'+(boxes.length===1?'':'es')+' connected in Smartlead',boxes.length?'':'Nothing can send until a mailbox is connected in Smartlead → Email Accounts. Use a separate domain from eternalgy.me so cold email cannot hurt your main inbox.')+
         check(S.campaigns.length>0,S.campaigns.length+' campaign'+(S.campaigns.length===1?'':'s'),S.campaigns.length?'':'Campaigns tab → New campaign.')+
         check((ld.in_campaign||0)>0,num(ld.in_campaign)+' of '+num(ld.eligible)+' lead emails added to a campaign',(ld.in_campaign||0)?'':'Leads tab → choose a campaign → Add.')+
-        check(active>0,active+' campaign'+(active===1?'':'s')+' sending',active?'':'Open a campaign and press Start once it has emails, mailboxes and leads.');
+        check(active>0,active+' campaign'+(active===1?'':'s')+' sending',active?'':'Open a campaign and press Start once it has emails, mailboxes and leads.')+
+        (function(w){
+          if(!w)return '';
+          var ok=w.ready&&!(w.errors&&w.errors.length)&&w.with_webhook>=w.campaigns;
+          var d=!w.ready?'The hub has no public URL to give Smartlead.':(w.errors&&w.errors.length?w.errors.join('; '):'Replies, bounces, unsubscribes and categories are written to the lead\'s activity. Checked every 30 minutes'+(w.last_sync?', last '+when(w.last_sync):'')+'. '+(w.last_event_at?'Last event '+when(w.last_event_at)+', '+num(w.events_7d)+' in 7 days.':'No event received yet.'));
+          return check(ok,'Webhook on '+num(w.with_webhook)+' of '+num(w.campaigns)+' campaigns',d);
+        })(st.webhook)+
+        check(true,num(ld.replied)+' replied · '+num(ld.do_not_email)+' bounced or unsubscribed','Bounced and unsubscribed addresses are skipped when you add leads.');
       $('mailboxes').innerHTML=boxes.length?'<table><thead><tr><th>Mailbox</th><th>Name</th><th>Type</th><th class="num">Per day</th><th class="num">Sent today</th><th>Warm-up</th><th>Connection</th></tr></thead><tbody>'+boxes.map(function(m){return '<tr><td>'+esc(m.email)+'</td><td>'+esc(m.name)+'</td><td>'+esc(m.type)+'</td><td class="num">'+esc(m.daily_limit)+'</td><td class="num">'+esc(m.sent_today)+'</td><td>'+esc(m.warmup||'—')+(m.reputation?' · '+esc(m.reputation):'')+'</td><td>'+(m.smtp_ok===false||m.imap_ok===false?'<span class="pill bad">failing</span>':'<span class="pill ok">ok</span>')+'</td></tr>'}).join('')+'</tbody></table>':'<div class="empty">No mailbox connected in Smartlead yet.</div>';
       renderCampaigns();fillCampaignSelects();
     });
@@ -163,7 +170,9 @@ td{padding:7px 8px;border-bottom:1px solid #1e222a;vertical-align:top}tr.click{c
       $('leadRows').innerHTML=S.leadRows.length?S.leadRows.map(function(x){
         return '<tr><td><input type="checkbox" data-key="'+esc(x.key)+'"'+(S.picked[x.key]?' checked':'')+'></td><td>'+esc(x.company_name)+(x.category?'<div class="muted small">'+esc(x.category)+'</div>':'')+'</td>'+
           '<td><a href="#" data-thread="'+esc(x.email)+'">'+esc(x.email)+'</a></td><td>'+esc(x.person_name||'')+(x.person_role?'<div class="muted small">'+esc(x.person_role)+'</div>':'')+'</td>'+
-          '<td>'+x.sources.map(function(s){return '<span class="pill">'+esc(s)+'</span>'}).join('')+'</td><td>'+(x.campaigns.length?x.campaigns.map(function(c){return '<span class="pill ok">'+esc(c.name||('#'+c.id))+'</span>'}).join(''):'<span class="muted small">none</span>')+'</td></tr>'}).join(''):'<tr><td colspan="6" class="empty">No lead emails match.</td></tr>';
+          '<td>'+x.sources.map(function(s){return '<span class="pill">'+esc(s)+'</span>'}).join('')+'</td><td>'+(x.campaigns.length?x.campaigns.map(function(c){
+            var st=c.bounced_at?['bad','bounced']:c.unsubscribed_at?['bad','unsubscribed']:c.replied_at?['ok','replied']:c.opened_at?['warn','opened']:c.last_event==='EMAIL_SENT'?['','sent']:['','added'];
+            return '<span class="pill '+st[0]+'" title="'+esc(c.category||'')+'">'+esc(c.name||('#'+c.id))+' · '+st[1]+'</span>'}).join(''):'<span class="muted small">none</span>')+'</td></tr>'}).join(''):'<tr><td colspan="6" class="empty">No lead emails match.</td></tr>';
       var end=Math.min(S.leadOffset+LIMIT,S.leadTotal);
       $('leadPage').textContent=S.leadTotal?(S.leadOffset+1)+'–'+end+' of '+num(S.leadTotal):'';
       $('leadPrev').disabled=S.leadOffset===0;$('leadNext').disabled=end>=S.leadTotal;$('checkAll').checked=false;
@@ -188,7 +197,7 @@ td{padding:7px 8px;border-bottom:1px solid #1e222a;vertical-align:top}tr.click{c
     show('error');show('info','Adding '+label+' to Smartlead…');$('pushAll').disabled=$('pushSelected').disabled=true;
     api('/api/email-marketing/campaigns/'+id+'/leads',{method:'POST',body:body}).then(function(r){
       S.picked={};
-      show('info','Sent '+num(r.sent)+' to "'+name+'": '+num(r.added)+' added, '+num(r.duplicates)+' already there, '+num(r.in_other_campaign)+' skipped (in another campaign), '+num(r.invalid)+' invalid, '+num(r.blocked)+' blocked or unsubscribed.'+(r.failed?'\n'+num(r.failed)+' failed: '+r.errors.join('; '):''));
+      show('info','Sent '+num(r.sent)+' to "'+name+'": '+num(r.added)+' added, '+num(r.duplicates)+' already there, '+num(r.in_other_campaign)+' skipped (in another campaign), '+num(r.invalid)+' invalid, '+num(r.blocked)+' blocked or unsubscribed.'+(r.do_not_email?' '+num(r.do_not_email)+' left out because they bounced or unsubscribed before.':'')+(r.failed?'\n'+num(r.failed)+' failed: '+r.errors.join('; '):''));
       loadLeads();
     }).catch(function(e){fail(e);syncPush()});
   }

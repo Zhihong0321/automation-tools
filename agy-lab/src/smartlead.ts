@@ -172,5 +172,12 @@ export const setCategory = (campaignId: number, leadId: number, categoryId: numb
 export const pauseLead = (campaignId: number, leadId: number) => call('POST', `/campaigns/${campaignId}/leads/${leadId}/pause`, {});
 export const resumeLead = (campaignId: number, leadId: number) => call('POST', `/campaigns/${campaignId}/leads/${leadId}/resume`, {});
 
-export const sendTest = (campaignId: number, leadId: number, sequenceNumber: number, to: string) =>
+/** Webhooks are per campaign. Event names Smartlead accepts, checked live 2026-10-29. */
+export const WEBHOOK_EVENTS = ['EMAIL_SENT', 'EMAIL_OPEN', 'EMAIL_LINK_CLICK', 'EMAIL_REPLY', 'EMAIL_BOUNCE', 'LEAD_UNSUBSCRIBED', 'LEAD_CATEGORY_UPDATED'];
+export const campaignWebhooks = (campaignId: number) => call<any[]>('GET', `/campaigns/${campaignId}/webhooks`);
+/** id null adds one; an existing id updates it. */
+export const saveWebhook = (campaignId: number, w: { id: number | null; name: string; webhook_url: string }) =>
+  call('POST', `/campaigns/${campaignId}/webhooks`, { ...w, event_types: WEBHOOK_EVENTS });
+
+export const sendTest =(campaignId: number, leadId: number, sequenceNumber: number, to: string) =>
   call('POST', `/campaigns/${campaignId}/send-test-email`, { leadId, sequenceNumber, customEmailAddress: to });

@@ -549,6 +549,26 @@ export function migrate(): Promise<void> {
       );
       comment on table email_marketing_lead is 'email-marketing.ts: which lead email the hub sent into which Smartlead campaign';
       create index if not exists email_marketing_lead_email_idx on email_marketing_lead (email);
+      alter table email_marketing_lead add column if not exists last_event text;
+      alter table email_marketing_lead add column if not exists last_event_at timestamptz;
+      alter table email_marketing_lead add column if not exists opened_at timestamptz;
+      alter table email_marketing_lead add column if not exists replied_at timestamptz;
+      alter table email_marketing_lead add column if not exists bounced_at timestamptz;
+      alter table email_marketing_lead add column if not exists unsubscribed_at timestamptz;
+      alter table email_marketing_lead add column if not exists category text;
+
+      create table if not exists email_marketing_event (
+        id          bigserial primary key,
+        campaign_id bigint,
+        email       text,
+        event_type  text not null,
+        at          timestamptz not null default now(),
+        payload     jsonb not null,
+        received_at timestamptz not null default now()
+      );
+      comment on table email_marketing_event is 'email-marketing.ts: every Smartlead webhook call, raw';
+      create index if not exists email_marketing_event_email_idx on email_marketing_event (email);
+      create index if not exists email_marketing_event_received_idx on email_marketing_event (received_at desc);
 
       create table if not exists maps_usage (
         month text primary key,

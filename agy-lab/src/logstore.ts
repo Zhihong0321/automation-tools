@@ -124,7 +124,7 @@ function append(record: Entry): void {
 /** `?token=` is a credential wherever it appears. Everything else is kept as sent. */
 function redact(url: URL): string {
   const copy = new URLSearchParams(url.search);
-  for (const key of ['token', 'secret', 'password']) if (copy.has(key)) copy.set(key, '(redacted)');
+  for (const key of ['token', 'secret', 'password', 'key']) if (copy.has(key)) copy.set(key, '(redacted)');
   const out = copy.toString();
   return out.length > 300 ? out.slice(0, 300) + '...' : out;
 }

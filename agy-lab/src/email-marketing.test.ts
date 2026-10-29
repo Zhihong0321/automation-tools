@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { eligible, mailName, toSmartlead, textToHtml, htmlToText, inboxItem, threadMessage } from './email-marketing.ts';
+import { eligible, mailName, toSmartlead, textToHtml, htmlToText, inboxItem, threadMessage, webhookEvent, activityNote, webhookKey, webhookUrl, doNotEmail, type MarketingLead } from './email-marketing.ts';
 import { page } from './email-marketing-page.ts';
 import type { EmailRow } from './email-list.ts';
 
@@ -53,4 +53,37 @@ test('the page links out and calls only its own API', () => {
   assert.match(html, /aria-current="page">Email marketing</);
   assert.doesNotMatch(html, /\$\{/);
   assert.doesNotMatch(html, /api_key=|server\.smartlead\.ai/i);
+});
+
+test('a webhook call reads either field naming and keeps the reply text', () => {
+  const a = webhookEvent({
+    event_type: 'EMAIL_REPLY', campaign_id: 7, campaign_name: 'Solar Q4', sl_lead_email: 'Boss@Acme.com',
+    event_timestamp: '2026-10-29T06:00:00Z', reply_message: { html: '<p>Yes, call me</p>' }, lead_data: { custom_fields: { hub_company_id: '42' } },
+  });
+  assert.deepEqual([a.type, a.campaign_id, a.email, a.hub_company_id, a.at, a.text], ['EMAIL_REPLY', 7, 'boss@acme.com', 42, '2026-10-29T06:00:00.000Z', 'Yes, call me']);
+  assert.equal(activityNote(a), 'Email reply from boss@acme.com (campaign "Solar Q4"): Yes, call me');
+  const b = webhookEvent({ event: 'EMAIL_BOUNCE', campaign: { id: 7 }, lead: { email: 'x@y.com' }, timestamp: 'not a date' });
+  assert.deepEqual([b.type, b.campaign_id, b.email], ['EMAIL_BOUNCE', 7, 'x@y.com']);
+  assert.ok(!isNaN(new Date(b.at).getTime()));
+  assert.match(activityNote(b), /bounced.*not be emailed again/);
+});
+
+test('the webhook key follows LAB_TOKEN and the URL uses the public domain', () => {
+  const keep = { t: process.env.LAB_TOKEN, d: process.env.RAILWAY_PUBLIC_DOMAIN };
+  process.env.LAB_TOKEN = 'a'.repeat(20); process.env.RAILWAY_PUBLIC_DOMAIN = 'hub.example.com';
+  const k1 = webhookKey();
+  assert.match(k1, /^[0-9a-f]{32}$/);
+  assert.equal(webhookUrl(), 'https://hub.example.com/api/email-marketing/webhook?key=' + k1);
+  process.env.LAB_TOKEN = 'b'.repeat(20);
+  assert.notEqual(webhookKey(), k1);
+  process.env.LAB_TOKEN = keep.t; process.env.RAILWAY_PUBLIC_DOMAIN = keep.d;
+  if (keep.t === undefined) delete process.env.LAB_TOKEN;
+  if (keep.d === undefined) delete process.env.RAILWAY_PUBLIC_DOMAIN;
+});
+
+test('an address that bounced or unsubscribed anywhere is never emailed again', () => {
+  const lead = (c: Partial<MarketingLead['campaigns'][number]>) => ({ ...row(), key: 'k', campaigns: [{ id: 1, name: null, pushed_at: '', last_event: null, last_event_at: null, opened_at: null, replied_at: null, bounced_at: null, unsubscribed_at: null, category: null, ...c }] });
+  assert.equal(doNotEmail(lead({})), false);
+  assert.equal(doNotEmail(lead({ bounced_at: 't' })), true);
+  assert.equal(doNotEmail(lead({ unsubscribed_at: 't' })), true);
 });

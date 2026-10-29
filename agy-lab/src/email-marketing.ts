@@ -5,7 +5,13 @@
 // lead list shows which campaign each email is already in and a second push skips it.
 // Campaigns, sending, replies and the inbox live in Smartlead; these routes read and
 // drive them so the whole loop runs from /email-marketing.
+//
+// Every campaign carries a hub webhook (added when the hub creates a campaign, and by
+// a sync every 30 minutes for campaigns made in Smartlead itself). Its events land in
+// email_marketing_event; replies, bounces, unsubscribes and category changes are also
+// written to the lead's lead_activity_log, so the telemarketer sees them.
 import type http from 'node:http';
+import crypto from 'node:crypto';
 import * as db from './reportdb.ts';
 import * as emailList from './email-list.ts';
 import * as sl from './smartlead.ts';
@@ -21,8 +27,14 @@ const NOT_A_MAILBOX = /\.(png|jpe?g|gif|webp|svg|css|js)$/i;
 
 export interface MarketingLead extends emailList.EmailRow {
   key: string;
-  campaigns: { id: number; name: string | null; pushed_at: string }[];
+  campaigns: {
+    id: number; name: string | null; pushed_at: string; last_event: string | null; last_event_at: string | null;
+    opened_at: string | null; replied_at: string | null; bounced_at: string | null; unsubscribed_at: string | null; category: string | null;
+  }[];
 }
+
+/** An address that bounced or unsubscribed is never sent to again. */
+export const doNotEmail = (r: MarketingLead) => r.campaigns.some((c) => c.bounced_at || c.unsubscribed_at);
 
 export function eligible(row: emailList.EmailRow): boolean {
   return Boolean(row.company_name?.trim()) && VALID_EMAIL.test(row.email) && !NOT_A_MAILBOX.test(row.email);
@@ -30,24 +42,29 @@ export function eligible(row: emailList.EmailRow): boolean {
 
 async function pushedByEmail(): Promise<Map<string, MarketingLead['campaigns']>> {
   await db.migrate();
-  const out = await db.sql<{ email: string; campaign_id: string; campaign_name: string | null; pushed_at: string }>(
-    `select email, campaign_id::text, campaign_name, pushed_at from email_marketing_lead order by pushed_at`);
+  const out = await db.sql<Omit<MarketingLead['campaigns'][number], 'id'> & { email: string; campaign_id: string }>(
+    `select email, campaign_id::text, campaign_name as name, pushed_at, last_event, last_event_at, opened_at, replied_at, bounced_at, unsubscribed_at, category
+       from email_marketing_lead order by pushed_at`);
   const map = new Map<string, MarketingLead['campaigns']>();
-  for (const r of out.rows) {
-    const list = map.get(r.email) ?? [];
-    list.push({ id: Number(r.campaign_id), name: r.campaign_name, pushed_at: r.pushed_at });
-    map.set(r.email, list);
+  for (const { email, campaign_id, ...rest } of out.rows) {
+    const list = map.get(email) ?? [];
+    list.push({ ...rest, id: Number(campaign_id) });
+    map.set(email, list);
   }
   return map;
 }
 
-/** status: all | new (in no campaign yet) | pushed. */
+/** status: all | new (in no campaign yet) | pushed | replied | stopped (bounced or unsubscribed). */
 export async function leads(options: { search?: string | null; source?: string | null; status?: string | null; fresh?: boolean }): Promise<{ all: MarketingLead[]; shown: MarketingLead[] }> {
   const [rows, pushed] = await Promise.all([emailList.allRows(options.fresh), pushedByEmail()]);
   const all = rows.filter(eligible).map((r) => ({ ...r, key: r.company_id + '|' + r.email, campaigns: pushed.get(r.email) ?? [] }));
   const status = options.status || 'all';
   const shown = (emailList.filter(all, options) as MarketingLead[])
-    .filter((r) => status === 'all' || (status === 'new' ? r.campaigns.length === 0 : r.campaigns.length > 0));
+    .filter((r) => status === 'all'
+      || (status === 'new' && r.campaigns.length === 0)
+      || (status === 'pushed' && r.campaigns.length > 0)
+      || (status === 'replied' && r.campaigns.some((c) => c.replied_at))
+      || (status === 'stopped' && doNotEmail(r)));
   return { all, shown };
 }
 
@@ -82,8 +99,9 @@ export function toSmartlead(r: emailList.EmailRow): sl.LeadIn {
  */
 export async function push(campaignId: number, campaignName: string | null, rows: MarketingLead[]) {
   const seen = new Set<string>();
-  const unique = rows.filter((r) => !r.campaigns.some((c) => c.id === campaignId) && !seen.has(r.email) && seen.add(r.email));
-  const totals = { requested: rows.length, sent: 0, added: 0, duplicates: 0, invalid: 0, blocked: 0, in_other_campaign: 0, failed: 0, errors: [] as string[] };
+  const stopped = rows.filter(doNotEmail);
+  const unique = rows.filter((r) => !doNotEmail(r) && !r.campaigns.some((c) => c.id === campaignId) && !seen.has(r.email) && seen.add(r.email));
+  const totals = { requested: rows.length, do_not_email: new Set(stopped.map((r) => r.email)).size, sent: 0, added: 0, duplicates: 0, invalid: 0, blocked: 0, in_other_campaign: 0, failed: 0, errors: [] as string[] };
   for (let i = 0; i < unique.length; i += BATCH) {
     const batch = unique.slice(i, i + BATCH);
     try {
@@ -161,6 +179,7 @@ async function setup(id: number, body: Record<string, unknown>, isNew: boolean):
   const schedule = readSchedule(body.schedule);
   if (schedule) await attempt('schedule', () => sl.saveSchedule(id, schedule));
   if (isNew) await attempt('settings', () => sl.saveSettings(id));
+  if (isNew && webhookUrl()) await attempt('webhook', () => ensureWebhook(id));
   const mailboxes = Array.isArray(body.mailbox_ids) ? body.mailbox_ids.map(Number).filter(Boolean) : [];
   if (mailboxes.length) await attempt('mailboxes', () => sl.attachMailboxes(id, mailboxes));
   return errors;
@@ -230,6 +249,144 @@ async function threads(email: string, onlyCampaign: number | null) {
   };
 }
 
+// ---- webhook ---------------------------------------------------------------------
+
+export const WEBHOOK_PATH = '/api/email-marketing/webhook';
+
+/** Derived from LAB_TOKEN, so the hub needs no extra secret and a rotated token rotates it. */
+export function webhookKey(): string {
+  return crypto.createHash('sha256').update('smartlead-webhook:' + (process.env.LAB_TOKEN ?? '')).digest('hex').slice(0, 32);
+}
+
+export function webhookUrl(): string | null {
+  const base = process.env.SMARTLEAD_WEBHOOK_BASE?.trim()
+    || (process.env.RAILWAY_PUBLIC_DOMAIN ? 'https://' + process.env.RAILWAY_PUBLIC_DOMAIN : '');
+  return base ? base.replace(/\/+$/, '') + WEBHOOK_PATH + '?key=' + webhookKey() : null;
+}
+
+/** Adds the hub webhook to a campaign, or repoints it when the URL changed. Returns whether it wrote. */
+async function ensureWebhook(campaignId: number): Promise<boolean> {
+  const want = webhookUrl();
+  if (!want) return false;
+  const hooks = (await sl.campaignWebhooks(campaignId)) ?? [];
+  const ours = hooks.find((w) => String(w.webhook_url ?? '').includes(WEBHOOK_PATH));
+  const complete = ours && sl.WEBHOOK_EVENTS.every((e) => (ours.event_types ?? []).includes(e));
+  if (ours && ours.webhook_url === want && complete) return false;
+  await sl.saveWebhook(campaignId, { id: ours?.id ?? null, name: 'ee-auto hub', webhook_url: want });
+  return true;
+}
+
+export const webhookState = { last_sync: null as string | null, campaigns: 0, with_webhook: 0, added: 0, errors: [] as string[] };
+
+export async function syncWebhooks(): Promise<typeof webhookState> {
+  const list = (await sl.listCampaigns()) ?? [];
+  let ok = 0, added = 0;
+  const errors: string[] = [];
+  for (const c of list) {
+    try { if (await ensureWebhook(c.id)) added++; ok++; } catch (err) { errors.push(`${c.name}: ${(err as Error).message}`); }
+  }
+  Object.assign(webhookState, { last_sync: new Date().toISOString(), campaigns: list.length, with_webhook: ok, added: webhookState.added + added, errors });
+  return webhookState;
+}
+
+/** Every 30 minutes, so a campaign made in Smartlead's own UI still reports back. */
+export function start(): void {
+  if (!sl.configured() || !webhookUrl()) return;
+  const tick = () => void syncWebhooks()
+    .then((s) => { if (s.errors.length) console.warn('[email-marketing] webhook sync: ' + s.errors.join('; ')); })
+    .catch((err: Error) => console.warn('[email-marketing] webhook sync failed: ' + err.message));
+  setTimeout(tick, 15_000);
+  setInterval(tick, 30 * 60_000);
+}
+
+/** One webhook call, whichever field names this Smartlead build sends. */
+export function webhookEvent(b: any) {
+  const at = pick(b, 'event_timestamp', 'timestamp', 'reply_message.time', 'time');
+  const parsed = at ? new Date(at) : null;
+  return {
+    type: String(pick(b, 'event_type', 'event', 'type') ?? '').toUpperCase(),
+    campaign_id: Number(pick(b, 'campaign_id', 'email_campaign_id', 'campaign.id')) || null,
+    campaign_name: pick(b, 'campaign_name', 'campaign.name') as string | null,
+    email: String(pick(b, 'sl_lead_email', 'lead_email', 'lead.email', 'lead_data.email', 'to_email') ?? '').trim().toLowerCase() || null,
+    hub_company_id: Number(pick(b, 'lead_data.custom_fields.hub_company_id', 'lead.custom_fields.hub_company_id', 'custom_fields.hub_company_id')) || null,
+    at: parsed && !isNaN(parsed.getTime()) ? parsed.toISOString() : new Date().toISOString(),
+    subject: pick(b, 'subject', 'reply_message.subject', 'reply.subject') as string | null,
+    text: htmlToText(String(pick(b, 'reply_message.text', 'reply_message.html', 'reply.body', 'preview_text', 'reply_body') ?? '')).slice(0, 1500),
+    category: pick(b, 'lead_category.new_name', 'lead_category.name', 'category.name', 'lead_category_name', 'category') as string | null,
+  };
+}
+
+const ACTIVITY: Record<string, string> = {
+  EMAIL_REPLY: 'email_replied', EMAIL_BOUNCE: 'email_bounced', LEAD_UNSUBSCRIBED: 'email_unsubscribed', LEAD_CATEGORY_UPDATED: 'email_category',
+};
+
+/** The line the telemarketer reads on the lead's activity. */
+export function activityNote(e: ReturnType<typeof webhookEvent>): string {
+  const camp = e.campaign_name ? ` (campaign "${e.campaign_name}")` : '';
+  switch (e.type) {
+    case 'EMAIL_REPLY': return `Email reply from ${e.email}${camp}: ${e.text || e.subject || '(no text)'}`;
+    case 'EMAIL_BOUNCE': return `Email to ${e.email} bounced${camp}. It will not be emailed again.`;
+    case 'LEAD_UNSUBSCRIBED': return `${e.email} unsubscribed from email${camp}. It will not be emailed again.`;
+    default: return `${e.email} marked "${e.category ?? '?'}" in Smartlead${camp}.`;
+  }
+}
+
+async function recordEvent(body: Record<string, unknown>): Promise<void> {
+  await db.migrate();
+  const e = webhookEvent(body);
+  await db.sql(`insert into email_marketing_event (campaign_id, email, event_type, at, payload) values ($1, $2, $3, $4::timestamptz, $5::jsonb)`,
+    [e.campaign_id, e.email, e.type || 'UNKNOWN', e.at, JSON.stringify(body)]);
+  if (!e.campaign_id || !e.email) return;
+  const when = (type: string) => (e.type === type ? e.at : null);
+  const row = await db.sql<{ company_id: string | null }>(
+    `insert into email_marketing_lead (campaign_id, email, company_id, campaign_name, last_event, last_event_at, opened_at, replied_at, bounced_at, unsubscribed_at, category)
+     values ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, $8::timestamptz, $9::timestamptz, $10::timestamptz, $11)
+     on conflict (campaign_id, email) do update set
+       company_id      = coalesce(email_marketing_lead.company_id, excluded.company_id),
+       campaign_name   = coalesce(excluded.campaign_name, email_marketing_lead.campaign_name),
+       last_event      = excluded.last_event,
+       last_event_at   = excluded.last_event_at,
+       opened_at       = coalesce(email_marketing_lead.opened_at, excluded.opened_at),
+       replied_at      = coalesce(excluded.replied_at, email_marketing_lead.replied_at),
+       bounced_at      = coalesce(email_marketing_lead.bounced_at, excluded.bounced_at),
+       unsubscribed_at = coalesce(email_marketing_lead.unsubscribed_at, excluded.unsubscribed_at),
+       category        = coalesce(excluded.category, email_marketing_lead.category)
+     returning company_id::text`,
+    [e.campaign_id, e.email, e.hub_company_id, e.campaign_name, e.type, e.at,
+      when('EMAIL_OPEN'), when('EMAIL_REPLY'), when('EMAIL_BOUNCE'), when('LEAD_UNSUBSCRIBED'), e.type === 'LEAD_CATEGORY_UPDATED' ? e.category : null]);
+  const companyId = Number(row.rows[0]?.company_id) || null;
+  const status = ACTIVITY[e.type];
+  if (!companyId || !status) return;
+  // No telemarketer name: these are not agent work and must not count in agent stats.
+  await db.sql(
+    `insert into lead_activity_log (company_id, action, previous_status, new_status, notes, is_mock, created_at)
+     select c.id, 'email_event', coalesce(c.lead_status, 'unassigned'), $2, $3, false, $4::timestamptz from company_data c where c.id = $1`,
+    [companyId, status, activityNote(e), e.at]);
+}
+
+function sameKey(a: string, b: string): boolean {
+  const d = (v: string) => crypto.createHash('sha256').update(v).digest();
+  return crypto.timingSafeEqual(d(a), d(b));
+}
+
+/** POST /api/email-marketing/webhook?key=…, called by Smartlead; outside the LAB_TOKEN gate. */
+export async function handleWebhook(req: http.IncomingMessage, res: http.ServerResponse, url: URL, ctx: Ctx): Promise<boolean> {
+  if (url.pathname !== WEBHOOK_PATH) return false;
+  if (req.method !== 'POST') { ctx.json(res, 405, { error: 'POST only' }); return true; }
+  if (!sameKey(url.searchParams.get('key') ?? '', webhookKey())) { ctx.json(res, 401, { error: 'bad key' }); return true; }
+  let body: Record<string, unknown>;
+  try { body = await ctx.readJson(req); } catch { ctx.json(res, 400, { error: 'body is not JSON' }); return true; }
+  try {
+    await recordEvent(body);
+    ctx.json(res, 200, { ok: true });
+  } catch (err) {
+    // 5xx so Smartlead sends it again rather than the event being lost.
+    console.warn('[email-marketing] webhook not saved: ' + (err as Error).message);
+    ctx.json(res, 500, { error: 'not saved' });
+  }
+  return true;
+}
+
 // ---- routes --------------------------------------------------------------------
 
 let categoryCache: { at: number; list: any[] } | null = null;
@@ -260,10 +417,18 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
   try {
     if (method === 'GET' && (p === '/api/email-marketing' || p === '/api/email-marketing/status')) {
       if (!sl.configured()) return send(200, { configured: false, mailboxes: [], categories: [] });
-      const [mailboxes, cats] = await Promise.all([sl.listMailboxes(), categories()]);
+      const lastEvents = async () => {
+        if (!db.configured()) return null;
+        await db.migrate();
+        const out = await db.sql<{ last: string | null; week: string }>(
+          `select max(received_at) as last, count(*) filter (where received_at > now() - interval '7 days')::text as week from email_marketing_event`);
+        return out.rows[0] ?? null;
+      };
+      const [mailboxes, cats, events] = await Promise.all([sl.listMailboxes(), categories(), lastEvents().catch(() => null)]);
       return send(200, {
         configured: true,
         categories: cats,
+        webhook: { ready: Boolean(webhookUrl()), ...webhookState, last_event_at: events?.last ?? null, events_7d: Number(events?.week ?? 0) },
         mailboxes: (mailboxes ?? []).map((m: any) => ({
           id: m.id, email: pick(m, 'from_email', 'email'), name: pick(m, 'from_name', 'name'), type: pick(m, 'type'),
           daily_limit: pick(m, 'message_per_day', 'max_email_per_day'), sent_today: pick(m, 'daily_sent_count'),
@@ -288,10 +453,23 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
           companies: new Set(all.map((r) => r.company_id)).size,
           with_person: all.filter((r) => r.person_name).length,
           in_campaign: all.filter((r) => r.campaigns.length).length,
+          replied: all.filter((r) => r.campaigns.some((c) => c.replied_at)).length,
+          do_not_email: all.filter(doNotEmail).length,
           not_yet: all.filter((r) => !r.campaigns.length).length,
         },
         total: shown.length, limit, offset, rows: shown.slice(offset, offset + limit),
       });
+    }
+
+    if (method === 'POST' && p === '/api/email-marketing/webhooks/sync') {
+      if (!webhookUrl()) return send(503, { error: 'no public URL: set SMARTLEAD_WEBHOOK_BASE' });
+      return send(200, await syncWebhooks());
+    }
+
+    if (method === 'GET' && p === '/api/email-marketing/events') {
+      const out = await db.sql(`select id::text, campaign_id::text, email, event_type, at, received_at, payload from email_marketing_event order by received_at desc limit $1`,
+        [Math.max(1, intParam(url, 'limit', 20, 200))]);
+      return send(200, { rows: out.rows });
     }
 
     if (method === 'GET' && p === '/api/email-marketing/campaigns') {

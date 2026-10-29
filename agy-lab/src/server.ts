@@ -312,6 +312,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (await intel.handleTelemarketerApi(req, res, url, { json, readJson, isOperator: authorized(req, url) })) return;
   }
 
+  // Smartlead's webhook carries its own key in the URL; it never holds LAB_TOKEN.
+  if (await emailMarketing.handleWebhook(req, res, url, { json, readJson })) return;
+
   if (!authorized(req, url)) {
     // An OpenAI client parses the error envelope and prints its message; a bare
     // {error: string} shows up there as [object Object].
@@ -482,6 +485,7 @@ server.listen(PORT, '0.0.0.0', () => {
   autoScan.init({ launch: intel.launchBusinessSearch });
   autoScan.start();
   void siteEmails.start();
+  emailMarketing.start();
   contactWorker.start();
   mapsWorker.start();
   // Broker jobs live only in memory. Refill it from saved contact reports after
