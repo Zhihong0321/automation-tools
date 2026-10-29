@@ -22,6 +22,7 @@ import * as autoContact from './autocontact.ts';
 import * as autoScan from './autoscan.ts';
 import * as contactWorker from './contact-worker.ts';
 import * as mapsWorker from './maps-worker.ts';
+import * as gmapWorker from './gmap-worker.ts';
 import * as contactKeys from './contact-keys.ts';
 import * as companyDive from './companydive.ts';
 import * as companyDivePeople from './companydive-people.ts';
@@ -315,6 +316,19 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // Smartlead's webhook carries its own key in the URL; it never holds LAB_TOKEN.
   if (await emailMarketing.handleWebhook(req, res, url, { json, readJson })) return;
 
+  // A Gmap Local Worker PC holds a key derived from LAB_TOKEN that reaches its
+  // own routes and nothing else: claiming, beating and answering gmap.scan, and
+  // fetching the sweep words and the engine. See gmap-worker.ts.
+  if (!authorized(req, url)) {
+    const header = req.headers.authorization ?? '';
+    if (header.startsWith('Bearer ') && gmapWorker.isWorkerKey(header.slice(7))) {
+      if (p.startsWith('/api/gmap-worker/') && await gmapWorker.handle(req, res, url, { json }, 'worker')) return;
+      if (gmapWorker.isJobRoute(method, p)
+        && await jobs.handle(req, res, url, { json, readJson, scope: { types: gmapWorker.JOB_TYPES } })) return;
+      return json(res, 403, { error: 'the Gmap worker key only reaches the worker routes' });
+    }
+  }
+
   if (!authorized(req, url)) {
     // An OpenAI client parses the error envelope and prints its message; a bare
     // {error: string} shows up there as [object Object].
@@ -345,6 +359,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (p === '/api/jobs' || p.startsWith('/api/jobs/')) {
     if (await jobs.handle(req, res, url, { json, readJson })) return;
   }
+
+  // ---- the Gmap Local Worker package, engine and sweep words ---------------
+  if (p.startsWith('/api/gmap-worker/') && await gmapWorker.handle(req, res, url, { json }, 'operator')) return;
 
   // ---- company deep dive (Brave + at most 15 Tavily calls + deepseek) ------
   // /:id/people first: the dive's own handler would answer it 404.

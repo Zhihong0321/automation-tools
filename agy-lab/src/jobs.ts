@@ -28,6 +28,11 @@ import {saveCountryJob, loadCountryJob, loadCountryJobs} from './country-job-sto
 export interface Ctx {
   json: (res: http.ServerResponse, status: number, body: unknown) => void;
   readJson: (req: http.IncomingMessage) => Promise<Record<string, unknown>>;
+  /**
+   * Set when the caller holds a scoped key rather than LAB_TOKEN (the Gmap Local
+   * Worker, gmap-worker.ts): it may claim and answer only these job types.
+   */
+  scope?: { types: string[] };
 }
 
 export type JobStatus = 'pending' | 'running' | 'done' | 'failed';
@@ -245,11 +250,22 @@ function sweep(): void {
   }
 }
 
-function pending(types: string[] | null): Job | null {
+/**
+ * The one worker a job may go to, when its payload names one. Lets a person
+ * test a particular machine without another lane claiming the job first.
+ */
+function pinnedTo(job: Job): string | null {
+  const worker = (job.payload as { worker?: unknown } | null)?.worker;
+  return typeof worker === 'string' && worker.trim() ? worker.trim() : null;
+}
+
+function pending(types: string[] | null, worker: string): Job | null {
   for (const job of jobs.values()) {
     if (job.status !== 'pending') continue;
     if (job.ready === false) continue;
     if (types && !types.includes(job.type)) continue;
+    const pin = pinnedTo(job);
+    if (pin && pin !== worker) continue;
     return job;
   }
   return null;
@@ -268,8 +284,9 @@ function lease(job: Job, worker: string): Job {
 
 /** Hand a freshly created job straight to a waiting worker, if one matches. */
 function wake(job: Job): void {
+  const pin = pinnedTo(job);
   const i = waiters.findIndex((w) => !cooldownFor(workers.get(w.worker)?.cooldownGroup ?? null)
-    && (!w.types || w.types.includes(job.type)));
+    && (!w.types || w.types.includes(job.type)) && (!pin || pin === w.worker));
   if (i === -1) return;
   const w = waiters.splice(i, 1)[0]!;
   clearTimeout(w.timer);
@@ -341,7 +358,7 @@ export function take(
   sweep();
   if (cooldownFor(workers.get(worker)?.cooldownGroup ?? null)) return Promise.resolve(null);
   const types = opts.types && opts.types.length ? opts.types : null;
-  const ready = pending(types);
+  const ready = pending(types, worker);
   if (ready) return Promise.resolve(lease(ready, worker));
 
   const waitMs = Math.min(Math.max(0, opts.waitMs ?? MAX_WAIT_MS), MAX_WAIT_MS);
@@ -545,7 +562,8 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     // research. They may report work already claimed, but cannot claim more.
     const types = (q.get('contactProtocol') === 'durable-v1'
       ? offeredTypes : offeredTypes.filter((type) => !isDurableContactJob(type)))
-      .filter((type) => !isRetired(worker, type));
+      .filter((type) => !isRetired(worker, type))
+      .filter((type) => !ctx.scope || ctx.scope.types.includes(type));
     touch(worker, callerIp(req), types, (q.get('cooldownGroup') ?? '').trim());
     const waitSec = Number(q.get('wait'));
     const controller = new AbortController();
@@ -625,7 +643,8 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     const offeredTypes = Array.isArray(body.types) ? body.types.map((t) => str(t).trim()).filter(Boolean) : [];
     const types = (body.contactProtocol === 'durable-v1'
       ? offeredTypes : offeredTypes.filter((type) => !isDurableContactJob(type)))
-      .filter((type) => !isRetired(worker, type));
+      .filter((type) => !isRetired(worker, type))
+      .filter((type) => !ctx.scope || ctx.scope.types.includes(type));
     const group = str(body.cooldownGroup).trim();
     touch(worker, callerIp(req), types, group);
     sweep();
@@ -698,6 +717,11 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     const worker = str(body.worker).trim();
     if (worker) touch(worker, callerIp(req));
     const current = get(result[1]!);
+    // A scoped key answers only a job of its own types that this worker holds.
+    if (ctx.scope && (!current || !ctx.scope.types.includes(current.type) || !worker || current.worker !== worker)) {
+      json(res, 403, { error: 'this key may only answer a ' + ctx.scope.types.join('/') + ' job its worker holds' });
+      return true;
+    }
     if (current?.type === 'country.industry' && (current.status !== 'running' || !worker || current.worker !== worker)) {
       json(res, 409, { error: 'country job is not held by this worker' });
       return true;

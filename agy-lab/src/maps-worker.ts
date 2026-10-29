@@ -28,7 +28,7 @@ export const JOB_TYPE = 'gmap.scan';
 export const WORKER_NAME = 'scraper-tech-maps';
 
 const DEFAULT_BASE_URL = 'https://mcp.scraper.tech';
-const DEFAULT_MAX = 200;
+export const DEFAULT_MAX = 200;
 const MAX_LIMIT = 500;
 const CALL_TIMEOUT_MS = 90_000;
 const SWEEP_CONCURRENCY = 6;
@@ -41,11 +41,11 @@ const SWEEP_CONCURRENCY = 6;
  */
 const MAX_FAILED_SHARE = 0.2;
 const STREET_CONCURRENCY = 10;
-const STREET_FORMS = ['shop', 'company'];
+export const STREET_FORMS = ['shop', 'company'];
 /** Stop starting street calls this long before the job's lease runs out. */
 const DEADLINE_MARGIN_MS = 60_000;
 /** Below this share of rows naming the place, the place is not how Google writes addresses there: keep everything. */
-const AREA_MATCH_FLOOR = 0.3;
+export const AREA_MATCH_FLOOR = 0.3;
 
 /**
  * Keyword families, each ordered by how many new in-area places a word added in
