@@ -242,7 +242,8 @@ export async function conversations(): Promise<Conversation[]> {
       return;
     }
     const d = draftOf.get(k);
-    const answered = d?.status === 'sent' ? d.sent_at : null;
+    // pg hands timestamptz back as a Date; compared with the ISO replied_at it is never later.
+    const answered = d?.status === 'sent' && d.sent_at ? new Date(d.sent_at).toISOString() : null;
     byKey.set(k, { ...c, draft_status: d?.status ?? null, answered_at: answered, needs_reply: false });
   };
   for (const r of local.rows) {
