@@ -187,7 +187,7 @@ async function setup(id: number, body: Record<string, unknown>, isNew: boolean):
 
 // ---- inbox ---------------------------------------------------------------------
 
-const pick = (o: any, ...paths: string[]): any => {
+export const pick = (o: any, ...paths: string[]): any => {
   for (const p of paths) {
     const v = p.split('.').reduce((a, k) => (a == null ? a : a[k]), o);
     if (v != null && v !== '') return v;
@@ -230,7 +230,7 @@ export function threadMessage(h: any) {
 }
 
 /** Every campaign thread with this email, found from Smartlead's lead record. */
-async function threads(email: string, onlyCampaign: number | null) {
+export async function threads(email: string, onlyCampaign: number | null) {
   const lead = await sl.call('GET', '/leads/?email=' + encodeURIComponent(email)).catch(() => null);
   if (!lead?.id) return { lead: null, threads: [] };
   const camps: any[] = (lead.lead_campaign_data ?? []).filter((c: any) => !onlyCampaign || Number(c.campaign_id) === onlyCampaign);
@@ -355,6 +355,8 @@ async function recordEvent(body: Record<string, unknown>): Promise<void> {
     [e.campaign_id, e.email, e.hub_company_id, e.campaign_name, e.type, e.at,
       when('EMAIL_OPEN'), when('EMAIL_REPLY'), when('EMAIL_BOUNCE'), when('LEAD_UNSUBSCRIBED'), e.type === 'LEAD_CATEGORY_UPDATED' ? e.category : null]);
   const companyId = Number(row.rows[0]?.company_id) || null;
+  // Smartlead's reply history can trail its webhook by a moment; the draft reads that history.
+  if (e.type === 'EMAIL_REPLY') setTimeout(() => void import('./email-replies.ts').then((r) => r.draftSoon(e.email!, e.campaign_id)), 20_000);
   const status = ACTIVITY[e.type];
   if (!companyId || !status) return;
   // No telemarketer name: these are not agent work and must not count in agent stats.
@@ -395,7 +397,7 @@ async function categories() {
   return categoryCache.list.map((c) => ({ id: c.id, name: c.name, sentiment: c.sentiment_type }));
 }
 
-function campaignRow(c: any, a: any) {
+export function campaignRow(c: any, a: any) {
   const n = (v: unknown) => Number(v ?? 0) || 0;
   return {
     id: c.id, name: c.name, status: c.status, created_at: c.created_at,
