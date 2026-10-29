@@ -569,6 +569,8 @@ export function migrate(): Promise<void> {
       comment on table email_marketing_event is 'email-marketing.ts: every Smartlead webhook call, raw';
       create index if not exists email_marketing_event_email_idx on email_marketing_event (email);
       create index if not exists email_marketing_event_received_idx on email_marketing_event (received_at desc);
+      -- Events saved before secret_key was dropped on arrival.
+      update email_marketing_event set payload = payload - 'secret_key' - 'webhook_url' where payload ? 'secret_key' or payload ? 'webhook_url';
 
       create table if not exists maps_usage (
         month text primary key,

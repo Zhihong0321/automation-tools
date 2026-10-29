@@ -9,7 +9,7 @@ import type http from 'node:http';
 import * as db from './reportdb.ts';
 import * as llm from './extract-llm.ts';
 import * as sl from './smartlead.ts';
-import { campaignRow, htmlToText, leads, pick, textToHtml, threads, webhookEvent } from './email-marketing.ts';
+import { campaignRow, htmlToText, leads, pick, stripQuoted, textToHtml, threads, webhookEvent } from './email-marketing.ts';
 
 type Ctx = {
   json: (res: http.ServerResponse, status: number, body: unknown) => void;
@@ -90,6 +90,7 @@ export function buildPrompt(input: { company: string | null; category: string | 
     '- Never invent prices, savings figures, specifications, timelines or promises. If they ask for something you cannot know, say you will confirm it or work it out after seeing their roof and electricity bill.',
     '- If they are not interested or ask to stop, write one or two polite lines that close the conversation and say they will not be emailed again.',
     '- If it is an auto-reply or out-of-office, write a one-line note saying you will follow up later.',
+    '- Do not mention links, booking pages, attachments or brochures: the email carries none. Ask them to reply with a good time, or WhatsApp.',
     '- Plain text only. No subject line, no "Dear [Name]" placeholders, no signature (it is added automatically), no markdown.',
     input.instruction ? `\nExtra instruction from the sender: ${input.instruction}` : '',
     '',
@@ -260,7 +261,7 @@ export async function conversations(): Promise<Conversation[]> {
         add({ email, campaign_id: campaign, campaign_name: pick(m, 'email_campaign_name', 'campaign_name', 'campaign.name'),
           company: pick(m, 'lead_company_name', 'company_name', 'lead.company_name', 'lead.company'), category: null,
           replied_at: when ? new Date(when).toISOString() : null,
-          preview: htmlToText(pick(m, 'last_reply.email_body', 'last_message.body', 'email_body', 'reply_body') ?? '') });
+          preview: stripQuoted(htmlToText(pick(m, 'last_reply.email_body', 'last_message.body', 'email_body', 'reply_body') ?? '')) });
       }
       if (rows.length < 20) break;
     }

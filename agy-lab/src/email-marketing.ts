@@ -212,11 +212,28 @@ export function inboxItem(m: any) {
   };
 }
 
+/**
+ * A reply without the email it quotes. Mail apps append the whole thread under
+ * "On <date>, <sender> wrote:" (or the Malay, Chinese or Outlook form); the
+ * reader and the model only need what the lead typed.
+ */
+export function stripQuoted(text: string): string {
+  const lines = text.split('\n');
+  const cut = lines.findIndex((l, i) =>
+    /^\s*(on\b.{0,200}\bwrote:|pada\b.{0,200}\bmenulis:|-{2,}\s*original message\s*-{2,}|from:\s.+|发件人[:：]|.{0,120}(写道|寫道)[:：])\s*$/i.test(l)
+    || (/^\s*on\b/i.test(l) && /wrote:\s*$/i.test(lines[i + 1] ?? ''))
+    || (/^\s*>/.test(l) && lines.slice(i).every((x) => !x.trim() || /^\s*>/.test(x))));
+  const kept = (cut > 0 ? lines.slice(0, cut) : lines).join('\n').trim();
+  return kept || text.trim();
+}
+
 /** One message of a thread, normalised. */
 export function threadMessage(h: any) {
   const type = String(pick(h, 'type', 'direction') ?? '').toUpperCase();
+  const inbound = type === 'REPLY' || type === 'INBOUND';
+  const text = htmlToText(String(pick(h, 'email_body', 'body') ?? ''));
   return {
-    inbound: type === 'REPLY' || type === 'INBOUND',
+    inbound,
     stats_id: pick(h, 'stats_id', 'email_stats_id'),
     message_id: pick(h, 'message_id', 'id'),
     time: pick(h, 'time', 'sent_at', 'received_at'),
@@ -224,7 +241,7 @@ export function threadMessage(h: any) {
     to: pick(h, 'to'),
     subject: pick(h, 'subject'),
     body_html: String(pick(h, 'email_body', 'body') ?? ''),
-    body: htmlToText(String(pick(h, 'email_body', 'body') ?? '')),
+    body: inbound ? stripQuoted(text) : text,
     seq: pick(h, 'email_seq_number'),
   };
 }
@@ -334,8 +351,10 @@ export function activityNote(e: ReturnType<typeof webhookEvent>): string {
 async function recordEvent(body: Record<string, unknown>): Promise<void> {
   await db.migrate();
   const e = webhookEvent(body);
+  // Smartlead puts part of the API key (secret_key) and our keyed URL in every call; neither is kept.
+  const { secret_key: _secret, webhook_url: _url, ...kept } = body;
   await db.sql(`insert into email_marketing_event (campaign_id, email, event_type, at, payload) values ($1, $2, $3, $4::timestamptz, $5::jsonb)`,
-    [e.campaign_id, e.email, e.type || 'UNKNOWN', e.at, JSON.stringify(body)]);
+    [e.campaign_id, e.email, e.type || 'UNKNOWN', e.at, JSON.stringify(kept)]);
   if (!e.campaign_id || !e.email) return;
   const when = (type: string) => (e.type === type ? e.at : null);
   const row = await db.sql<{ company_id: string | null }>(

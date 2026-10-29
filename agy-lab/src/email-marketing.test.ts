@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { eligible, mailName, toSmartlead, textToHtml, htmlToText, inboxItem, threadMessage, webhookEvent, activityNote, webhookKey, webhookUrl, doNotEmail, type MarketingLead } from './email-marketing.ts';
+import { eligible, mailName, toSmartlead, textToHtml, htmlToText, inboxItem, threadMessage, stripQuoted, webhookEvent, activityNote, webhookKey, webhookUrl, doNotEmail, type MarketingLead } from './email-marketing.ts';
 import { page } from './email-marketing-page.ts';
 import type { EmailRow } from './email-list.ts';
 
@@ -86,4 +86,17 @@ test('an address that bounced or unsubscribed anywhere is never emailed again', 
   assert.equal(doNotEmail(lead({})), false);
   assert.equal(doNotEmail(lead({ bounced_at: 't' })), true);
   assert.equal(doNotEmail(lead({ unsubscribed_at: 't' })), true);
+});
+
+test('a reply drops the email it quotes, in the forms mail apps use', () => {
+  // The live test reply of 2026-10-29, as Smartlead returned it.
+  const real = htmlToText('<p>my house RM380 average<br/>link terrace. nilai</p><p>On 10/29/2026, 3:31:42 PM, <a href="mailto:eternalgy@atap.solar">eternalgy@atap.solar</a> wrote:<br/>&gt; Hi Eternalgy Sdn Bhd team,<br/>&gt;<br/>&gt; This is a live test</p>');
+  assert.equal(stripQuoted(real), 'my house RM380 average\nlink terrace. nilai');
+  assert.equal(stripQuoted('Yes please\n\nOn Tue, 4 Nov 2026 at 10:00, Gan Zhi Hong <eternalgy@atap.solar>\nwrote:\n> hi'), 'Yes please');
+  assert.equal(stripQuoted('Boleh\n\nPada 4 Nov 2026, Gan menulis:\n> hi'), 'Boleh');
+  assert.equal(stripQuoted('可以\n\n在 2026年11月4日 Gan 写道：\n> hi'), '可以');
+  assert.equal(stripQuoted('Ok\n\nFrom: Gan Zhi Hong <eternalgy@atap.solar>\nSent: Tuesday'), 'Ok');
+  assert.equal(stripQuoted('> only a quote'), '> only a quote');
+  assert.equal(threadMessage({ type: 'REPLY', email_body: '<p>Ok</p><p>On Mon, X wrote:<br>&gt; old</p>' }).body, 'Ok');
+  assert.match(threadMessage({ type: 'SENT', email_body: '<p>Ok</p><p>On Mon, X wrote:</p>' }).body, /wrote:/);
 });
