@@ -717,8 +717,14 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     const worker = str(body.worker).trim();
     if (worker) touch(worker, callerIp(req));
     const current = get(result[1]!);
-    // A scoped key answers only a job of its own types that this worker holds.
-    if (ctx.scope && (!current || !ctx.scope.types.includes(current.type) || !worker || current.worker !== worker)) {
+    // A scoped key answers only a job of its own types that this worker holds. A
+    // job this broker no longer has (a redeploy mid-scan) is a plain 404, and
+    // never reaches the contact-report recovery below.
+    if (ctx.scope && !current) {
+      json(res, 404, { error: 'no such job — it was evicted, or the service restarted while it ran', id: result[1] });
+      return true;
+    }
+    if (ctx.scope && current && (!ctx.scope.types.includes(current.type) || !worker || current.worker !== worker)) {
       json(res, 403, { error: 'this key may only answer a ' + ctx.scope.types.join('/') + ' job its worker holds' });
       return true;
     }

@@ -114,6 +114,11 @@ test('a scoped key answers only the gmap.scan job its own worker holds', async (
   finish(fb.id, false, null, 'test');
 });
 
+test('a scoped result for a job the broker lost is a 404', async () => {
+  const lost = await scoped('POST', '/api/jobs/0000aaaa1111/result', { worker: 'pc-scope-3', ok: true, result: { businesses: [] } });
+  assert.equal(lost.status, 404);
+});
+
 test('a job pinned to a worker goes to that worker only', async () => {
   const job = create('gmap.scan', { keyword: 'factory', place: 'Taman Pin', worker: 'pc-pinned' }, 60_000);
   assert.equal(await take('scraper-tech-maps', { types: ['gmap.scan'], waitMs: 0 }), null);

@@ -118,8 +118,9 @@ function Invoke-Hub([string]$Method, [string]$Path, $Body = $null, [int]$Timeout
   } catch [Net.WebException] {
     $resp = $_.Exception.Response
     if (-not $resp) { throw }
-    $text = ''
-    try { $text = (New-Object IO.StreamReader($resp.GetResponseStream())).ReadToEnd() } catch { }
+    # 5.1 has usually read the body already and keeps it in ErrorDetails.
+    $text = if ($_.ErrorDetails) { [string]$_.ErrorDetails.Message } else { '' }
+    if (-not $text) { try { $text = (New-Object IO.StreamReader($resp.GetResponseStream())).ReadToEnd() } catch { } }
     return @{ status = [int]$resp.StatusCode; body = $text }
   }
 }
