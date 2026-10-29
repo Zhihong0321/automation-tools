@@ -1,14 +1,14 @@
 // The Gmap Local Worker: a download that turns a Windows PC into a gmap.scan
-// worker. The package (../local-worker) is a PowerShell bridge that claims a
-// Maps job from this hub, sweeps Google Maps with gosom
-// (github.com/gosom/google-maps-scraper, built for Windows in the Dockerfile),
-// and posts the businesses back like any other worker.
+// worker. The package (../local-worker) is one PowerShell script that claims a
+// Maps job from this hub, reads the businesses from Google Maps' own result-list
+// pages on the PC's internet line (no browser), and posts them back like any
+// other worker. How and why: the header of local-worker/worker.ps1.
 //
 // THE KEY. A worker PC must not hold LAB_TOKEN: that is a shell on this
 // container. It holds GMAP_WORKER_KEY, an HMAC of LAB_TOKEN, which server.ts
 // lets through to the claim, heartbeat and result routes (for gmap.scan only,
-// see jobs.ts `scope`) and to the strategy and engine routes below. Rotating
-// LAB_TOKEN rotates it; the PCs then need a fresh package.
+// see jobs.ts `scope`) and to the strategy route below. Rotating LAB_TOKEN
+// rotates it; the PCs then need a fresh package.
 import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -20,7 +20,6 @@ import { AREA_MATCH_FLOOR, DEFAULT_MAX, FAMILIES, STREET_FORMS } from './maps-wo
 export const JOB_TYPES = ['gmap.scan'];
 export const PACKAGE_NAME = 'GmapWorker.zip';
 const DIR = path.resolve(import.meta.dirname, '../local-worker');
-const ENGINE = path.join(DIR, 'gmaps.exe');
 const KEY_LABEL = 'gmap-local-worker-v1';
 
 /** Files of the package, as [path in the folder, path in the zip]. */
@@ -55,17 +54,6 @@ export function isJobRoute(method: string, p: string): boolean {
 /** What the bridge sweeps, read on every job so the words stay the hub's. */
 export function strategy(): Record<string, unknown> {
   return { families: FAMILIES, streetForms: STREET_FORMS, areaMatchFloor: AREA_MATCH_FLOOR, defaultMax: DEFAULT_MAX };
-}
-
-let engineInfo: { sha256: string; size: number; mtimeMs: number } | null = null;
-export function engine(file = ENGINE): { sha256: string; size: number } | null {
-  let stat: fs.Stats;
-  try { stat = fs.statSync(file); } catch { return null; }
-  if (!engineInfo || engineInfo.mtimeMs !== stat.mtimeMs || engineInfo.size !== stat.size) {
-    const sha256 = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-    engineInfo = { sha256, size: stat.size, mtimeMs: stat.mtimeMs };
-  }
-  return { sha256: engineInfo.sha256, size: engineInfo.size };
 }
 
 const DOS_EPOCH = { time: 0, date: (2026 - 1980) << 9 | 1 << 5 | 1 };
@@ -164,21 +152,5 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     return true;
   }
   if (p === '/api/gmap-worker/strategy') { ctx.json(res, 200, strategy()); return true; }
-  if (p === '/api/gmap-worker/engine-info') {
-    const info = engine();
-    if (!info) { ctx.json(res, 503, { error: 'this deploy has no gmaps.exe; it is built by the Dockerfile' }); return true; }
-    ctx.json(res, 200, info);
-    return true;
-  }
-  if (p === '/api/gmap-worker/engine') {
-    const info = engine();
-    if (!info) { ctx.json(res, 503, { error: 'this deploy has no gmaps.exe; it is built by the Dockerfile' }); return true; }
-    res.writeHead(200, {
-      'content-type': 'application/octet-stream', 'content-length': info.size, 'cache-control': 'no-store',
-      'content-disposition': 'attachment; filename="gmaps.exe"', 'x-sha256': info.sha256,
-    });
-    fs.createReadStream(ENGINE).pipe(res);
-    return true;
-  }
   return false;
 }

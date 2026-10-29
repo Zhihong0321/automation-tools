@@ -12,5 +12,3 @@ package-lock.json
 # local website email scrape output (has emails; never commit)
 agy-lab/scripts/site-emails-out/
 
-# built by the Dockerfile, served to Gmap Local Worker PCs
-agy-lab/local-worker/gmaps.exe

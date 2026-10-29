@@ -1,27 +1,32 @@
 # Gmap Local Worker: turns this Windows PC into a gmap.scan worker for the hub.
 #
-# It asks the hub for a Google Maps job, sweeps Maps with gosom (headless
-# Chromium on this PC's own internet line), and posts the businesses back. Only
-# outbound requests: nothing to open on the router.
+# It asks the hub for a Google Maps job, reads the businesses from Google Maps
+# on this PC's own internet line, and posts them back. Only outbound requests:
+# nothing to open on the router.
+#
+# No browser. Maps fills its result list from /search?tbm=map, 20 businesses a
+# page, each with its phone, website, address, rating, categories, coordinates
+# and place id. This reads those pages directly, one after another, paging with
+# the pb offset. The field positions are gosom's ParseSearchResults
+# (github.com/gosom/google-maps-scraper, gmaps/multiple.go, MIT) plus the
+# place id at 78 (gosom gmaps/entry.go). On 2026-10-29 the factory sweep of
+# Taman Daya read 802 businesses in 4 minutes this way; scraper.tech read 839.
 #
 # The sweep is the hub's (maps-worker.ts): "<word> in <place>" for every word of
 # the keyword's family, then for a Business scan "shop/company in <street>" for
 # the streets the first pass found. The words come from the hub on every job.
-# gosom runs once per pass and dedupes places across that pass's searches.
 #
 # Windows PowerShell 5.1, ASCII only (5.1 reads a BOM-less script as ANSI).
 param([ValidateSet('on', 'off', '')][string]$Autostart = '')
 
 $ErrorActionPreference = 'Stop'
-# The progress bar makes Invoke-WebRequest downloads many times slower on 5.1.
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $Root = Split-Path $PSScriptRoot -Parent
 $Data = Join-Path $env:LOCALAPPDATA 'GmapWorker'
-$Work = Join-Path $Data 'runs'
 $LogFile = Join-Path $Data 'worker.log'
-New-Item -ItemType Directory -Force $Data, $Work | Out-Null
+New-Item -ItemType Directory -Force $Data | Out-Null
 
 function Log([string]$Message) {
   $line = '[' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + '] ' + $Message
@@ -77,11 +82,19 @@ if (-not $Lab -or -not $Key) {
 }
 $Name = [string]$Cfg['WORKER_NAME']
 if (-not $Name) { $Name = 'pc-' + ($env:COMPUTERNAME.ToLower() -replace '[^a-z0-9-]', '-') }
-$Concurrency = 2
-if ($Cfg['GMAP_CONCURRENCY']) { $Concurrency = [Math]::Max(1, [int]$Cfg['GMAP_CONCURRENCY']) }
+# Pause between two Google requests. 1 request a second was never refused in testing.
+$PaceMs = 500
+if ($Cfg['GMAP_PACE_MS']) { $PaceMs = [Math]::Max(0, [int]$Cfg['GMAP_PACE_MS']) }
 $Types = 'gmap.scan'
-# Time kept back from the hub's deadline to read the results and post them.
-$PostMarginSec = 120
+# Time kept back from the hub's deadline to post the result.
+$PostMarginSec = 60
+# After Google refuses this line, claim nothing for this long.
+$BlockedRestSec = 1800
+$Page = 20
+$MaxPages = 15
+# Where a search starts before the place's own centre is known. The query text
+# places it ("factory in Taman Daya" lands in Johor Bahru from here too).
+$DefaultCentre = @(3.139, 101.6869)
 
 # One worker per PC: autostart and a double click must not run two.
 $mutex = New-Object Threading.Mutex($false, 'Local\GmapLocalWorker')
@@ -99,9 +112,16 @@ function Stay-Awake([bool]$On) {
   else { [void][GmapWorker.Power]::SetThreadExecutionState([uint32]2147483648) }
 }
 
+# ConvertFrom-Json on 5.1 is slow on Google's deeply nested arrays; this is not.
+Add-Type -AssemblyName System.Web.Extensions
+$Json = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+$Json.MaxJsonLength = [int]::MaxValue
+$Json.RecursionLimit = 10000
+$Invariant = [Globalization.CultureInfo]::InvariantCulture
+
 # --------------------------------------------------------------------- hub
 
-function Invoke-Hub([string]$Method, [string]$Path, $Body = $null, [int]$TimeoutSec = 60, [string]$OutFile = '') {
+function Invoke-Hub([string]$Method, [string]$Path, $Body = $null, [int]$TimeoutSec = 60) {
   $params = @{
     Uri = $Lab + $Path; Method = $Method; UseBasicParsing = $true; TimeoutSec = $TimeoutSec
     Headers = @{ authorization = 'Bearer ' + $Key }
@@ -110,10 +130,8 @@ function Invoke-Hub([string]$Method, [string]$Path, $Body = $null, [int]$Timeout
     $params.Body = [Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 8 -Compress))
     $params.ContentType = 'application/json; charset=utf-8'
   }
-  if ($OutFile) { $params.OutFile = $OutFile }
   try {
     $r = Invoke-WebRequest @params
-    if ($OutFile) { return @{ status = 200; body = '' } }
     return @{ status = [int]$r.StatusCode; body = [string]$r.Content }
   } catch [Net.WebException] {
     $resp = $_.Exception.Response
@@ -133,31 +151,78 @@ function Send-Beat {
   try { [void](Invoke-Hub 'POST' '/api/jobs/heartbeat' @{ worker = $Name; types = @($Types); jobId = $script:JobId } 20) } catch { }
 }
 
-# ------------------------------------------------------------------ engine
+# ------------------------------------------------------------- google maps
 
-# The engine is gosom (github.com/gosom/google-maps-scraper), built by the hub
-# for Windows. It is fetched from the hub and checked against the hub's hash.
-function Get-Engine {
-  $r = Invoke-Hub 'GET' '/api/gmap-worker/engine-info'
-  if ($r.status -ne 200) { throw "the hub has no engine to give (HTTP $($r.status)): $($r.body)" }
-  $info = $r.body | ConvertFrom-Json
-  $exe = Join-Path $Data ('gmaps-' + $info.sha256.Substring(0, 12) + '.exe')
-  if ((Test-Path $exe) -and (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower() -eq $info.sha256) { return $exe }
-  Log ('downloading the scraping engine (' + [Math]::Round($info.size / 1MB) + ' MB) from the hub')
-  $part = "$exe.part"
-  $d = Invoke-Hub 'GET' '/api/gmap-worker/engine' $null 900 $part
-  if ($d.status -ne 200) { throw "engine download failed (HTTP $($d.status)): $($d.body)" }
-  $hash = (Get-FileHash $part -Algorithm SHA256).Hash.ToLower()
-  if ($hash -ne $info.sha256) { Remove-Item $part -Force; throw "engine download is corrupt (sha256 $hash, expected $($info.sha256))" }
-  Move-Item $part $exe -Force
-  Get-ChildItem $Data -Filter 'gmaps-*.exe' | Where-Object { $_.FullName -ne $exe } | Remove-Item -Force -ErrorAction SilentlyContinue
-  Log 'engine ready. Its first run also downloads Chromium (about 150 MB), once.'
-  return $exe
+# One element of Google's nested arrays, or $null. Arrays come back whole: a
+# plain `return` would unroll them into the pipeline.
+function At($Value, [int[]]$Path) {
+  foreach ($i in $Path) {
+    if ($Value -isnot [array] -or $i -ge $Value.Count) { return $null }
+    $Value = $Value[$i]
+  }
+  if ($Value -is [array]) { return , $Value }
+  return $Value
 }
 
-# -------------------------------------------------------------------- sweep
+function Get-Pb([double]$Lat, [double]$Lon, [int]$Offset) {
+  return '!4m12!1m3!1d3826.902183192154!2d' + $Lon.ToString('0.0000', $Invariant) + '!3d' + $Lat.ToString('0.0000', $Invariant) +
+    '!2m3!1f0!2f0!3f0!3m2!1i600!2i800!4f15.0!7i' + $Page + '!8i' + $Offset +
+    '!10b1!12m22!1m3!18b1!30b1!34e1!2m3!5m1!6e2!20e3!4b0!10b1!12b1!13b1!16b1!17m1!3e1!20m3!5e2!6b1!14b1!46m1!1b0' +
+    '!96b1!19m4!2m3!1i360!2i120!4i8'
+}
 
-function Squash([string]$Text) { return ($Text.ToLower() -replace '[^a-z0-9]', '') }
+function Text($Value) { if ($null -ne $Value -and [string]$Value -ne '') { return [string]$Value } return $null }
+
+$script:Requests = 0
+$script:Blocked = $null
+$UserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
+
+# One page of one search: up to 20 businesses in the hub's business shape.
+function Get-ListPage([string]$Query, [double]$Lat, [double]$Lon, [int]$Offset) {
+  $url = 'https://www.google.com/search?tbm=map&authuser=0&hl=en&gl=my&q=' + [uri]::EscapeDataString($Query) +
+    '&pb=' + [uri]::EscapeDataString((Get-Pb $Lat $Lon $Offset))
+  $script:Requests++
+  try {
+    $r = Invoke-WebRequest -UseBasicParsing -Uri $url -UserAgent $UserAgent -Headers @{ 'accept-language' = 'en' } -TimeoutSec 30
+  } catch [Net.WebException] {
+    $code = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+    if ($code -eq 429 -or $code -eq 403) { $script:Blocked = "Google refused this line (HTTP $code)"; return @() }
+    throw
+  }
+  $text = [Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray())
+  if ($text -match 'unusual traffic|/sorry/index|recaptcha') { $script:Blocked = 'Google asked this line for a captcha'; return @() }
+  $data = $Json.DeserializeObject($text.Substring($text.IndexOf("`n") + 1))
+  $items = At $data @(0, 1)
+  $rows = New-Object System.Collections.ArrayList
+  if ($null -eq $items) { return @() }
+  for ($i = 1; $i -lt $items.Count; $i++) {
+    $b = At $items[$i] @(14)
+    if ($null -eq $b) { continue }
+    $name = Text (At $b @(11))
+    if (-not $name) { continue }
+    $parts = At $b @(2)
+    $reviews = At $b @(4, 8)
+    $placeId = Text (At $b @(78))
+    [void]$rows.Add([ordered]@{
+      name = $name
+      rating = $(if ($null -ne (At $b @(4, 7))) { [double](At $b @(4, 7)) } else { $null })
+      reviews = $(if ($null -ne $reviews) { [int]$reviews } else { $null })
+      category = Text (At $b @(13, 0))
+      address = $(if ($parts) { ($parts | ForEach-Object { [string]$_ }) -join ', ' } else { $null })
+      phone = Text (At $b @(178, 0, 0))
+      website = Text (At $b @(7, 0))
+      mapsUrl = $(if ($placeId) { 'https://www.google.com/maps/place/?q=place_id:' + $placeId } else { $null })
+      place_id = $placeId
+      latitude = At $b @(9, 2)
+      longitude = At $b @(9, 3)
+    })
+  }
+  return , $rows.ToArray()
+}
+
+# ------------------------------------------------------------------- sweep
+
+function Squash([string]$Value) { return ($Value.ToLower() -replace '[^a-z0-9]', '') }
 
 # The names an address must carry to be in the place: the first comma segment,
 # split on "/". Same rule as areaNames in maps-worker.ts.
@@ -172,95 +237,36 @@ function Test-InArea([string]$Address, $Names) {
   return $false
 }
 
-# gosom keeps its results file open while it writes, so read it with shared access.
-function Read-Lines([string]$File) {
-  if (-not (Test-Path $File)) { return @() }
-  $fs = New-Object IO.FileStream($File, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
-  try {
-    $reader = New-Object IO.StreamReader($fs, [Text.Encoding]::UTF8)
-    return @($reader.ReadToEnd() -split "`r?`n")
-  } finally { $fs.Dispose() }
-}
-
-# Light read of a gosom JSON-lines file while it is still being written: place
-# ids and addresses only, by regex, so it can run every few seconds.
-function Count-InArea([string[]]$Files, $Names) {
-  $seen = @{}
-  foreach ($f in $Files) {
-    if (-not (Test-Path $f)) { continue }
-    foreach ($line in (Read-Lines $f)) {
-      $id = [regex]::Match($line, '"place_id":"([^"]*)"').Groups[1].Value
-      $addr = [regex]::Match($line, '"address":"((?:[^"\\]|\\.)*)"').Groups[1].Value
-      if ($id -and (Test-InArea $addr $Names)) { $seen[$id] = $true }
-    }
-  }
-  return $seen.Count
-}
-
-function Stop-Tree([System.Diagnostics.Process]$Proc) {
-  if ($Proc -and -not $Proc.HasExited) { & taskkill.exe /PID $Proc.Id /T /F 2>&1 | Out-Null }
-}
-
-$script:Searches = 0
-# One gosom run over these queries. Stops at the deadline, or once `max` in-area
-# places are in hand; whatever gosom wrote by then is kept.
-function Invoke-Gosom([string]$Exe, [string[]]$Queries, [string]$Out, [string]$Geo, [int]$Depth, [datetime]$Deadline, $Names, [int]$Max, [string[]]$Earlier) {
-  if (-not $Queries.Count) { return }
-  if ((Get-Date) -ge $Deadline) { return }
-  $script:Searches += $Queries.Count
-  $in = $Out -replace '\.json$', '.txt'
-  [IO.File]::WriteAllLines($in, $Queries, (New-Object Text.UTF8Encoding $false))
-  $gosomArgs = @('-input', $in, '-results', $Out, '-json', '-c', $Concurrency, '-depth', $Depth, '-lang', 'en')
-  if ($Geo) { $gosomArgs += @('-geo', $Geo, '-zoom', '15') }
-  $argLine = ($gosomArgs | ForEach-Object { '"' + $_ + '"' }) -join ' '
-  $proc = Start-Process -FilePath $Exe -ArgumentList $argLine -WorkingDirectory $Work -PassThru -NoNewWindow `
-    -RedirectStandardError ($Out -replace '\.json$', '.log') -RedirectStandardOutput ($Out -replace '\.json$', '.out')
-  $lastCheck = Get-Date
-  while (-not $proc.HasExited) {
-    Start-Sleep -Seconds 2
+$script:Found = [ordered]@{}
+$script:InArea = 0
+# Every page of one search, until a short page, the page cap, `max` in-area
+# places, the deadline, or Google refusing. Returns how many places were new.
+function Search-All([string]$Query, [double[]]$Centre, $Names, [int]$Max, [datetime]$Deadline) {
+  $added = 0
+  for ($p = 0; $p -lt $MaxPages; $p++) {
+    if ($script:Blocked -or (Get-Date) -ge $Deadline -or $script:InArea -ge $Max) { break }
     Send-Beat
-    if ((Get-Date) -ge $Deadline) { Log '  deadline reached: stopping this pass, keeping what it found'; Stop-Tree $proc; break }
-    if (((Get-Date) - $lastCheck).TotalSeconds -ge 30) {
-      $lastCheck = Get-Date
-      if ((Count-InArea (@($Earlier) + $Out) $Names) -ge $Max) { Log "  $Max places found: stopping early"; Stop-Tree $proc; break }
+    $rows = $null
+    foreach ($try in 1, 2) {
+      try { $rows = Get-ListPage $Query $Centre[0] $Centre[1] ($p * $Page); break }
+      catch { Log "  '$Query' page $p failed ($($_.Exception.Message)); $(if ($try -eq 1) { 'trying again' } else { 'skipping the rest of this search' })" }
     }
-  }
-}
-
-# Every row gosom wrote, deduped on Google's place id, in the hub's business shape.
-function Read-Businesses([string[]]$Files) {
-  $byId = [ordered]@{}
-  foreach ($f in $Files) {
-    if (-not (Test-Path $f)) { continue }
-    foreach ($line in (Read-Lines $f)) {
-      if (-not $line.Trim()) { continue }
-      # A pass stopped mid-write leaves a cut last line.
-      try { $row = $line | ConvertFrom-Json } catch { continue }
-      if (-not $row.title) { continue }
-      if ([string]$row.status -match 'permanently closed') { continue }
-      $id = if ($row.place_id) { [string]$row.place_id } else { [string]$row.title + '|' + [string]$row.address }
-      if ($byId.Contains($id)) { continue }
-      $text = { param($v) if ($null -ne $v -and [string]$v -ne '') { [string]$v } else { $null } }
-      $byId[$id] = [ordered]@{
-        name = [string]$row.title
-        rating = if ($row.review_count -gt 0) { [double]$row.review_rating } else { $null }
-        reviews = if ($null -ne $row.review_count) { [int]$row.review_count } else { $null }
-        category = & $text $row.category
-        address = & $text $row.address
-        phone = & $text $row.phone
-        website = & $text $row.web_site
-        mapsUrl = & $text $row.link
-        place_id = & $text $row.place_id
-        latitude = $row.latitude
-        longitude = $row.longitude
-      }
+    if ($null -eq $rows) { break }
+    foreach ($row in $rows) {
+      $key = if ($row.place_id) { $row.place_id } else { $row.name + '|' + $row.address }
+      if ($script:Found.Contains($key)) { continue }
+      $script:Found[$key] = $row
+      $added++
+      if (Test-InArea $row.address $Names) { $script:InArea++ }
     }
+    if ($rows.Count -lt $Page) { break }
+    if ($PaceMs) { Start-Sleep -Milliseconds $PaceMs }
   }
-  return @($byId.Values)
+  return $added
 }
 
 function Get-Median($Values) {
-  $v = @($Values | Where-Object { $_ } | Sort-Object)
+  $v = @($Values | Where-Object { $null -ne $_ } | ForEach-Object { [double]$_ } | Sort-Object)
   if (-not $v.Count) { return $null }
   return $v[[int][Math]::Floor($v.Count / 2)]
 }
@@ -283,7 +289,7 @@ function Get-Streets($Businesses) {
   return @($counts.GetEnumerator() | Sort-Object Value -Descending | ForEach-Object { $names[$_.Key] })
 }
 
-function Invoke-Scan($Job, [string]$Exe, $Strategy) {
+function Invoke-Scan($Job, $Strategy) {
   $started = Get-Date
   $p = $Job.payload
   $locationOnly = $p.searchMode -eq 'location_only'
@@ -293,7 +299,7 @@ function Invoke-Scan($Job, [string]$Exe, $Strategy) {
   $max = if ([int]$p.max -gt 0) { [int]$p.max } else { [int]$Strategy.defaultMax }
   $timeoutSec = [Math]::Max(120, [int]($Job.timeoutMs / 1000))
   $deadline = $started.AddSeconds([Math]::Max(60, $timeoutSec - $PostMarginSec))
-  $script:Searches = 0
+  $script:Requests = 0; $script:Blocked = $null; $script:Found = [ordered]@{}; $script:InArea = 0
 
   $family = $null
   if ($place) {
@@ -301,56 +307,47 @@ function Invoke-Scan($Job, [string]$Exe, $Strategy) {
     if ($fam) { $family = @($fam) }
   }
   $names = if ($family) { Get-AreaNames $place } else { @() }
-  $dir = Join-Path $Work $Job.id
-  New-Item -ItemType Directory -Force $dir | Out-Null
-  $files = @()
+  $centre = $DefaultCentre
+  $swept = New-Object System.Collections.ArrayList
   $streets = $null
-  $geo = $null
 
   if ($family) {
     $query = if ($keyword) { "$keyword in $place" } else { $place }
-    $queries = @($family | ForEach-Object { "$_ in $place" })
-    # Pass 1: the first word alone, to learn where the place is on the map.
-    $f1 = Join-Path $dir 'pass1.json'
-    Log "  pass 1: '$($queries[0])'"
-    Invoke-Gosom $Exe @($queries[0]) $f1 '' 50 $deadline $names $max @()
-    $files += $f1
-    $first = Read-Businesses @($f1)
-    $inPlace = @($first | Where-Object { Test-InArea $_.address $names })
-    $lat = Get-Median ($inPlace | ForEach-Object { $_.latitude })
-    $lng = Get-Median ($inPlace | ForEach-Object { $_.longitude })
-    if ($null -ne $lat -and $null -ne $lng) { $geo = [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0},{1}', [double]$lat, [double]$lng) }
-    Log "  pass 1: $($first.Count) places, $($inPlace.Count) in $place; map centre $geo"
-    # Pass 2: the rest of the family, pinned to the place.
-    $f2 = Join-Path $dir 'pass2.json'
-    if ((Count-InArea $files $names) -lt $max) {
-      Log "  pass 2: $($queries.Count - 1) more searches"
-      Invoke-Gosom $Exe @($queries | Select-Object -Skip 1) $f2 $geo 50 $deadline $names $max $files
-      $files += $f2
-    }
-    # Pass 3, Business only: street by street, two searches a street.
-    if ($keyword -eq '' -or $keyword.ToLower() -eq 'business') {
-      $soFar = @(Read-Businesses $files | Where-Object { Test-InArea $_.address $names })
-      if ($soFar.Count -lt $max -and (Get-Date) -lt $deadline) {
-        $list = Get-Streets $soFar
-        $streets = [ordered]@{ total = $list.Count; searched = 0; added = 0 }
-        $streetQueries = @($list | ForEach-Object { $s = $_; $Strategy.streetForms | ForEach-Object { "$_ in $s, $place" } })
-        $f3 = Join-Path $dir 'pass3.json'
-        Log "  pass 3: $($list.Count) streets, $($streetQueries.Count) searches"
-        Invoke-Gosom $Exe $streetQueries $f3 $geo 20 $deadline $names $max $files
-        $files += $f3
-        $streets.searched = $list.Count
-        $streets.added = @(Read-Businesses $files | Where-Object { Test-InArea $_.address $names }).Count - $soFar.Count
+    $searches = 0
+    foreach ($word in $family) {
+      if ($script:Blocked -or (Get-Date) -ge $deadline -or $script:InArea -ge $max) { break }
+      $q = "$word in $place"
+      $added = Search-All $q $centre $names $max $deadline
+      $searches++
+      [void]$swept.Add([ordered]@{ keyword = $word; added = $added })
+      # After the first search, pin the rest to the place's own centre.
+      if ($searches -eq 1) {
+        $here = @($script:Found.Values | Where-Object { Test-InArea $_.address $names })
+        $lat = Get-Median ($here | ForEach-Object { $_.latitude })
+        $lng = Get-Median ($here | ForEach-Object { $_.longitude })
+        if ($null -ne $lat -and $null -ne $lng) { $centre = @($lat, $lng) }
+        Log ("  map centre of {0}: {1}" -f $place, ($centre -join ','))
       }
+      Log "  '$q': +$added (in $place so far: $($script:InArea), requests: $($script:Requests))"
+    }
+    # Business only: street by street, two searches a street.
+    if (($keyword -eq '' -or $keyword.ToLower() -eq 'business') -and -not $script:Blocked -and $script:InArea -lt $max -and (Get-Date) -lt $deadline) {
+      $list = Get-Streets @($script:Found.Values | Where-Object { Test-InArea $_.address $names })
+      $streets = [ordered]@{ total = $list.Count; searched = 0; added = 0 }
+      Log "  streets: $($list.Count)"
+      foreach ($street in $list) {
+        if ($script:Blocked -or (Get-Date) -ge $deadline -or $script:InArea -ge $max) { break }
+        foreach ($form in $Strategy.streetForms) { $streets.added += Search-All "$form in $street, $place" $centre $names $max $deadline }
+        $streets.searched++
+      }
+      Log "  streets searched: $($streets.searched) of $($streets.total), +$($streets.added)"
     }
   } else {
     $query = if ($place) { "$keyword in $place" } else { $keyword }
-    $f1 = Join-Path $dir 'pass1.json'
-    Invoke-Gosom $Exe @($query) $f1 '' ([Math]::Max(10, [Math]::Ceiling($max / 3))) $deadline $names $max @()
-    $files += $f1
+    [void](Search-All $query $centre $names $max $deadline)
   }
 
-  $all = Read-Businesses $files
+  $all = @($script:Found.Values)
   $kept = $all
   $outside = 0
   if ($family -and $names.Count) {
@@ -359,25 +356,29 @@ function Invoke-Scan($Job, [string]$Exe, $Strategy) {
     if ($inside.Count -ge $all.Count * [double]$Strategy.areaMatchFloor) { $kept = $inside; $outside = $all.Count - $inside.Count }
   }
   $businesses = @($kept | Select-Object -First $max | ForEach-Object { $_.Remove('latitude'); $_.Remove('longitude'); $_ })
-  if ($family -and -not $businesses.Count) {
-    throw "gosom found no businesses for $query. Google may be throttling this PC's line; the hub will scan this place again."
-  }
+  if (-not $businesses.Count -and $script:Blocked) { throw "$($script:Blocked) before any business was read" }
+  if ($family -and -not $businesses.Count) { throw "no businesses found for $query" }
   return [ordered]@{
     query = $query; keyword = $keyword; place = $(if ($place) { $place } else { $null })
     businesses = $businesses; found = $businesses.Count; capped = ($businesses.Count -ge $max)
-    blocked = $false; blockedReason = $null; limitedView = $false; categories = $null
+    blocked = $false; blockedReason = $null; limitedView = $false
+    categories = $(if ($swept.Count) { $swept.ToArray() } else { $null })
     outsideArea = $outside; streets = $streets; skippedSearches = $null; scrolls = 0
-    provider = 'gosom-local'; worker = $Name; mapCentre = $geo
+    provider = 'maps-list-local'; worker = $Name
+    mapCentre = ($centre | ForEach-Object { ([double]$_).ToString($Invariant) }) -join ','
     # Free: nothing here counts against the scraper.tech budget.
-    requests = 0; searches = $script:Searches
+    requests = 0; googleRequests = $script:Requests
+    stoppedEarly = $script:Blocked
     tookMs = [int]((Get-Date) - $started).TotalMilliseconds; at = (Get-Date).ToUniversalTime().ToString('o'); storage = 'hub'
   }
 }
 
 # Post a result, retrying the hub for a few minutes. If it never takes it, keep
 # a copy on disk rather than lose the scan.
-function Send-Result([string]$Id, [bool]$Ok, $Result, [string]$ErrorText) {
+function Send-Result([string]$Id, [bool]$Ok, $Result, [string]$ErrorText, [int]$RetryAfterMs = 0) {
   $body = @{ worker = $Name; ok = $Ok; result = $Result; error = $(if ($ErrorText) { $ErrorText } else { $null }) }
+  # Tells the hub to stop handing this worker jobs while Google rests it.
+  if ($RetryAfterMs) { $body.retryAfterMs = $RetryAfterMs }
   foreach ($wait in 0, 10, 30, 60, 120) {
     Start-Sleep -Seconds $wait
     try {
@@ -395,12 +396,10 @@ function Send-Result([string]$Id, [bool]$Ok, $Result, [string]$ErrorText) {
 
 # --------------------------------------------------------------------- main
 
-Log "Gmap Local Worker '$Name' -> $Lab (gosom, $Concurrency parallel searches)"
-$exe = $null
+Log "Gmap Local Worker '$Name' -> $Lab (Google Maps list pages, $PaceMs ms apart)"
 $backoff = 5
 while ($true) {
   try {
-    if (-not $exe) { $exe = Get-Engine }
     $r = Invoke-Hub 'GET' ("/api/jobs/next?worker=$([uri]::EscapeDataString($Name))&types=$Types&wait=25") $null 45
     if ($r.status -eq 204) { $backoff = 5; continue }
     if ($r.status -eq 401 -or $r.status -eq 403) {
@@ -414,21 +413,23 @@ while ($true) {
     $script:LastBeat = (Get-Date).AddSeconds(-60)
     Log "job $($job.id): $($job.payload.keyword) in $($job.payload.place) (max $($job.payload.max))"
     Stay-Awake $true
+    $rest = 0
     try {
       $sr = Invoke-Hub 'GET' '/api/gmap-worker/strategy'
       if ($sr.status -ne 200) { throw "the hub gave no sweep strategy (HTTP $($sr.status))" }
-      $strategy = $sr.body | ConvertFrom-Json
-      $result = Invoke-Scan $job $exe $strategy
-      Log "job $($job.id): $($result.found) businesses from $($result.searches) searches in $([Math]::Round($result.tookMs / 60000, 1)) min"
-      Send-Result $job.id $true $result ''
+      $result = Invoke-Scan $job ($sr.body | ConvertFrom-Json)
+      if ($result.stoppedEarly) { $rest = $BlockedRestSec; Log "  stopped early: $($result.stoppedEarly)" }
+      Log "job $($job.id): $($result.found) businesses from $($result.googleRequests) Google requests in $([Math]::Round($result.tookMs / 60000, 1)) min"
+      Send-Result $job.id $true $result '' ($rest * 1000)
     } catch {
+      if ($script:Blocked) { $rest = $BlockedRestSec }
       Log "job $($job.id) failed: $($_.Exception.Message)"
-      Send-Result $job.id $false $null ([string]$_.Exception.Message)
+      Send-Result $job.id $false $null ([string]$_.Exception.Message) ($rest * 1000)
     } finally {
       Stay-Awake $false
       $script:JobId = $null
-      Get-ChildItem $Work -Directory | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
+    if ($rest) { Log "resting $([Math]::Round($rest / 60)) min before the next job: Google refused this line"; Start-Sleep -Seconds $rest }
   } catch {
     Log "hub unreachable or error: $($_.Exception.Message). Retrying in $backoff s."
     Start-Sleep -Seconds $backoff
