@@ -31,6 +31,7 @@ import * as diveDeeper from './divedeeper.ts';
 import * as siteEmails from './site-emails.ts';
 import * as emailMarketing from './email-marketing.ts';
 import * as emailReplies from './email-replies.ts';
+import * as contactFormDelivery from './contact-form-delivery.ts';
 import { page as emailMarketingPage } from './email-marketing-page.ts';
 import { page } from './ui.ts';
 import { page as docsPage } from './docs.ts';
@@ -378,6 +379,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // ---- email marketing: lead emails into Smartlead campaigns, replies back --------
   if (await emailReplies.handle(req, res, url, { json, readJson })) return;
   if (await emailMarketing.handle(req, res, url, { json, readJson })) return;
+
+  // ---- contact-form delivery: one lead's message through its website contact form ----
+  if (await contactFormDelivery.handle(req, res, url, { json, readJson })) return;
 
   if (p === '/api/contact-keys' || p === '/api/gemini-contact-keys' || p === '/api/contact-stats') {
     if (await contactKeys.handleKeys(req, res, url, { json, readJson })) return;
