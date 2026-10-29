@@ -57,11 +57,22 @@ function splitName(name: string | null): { first_name?: string; last_name?: stri
   return { first_name: parts[0], last_name: parts.slice(1).join(' ') || undefined };
 }
 
+/**
+ * The name as it reads inside an email. Maps titles carry emoji and taglines
+ * ("️ ️ AK Freight Sdn Bhd | logistics Service Provider | Malaysia"); {{company_name}}
+ * should say "AK Freight Sdn Bhd".
+ */
+export function mailName(name: string): string {
+  const clean = name.replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}\u{200B}]/gu, '').replace(/\s+/g, ' ').trim();
+  const first = clean.split(/\s+[|•·–—]\s+|\s+-\s+/)[0].trim();
+  return first || clean;
+}
+
 export function toSmartlead(r: emailList.EmailRow): sl.LeadIn {
   const custom: Record<string, string> = { hub_company_id: r.company_id };
   if (r.category) custom.category = r.category;
   if (r.person_role) custom.role = r.person_role;
-  return { email: r.email, company_name: r.company_name.trim(), ...splitName(r.person_name), custom_fields: custom };
+  return { email: r.email, company_name: mailName(r.company_name), ...splitName(r.person_name), custom_fields: custom };
 }
 
 /**

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { eligible, toSmartlead, textToHtml, htmlToText, inboxItem, threadMessage } from './email-marketing.ts';
+import { eligible, mailName, toSmartlead, textToHtml, htmlToText, inboxItem, threadMessage } from './email-marketing.ts';
 import { page } from './email-marketing-page.ts';
 import type { EmailRow } from './email-list.ts';
 
@@ -22,6 +22,13 @@ test('a person name splits into first and last; the hub id rides along', () => {
   assert.equal(lead.last_name, 'Wei Ming');
   assert.deepEqual(lead.custom_fields, { hub_company_id: '42', category: 'Factory', role: 'Director' });
   assert.equal(toSmartlead(row()).first_name, undefined);
+});
+
+test('a Maps title loses its emoji and tagline before it goes into an email', () => {
+  assert.equal(mailName('️ ️ AK Freight Sdn Bhd | logistics Service Provider | Malaysia'), 'AK Freight Sdn Bhd');
+  assert.equal(mailName('Syarikat Lim & Sons - Solar Installer'), 'Syarikat Lim & Sons');
+  assert.equal(mailName('Coca-Cola Bottlers (M) Sdn Bhd'), 'Coca-Cola Bottlers (M) Sdn Bhd');
+  assert.equal(toSmartlead(row({ company_name: '🌞 Sun Power | Johor' })).company_name, 'Sun Power');
 });
 
 test('plain text becomes paragraphs and comes back the same', () => {
