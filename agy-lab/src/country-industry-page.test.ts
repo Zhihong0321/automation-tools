@@ -5,7 +5,7 @@ import {countryIndustryPage} from './country-industry-page.ts';
 
 test('country research page offers inputs, status and CSV download',()=>{
   const html=countryIndustryPage();
-  for(const id of ['country','industry','start','maps-state','contacts-state','csv-state','download','jobs-list','jobs-message','token-input','connect']) assert.match(html,new RegExp('id="'+id+'"'));
+  for(const id of ['country','industry','start','maps-state','contacts-state','csv-state','download','jobs-list','jobs-message','token-input','connect','view-csv','csv-search','csv-email-only','csv-prev','csv-next']) assert.match(html,new RegExp('id="'+id+'"'));
   assert.match(html,/type:'country\.industry'/);
   assert.match(html,/job\.progress/);
   assert.match(html,/renderJobs\(d.jobs/);
