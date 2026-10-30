@@ -13,6 +13,10 @@
 // /api/llm-lanes. While that table holds an enabled lane, the CONTACT_LLM_*
 // variables are ignored; they only serve a hub whose table is empty.
 //
+// A lane marked "use first" (a plan whose unused tokens expire) takes every
+// call it can: calls go to it before the rotating lanes, and only move on while
+// it is resting or failed that call. It rests 10s after a 429, not a minute.
+//
 // Errors carry Pi's codes (rate_limit, timeout, length, empty, failed), so the
 // extract step's retry and the lane's cooldown treat both models alike.
 
@@ -20,12 +24,13 @@ import * as db from './reportdb.ts';
 
 type FetchImpl = typeof fetch;
 
-export type LlmConfig = { url: string; key: string; model: string };
+export type LlmConfig = { url: string; key: string; model: string; first?: boolean };
 export type LlmLane = LlmConfig & { id?: number; label: string; enabled: boolean };
 
 const HIVE_URL = 'https://api.thehive.ai/api/v3';
 const HIVE_MODEL = 'deepseek-ai/deepseek-v4.1-flash-1017';
 const REST_MS = 60_000;
+const FIRST_REST_MS = 10_000;
 
 let saved: LlmConfig[] = [];
 
@@ -65,16 +70,17 @@ async function ensureTable(): Promise<void> {
       enabled boolean not null default true,
       created_at timestamptz not null default now()
     );
+    alter table llm_lane add column if not exists first boolean not null default false;
   `);
 }
 
 /** Every saved lane, disabled ones too, in the order calls take turns. */
 export async function listLanes(): Promise<LlmLane[]> {
   await ensureTable();
-  const out = await db.sql(`select id, label, url, api_key, model, enabled from llm_lane order by id`);
+  const out = await db.sql(`select id, label, url, api_key, model, enabled, first from llm_lane order by id`);
   return out.rows.map((row) => ({
     id: Number(row.id), label: String(row.label ?? ''), url: String(row.url), key: String(row.api_key),
-    model: String(row.model), enabled: row.enabled !== false,
+    model: String(row.model), enabled: row.enabled !== false, first: row.first === true,
   }));
 }
 
@@ -83,7 +89,8 @@ export async function refresh(): Promise<LlmLane[]> {
   if (!db.configured()) return [];
   try {
     const lanes = await listLanes();
-    saved = lanes.filter((l) => l.enabled).map(({ url, key, model }) => ({ url, key, model }));
+    const on = lanes.filter((l) => l.enabled).map(({ url, key, model, first }) => ({ url, key, model, first }));
+    saved = [...on.filter((l) => l.first), ...on.filter((l) => !l.first)];
     return lanes;
   } catch (err) {
     console.error('[extract-llm] could not load llm_lane: ' + (err as Error).message);
@@ -99,11 +106,12 @@ export async function replaceLanes(input: Array<Partial<LlmLane>>): Promise<LlmL
     key: String(l.key ?? '').trim(),
     model: String(l.model ?? '').trim(),
     enabled: l.enabled !== false,
+    first: l.first === true,
   })).filter((l) => /^https?:\/\//.test(l.url) && l.key && l.model);
   await ensureTable();
   await db.sql(`delete from llm_lane`);
   for (const l of clean) {
-    await db.sql(`insert into llm_lane (label, url, api_key, model, enabled) values ($1, $2, $3, $4, $5)`, [l.label, l.url, l.key, l.model, l.enabled]);
+    await db.sql(`insert into llm_lane (label, url, api_key, model, enabled, first) values ($1, $2, $3, $4, $5, $6)`, [l.label, l.url, l.key, l.model, l.enabled, l.first]);
   }
   return refresh();
 }
@@ -135,9 +143,11 @@ export async function ask(
 ): Promise<{ answer: string; ms: number; model: string }> {
   const all = Array.isArray(cfg) ? cfg : cfg ? [cfg] : [];
   if (!all.length) throw fail('not_configured', 'Neither CONTACT_LLM_URL, CONTACT_LLM_KEY and CONTACT_LLM_MODEL nor CONTACT_LLM_HIVE_KEYS are set');
-  const start = turn++;
+  const firsts = all.filter((c) => c.first);
+  const rest = all.filter((c) => !c.first);
+  const start = rest.length ? turn++ : 0;
   const now = Date.now();
-  const order = all.map((_, i) => all[(start + i) % all.length]!);
+  const order = [...firsts, ...rest.map((_, i) => rest[(start + i) % rest.length]!)];
   const awake = order.filter((c) => (restingUntil.get(c.key) ?? 0) <= now);
   let last: Error | null = null;
   // Every provider resting: try them anyway rather than fail the job.
@@ -146,7 +156,7 @@ export async function ask(
       return await askOne(prompt, opts, c, fetchImpl);
     } catch (err) {
       last = err as Error;
-      if ((err as { code?: string }).code === 'rate_limit') restingUntil.set(c.key, Date.now() + REST_MS);
+      if ((err as { code?: string }).code === 'rate_limit') restingUntil.set(c.key, Date.now() + (c.first ? FIRST_REST_MS : REST_MS));
     }
   }
   throw last!;

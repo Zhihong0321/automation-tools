@@ -94,3 +94,28 @@ test('an empty answer moves the call on without resting the provider', async () 
   const empty = (async () => new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '' } }] }))) as unknown as typeof fetch;
   assert.equal(await ask('x', {}, all, empty).catch((e) => e.code), 'empty', 'every provider empty still reports empty');
 });
+
+test('a lane marked first takes every call; the others rotate behind it', async () => {
+  resetForTests();
+  const lanes = [
+    { url: 'https://a.example/v1', key: 'a', model: 'm' },
+    { url: 'https://p.example/v1', key: 'p', model: 'm', first: true },
+    { url: 'https://b.example/v1', key: 'b', model: 'm' },
+  ];
+  const hits: string[] = [];
+  let busy = false;
+  const fetchImpl = (async (url: string) => {
+    hits.push(new URL(url).host[0]!);
+    if (busy && url.startsWith('https://p.')) return new Response('{}', { status: 429 });
+    return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: 'ok' } }] }));
+  }) as unknown as typeof fetch;
+  for (let i = 0; i < 3; i++) await ask('x', {}, lanes, fetchImpl);
+  assert.deepEqual(hits, ['p', 'p', 'p']);
+  hits.length = 0;
+  busy = true;
+  await ask('x', {}, lanes, fetchImpl);
+  await ask('x', {}, lanes, fetchImpl);
+  // The first lane answered 429 and rests; the next calls rotate over the others.
+  assert.equal(hits[0], 'p');
+  assert.deepEqual(hits.slice(1).sort(), ['a', 'b']);
+});
