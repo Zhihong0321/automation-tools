@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ask, config } from './extract-llm.ts';
+import { ask, config, pool, resetForTests } from './extract-llm.ts';
 
 const cfg = { url: 'https://llm.example/v1', key: 'k', model: 'deepseek-v4.1-flash-1017' };
 const reply = (status: number, body: unknown) => (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
@@ -46,4 +46,32 @@ test('failures carry the codes the extract retry and lane cooldown read', async 
   assert.equal(await code(reply(200, { choices: [{ finish_reason: 'stop', message: { content: '' } }] })), 'empty');
   assert.equal(await code((async () => { throw Object.assign(new Error('t'), { name: 'TimeoutError' }); }) as unknown as typeof fetch), 'timeout');
   assert.equal(await ask('x', {}, null).catch((e) => e.code), 'not_configured');
+});
+
+test('Hive keys join the pool after Vectide, on the deepseek model', () => {
+  const env = { CONTACT_LLM_URL: 'https://llm.example/v1', CONTACT_LLM_KEY: 'k', CONTACT_LLM_MODEL: 'deepseek-v4.1-flash-1017', CONTACT_LLM_HIVE_KEYS: ' h1, h2 ,,h3' };
+  assert.deepEqual(pool(env).map((c) => [c.url, c.key, c.model]), [
+    ['https://llm.example/v1', 'k', 'deepseek-v4.1-flash-1017'],
+    ['https://api.thehive.ai/api/v3', 'h1', 'deepseek-ai/deepseek-v4.1-flash-1017'],
+    ['https://api.thehive.ai/api/v3', 'h2', 'deepseek-ai/deepseek-v4.1-flash-1017'],
+    ['https://api.thehive.ai/api/v3', 'h3', 'deepseek-ai/deepseek-v4.1-flash-1017'],
+  ]);
+  assert.equal(config({ CONTACT_LLM_HIVE_KEYS: 'h1' })?.key, 'h1');
+});
+
+test('calls take turns, and a 429 moves the call to the next provider', async () => {
+  resetForTests();
+  const providers = ['a', 'b', 'c'].map((key) => ({ url: 'https://llm.example/v1', key, model: 'm' }));
+  const seen: string[] = [];
+  const fetchImpl = (async (_url: string, init: RequestInit) => {
+    const key = String((init.headers as Record<string, string>).authorization).slice(7);
+    seen.push(key);
+    if (key === 'a') return new Response('busy', { status: 429 });
+    return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: key } }] }));
+  }) as unknown as typeof fetch;
+  assert.equal((await ask('x', {}, providers, fetchImpl)).answer, 'b');
+  assert.equal((await ask('x', {}, providers, fetchImpl)).answer, 'b');
+  assert.equal((await ask('x', {}, providers, fetchImpl)).answer, 'c');
+  assert.equal((await ask('x', {}, providers, fetchImpl)).answer, 'b', 'a rests after its 429');
+  assert.deepEqual(seen, ['a', 'b', 'b', 'c', 'b']);
 });

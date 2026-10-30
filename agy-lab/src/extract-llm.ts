@@ -4,6 +4,10 @@
 // serves report rounds and translation and whose Token Plan ran out on
 // 2026-10-24. Unset, contact research stays on Pi.
 //
+// CONTACT_LLM_HIVE_KEYS (comma-separated) adds Hive accounts serving the same
+// deepseek model. Calls take turns across Vectide and every Hive key, and a
+// provider that answers 429 rests a minute while the call moves to the next.
+//
 // Errors carry Pi's codes (rate_limit, timeout, length, empty, failed), so the
 // extract step's retry and the lane's cooldown treat both models alike.
 
@@ -11,11 +15,37 @@ type FetchImpl = typeof fetch;
 
 export type LlmConfig = { url: string; key: string; model: string };
 
-export function config(env: NodeJS.ProcessEnv = process.env): LlmConfig | null {
+const HIVE_URL = 'https://api.thehive.ai/api/v3';
+const HIVE_MODEL = 'deepseek-ai/deepseek-v4.1-flash-1017';
+const REST_MS = 60_000;
+
+/** Every provider the extract step may call: CONTACT_LLM_* first, then each Hive key. */
+export function pool(env: NodeJS.ProcessEnv = process.env): LlmConfig[] {
+  const out: LlmConfig[] = [];
   const url = env.CONTACT_LLM_URL?.trim().replace(/\/+$/, '') ?? '';
   const key = env.CONTACT_LLM_KEY?.trim() ?? '';
   const model = env.CONTACT_LLM_MODEL?.trim() ?? '';
-  return url && key && model ? { url, key, model } : null;
+  if (url && key && model) out.push({ url, key, model });
+  const hiveUrl = env.CONTACT_LLM_HIVE_URL?.trim().replace(/\/+$/, '') || HIVE_URL;
+  const hiveModel = env.CONTACT_LLM_HIVE_MODEL?.trim() || HIVE_MODEL;
+  for (const hiveKey of (env.CONTACT_LLM_HIVE_KEYS ?? '').split(',').map((k) => k.trim()).filter(Boolean)) {
+    out.push({ url: hiveUrl, key: hiveKey, model: hiveModel });
+  }
+  return out;
+}
+
+/** The first configured provider, or null when contact research stays on Pi. */
+export function config(env: NodeJS.ProcessEnv = process.env): LlmConfig | null {
+  return pool(env)[0] ?? null;
+}
+
+let turn = 0;
+const restingUntil = new Map<string, number>();
+
+/** Test hook: forget turns and rests. */
+export function resetForTests(): void {
+  turn = 0;
+  restingUntil.clear();
 }
 
 function fail(code: string, message: string): Error {
@@ -25,10 +55,35 @@ function fail(code: string, message: string): Error {
 export async function ask(
   prompt: string,
   opts: { timeoutMs?: number; maxTokens?: number } = {},
-  cfg: LlmConfig | null = config(),
+  cfg: LlmConfig | LlmConfig[] | null = pool(),
   fetchImpl: FetchImpl = fetch,
 ): Promise<{ answer: string; ms: number; model: string }> {
-  if (!cfg) throw fail('not_configured', 'CONTACT_LLM_URL, CONTACT_LLM_KEY and CONTACT_LLM_MODEL are not all set');
+  const all = Array.isArray(cfg) ? cfg : cfg ? [cfg] : [];
+  if (!all.length) throw fail('not_configured', 'Neither CONTACT_LLM_URL, CONTACT_LLM_KEY and CONTACT_LLM_MODEL nor CONTACT_LLM_HIVE_KEYS are set');
+  const start = turn++;
+  const now = Date.now();
+  const order = all.map((_, i) => all[(start + i) % all.length]!);
+  const awake = order.filter((c) => (restingUntil.get(c.key) ?? 0) <= now);
+  let last: Error | null = null;
+  // Every provider resting: try them anyway rather than fail the job.
+  for (const c of awake.length ? awake : order) {
+    try {
+      return await askOne(prompt, opts, c, fetchImpl);
+    } catch (err) {
+      last = err as Error;
+      if ((err as { code?: string }).code !== 'rate_limit') throw err;
+      restingUntil.set(c.key, Date.now() + REST_MS);
+    }
+  }
+  throw last!;
+}
+
+async function askOne(
+  prompt: string,
+  opts: { timeoutMs?: number; maxTokens?: number },
+  cfg: LlmConfig,
+  fetchImpl: FetchImpl,
+): Promise<{ answer: string; ms: number; model: string }> {
   const started = Date.now();
   let res: Response;
   try {
