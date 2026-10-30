@@ -174,5 +174,5 @@ test('every report ends with the technology partner strip, one mark per partner'
     assert.match(html, /Technology partner/);
     for (const p of PARTNERS) assert.ok(html.includes(`<span>${p.name}</span>`), p.name);
   }
-  assert.deepEqual(PARTNERS.map((p) => p.name), ['Tavily', 'Brave Search', 'Exa', 'scraper.tech', 'Google PageSpeed Insights', 'DeepSeek', 'OpenAI']);
+  assert.deepEqual(PARTNERS.map((p) => p.name), ['Tavily', 'Brave Search', 'Exa', 'Google Maps', 'Google PageSpeed Insights', 'DeepSeek', 'OpenAI']);
 });
