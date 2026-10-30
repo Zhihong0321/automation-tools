@@ -8,8 +8,8 @@
 // reachability, 2 how the internet understands you (AI and search lead), 3 reviews, discussion
 // and news, 4 credibility and official records (the official sources, then this company's claims
 // and warning signs), 5 digital assets (domains, hosting, email and its reputation), 6 website
-// speed and quality (Google PageSpeed), 7 analysis and suggestions. Then how it works, and the
-// order panel.
+// speed and quality (Google PageSpeed), 7 the full analysis across all six, 8 the action plan by
+// department with the work written for you. Then how it works, and the order panel.
 // Same look as the full report (Inter, two-tone headlines, near-black bands), laid out as one
 // responsive page rather than A4 sheets.
 //
@@ -286,7 +286,8 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
 .tile .in { background:#fff; padding:16px; display:grid; gap:9px; font-size:13px; box-shadow:0 1px 3px rgba(0,0,0,.07); }
 .m-fix { display:grid; grid-template-columns:26px minmax(0,1fr) auto auto; gap:10px; align-items:center; padding:9px 0; border-top:1px solid var(--line); } .m-fix:first-child { border-top:0; }
 .m-fix .no { font-family:var(--display); font-weight:600; color:var(--muted); } .m-pill { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:3px 7px; background:var(--band); color:var(--grey); white-space:nowrap; } .m-pill.hi { color:var(--wrong); background:var(--wrong-bg); }
-.m-weeks { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; } .m-weeks div { display:grid; gap:7px; align-content:start; } .m-weeks b { font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; }
+.m-depts { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; } .m-depts div { display:grid; gap:8px; align-content:start; } .m-depts b { font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; }
+.m-task { display:grid; grid-template-columns:12px minmax(0,1fr); gap:7px; align-items:center; } .m-task i { width:11px; height:11px; border:1.5px solid var(--muted); }
 .m-reply { background:var(--ink); padding:12px 14px; border-radius:12px 12px 4px 12px; justify-self:end; width:86%; display:grid; gap:7px; } .m-reply .rd { background:rgba(255,255,255,.32); } .m-reply small { color:#c9ced4; font-size:10.5px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; }
 .m-slug { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12.5px; background:#fff; padding:9px 12px; border-left:3px solid var(--ink); overflow-wrap:anywhere; }
 .m-code { margin:0; background:var(--dark); color:#c9d1d9; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12px; padding:16px; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; } .m-code .rd { background:rgba(255,255,255,.22); height:8px; }
@@ -317,7 +318,7 @@ footer .muted { color:var(--muted); font-weight:500; }
   .ledger td { display:block; padding:0; border:0; width:auto !important; } .ledger .where::before { content:"Checked against: "; font-weight:600; color:var(--ink); }
   .run { grid-template-columns:28px minmax(0,1fr); gap:6px 12px; padding:14px 16px; } .run .rs, .run .rc { grid-column:2; } .run .rc b { font-size:24px; }
 }
-@media (max-width:560px) { .uses, .tiles, .srcs { grid-template-columns:1fr; } .tile.wide { grid-column:auto; } .m-weeks { grid-template-columns:1fr 1fr; } .mock { padding:18px; } .m-fix { grid-template-columns:22px minmax(0,1fr) auto; } .m-fix .eff { display:none; } }
+@media (max-width:560px) { .uses, .tiles, .srcs { grid-template-columns:1fr; } .tile.wide { grid-column:auto; } .m-depts { grid-template-columns:1fr 1fr; } .mock { padding:18px; } .m-fix { grid-template-columns:22px minmax(0,1fr) auto; } .m-fix .eff { display:none; } }
 @page { size:A4; margin:14mm 12mm 16mm;
   @bottom-left { content:${cssStr(`${name} · Online Presence Audit ${year} · Preview`)}; font:500 8.5px/1 "Inter",system-ui,sans-serif; color:#8a9099; letter-spacing:.02em; }
   @bottom-right { content:counter(page) " / " counter(pages); font:500 8.5px/1 "Inter",system-ui,sans-serif; color:#8a9099; font-variant-numeric:tabular-nums; } }
@@ -538,8 +539,8 @@ footer .muted { color:var(--muted); font-weight:500; }
 
 <section id="inside" class="dark" style="padding-top:0">
   <div class="head"><p class="eyebrow">Inside your full report</p>
-    <h2>Seven parts, written for ${esc(short)}.<br><span class="g">Here is what each one shows you.</span></h2>
-    <p class="lead">This preview read what public sources say. The full report goes further: it traces how customers reach you, measures how the internet understands you and what people say, checks the official records, maps the domains that carry your name, runs Google’s own test on your website, and tells you what to do about it.</p></div>
+    <h2>Eight parts, written for ${esc(short)}.<br><span class="g">Here is what each one shows you.</span></h2>
+    <p class="lead">This preview read what public sources say. The full report goes further: it traces how customers reach you, measures how the internet understands you and what people say, checks the official records, maps the domains that carry your name, runs Google’s own test on your website, then reads all six together and hands each department its task list.</p></div>
   <div class="parts">
     <a href="#p-contact"><span class="n">01</span><h3>${esc(CHAPTER_EYEBROW.contact)}</h3><p>Every way a customer can reach you, and where each one really leads.</p>
       <ul>${inside.contact.know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><span class="go">See what it shows&nbsp;↓</span></a>
@@ -553,8 +554,10 @@ footer .muted { color:var(--muted); font-weight:500; }
       <ul>${inside.assets.know.slice(0, 3).map((k) => `<li>${esc(k)}</li>`).join('')}</ul><span class="go">See what it shows&nbsp;↓</span></a>
     <a href="#p-speed"><span class="n">06</span><h3>${esc(CHAPTER_EYEBROW.speed)}</h3><p>Google’s own test of your official homepage, on a phone and a computer.</p>
       <ul>${inside.speed.know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><span class="go">See what it shows&nbsp;↓</span></a>
-    <a href="#advice" class="wide"><span class="n">07</span><h3>Analysis and suggestions</h3><p>What it all means for your business, and what to do, in order.</p>
-      <ul><li>Your fixes, least effort first</li><li>A plan for your first 30 days</li><li>Copy, replies and pages, written for you</li></ul><span class="go">See what it shows&nbsp;↓</span></a>
+    <a href="#analysis"><span class="n">07</span><h3>Full analysis</h3><p>One read across all six parts: what it all means for your business.</p>
+      <ul><li>Each part, assessed</li><li>The causes behind several problems at once</li><li>What to build on, the risks, what you could win</li></ul><span class="go">See what it shows&nbsp;↓</span></a>
+    <a href="#advice" class="wide"><span class="n">08</span><h3>Action plan</h3><p>Every fix as a task, grouped by the department that does it.</p>
+      <ul><li>Website: content, pages and speed</li><li>Social media: reviews, replies and listings</li><li>IT: domains and email</li><li>Other: legal, licences and records</li><li>When, effort and the part each task comes from</li><li>Copy, replies and pages, written for you</li></ul><span class="go">See what it shows&nbsp;↓</span></a>
   </div>
 </section>
 
@@ -596,15 +599,27 @@ footer .muted { color:var(--muted); font-weight:500; }
   <div class="feats">${feat('speed')}</div>
 </section>
 
-<section id="advice" class="pt">
-  <div class="head"><p class="eyebrow">Part 7 · Analysis and suggestions</p>
-    <h2>Not just what is wrong.<br><span class="g">What to do, in order, written for you.</span></h2>
-    <p class="lead">We weigh every finding by what it costs you in customers and what it takes to fix, then write the work out so you or your web developer can start the same day.</p></div>
+<section id="analysis" class="pt">
+  <div class="head"><p class="eyebrow">Part 7 · Full analysis</p>
+    <h2>Six parts, read together.<br><span class="g">What it all means for ${esc(short)}.</span></h2>
+    <p class="lead">One problem often shows up in several parts: two websites that disagree give customers the wrong number, confuse AI assistants and slow the phone page. The analysis finds those causes, so one fix solves several findings at once.</p></div>
   <div class="tiles">
-    <div class="tile wide"><h3>Your fixes, in order</h3><p>The changes that win back the most customers, least effort first, each with why it matters.</p>
-      <div class="in">${[['1 hour', 'High'], ['1 day', 'High'], ['1 hour', 'Medium'], ['1 week', 'High'], ['1 day', 'Medium']].map(([e, im], i) => `<div class="m-fix"><span class="no">${i + 1}</span>${rd(['82%', '64%', '74%', '58%', '68%'][i])}<span class="m-pill eff">${e}</span><span class="m-pill${im === 'High' ? ' hi' : ''}">${im} impact</span></div>`).join('')}</div></div>
-    <div class="tile"><h3>Your first 30 days</h3><p>The same fixes, laid out week by week.</p>
-      <div class="in"><div class="m-weeks">${[1, 2, 3, 4].map((w) => `<div><b>Week ${w}</b>${rd('92%')}${rd('70%')}${w < 3 ? rd('84%') : ''}</div>`).join('')}</div></div></div>
+    <div class="tile wide"><h3>Part by part</h3><p>Each part's number, its status, and what it says about the business.</p>
+      <div class="in">${CHAPTER_ORDER.map((c, i) => `<div class="m-fix"><span class="no">${i + 1}</span><span>${esc(CHAPTER_EYEBROW[c])}</span><span class="m-pill">Locked</span></div>`).join('')}</div></div>
+    <div class="tile"><h3>What ties it together</h3><p>The two to four causes behind the most findings, and the parts each one runs through.</p>
+      <div class="in">${[0, 1].map(() => `<div class="m-faq"><b>→</b>${rd('82%')}${rd('60%')}</div>`).join('')}</div></div>
+  </div>
+</section>
+
+<section id="advice" class="pt">
+  <div class="head"><p class="eyebrow">Part 8 · Action plan</p>
+    <h2>Not just what is wrong.<br><span class="g">Who fixes what, and when.</span></h2>
+    <p class="lead">Every finding becomes a task for the department that does the work, with when to do it, how long it takes and the part it comes from. The work that can be written is written for you, so each team can start the same day.</p></div>
+  <div class="tiles">
+    <div class="tile wide"><h3>Your task list, by department</h3><p>One list each for your web developer, whoever runs your Google and social pages, your IT vendor, and a director.</p>
+      <div class="in"><div class="m-depts">${['Website', 'Social media', 'IT', 'Other'].map((d, i) => `<div><b>${d}</b>${[0, 1, 2].slice(0, 3 - (i > 1 ? 1 : 0)).map((j) => `<span class="m-task"><i></i>${rd(['86%', '64%', '74%'][j])}</span>`).join('')}</div>`).join('')}</div></div></div>
+    <div class="tile"><h3>When, and how long</h3><p>This week, this month or within three months, with an honest estimate for each task.</p>
+      <div class="in">${[['This week', '1 hour'], ['This month', '2 days']].map(([w, e]) => `<div class="m-fix"><span class="no">☐</span>${rd('70%')}<span class="m-pill hi">${w}</span><span class="m-pill eff">${e}</span></div>`).join('')}</div></div>
     <div class="tile"><h3>Your homepage, rewritten</h3><p>A new headline, proof points and sections, built only from facts we verified.</p>
       <div class="m-browser"><div class="m-url"><span class="dots"><i></i><i></i><i></i></span>${esc(site)}</div><div class="m-page" style="min-height:0">${rd('86%')}${rd('60%')}${rd('74%')}<span class="m-btn">Your call to action</span></div></div></div>
     <div class="tile"><h3>Review replies, ready to post</h3><p>A reply for every unanswered complaint, and a WhatsApp message asking for reviews.</p>
@@ -648,10 +663,10 @@ footer .muted { color:var(--muted); font-weight:500; }
 <section id="order" class="dark">
   <div class="order">
     <div><p class="eyebrow">Order your full report</p><h2>${esc(short)} deserves<br><span class="g">one story, told right.</span></h2>
-      <p class="lead" style="margin-top:18px">You have seen what public sources say. The full audit traces how customers reach you, shows what they see and hear, settles every warning sign against the official records, traces the domains and email that carry your name, runs Google’s own test on your website, and hands you the fixes.</p></div>
+      <p class="lead" style="margin-top:18px">You have seen what public sources say. The full audit traces how customers reach you, shows what they see and hear, settles every warning sign against the official records, traces the domains and email that carry your name, runs Google’s own test on your website, then reads it all together and hands each department its task list.</p></div>
     <div class="panel">
       ${offer.price ? `<p class="price">${esc(offer.price)}</p>` : ''}
-      <ul><li>Contact and reachability: every phone, email and WhatsApp, traced</li><li>How top AI sees your brand, and how search engines index you</li><li>Reviews, news and forum talk about you and your key people</li><li>Credibility: regulator alerts, courts, insolvency and your licences</li><li>Digital assets: your domains, hosting and email</li><li>Analysis and suggestions: fixes in order, a 30-day plan, the work written for you</li><li>Desktop, mobile and A4 PDF</li></ul>
+      <ul><li>Contact and reachability: every phone, email and WhatsApp, traced</li><li>How top AI sees your brand, and how search engines index you</li><li>Reviews, news and forum talk about you and your key people</li><li>Credibility: regulator alerts, courts, insolvency and your licences</li><li>Digital assets: your domains, hosting and email</li><li>Website speed and quality: Google’s own test of your homepage</li><li>A full analysis that reads all six parts together</li><li>An action plan by department: website, social media, IT and other, with the work written for you</li><li>Desktop, mobile and A4 PDF</li></ul>
       ${ctaHref !== '#order' ? cta('Get my full report') : `<p>${esc(offer.contact || 'Reply to the message that brought you this preview, and we will start your full audit.')}</p>`}
       <p style="font-size:14px;color:var(--on-dark)">Need one on a competitor or a supplier? Same report, any Malaysian company.</p>
       <p style="font-size:13px;color:var(--on-dark-2)">This preview is yours to keep.</p>

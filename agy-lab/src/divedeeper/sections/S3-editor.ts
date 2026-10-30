@@ -5,9 +5,8 @@
 // Reads every stage-1 lane and S2 from out/. Works out one settled set of numbers in code
 // (editor.ts resolve: the register beats the research where they disagree), then:
 //   1. rewrites every finding title in plain English for the owner (batches of 35),
-//   2. writes the verdict, the three stories that cost the most customers, and the few
-//      things a stranger would notice do not add up,
-//   3. takes proof screenshots of the worst website problems, with the problem outlined.
+//   2. takes proof screenshots of the worst website problems, with the problem outlined.
+// The verdict, the stories and the rest of the analysis are S4's (sections/S4-analysis.ts).
 // Every step falls back: no LLM answer keeps the lane's own wording, no browser means no shots.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,7 +15,6 @@ import { STAGE1_LANES, resolve, type Item } from '../editor.ts';
 import { takeShots, type ShotAsk } from '../shots.ts';
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + ' …' : s);
-const THEMES = ['contact', 'understanding', 'voice', 'credibility', 'assets', 'speed'] as const;
 
 function stage(diveId: string, lane: string): any | null {
   const file = path.join(OUT, `${lane}-${diveId}.json`);
@@ -88,41 +86,7 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   ctx.log(`plain titles: ${Object.keys(plain).length} of ${R.items.length}`);
   if (Object.keys(plain).length < R.items.length) ctx.warn(`${R.items.length - Object.keys(plain).length} findings keep their original wording`);
 
-  // ---- 2. Verdict, stories and what does not add up. ----
-  const T = (x: Item) => plain[x.key]?.title ?? x.title;
-  const urgent = (area: string) => R.items.filter((x) => x.area === area && (x.severity === 'high' || x.severity === 'medium')).slice(0, 10).map((x) => `- [${x.severity}] ${T(x)}`).join('\n');
-  const facts = {
-    areas: R.areas.map((a) => ({ area: a.id, status: a.status[1], measured: a.metric })),
-    reviews: { answered: `${R.reviews.replied} of ${R.reviews.total}`, listings: R.reviews.listings, unanswered_bad_reviews: R.reviews.unanswered_low.map((x) => ({ stars: x.stars, date: x.date, days_without_reply: x.days_open, text: clip(x.text, 200) })), review_spikes: R.reviews.bursts, same_reviewers_on_two_listings: R.reviews.cross_reviewers, praised_for: R.reviews.praise },
-    google_maps: R.maps.by_area.map((a) => ({ town: a.area, your_best_rank: a.best_rank, of: a.of, shown_first: a.top.slice(0, 3) })), no_maps_listing_in: R.maps.no_listing_in, your_listing: R.maps.our,
-    ai_assistants: { recommended_you: `${R.ai.named_us} of ${R.ai.trade_answers} answers to "${R.ai.trade_question}"`, named_instead: R.ai.share.slice(0, 5), from_memory: R.ai.memory?.models, with_web_search: R.ai.search?.models, wrong_things_said: R.ai.memory?.wrong_examples },
-    licences: { cidb_grade_on_official_register: R.credentials.cidb_grade, claims: R.credentials.list.map((c: any) => `${c.verdict}${c.direction ? ` (${c.direction})` : ''}: ${clip(c.claim, 120)}`) },
-    website: R.website,
-    contact_points: { reach_you: `${R.contact.ok} of ${R.contact.total}`, wrong_way: R.contact.points.filter((p: any) => !['current', 'unclear'].includes(p.status)).slice(0, 8).map((p: any) => `${p.kind} ${p.value}: ${p.status}${p.left ? ' (someone who has left)' : ''}; ${clip(String(p.reason ?? ''), 140)}`) },
-    brand: { understood_out_of_100: R.brand_view.score, why_choose_you: R.brand_view.why, five_second_test: R.brand_view.five, offer: R.brand_view.offer, unanswered_buyer_questions: R.brand_view.missing },
-    news_and_discussion: { counts: R.news.counts, negative: R.news.items.filter((x: any) => x.sentiment === 'negative').slice(0, 5).map((x: any) => `${x.date} ${x.host}: ${clip(String(x.summary), 160)}`) },
-    official_records: R.records.checks.map((c: any) => `${c.label}: ${c.result}; ${clip(String(c.detail), 160)}`),
-    google_pagespeed: R.speed.pages.map((p: any) => ({ site: p.site, device: p.strategy, scores: p.scores, real_visitors: p.field?.overall ?? null, top_fixes: (p.fixes ?? []).slice(0, 3).map((f: any) => f.title) })),
-    digital_assets: R.assets.domains.map((d: any) => ({ domain: d.domain, expires: d.expires, registrant: d.registrant, email_by: d.mail, dmarc: d.dmarc, site_status: d.site?.status ?? null })),
-  };
-  // Only these register results may settle a mismatch; the editor cites one by its R-number.
-  const regs = R.credentials.list.filter((c: any) => !/can't check/.test(c.verdict));
-  const regLines = regs.map((c: any, i: number) => `R${i + 1}: ${c.verdict}${c.direction ? ` (${c.direction})` : ''}: ${clip(c.claim, 110)}; ${clip(c.detail, 160)}`).join('\n');
-  const mismatchesIn = (dive?.result?.contradictions ?? []).slice(0, 14).map((c: string) => `- ${c.replace(/\[\d+\]/g, '').replace(/\s+/g, ' ').trim()}`).join('\n');
-  const ed = await askJson(ctx,
-    `You are the senior consultant signing an online presence audit for the owner of ${name} (${R.identity.industry}). Write the editorial parts. Plain British English, warm but direct, no hype, no jargon, every claim backed by the facts below. Speak to the owner as "you".\n\n` +
-    `Measured facts (settled; where an official register is given it is the truth):\n${JSON.stringify(facts)}\n\n` +
-    `Urgent and needs-work items by area:\n${THEMES.map((t) => `## ${t}\n${urgent(t) || '(none)'}`).join('\n')}\n\n` +
-    `Things public sources disagree on about the company:\n${mismatchesIn || '(none)'}\n\n` +
-    `Official register results (the only things that settle anything):\n${regLines || '(none)'}\n\n` +
-    `Return JSON only:\n{"verdict": "3 sentences: where they stand, the single biggest risk, the single biggest opportunity. Use real numbers.",\n` +
-    `"stories": [{"theme": "one of ${THEMES.join(', ')} (contact = contact and reachability, understanding = how the internet understands the brand, voice = reviews, discussion and news, credibility = official records and licences, assets = domains, hosting and email, speed = Google PageSpeed scores of the official homepages)", "headline": "at most 12 words, includes a real number", "body": "2-3 sentences: what we found and why it matters", "cost": "1 sentence: how this loses customers or money", "fix": "1 sentence: the first thing to do"}] (exactly 3, different themes, the three costing the most customers first),\n` +
-    `"mismatch": [{"issue": "1 sentence a customer, bank or tender officer would notice", "settled_by": "the R-number of the register result above that settles it, or null; directories, portfolio sites and the company's own pages settle nothing"}] (at most 5, the ones that most hurt trust; drop any the register settles in the company's favour unless their own site still says the wrong thing)}`,
-  'editorial');
-  if (!ed) ctx.warn('editorial did not parse; the report uses its built-in wording');
-  const stories = (ed?.stories ?? []).filter((s: any) => THEMES.includes(s?.theme)).filter((s: any, i: number, a: any[]) => a.findIndex((x) => x.theme === s.theme) === i).slice(0, 3);
-
-  // ---- 3. Proof screenshots. ----
+  // ---- 2. Proof screenshots. ----
   const ownSite = (L['S2-consult']?.notes?.own_sites ?? [])[0] ?? (R.identity.domains[0] ? `https://${R.identity.domains[0]}/` : null);
   const shots = await takeShots(shotAsks(R, ownSite), ctx.warn);
   // A shot asked to find text that was not there proves nothing; keep it only for the cover and 404s.
@@ -130,10 +94,7 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   ctx.log(`screenshots: ${kept.length} of ${shots.length} kept`);
 
   return {
-    findings: [{ title: 'Report edited', detail: `${Object.keys(plain).length} plain titles, ${stories.length} stories, ${kept.length} screenshots`, severity: 'info', source: null, checked_at: now }],
-    notes: { plain, verdict: ed?.verdict ?? null, stories, mismatch: (Array.isArray(ed?.mismatch) ? ed.mismatch : []).slice(0, 5).map((m: any) => {
-      const reg = regs[Number(String(m?.settled_by ?? '').replace(/\D/g, '')) - 1];
-      return { issue: String(m?.issue ?? ''), settled: reg ? `${reg.verdict === 'verified' ? 'confirms' : reg.direction === 'undersell' ? 'shows better than you claim' : reg.verdict === 'contradicted' ? 'contradicts' : 'has no record of'}: ${clip(reg.claim, 110)}` : null, source: reg?.source ?? null };
-    }).filter((m: any) => m.issue), shots: kept },
+    findings: [{ title: 'Report edited', detail: `${Object.keys(plain).length} plain titles, ${kept.length} screenshots`, severity: 'info', source: null, checked_at: now }],
+    notes: { plain, shots: kept },
   };
 }

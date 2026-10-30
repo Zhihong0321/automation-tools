@@ -1,11 +1,11 @@
 // One settled set of numbers for the report, worked out in code from the lane outputs.
-// The editor lane (sections/S3-editor.ts) briefs the LLM from it and the report draws its
+// The analysis and plan lanes (sections/S4-analysis.ts, S5-plan.ts) brief the LLM from it and the report draws its
 // charts and scores from it, so the words and the pictures can never disagree.
 //
 // Where sources conflict, the official register wins over the company-dive's research
 // (a CIDB grade read from CIDB beats one a website or directory printed).
 
-// The malaysia-deeper-dive report is read in five parts, then the analysis. A lane can feed two
+// The malaysia-deeper-dive report is read in six research parts, then one full analysis and one action plan. A lane can feed two
 // parts: C-merged's website checks are sorted by what each one is about (see partOfCheck).
 export type Area = 'contact' | 'understanding' | 'voice' | 'credibility' | 'assets' | 'speed';
 export const AREAS: { id: Area; title: string; lanes: string[] }[] = [
@@ -30,6 +30,25 @@ export function partOfCheck(check: string | undefined): Area {
 }
 
 export type Item = { key: string; lane: string; area: Area; severity: string; title: string; detail: string; source: string | null; check?: string; raw: any };
+
+// The action plan (sections/S5-plan.ts) hands every task to the department that does it.
+export type Dept = 'website' | 'social' | 'it' | 'other';
+export const DEPTS: { id: Dept; title: string; covers: string; who: string }[] = [
+  { id: 'website', title: 'Website', covers: 'Content, pages, contact details on the site, page speed', who: 'Your web developer, or whoever edits the website' },
+  { id: 'social', title: 'Social media', covers: 'Google reviews and replies, Google Maps listings, Facebook, LinkedIn, directories', who: 'Whoever runs your Google and social pages' },
+  { id: 'it', title: 'IT', covers: 'Domains, email, DNS, hosting, certificates', who: 'Your IT vendor, or whoever set up your domains and email' },
+  { id: 'other', title: 'Other', covers: 'Legal, licences, registrations, trademarks, official records', who: 'A director, with your company secretary' },
+];
+
+/** The department a finding goes to when nobody said otherwise. */
+export function deptOf(x: Item): Dept {
+  if (x.area === 'assets') return 'it';
+  if (x.area === 'credibility') return x.lane === 'C-merged' ? 'website' : 'other';
+  if (x.area === 'voice') return 'social';
+  if (x.lane === 'H-maps') return 'social';
+  if (x.lane === 'R-contacts' && /google maps|directory|listing|facebook|linkedin|instagram/i.test(`${x.title} ${x.detail}`) && !/your (web)?site|homepage/i.test(x.title)) return 'social';
+  return 'website';
+}
 
 const isPrivate = (f: any) => /^PRIVATE/i.test(String(f?.title ?? ''));
 const short = (n: string) => n.replace(/\s*[-–|].*$/, '').replace(/\s+(Sdn\.?\s*Bhd\.?|Berhad|Holdings Berhad|Sdn)\.?$/i, '').trim();

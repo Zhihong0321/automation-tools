@@ -15,10 +15,15 @@ sorted into the part each one is about (`partOfCheck`).
 | 3 Reviews, discussion and news | Google reviews, plus news, forums and social talk about the company, brand and key people | E-maps, **N-news** (new) |
 | 4 Credibility and official records | BNM and SC alert lists, court judgments, winding-up notices, Bursa, .gov.my mentions, published financials; licences in their registers | **K-credibility** (new), D-registry, C-merged SSM check |
 | 5 Digital assets | Domains (MYNIC whois / RDAP), expiry, registrant, DNS, hosting network, email (MX, SPF, DMARC), certificate, CMS, subdomains (crt.sh), lookalike domains | **A-assets** (new, no LLM), C-merged SSL checks |
-| 6 Analysis and suggestions | Verdict, stories, fixes in order, 30-day plan, ready-to-use copy | S2-consult, S3-editor |
+| 6 Website speed and quality | Google PageSpeed Insights on the official homepages, mobile and desktop, plus 28 days of real Chrome visitors | **W-speed**, C-merged speed checks |
+| 7 Full analysis | One read across all six parts: verdict, the three problems costing the most customers, each part assessed, the causes that run through several parts, what to build on, risks, opportunities, what does not add up | **S4-analysis** |
+| 8 Action plan | Every urgent and needs-work finding as a task for the department that does it (website: content and speed; social media: reviews, replies, listings; IT: domains and email; other: legal and records), with when, effort and the ready-to-use draft that does it | **S5-plan**, drafts from S2-consult |
+
+S3-editor writes the plain titles and the proof screenshots every part uses. S5 checks the plan is complete: an urgent or
+needs-work finding no task covers is still listed under its department (`editor.ts` DEPTS, `deptOf`).
 
 Run order on the hub: H-maps, H-web, D-registry, G-fixed, G-grounded, K-credibility, N-news together; E-maps and C-merged
-after H-maps; then R-contacts, A-assets and B-brand (they read C-merged, H-maps, H-web and G-fixed); then S2 and S3.
+after H-maps; then R-contacts, A-assets and B-brand (they read C-merged, H-maps, H-web and G-fixed); then S2, S3, S4 and S5, one after another.
 
 Not checked automatically, stated as such in the report: SSM e-Info documents, CTOS/CCRIS, MDI insolvency search (paid),
 PDRM Semak Mule. bnm.gov.my sits behind a bot check, so its alert list is read through Exa and Brave, never by passing it.

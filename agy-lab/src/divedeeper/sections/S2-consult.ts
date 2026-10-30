@@ -5,9 +5,10 @@
 // Reads the stage-1 outputs already in out/ (E-maps, H-maps, H-web, C-merged, D-registry,
 // G-fixed, G-grounded for the same dive) and makes a handful of fresh reads: the company's
 // own homepages, the competitors AI names most, and the "best <trade> in <town>" list pages
-// AI read when it answered. Four LLM calls write: a website plan with rewritten homepage copy,
-// an AI-visibility plan against those competitors, review-reply drafts, and the top fixes with
-// a 30-day plan. The business JSON-LD is built in code from the dive's facts.
+// AI read when it answered. Three LLM calls write the ready-to-use drafts: a website plan with
+// rewritten homepage copy, the FAQ for an AI-visibility plan built against those competitors, and
+// review-reply drafts. The business JSON-LD is built in code from the dive's facts. The analysis
+// and the action plan read across everything afterwards (S4-analysis, S5-plan).
 import fs from 'node:fs';
 import path from 'node:path';
 import { OUT, type Ctx, type Finding } from '../lib.ts';
@@ -187,20 +188,7 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   'review replies') : null;
   if (toReply.length && !replies) ctx.warn('review replies did not parse');
 
-  // ---- 4. Top fixes and the 30-day plan, across everything. ----
-  const top = await askJson(ctx, 
-    `You are writing the action summary of a business presence audit for ${name}. All stage-1 findings:\n` +
-    Object.entries(lanes).map(([l, v]) => `## ${l}\n${brief(v, 18)}`).join('\n') +
-    `\n\nWebsite plan verdict: ${site?.verdict ?? '-'}\nAI plan actions: ${(ai?.actions ?? []).map((a: any) => a.action).join('; ')}\n\n` +
-    `Return JSON only:\n{"summary": "3 sentences for the owner: where they stand, the biggest risk, the biggest opportunity",\n` +
-    `"top5": [{"fix": "", "why": "1 sentence with the evidence", "effort": "", "impact": "high|medium"}] (exactly 5, least effort for most impact first),\n` +
-    `"plan30": [{"week": 1, "tasks": ["3-5 tasks"]}] (weeks 1-4),\n` +
-    `"more_help": [{"service": "", "why_for_you": "1 sentence tied to a finding"}] (4-6 further services a consultant could do for them: e.g. Google Business Profile setup, competitor ads review, content plan, tender readiness, monthly monitoring)}\n` +
-    `Use only the findings. British English.`,
-  'top fixes');
-  if (!top) ctx.warn('top fixes did not parse');
-
-  // ---- 5. The business JSON-LD, in code from the dive's facts. ----
+  // ---- 4. The business JSON-LD, in code from the dive's facts. ----
   const hw = lanes['H-web']?.notes?.unique ?? [];
   const sameAs = [...new Set(hw.filter((x: any) => x.class === 'own' && /facebook|instagram|linkedin|tiktok|youtube/.test(host(x.url))).map((x: any) => x.url.split('?')[0].replace(/\/(mentions|posts)\/?$/, '/')))];
   const addr = String(id.address ?? '');
@@ -214,6 +202,6 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
     identifier: (id.registration_numbers ?? []).filter((x: string) => /^\d{12}$/.test(x)).map((x: string) => ({ '@type': 'PropertyValue', propertyID: 'SSM', value: x })),
   };
 
-  findings.push({ title: 'Stage 2 consultation written', detail: `website plan ${site ? 'ok' : 'missing'}, AI plan ${ai ? 'ok' : 'missing'}, ${replies?.replies?.length ?? 0} review replies, top fixes ${top ? 'ok' : 'missing'}`, severity: 'info', source: null, checked_at: now });
-  return { findings, notes: { competitors: competitors.map(({ site_text, ...c }) => c), presence, own_sites: ownSites.map((s) => s.url), site, ai, replies, reply_targets: toReply.map((x) => ({ stars: x.stars, date: x.date, listing: x.listing, author: x.author, text: x.text })), top, jsonld } };
+  findings.push({ title: 'Stage 2 consultation written', detail: `website plan ${site ? 'ok' : 'missing'}, AI plan ${ai ? 'ok' : 'missing'}, ${replies?.replies?.length ?? 0} review replies`, severity: 'info', source: null, checked_at: now });
+  return { findings, notes: { competitors: competitors.map(({ site_text, ...c }) => c), presence, own_sites: ownSites.map((s) => s.url), site, ai, replies, reply_targets: toReply.map((x) => ({ stars: x.stars, date: x.date, listing: x.listing, author: x.author, text: x.text })), jsonld } };
 }

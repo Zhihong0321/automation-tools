@@ -6,15 +6,16 @@
 //   cover        company, title, the homepage on a phone
 //   at a glance  five measured numbers, the status of each area, the verdict
 //   fix first    the three problems costing the most customers
-//   chapters     one per area, each opening with why it matters today, then what we found
-//   plan         fixes in order and the first 30 days
-//   ready to use homepage copy, pages, review replies, AI plan, FAQ, business data
+//   chapters     the six research parts, each opening with why it matters today, then what we found
+//   analysis     one full analysis across all six parts: verdict, part by part, what ties it together
 //   stranger     what a customer, bank or tender officer learns in 10 minutes
+//   plan         the action plan: one task list per department (website, social media, IT, other)
+//   ready to use homepage copy, pages, review replies, AI plan, FAQ, business data
 //   appendix     every finding in plain words, the background research, sources, method
-// Numbers come from editor.ts resolve(); wording from the S3 editor lane when it ran, else
-// built in here. Used by the hub (divedeeper.ts) and by scripts/dive-deeper/report.ts.
+// Numbers come from editor.ts resolve(); plain titles from the S3 editor lane, the analysis from S4,
+// the action plan from S5, each when it ran, else built in here. Used by the hub (divedeeper.ts) and by scripts/dive-deeper/report.ts.
 // A missing lane only drops its block; the report still builds.
-import { AREAS, resolve, type Item } from './editor.ts';
+import { AREAS, DEPTS, deptOf, resolve, type Item } from './editor.ts';
 import { isPrivateUrl, publicSources, scrub } from './privacy.ts';
 
 /** Why each area matters, said once for every client. No market statistics we cannot source. */
@@ -187,6 +188,10 @@ svg { width:100%; height:auto; display:block; } svg text { font-family:var(--bod
 .fixes { counter-reset:fx; display:grid; gap:4px; } .fixes > div { counter-increment:fx; display:grid; grid-template-columns:12mm minmax(0,1fr) auto; gap:12px; padding:10px 12px; background:var(--band); align-items:start; }
 .fixes > div::before { content:counter(fx, decimal-leading-zero); font-family:var(--display); font-size:20px; font-weight:500; color:var(--grey); }
 .fixes h4 { font-size:13.5px; letter-spacing:-0.005em; line-height:1.3; } .fixes .w { color:var(--grey); font-size:11.5px; margin-top:2px; } .fixes .tags { display:grid; gap:4px; justify-items:end; }
+.depts { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:6px; } .depts a { background:var(--band); padding:12px 14px; display:grid; gap:3px; align-content:start; text-decoration:none; font-size:11.5px; }
+.depts a:first-child { background:var(--dark2); color:var(--on-dark); } .depts a:first-child .muted { color:var(--on-dark-2); } .depts b { font-family:var(--display); font-size:30px; font-weight:500; letter-spacing:-0.04em; line-height:1; } .depts span:nth-of-type(1) { font-weight:600; }
+.dept { display:grid; gap:6px; } .deptc { font-family:var(--body); font-size:11px; font-weight:400; letter-spacing:0; }
+.tasks .cb { width:7mm; font-size:15px; line-height:1.1; color:var(--grey); } .tasks .tg { width:34mm; } .tasks .tg div { display:grid; gap:4px; justify-items:end; font-size:11px; }
 .weeks { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; } .weeks > div { background:var(--band); padding:12px; } .weeks > div:first-child { background:var(--dark2); color:var(--on-dark); }
 .weeks h4 { font-size:14px; margin-bottom:6px; } .weeks ul { margin:0; padding-left:15px; font-size:11px; display:grid; gap:4px; }
 .hero { background:var(--dark2); color:var(--on-dark); padding:18px; display:grid; gap:8px; } .hero .hl { font-family:var(--display); font-size:24px; font-weight:600; letter-spacing:-0.02em; line-height:1.12; }
@@ -231,6 +236,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:10px; color:var
   .v-desktop .three h3 { font-size:24px; } .v-desktop .three .cols { font-size:14px; } .v-desktop .three .item { padding:22px; }
   .v-desktop .panel { padding:20px 22px; font-size:15px; } .v-desktop .box { font-size:14px; padding:16px 18px; } .v-desktop .box h4 { font-size:16px; }
   .v-desktop .fixes > div { padding:14px 16px; } .v-desktop .fixes h4 { font-size:16px; } .v-desktop .fixes .w { font-size:13.5px; }
+  .v-desktop .depts a { font-size:14px; padding:16px 18px; } .v-desktop .depts b { font-size:44px; } .v-desktop .deptc { font-size:13px; } .v-desktop .tasks .tg div { font-size:13px; }
   .v-desktop .weeks ul { font-size:13px; } .v-desktop .reply { font-size:14px; } .v-desktop blockquote { font-size:14.5px; }
   .v-desktop .opener { gap:56px; } .v-desktop .aside .big { font-size:24px; } .v-desktop figcaption, .v-desktop .note { font-size:12.5px; }
   .v-desktop .shots { grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:18px; } .v-desktop .hero .hl { font-size:32px; }
@@ -242,6 +248,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:10px; color:var
   .v-mobile .page.dark { border-bottom:0; }
   .v-mobile .display { font-size:32px; } .v-mobile .lead { font-size:16.5px; } .v-mobile .body { font-size:15.5px; } .v-mobile .kicker { font-size:18px; } .v-mobile .sub { font-size:22px; }
   .v-mobile .opener, .v-mobile .pair, .v-mobile .cover-mid, .v-mobile .cover-bot, .v-mobile .three .cols, .v-mobile .grid2, .v-mobile .grid3, .v-mobile .quotes, .v-mobile .reply { grid-template-columns:1fr; }
+  .v-mobile .depts { grid-template-columns:1fr 1fr; } .v-mobile .tasks .cb { display:none !important; } .v-mobile .tasks .tg { width:auto; } .v-mobile .tasks .tg div { display:flex; flex-wrap:wrap; gap:6px; justify-items:start; font-size:13px; }
   .v-mobile .weeks { grid-template-columns:1fr; } .v-mobile .aside { border-left:0; padding-left:0; border-top:1px solid var(--line); padding-top:12px; } .v-mobile .aside .big { font-size:21px; }
   .v-mobile .cover { min-height:100svh; padding:0; } .v-mobile .cover-top, .v-mobile .cover-mid, .v-mobile .cover-bot { padding-left:18px; padding-right:18px; } .v-mobile .cover-top { padding-top:28px; } .v-mobile .cover-bot { padding-bottom:84px; font-size:13px; }
   .v-mobile .cover h1 { font-size:42px; } .v-mobile .phone { width:min(62vw,240px); justify-self:center; }
@@ -262,7 +269,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:10px; color:var
 @media print {
   .viewbar, .chapnav { display:none !important; }
   body { background:none; } .page { margin:0; box-shadow:none; width:210mm; min-height:297mm; break-after:page; -webkit-box-decoration-break:clone; box-decoration-break:clone; }
-  .page:last-child { break-after:auto; } .band tr, .box, .panel, figure, .fixes > div, .gcard, .reply, .three .item, .weeks, .hero, .pair, .opener, pre { break-inside:avoid; }
+  .page:last-child { break-after:auto; } .band tr, .box, .panel, figure, .fixes > div, .depts, .gcard, .reply, .three .item, .weeks, .hero, .pair, .opener, pre { break-inside:avoid; }
   h2, h3, h4, .sub, .tbl-h, .kicker, .lbl { break-after:avoid; }
   details > :not(summary) { display:block; } details::details-content { display:block; content-visibility:visible; } details > summary { list-style:none; }
 }
@@ -323,6 +330,8 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   const name = R.name;
   const s2 = L['S2-consult']?.notes ?? {};
   const ed = L['S3-editor']?.notes ?? {};
+  // Runs before S4 kept the verdict, the stories and the mismatches in the editor's notes.
+  const an = L['S4-analysis']?.notes ?? ed;
   const plain: Record<string, { title: string; why: string }> = ed.plain ?? {};
   const shots: any[] = ed.shots ?? [];
   const trade = String((R.plan?.trades ?? [])[0] ?? 'business like yours');
@@ -556,7 +565,7 @@ export function buildReport(dive: any, L: Record<string, any>): string {
     assets: () => ({ headline: `${R.assets.issues} risks in the domains and email that carry your name`, body: 'Expiring domains, domains held in someone else’s name, and email anyone can fake.', cost: 'A lapsed domain takes your website and every email address down at once.', fix: 'Turn on auto-renew, move every domain into the company’s name, and add SPF and DMARC to your email domain.' }),
   };
   const themes = [...CHAPTER_ORDER] as string[];
-  const edStories: any[] = (ed.stories ?? []).filter((s: any) => themes.includes(s.theme));
+  const edStories: any[] = (an.stories ?? []).filter((s: any) => themes.includes(s.theme));
   const stories = (edStories.length ? edStories : themes.filter((t) => areaOf(t)?.ran && areaOf(t)?.status[0] !== 'good').slice(0, 3).map((t) => ({ theme: t, ...fallback[t]() })))
     .map((s: any) => ({ ...fallback[s.theme](), ...Object.fromEntries(Object.entries(s).filter(([, v]) => typeof v === 'string' && v.trim())) }));
   const storyOf = (t: string) => stories.find((s: any) => s.theme === t);
@@ -564,8 +573,7 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   const chapters = CHAPTER_ORDER.filter((id) => areaOf(id)?.ran && (id !== 'speed' || R.speed.pages.length > 0));
   const chapterNo = (id: string) => chapters.indexOf(id as any) + 1;
 
-  const verdict = ed.verdict ?? s2.top?.summary ?? '';
-  const top = s2.top ?? null;
+  const verdict = an.verdict ?? '';
   const site = s2.site ?? null;
   const ai = s2.ai ?? null;
   const replies = s2.replies ?? null;
@@ -595,7 +603,7 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   const docs = [...new Set(searched.filter((u: string) => /proposal|invoice|\/inv[-/]|[?&]uid=|quotation/i.test(u)))];
   if (docs.length) privateItems.push(`<b>Search engines have indexed ${docs.length} private document link${docs.length === 1 ? '' : 's'}</b> (proposals or invoices meant for one customer). Put these behind a login or mark them no-index.`);
 
-  const mismatch: any[] = ed.mismatch?.length ? ed.mismatch : (r.contradictions ?? []).slice(0, 5).map((c: string) => ({ issue: c.replace(/\[\d+\]/g, '').replace(/\s+/g, ' ').trim(), settled: null }));
+  const mismatch: any[] = an.mismatch?.length ? an.mismatch : (r.contradictions ?? []).slice(0, 5).map((c: string) => ({ issue: c.replace(/\[\d+\]/g, '').replace(/\s+/g, ' ').trim(), settled: null }));
   const checkedOn = dateOf(R.checked_on);
   // The assistants section G actually asked (the hub asks DeepSeek only), named for the method note.
   const modelNames = [...new Set(['G-fixed', 'G-grounded'].flatMap((l) => L[l]?.notes?.models ?? []).map((m: string) => (/deepseek/i.test(m) ? 'DeepSeek V4.1 Flash' : /gpt-6\.1/i.test(m) ? 'GPT-6.1' : m)))];
@@ -626,6 +634,52 @@ export function buildReport(dive: any, L: Record<string, any>): string {
 </section>`;
   }
 
+  const count = (n: number) => ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight'][n] ?? String(n);
+  const partsOf = (themes: string[]) => themes.filter((t) => chapters.includes(t as any)).map((t) => `<a class="see" href="#ch-${t}">Part ${chapterNo(t)}</a>`).join(', ');
+
+  // ---------- the full analysis: one read across every part ----------
+  function analysis(): string {
+    const assess = (id: string) => (an.parts ?? []).find((p: any) => p.theme === id)?.assessment ?? '';
+    const threads: any[] = an.threads ?? [];
+    const lists: [string, string[]][] = [['What you can build on', an.strengths ?? []], ['If nothing changes', an.risks ?? []], ['What you could win', an.opportunities ?? []]];
+    return `<section class="page" id="analysis">
+  <p class="eyebrow">Part ${chapters.length + 1} · Full analysis</p>
+  <h2 class="display">What it all means,<br><span class="g">read across all ${count(chapters.length)} parts.</span></h2>
+  ${verdict ? `<p class="lead" style="max-width:40em">${esc(verdict)}</p>` : ''}
+  <h3 class="sub">Part by part</h3>
+  <table class="band items"><tbody>${chapters.map((id) => { const a = areaOf(id)!; return `<tr><td class="st-cell"><span class="pill ${a.status[0]}">${esc(a.status[1])}</span></td><td><p class="t"><a class="see" href="#ch-${id}">Part ${chapterNo(id)} · ${esc(CHAPTER_EYEBROW[id])}</a></p>${assess(id) ? `<p class="w">${esc(assess(id))}</p>` : ''}</td><td class="where">${esc(a.metric ?? '–')}</td></tr>`; }).join('')}</tbody></table>
+  ${threads.length ? `<h3 class="sub">What ties it together</h3><div class="grid2">${threads.map((t: any) => `<div class="box"><h4>${esc(t.title)}</h4><p>${esc(t.body)}</p>${partsOf(t.themes ?? []) ? `<p class="small muted">Seen in ${partsOf(t.themes ?? [])}</p>` : ''}</div>`).join('')}</div>` : ''}
+  ${lists.some(([, l]) => l.length) ? `<div class="grid3">${lists.filter(([, l]) => l.length).map(([h, l]) => `<div class="box"><h4>${esc(h)}</h4><ul>${l.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>`).join('')}</div>` : ''}
+  ${!verdict && !(an.parts ?? []).length ? '<p class="note">The full analysis was not written in this run; each part above carries its own findings.</p>' : ''}
+  ${foot()}
+</section>`;
+  }
+
+  // ---------- the action plan: one task list per department ----------
+  const WHEN: Record<string, [string, string]> = { week: ['urgent', 'This week'], month: ['fix', 'This month'], quarter: ['info', 'Within 3 months'] };
+  const READY_AT: Record<string, string> = { homepage: 'd-site', fixes: 'd-site', pages: 'd-pages', replies: 'd-reviews', ask: 'd-reviews', faq: 'd-ai', ai: 'd-ai', jsonld: 'd-jsonld' };
+  const itemByKey = new Map(R.items.map((x) => [x.key, x]));
+  // Without S5 every urgent and needs-work finding still lands under the department that does it.
+  const plan: any[] = L['S5-plan']?.notes?.depts ?? DEPTS.map((d) => ({ dept: d.id, tasks: [], also: R.items.filter((x) => (x.severity === 'high' || x.severity === 'medium') && deptOf(x) === d.id).map((x) => ({ key: x.key, theme: x.area })) }));
+  const readyWords: Record<string, string> = L['S5-plan']?.notes?.ready ?? {};
+  function actionPlan(): string {
+    const n = chapters.length + 2;
+    const tasks = plan.reduce((t, d) => t + d.tasks.length, 0);
+    const rows = (d: any) => d.tasks.map((t: any) => `<tr><td class="cb" aria-hidden="true">☐</td><td><p class="t">${esc(t.task)}</p>${t.why ? `<p class="w">${esc(t.why)}</p>` : ''}${t.how ? `<p class="small">${esc(t.how)}</p>` : ''}${t.ready && READY_AT[t.ready] ? `<p class="small"><a class="see" href="#${READY_AT[t.ready]}">Done for you: ${esc(readyWords[t.ready] ?? 'a draft')} ↓</a></p>` : ''}</td><td class="tg"><div><span class="pill ${(WHEN[t.when] ?? WHEN.month)[0]}">${esc((WHEN[t.when] ?? WHEN.month)[1])}</span>${t.effort ? `<span class="pill info">${esc(t.effort)}</span>` : ''}${t.theme && chapters.includes(t.theme) ? partsOf([t.theme]) : ''}</div></td></tr>`).join('');
+    const also = (d: any) => d.also.map((a: any) => itemByKey.get(a.key)).filter(Boolean) as Item[];
+    return `<section class="page" id="plan">
+  <p class="eyebrow">Part ${n} · Action plan</p>
+  <h2 class="display">Your action plan,<br><span class="g">department by department.</span></h2>
+  <p class="lead" style="max-width:40em">${tasks ? `${tasks} task${tasks === 1 ? '' : 's'}, compiled from all ${count(chapters.length)} parts and the analysis.` : 'Every urgent and needs-work finding, sorted by who does the work.'} Hand each list to the people who do the work, and tick each task off as it is done.</p>
+  <div class="depts">${DEPTS.map((d) => { const p = plan.find((x) => x.dept === d.id) ?? { tasks: [], also: [] }; const week = p.tasks.filter((t: any) => t.when === 'week').length; return `<a href="#plan-${d.id}"><b>${p.tasks.length || p.also.length}</b><span>${esc(d.title)}</span><span class="muted">${p.tasks.length ? (week ? `${week} this week` : 'none this week') : `${p.also.length ? 'findings' : 'nothing'} to fix`}</span></a>`; }).join('')}</div>
+  ${DEPTS.map((d) => { const p = plan.find((x) => x.dept === d.id) ?? { tasks: [], also: [] }; const more = also(p); return `<div class="dept" id="plan-${d.id}"><h3 class="sub">${esc(d.title)} <span class="muted deptc">${esc(d.covers)}</span></h3><p class="note"><b>Who does it:</b> ${esc(d.who)}</p>
+  ${p.tasks.length ? `<table class="band tasks"><tbody>${rows(p)}</tbody></table>` : ''}
+  ${more.length ? `<p class="lbl">${p.tasks.length ? 'Also on this list' : 'To fix'}</p><ul class="plain small">${more.map((x) => `<li>${esc(T(x))} ${partsOf([x.area])}</li>`).join('')}</ul>` : ''}
+  ${!p.tasks.length && !more.length ? '<p class="note">Nothing for this department right now.</p>' : ''}</div>`; }).join('')}
+  ${foot()}
+</section>`;
+  }
+
   return shell(`${name}: Online Presence Audit`, `<section class="page dark cover">
   <div class="cover-top"><b>${esc(name)}</b><span>Online Presence Audit ${esc(R.checked_on.slice(0, 4))}</span></div>
   <div class="cover-mid">
@@ -635,7 +689,7 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   <div class="cover-bot"><div><b>Prepared for ${esc(name)}</b>SSM ${esc(R.identity.ssm ?? '–')}${R.identity.domains.length ? ` · ${esc(R.identity.domains.join(', '))}` : ''}</div><div><b>Checked ${esc(checkedOn)}</b>${R.reviews.total ? `${esc(R.reviews.total)} reviews read · ` : ''}${R.ai.trade_answers ? `${esc((R.ai.memory?.models ?? []).concat(R.ai.search?.models ?? []).reduce((t: number, m: any) => t + m.asked + m.trade_asked, 0))} AI answers checked · ` : ''}every page of your sites tested</div></div>
 </section>
 
-<nav class="chapnav" aria-label="Sections"><a href="#glance">At a glance</a>${stories.length ? '<a href="#stories">Fix first</a>' : ''}${chapters.map((id) => `<a href="#ch-${id}">${esc(CHAPTER_EYEBROW[id])}</a>`).join('')}<a href="#fixes">Analysis and plan</a><a href="#ready">Ready to use</a><a href="#stranger">Trust</a><a href="#appendix">Checklist</a></nav>
+<nav class="chapnav" aria-label="Sections"><a href="#glance">At a glance</a>${stories.length ? '<a href="#stories">Fix first</a>' : ''}${chapters.map((id) => `<a href="#ch-${id}">${esc(CHAPTER_EYEBROW[id])}</a>`).join('')}<a href="#analysis">Full analysis</a><a href="#stranger">Trust</a><a href="#plan">Action plan</a><a href="#ready">Ready to use</a><a href="#appendix">Checklist</a></nav>
 
 <section class="page dark" id="glance">
   <p class="eyebrow">At a glance</p>
@@ -657,18 +711,31 @@ ${stories.length ? `<section class="page" id="stories">
 
 ${chapters.map(chapter).join('\n')}
 
-<section class="page" id="fixes">
-  <p class="eyebrow">Part ${chapters.length + 1} · Analysis and suggestions</p>
-  <h2 class="display">Your fixes, in order.<br><span class="g">Least effort, most effect first.</span></h2>
-  ${top?.top5?.length ? `<div class="fixes">${top.top5.map((x: any) => `<div><div><h4>${esc(x.fix)}</h4><p class="w">${esc(x.why)}</p></div><div class="tags"><span class="pill info">${esc(x.effort)}</span><span class="pill ${x.impact === 'high' ? 'urgent' : 'fix'}">${esc(x.impact)} impact</span></div></div>`).join('')}</div>` : '<p class="note">The fix list was not written in this run.</p>'}
-  ${(top?.plan30 ?? []).length ? `<h3 class="sub">Your first 30 days</h3><div class="weeks">${top.plan30.map((w: any) => `<div><h4>Week ${esc(w.week)}</h4><ul>${(w.tasks ?? []).map((t: string) => `<li>${esc(t)}</li>`).join('')}</ul></div>`).join('')}</div>` : ''}
+${analysis()}
+
+<section class="page" id="stranger">
+  <p class="eyebrow">Part ${chapters.length + 1} · Full analysis · What a stranger sees</p>
+  <h2 class="display">What a customer, bank or tender officer<br><span class="g">learns about you in ten minutes.</span></h2>
+  <table class="band idtable"><tbody>
+    <tr><td>Company</td><td><b>${esc(name)}</b></td></tr>
+    <tr><td>Registration</td><td>${esc(R.identity.ssm ?? '–')}</td></tr>
+    ${R.credentials.cidb_grade ? `<tr><td>CIDB grade (official register)</td><td>${esc(R.credentials.cidb_grade)}</td></tr>` : ''}
+    ${R.maps.our ? `<tr><td>Google rating</td><td>${esc(R.maps.our.rating)}★ from ${esc(R.maps.our.reviews)} reviews</td></tr>` : ''}
+    ${R.identity.address ? `<tr><td>Address</td><td>${esc(R.identity.address)}</td></tr>` : ''}
+    ${R.identity.domains.length ? `<tr><td>Websites</td><td>${esc(R.identity.domains.join(', '))}</td></tr>` : ''}
+  </tbody></table>
+  ${mismatch.length ? `<h3 class="sub">What does not add up</h3><table class="band"><tbody>${mismatch.map((m: any) => `<tr><td><p class="t">${esc(m.issue)}</p>${m.settled ? `<p class="w">The official register ${esc(m.settled)}</p>` : ''}</td><td class="where">${m.source ? seeIt(m.source) : ''}</td></tr>`).join('')}</tbody></table>` : ''}
+  ${R.reviews.good_quotes.length ? `<h3 class="sub">What your customers say, in their words</h3><div class="quotes">${R.reviews.good_quotes.map((q: any) => `<blockquote>${esc(clip(String(q.text), 260))}<cite>${esc(q.author)} · ${esc(dateOf(q.date))}</cite></blockquote>`).join('')}</div>${R.reviews.praise.length ? `<p class="note">Praised most for: ${esc(R.reviews.praise.map(([p, n]) => `${p} (${n})`).join(', '))}. None of this appears on your website yet.</p>` : ''}` : ''}
+  ${privateItems.length ? `<div class="private"><p class="lbl" style="color:var(--urgent)">Private: for you only</p><ul class="plain">${privateItems.map((x) => `<li>${x}</li>`).join('')}</ul></div>` : ''}
   ${foot()}
 </section>
 
+${actionPlan()}
+
 <section class="page" id="ready">
-  <p class="eyebrow">Part ${chapters.length + 1} · Ready to use</p>
+  <p class="eyebrow">Part ${chapters.length + 2} · Action plan · Ready to use</p>
   <h2 class="display">Done for you:<br><span class="g">copy, replies and pages.</span></h2>
-  <p class="lead" style="max-width:40em">Written only from facts we verified. Read each one before you publish it.</p>
+  <p class="lead" style="max-width:40em">The drafts the action plan points to, written only from facts we verified. Read each one before you publish it.</p>
   <h3 class="sub" id="d-site">Your homepage, rewritten</h3>
   ${site ? `<p class="body">${esc(site.verdict)}</p>${site.one_site_or_two ? `<p class="body"><b>One site or two?</b> ${esc(site.one_site_or_two)}</p>` : ''}
   ${site.homepage ? `<div class="hero"><div class="hl">${esc(site.homepage.headline)}</div><p>${esc(site.homepage.subheadline)}</p>${(site.homepage.proof_points ?? []).length ? `<ul>${site.homepage.proof_points.map((p: string) => `<li>${esc(p)}</li>`).join('')}</ul>` : ''}<span class="btn">${esc(site.homepage.cta)}</span></div>
@@ -682,24 +749,7 @@ ${chapters.map(chapter).join('\n')}
   ${ai ? `${(ai.actions ?? []).length ? `<div class="fixes">${ai.actions.map((a: any) => `<div><div><h4>${esc(tidy(a.action))}</h4><p class="w">${esc(tidy(a.why))}</p><p class="small" style="margin-top:3px">${esc(tidy(a.how))}</p></div><div class="tags"><span class="pill info">${esc(a.effort)}</span><span class="pill ${a.impact === 'high' ? 'urgent' : 'fix'}">${esc(a.impact)} impact</span></div></div>`).join('')}</div>` : ''}
   ${(ai.faq ?? []).length ? `<h4 class="tbl-h">FAQ for your website</h4><div class="grid2">${ai.faq.map((x: any) => `<div class="box"><h4>${esc(x.q)}</h4><p>${esc(x.a)}</p></div>`).join('')}</div>` : ''}
   ${ai.measure ? `<p class="note"><b>How to track it:</b> ${esc(tidy(ai.measure))}</p>` : ''}` : '<p class="note">The AI plan was not written in this run.</p>'}
-  ${s2.jsonld ? `<h4 class="tbl-h">Business details for Google and AI</h4><p class="note">Ask your web developer to paste this into the &lt;head&gt; of every page, after checking the phone and address are the ones you want everywhere.</p><pre>${esc('<script type="application/ld+json">\n' + JSON.stringify(s2.jsonld, null, 2) + '\n</script>')}</pre>` : ''}
-  ${foot()}
-</section>
-
-<section class="page" id="stranger">
-  <p class="eyebrow">Part ${chapters.length + 1} · What a stranger sees</p>
-  <h2 class="display">What a customer, bank or tender officer<br><span class="g">learns about you in ten minutes.</span></h2>
-  <table class="band idtable"><tbody>
-    <tr><td>Company</td><td><b>${esc(name)}</b></td></tr>
-    <tr><td>Registration</td><td>${esc(R.identity.ssm ?? '–')}</td></tr>
-    ${R.credentials.cidb_grade ? `<tr><td>CIDB grade (official register)</td><td>${esc(R.credentials.cidb_grade)}</td></tr>` : ''}
-    ${R.maps.our ? `<tr><td>Google rating</td><td>${esc(R.maps.our.rating)}★ from ${esc(R.maps.our.reviews)} reviews</td></tr>` : ''}
-    ${R.identity.address ? `<tr><td>Address</td><td>${esc(R.identity.address)}</td></tr>` : ''}
-    ${R.identity.domains.length ? `<tr><td>Websites</td><td>${esc(R.identity.domains.join(', '))}</td></tr>` : ''}
-  </tbody></table>
-  ${mismatch.length ? `<h3 class="sub">What does not add up</h3><table class="band"><tbody>${mismatch.map((m: any) => `<tr><td><p class="t">${esc(m.issue)}</p>${m.settled ? `<p class="w">The official register ${esc(m.settled)}</p>` : ''}</td><td class="where">${m.source ? seeIt(m.source) : ''}</td></tr>`).join('')}</tbody></table>` : ''}
-  ${R.reviews.good_quotes.length ? `<h3 class="sub">What your customers say, in their words</h3><div class="quotes">${R.reviews.good_quotes.map((q: any) => `<blockquote>${esc(clip(String(q.text), 260))}<cite>${esc(q.author)} · ${esc(dateOf(q.date))}</cite></blockquote>`).join('')}</div>${R.reviews.praise.length ? `<p class="note">Praised most for: ${esc(R.reviews.praise.map(([p, n]) => `${p} (${n})`).join(', '))}. None of this appears on your website yet.</p>` : ''}` : ''}
-  ${privateItems.length ? `<div class="private"><p class="lbl" style="color:var(--urgent)">Private: for you only</p><ul class="plain">${privateItems.map((x) => `<li>${x}</li>`).join('')}</ul></div>` : ''}
+  ${s2.jsonld ? `<h4 class="tbl-h" id="d-jsonld">Business details for Google and AI</h4><p class="note">Ask your web developer to paste this into the &lt;head&gt; of every page, after checking the phone and address are the ones you want everywhere.</p><pre>${esc('<script type="application/ld+json">\n' + JSON.stringify(s2.jsonld, null, 2) + '\n</script>')}</pre>` : ''}
   ${foot()}
 </section>
 

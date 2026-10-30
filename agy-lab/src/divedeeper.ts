@@ -3,10 +3,11 @@
 // This is the malaysia-deeper-dive pipeline (docs/country-deeper-dive-plan.md): Malaysian
 // registers, regulators, courts and phone formats. One run per company: the company-dive first
 // (started through its own public API, never touched), then stage 1, whose lanes feed the report's
-// five parts (contact and reachability; how the internet understands the brand; reviews,
+// six research parts (contact and reachability; how the internet understands the brand; reviews,
 // discussion and news; credibility and official records; digital assets; website speed and quality
-// from Google PageSpeed Insights), stage 2 (consultation)
-// and stage 3 (the editor), then one report stored in the dive_deeper table and served at /dd/<public id>.
+// from Google PageSpeed Insights), stage 2 (the ready-to-use drafts), stage 3 (the editor's plain
+// titles and screenshots), stage 4 (one full analysis across all six parts) and stage 5 (the action
+// plan, one task list per department), then one report stored in the dive_deeper table and served at /dd/<public id>.
 //
 // Isolation from company-dive (plan §2): own files, own table, own queue (one run at a time,
 // never in company-dive's queue), read-only on company_dive (plain selects). Everything here
@@ -41,8 +42,12 @@ export const STAGE1_FIRST = [['H', 'maps'], ['H', 'web'], ['D', 'registry'], ['G
 export const STAGE1_AFTER_H = [['E', 'maps'], ['C', 'merged']] as const;
 export const STAGE1_LAST = [['R', 'contacts'], ['A', 'assets'], ['B', 'brand']] as const;
 export const STAGE2 = ['S2', 'consult'] as const;
-/** The editor reads everything, S2 included, and writes the report's words and screenshots. */
+/** The editor reads everything, S2 included, and writes the report's plain titles and screenshots. */
 export const STAGE3 = ['S3', 'editor'] as const;
+/** One full analysis, read across every part. */
+export const STAGE4 = ['S4', 'analysis'] as const;
+/** The action plan: every urgent and needs-work finding as a task for the department that does it. */
+export const STAGE5 = ['S5', 'plan'] as const;
 
 type Row = {
   id: number; public_id: string; company: string; dive_id: number | null;
@@ -196,6 +201,10 @@ async function execute(id: number): Promise<void> {
     lanes['S2-consult'] = s2;
     await say('stage3', 'Editing the report and taking screenshots');
     lanes['S3-editor'] = await runLane(STAGE3[0], STAGE3[1], diveKey, dive);
+    await say('stage4', 'Writing the full analysis');
+    lanes['S4-analysis'] = await runLane(STAGE4[0], STAGE4[1], diveKey, dive);
+    await say('stage5', 'Compiling the action plan');
+    lanes['S5-plan'] = await runLane(STAGE5[0], STAGE5[1], diveKey, dive);
 
     // 3. The report.
     const html = buildReport(dive, lanes);

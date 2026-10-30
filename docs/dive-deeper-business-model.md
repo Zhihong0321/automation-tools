@@ -41,7 +41,7 @@ written to hook them in two ways, then ask for the order:
   AI recommendations, urgent website faults, claims confirmed by the registers.
 
 After that comes what each chapter of the full report unlocks, the work done for them
-(rewritten homepage, review replies, pages to add, AI plan, business data, 30-day plan), how it
+(the full analysis, the action plan by department, rewritten homepage, review replies, pages to add, AI plan, business data), how it
 works, and the order panel. "Get my full report" buttons sit in the top bar, the opening, the
 middle and the end.
 
@@ -63,10 +63,13 @@ researched twice:
   - each licence and award, looked up in its official register
   - every page of their websites, with links, phone numbers and WhatsApp tested
   - what AI assistants say about them, from memory and with a web search
-- Stage 2 writes the advice: fixes in order, a 30-day plan, homepage copy, pages to add, review
-  replies, the AI plan, the FAQ, and the business data for Google and AI.
-- Stage 3 edits it into the report: plain English, the three problems costing the most customers,
-  and screenshots of what is broken.
+- Stage 2 writes the ready-to-use drafts: homepage copy, pages to add, review replies, the AI
+  plan, the FAQ, and the business data for Google and AI.
+- Stage 3 edits it into the report: plain English and screenshots of what is broken.
+- Stage 4 writes one full analysis across all six research parts: the verdict, the three problems
+  costing the most customers, each part assessed and the causes that run through several parts.
+- Stage 5 compiles the action plan: one task list per department (website, social media, IT,
+  other), each task with when, effort and the draft that does it.
 
 The client receives one link with three versions: desktop, mobile, and A4 to print or save as PDF.
 

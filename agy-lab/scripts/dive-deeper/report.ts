@@ -10,7 +10,7 @@ import { OUT } from '../../src/divedeeper/lib.ts';
 import { buildReport } from '../../src/divedeeper/report-html.ts';
 import { STAGE1_LANES } from '../../src/divedeeper/editor.ts';
 
-export const LANES = [...STAGE1_LANES, 'S2-consult', 'S3-editor'];
+export const LANES = [...STAGE1_LANES, 'S2-consult', 'S3-editor', 'S4-analysis', 'S5-plan'];
 
 const diveId = process.argv[2];
 if (!diveId) { console.error('usage: node scripts/dive-deeper/report.ts <diveId> [out.html]'); process.exit(2); }

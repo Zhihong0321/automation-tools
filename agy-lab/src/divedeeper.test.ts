@@ -38,7 +38,7 @@ test('with the switch off every handler declines, so the hub behaves as before',
   }
 });
 
-test('the report builds all three parts from data alone, and survives missing lanes', () => {
+test('the report builds the parts, the full analysis and the action plan from data alone, and survives missing lanes', () => {
   const dive = {
     company: 'Acme Sdn Bhd', finished_at: '2026-10-25T10:00:00Z',
     dossier: '# Acme\n\n## Identity\n\nAcme makes widgets [1].\n\n| Item | Detail |\n|---|---|\n| Name | Acme |',
@@ -46,10 +46,11 @@ test('the report builds all three parts from data alone, and survives missing la
   };
   const lanes = {
     'E-maps': { ran_at: '2026-10-26T01:00:00Z', findings: [{ title: '1★ review with no reply', detail: 'x', severity: 'high', source: 'https://maps.example/' }] },
-    'S2-consult': { notes: { top: { summary: 'Short summary.', top5: [{ fix: 'Reply to reviews', why: 'none answered', effort: '1 hour', impact: 'high' }] } } },
+    'S4-analysis': { notes: { verdict: 'Short summary.', parts: [{ theme: 'voice', assessment: 'Nobody answers the reviews.' }], threads: [{ title: 'Nobody owns the listing', body: 'b', themes: ['voice'] }], strengths: ['A 4.7 rating'] } },
+    'S5-plan': { notes: { depts: [{ dept: 'social', tasks: [{ dept: 'social', task: 'Reply to reviews', why: 'none answered', how: 'h', when: 'week', effort: '1 hour', impact: 'high', theme: 'voice', ready: 'replies', items: ['E-maps#0'] }], also: [] }], ready: { replies: 'the review replies, ready to post' } } },
   };
   const html = buildReport(dive, lanes);
-  for (const part of ['id="stories"', 'Your fixes, in order', 'What a stranger sees', 'The full checklist', 'Background research', '1★ review with no reply', 'Reply to reviews', 'id="src-1"']) assert.ok(html.includes(part), part);
+  for (const part of ['id="stories"', 'Short summary.', 'Nobody answers the reviews.', 'Nobody owns the listing', 'What you can build on', 'Your action plan', 'Social media', 'This week', 'Done for you: the review replies', 'Nothing for this department right now.', 'What a stranger sees', 'The full checklist', 'Background research', '1★ review with no reply', 'Reply to reviews', 'id="src-1"']) assert.ok(html.includes(part), part);
   assert.ok(!/undefined|\[object Object\]|NaN/.test(html.replace(/<style[\s\S]*?<\/style>/, '')));
 });
 
@@ -67,9 +68,11 @@ test('the report speaks the editor\'s plain words and never shows the lanes\' ma
   const html = buildReport(dive, lanes).replace(/<style[\s\S]*?<\/style>/, '');
   for (const s of ['An AI assistant gives customers the wrong office address', 'AI assistants send customers to the wrong address', 'You are better than your website says.', 'Better than you claim']) assert.ok(html.includes(s), s);
   for (const bad of ['CONTRADICTED:', 'doesnt_know', 'gpt-6.1-sol', 'what=correct']) assert.ok(!html.includes(bad), bad);
+  // Without S5, every urgent finding still lands under the department that does it.
+  assert.ok(/id="plan-website"[\s\S]*An AI assistant gives customers the wrong office address/.test(html), 'unplanned finding listed under its department');
 });
 
-test('the report reads in five parts plus the analysis, each part drawn from its own lanes', () => {
+test('the report reads in six research parts, each drawn from its own lanes', () => {
   const dive = { company: 'Acme Sdn Bhd', finished_at: '2026-10-25T10:00:00Z', dossier: '', result: { identity: { legal_name: 'Acme Sdn Bhd', official_domains: ['acme.my'] } } };
   const at = '2026-10-26T01:00:00Z';
   const lanes = {
@@ -87,7 +90,7 @@ test('the report reads in five parts plus the analysis, each part drawn from its
     'C-merged': { ran_at: at, findings: [{ title: 'Your SSM number is missing from the site', detail: 'd', severity: 'medium', source: null, check: 'ssm' }, { title: 'WhatsApp link does not open a chat', detail: 'd', severity: 'high', source: null, check: 'whatsapp' }] },
   };
   const html = buildReport(dive, lanes).replace(/<style[\s\S]*?<\/style>/, '');
-  for (const s of ['Part 1 · Contact and reachability', 'Part 2 · How the internet understands you', 'Part 3 · Reviews, discussion and news', 'Part 4 · Credibility and official records', 'Part 5 · Digital assets', 'Part 6 · Website speed and quality', 'Part 7 · Analysis and suggestions', 'Google’s speed score',
+  for (const s of ['Part 1 · Contact and reachability', 'Part 2 · How the internet understands you', 'Part 3 · Reviews, discussion and news', 'Part 4 · Credibility and official records', 'Part 5 · Digital assets', 'Part 6 · Website speed and quality', 'Part 7 · Full analysis', 'Part 8 · Action plan', 'Google’s speed score',
     'Someone who has left', 'Fast installs across Johor.', 'Widget installation', 'A customer dispute over a late install.', 'Bank Negara Financial Consumer Alert list', 'Possible conflict', 'Acme Trading filed ACME in class 37', 'Exabytes', 'Can be faked', 'How the world’s mail systems see your email', 'Listed: Barracuda', 'Broken', '20 days']) assert.ok(html.includes(s), s);
   assert.ok(!/undefined|\[object Object\]|NaN/.test(html));
   // The website lane's checks land in the part they are about.
@@ -128,7 +131,7 @@ test('the preview landing page builds from the company-dive alone, uses the edit
   assert.ok(!/\[\d+\]/.test(html.replace(/<details[\s\S]*<\/details>/g, '')), 'no [n] citations outside the research appendix');
   assert.ok(buildPreview({ company: 'Empty' }).includes('Empty'), 'a dive with no result still builds');
   // What the full report holds, in its six parts, with the company's own claims mapped to their register.
-  for (const s of ['Contact and reachability', 'Digital assets', 'Part 1 · Contact and reachability', 'Part 2 · How the internet understands you', 'Part 3 · Reviews, discussion and news', 'Part 5 · Digital assets', 'Bank Negara alert list', 'is how clearly the market sees it.', 'Read it before your competitors do.', 'Fix it before your customers see it.', 'Choosing a supplier? Check them first.', 'SSM e-Info documents', 'acme.com.my · ?', 'About Ali', 'Part 4 · Credibility and official records', 'Part 6 · Website speed and quality', 'Part 7 · Analysis and suggestions', 'Seven parts, written for', 'How top AI sees your brand', 'How search engines index your company', 'Claims CIDB Grade G7 registration.', 'CIDB contractor register', 'acme.my', 'in Johor Bahru']) assert.ok(html.includes(s), s);
+  for (const s of ['Contact and reachability', 'Digital assets', 'Part 1 · Contact and reachability', 'Part 2 · How the internet understands you', 'Part 3 · Reviews, discussion and news', 'Part 5 · Digital assets', 'Bank Negara alert list', 'is how clearly the market sees it.', 'Read it before your competitors do.', 'Fix it before your customers see it.', 'Choosing a supplier? Check them first.', 'SSM e-Info documents', 'acme.com.my · ?', 'About Ali', 'Part 4 · Credibility and official records', 'Part 6 · Website speed and quality', 'Part 7 · Full analysis', 'Part 8 · Action plan', 'Social media: reviews, replies and listings', 'Eight parts, written for', 'How top AI sees your brand', 'How search engines index your company', 'Claims CIDB Grade G7 registration.', 'CIDB contractor register', 'acme.my', 'in Johor Bahru']) assert.ok(html.includes(s), s);
   assert.ok(buildPreview({ ...dive, finished_at: new Date('2026-10-25T10:00:00Z') }).includes('Online Presence Audit 2026'), 'a Date finished_at still gives the year');
   const edited = buildPreview(dive, {}, { hook: 'Your award label is a year out.', known: [{ label: 'Founded', value: 'July 2023' }], warnings: [{ type: 'outdated', title: 'Award label still says 2024', detail: 'd', risk: 'r' }] }).replace(/\u00a0|&nbsp;/g, ' ');
   for (const s of ['Your award label is a year out.', 'Award label still says 2024', 'Outdated', 'July 2023']) assert.ok(edited.includes(s), s);
