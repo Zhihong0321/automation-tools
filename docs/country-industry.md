@@ -142,9 +142,11 @@ How it runs:
 1. **Maps.** Each row is one `gmap.scan` job asking for `search_keyword`
    exactly as written, up to 200 businesses. Five are in flight at once, so the
    mini, the PC and the three scraper.tech lanes each have one. The mini takes
-   these searches (`source: 'search.list'`, allowed in `countryScanOnly`). A
-   search that fails or is blocked is asked once more; one that fails twice is
-   marked failed and the run goes on.
+   these searches (`source: 'search.list'`, allowed in `countryScanOnly`). With
+   no separate place in the search, the mini reads only its Chrome feed, not
+   Google's paged result list. A search that fails, is blocked or is cut short
+   is asked once more; one that fails twice rests 30 minutes and gets one more
+   round of two (see below).
 2. **Merge.** One row per Google place id. A business found by several
    searches (KL web design and KL digital marketing) is one row naming every
    search that found it.
@@ -158,7 +160,7 @@ In the report database (Postgres on Railway), three tables:
 | Table | One row per | Holds |
 |---|---|---|
 | `search_list_run` | list | name, status (`paused`, `running`, `done`), lease |
-| `search_list_search` | row of the CSV | its search, `pending`/`done`/`failed`, which worker answered, how many businesses |
+| `search_list_search` | row of the CSV | its search, `pending`/`searching`/`done`/`failed`, asks so far, which worker answered, how many businesses |
 | `search_list_place` | business | the Maps fields, the searches that found it, the website contacts |
 
 The CSV is built from these rows when you download it, at any point in the
@@ -178,10 +180,27 @@ is no checkpoint file to lose and nothing finished is redone.
   again.
 - **You pause it.** No new searches start; the ones in flight finish and are
   saved. Start picks up from there.
-- **A worker is off or Google refuses it.** The other workers take its
-  searches, as for country jobs.
-- **Searches or website checks fail.** They stay marked failed. **Retry
-  failures** puts them back, and only them.
+- **A worker is off.** The other workers take its searches, as for country
+  jobs.
+- **Google blocks a worker, or asks it for a captcha.** The PC sees HTTP 403
+  or 429, or a page with "unusual traffic", `/sorry/` or reCAPTCHA, and stops
+  at once; it never answers a captcha. It sends the hub what it had read, asks
+  for a 30-minute cooldown, and sleeps 30 minutes (`$BlockedRestSec` in
+  `worker.ps1`); the hub hands it nothing until then. The mini does the same.
+  A scraper.tech lane that hits its API's rate limit rests 5 minutes. The
+  other workers keep going. The PC waits 0.5 s between Google pages;
+  `GMAP_PACE_MS` in its config slows it further.
+- **A search is cut short.** When Google refuses a worker partway through a
+  search, the answer comes back with what was read: `stoppedEarly` from the
+  PC, `retryAfterMs` from the mini. The list keeps those businesses and asks
+  the search again, most likely of another worker, so a block partway does not
+  leave the search short.
+- **A search fails twice.** It is marked failed, rests 30 minutes (the same
+  rest Google's block gives the worker), and then gets a second round of two
+  asks. A search that fails all four is failed for good; its businesses read
+  so far are kept.
+- **Website checks fail.** They stay marked failed. **Retry failures** puts
+  them, and any search failed for good, back to be asked again.
 
 ### The trial before the full run
 

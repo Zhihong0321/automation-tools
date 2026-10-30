@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCsv, parseSearchList, placesOf, csvLine } from './search-list.ts';
+import { parseCsv, parseSearchList, placesOf, csvLine, cutShort } from './search-list.ts';
 
 test('parseCsv reads quotes, doubled quotes, commas and line breaks inside quotes, and a BOM', () => {
   assert.deepEqual(parseCsv('﻿"a","b, c"\r\n"say ""hi""","two\nlines"\n\n'), [['a', 'b, c'], ['say "hi"', 'two\nlines']]);
@@ -40,4 +40,11 @@ test('a CSV line names every search that found the business, then its website co
   assert.match(line, /"hi@acme\.example","https:\/\/acme\.example\/contact"/);
   const unchecked = csvLine({ business: { name: 'Later' }, contact: null, contact_status: null }, []);
   assert.match(unchecked, /"not_checked_yet",""$/);
+});
+
+test('an answer Google cut short is told apart from a whole one', () => {
+  assert.equal(cutShort({ businesses: [{}], stoppedEarly: null }), null);
+  assert.equal(cutShort({ businesses: [{}] }), null);
+  assert.match(cutShort({ businesses: [{}], stoppedEarly: 'Google asked this line for a captcha' })!, /cut short: Google asked this line for a captcha/);
+  assert.match(cutShort({ businesses: [{}], retryAfterMs: 1_800_000, listError: 'Google refused list requests (HTTP 429)' })!, /HTTP 429/);
 });

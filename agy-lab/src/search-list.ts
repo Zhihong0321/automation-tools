@@ -29,8 +29,14 @@ const MAX_PER_SEARCH = 200;
 /** The mini, the PC and three scraper.tech lanes: one search each. */
 const SEARCHES_IN_FLIGHT = 5;
 const SEARCH_TIMEOUT_MS = 600_000;
-/** A failed or blocked search is asked once more, likely of another worker. */
+/** A failed, blocked or cut-short search is asked once more, likely of another worker. */
 const SEARCH_ATTEMPTS = 2;
+/**
+ * A search that failed both asks gets one more round, after the half hour a
+ * worker Google refused rests for (BlockedRestSec in the PC's worker.ps1).
+ */
+const SEARCH_ROUNDS = 2;
+const RETRY_AFTER_SECONDS = 1_800;
 const CONTACT_CONCURRENCY = 12;
 const CONTACT_BATCH = 50;
 const LEASE_SECONDS = 120;
@@ -45,7 +51,8 @@ const CSV_FIELDS = ['country', 'city', 'industry', 'search_keyword', 'name', 'ca
   'research_status', 'research_errors'];
 
 export type SearchRow = { country: string; city: string; industry: string; keyword: string };
-type Scan = { businesses?: Array<Record<string, unknown>>; blocked?: boolean; error?: string | null; capped?: boolean; worker?: string | null };
+type Scan = { businesses?: Array<Record<string, unknown>>; blocked?: boolean; error?: string | null; capped?: boolean; worker?: string | null;
+  stoppedEarly?: string | null; retryAfterMs?: number; listError?: string | null };
 type Place = { place_key: string; business: Record<string, unknown> };
 export type Deps = {
   search: (payload: Record<string, unknown>) => Promise<Scan>;
@@ -54,6 +61,17 @@ export type Deps = {
 
 function invalid(message: string): Error {
   return Object.assign(new Error(message), { code: 'bad_request' });
+}
+
+/**
+ * Why a worker's answer is only part of the search, or null when it is whole.
+ * Google can refuse a worker partway through: the PC then sends what it read
+ * with `stoppedEarly`, the mini with `retryAfterMs`, and neither is `blocked`.
+ */
+export function cutShort(scan: Scan): string | null {
+  if (typeof scan.stoppedEarly === 'string' && scan.stoppedEarly) return 'cut short: ' + scan.stoppedEarly;
+  if (Number(scan.retryAfterMs) > 0) return 'cut short: Google refused the worker partway' + (scan.listError ? ' (' + scan.listError + ')' : '');
+  return null;
 }
 
 const jsonParam = (value: unknown): string =>
@@ -227,7 +245,7 @@ export async function runStatus(id: string): Promise<Record<string, unknown> | n
   const count = (s: string) => searches.find((r) => r.status === s)?.n ?? 0;
   return {
     ...run,
-    searches: { total: searches.reduce((n, r) => n + r.n, 0), pending: count('pending'), done: count('done'), failed: count('failed'),
+    searches: { total: searches.reduce((n, r) => n + r.n, 0), pending: count('pending') + count('searching'), done: count('done'), failed: count('failed'),
       businessesFound: searches.reduce((n, r) => n + r.found, 0) },
     searchesByWorker: Object.fromEntries(byWorker.map((r) => [r.worker, r.n])),
     places,
@@ -275,28 +293,55 @@ export async function queueSearch(payload: Record<string, unknown>): Promise<Sca
 
 const DEFAULT_DEPS: Deps = { search: queueSearch, research: websiteContacts };
 
-/** One row of the list: asked up to twice, its businesses saved, the row marked done or failed. */
+/**
+ * One row of the list: asked up to twice, its businesses saved, the row marked
+ * done or failed. A cut-short answer's businesses are kept and the search is
+ * asked again, so a block partway does not leave the row short.
+ */
 async function runSearch(runId: string, idx: number, row: SearchRow, deps: Deps, worker?: string): Promise<void> {
   let result: Scan | null = null;
   let error = 'not run';
+  let kept = 0;
   for (let attempt = 0; attempt < SEARCH_ATTEMPTS; attempt++) {
     await db.sql(`update search_list_search set attempts = attempts + 1 where run_id = $1 and idx = $2`, [runId, idx]);
     try {
       const scan = await deps.search({ keyword: row.keyword, max: MAX_PER_SEARCH, ...(worker ? { worker } : {}) });
-      if (!scan.blocked && !scan.error) { result = scan; break; }
-      error = scan.error || 'blocked';
+      if (scan.blocked || scan.error) { error = scan.error || 'blocked'; continue; }
+      kept = Math.max(kept, await savePlaces(runId, idx, Array.isArray(scan.businesses) ? scan.businesses : []));
+      const short = cutShort(scan);
+      if (!short) { result = scan; break; }
+      error = short;
     } catch (cause) {
       error = (cause as Error).message ?? String(cause);
     }
   }
   if (!result) {
-    await db.sql(`update search_list_search set status = 'failed', error = $3, finished_at = now() where run_id = $1 and idx = $2`, [runId, idx, error.slice(0, 500)]);
+    await db.sql(`update search_list_search set status = 'failed', found = $4, error = $3, finished_at = now() where run_id = $1 and idx = $2`,
+      [runId, idx, error.slice(0, 500), kept || null]);
     return;
   }
-  const businesses = Array.isArray(result.businesses) ? result.businesses : [];
-  const found = await savePlaces(runId, idx, businesses);
   await db.sql(`update search_list_search set status = 'done', worker = $3, found = $4, capped = $5, error = null, finished_at = now() where run_id = $1 and idx = $2`,
-    [runId, idx, result.worker ?? null, found, result.capped === true]);
+    [runId, idx, result.worker ?? null, kept, result.capped === true]);
+}
+
+/**
+ * The next search to ask, marked `searching` so no other loop asks it too:
+ * pending ones first, then failed ones whose rest is over and that have a
+ * round left. 'wait' when only resting ones remain.
+ */
+async function takeSearch(runId: string): Promise<number | 'wait' | null> {
+  const taken = await db.sql<{ idx: number }>(`
+    update search_list_search set status = 'searching'
+    where run_id = $1 and idx = (
+      select idx from search_list_search
+      where run_id = $1 and (status = 'pending'
+        or (status = 'failed' and attempts < $2 and finished_at < now() - make_interval(secs => $3)))
+      order by status desc, idx limit 1 for update skip locked)
+    returning idx`, [runId, SEARCH_ATTEMPTS * SEARCH_ROUNDS, RETRY_AFTER_SECONDS]);
+  if (taken.rows[0]) return taken.rows[0].idx;
+  const resting = await db.sql<{ n: number }>(`select count(*)::int as n from search_list_search where run_id = $1 and status = 'failed' and attempts < $2`,
+    [runId, SEARCH_ATTEMPTS * SEARCH_ROUNDS]);
+  return Number(resting.rows[0]?.n) > 0 ? 'wait' : null;
 }
 
 const NO_WEBSITE = { website: null, status: 'no_website', emails: [], phones: [], people: [], links: [], pages: [], errors: [] };
@@ -351,7 +396,8 @@ async function checkPlaces(runId: string, deps: Deps, alive: () => boolean, more
 
 /** The whole list, searches and website checks side by side, while this hub holds the run's lease. */
 export async function work(runId: string, deps: Deps = DEFAULT_DEPS): Promise<void> {
-  // Rows taken by a hub that stopped mid-check are not being checked by anyone.
+  // Rows taken by a hub that stopped mid-search or mid-check are not being worked by anyone.
+  await db.sql(`update search_list_search set status = 'pending' where run_id = $1 and status = 'searching'`, [runId]);
   await db.sql(`update search_list_place set contact_status = null where run_id = $1 and contact_status = 'running'`, [runId]);
   let alive = true;
   const beat = setInterval(() => {
@@ -363,28 +409,36 @@ export async function work(runId: string, deps: Deps = DEFAULT_DEPS): Promise<vo
   beat.unref();
   try {
     const rows = await searchRows(runId);
-    const pending = (await db.sql<{ idx: number }>(`select idx from search_list_search where run_id = $1 and status = 'pending' order by idx`, [runId])).rows.map((r) => r.idx);
-    let next = 0;
     let searching = true;
-    console.log(`[search-list] run ${runId}: ${pending.length} searches to go`);
-    const searches = Promise.all(Array.from({ length: Math.min(SEARCHES_IN_FLIGHT, pending.length) }, async () => {
-      while (alive && next < pending.length) {
-        const idx = pending[next++]!;
+    let inFlight = 0;
+    console.log(`[search-list] run ${runId}: searching`);
+    const searches = Promise.all(Array.from({ length: SEARCHES_IN_FLIGHT }, async () => {
+      while (alive) {
+        const idx = await takeSearch(runId);
+        // Nothing to take: this loop is done unless a search in flight may still fail into a retry.
+        if (idx === null && !inFlight) return;
+        if (idx === null || idx === 'wait') { await sleep(30_000); continue; }
+        inFlight++;
         try { await runSearch(runId, idx, rows.get(idx)!, deps); }
-        catch (cause) { console.error(`[search-list] run ${runId} search ${idx}: ${(cause as Error).message}`); }
+        catch (cause) {
+          console.error(`[search-list] run ${runId} search ${idx}: ${(cause as Error).message}`);
+          await db.sql(`update search_list_search set status = 'pending' where run_id = $1 and idx = $2 and status = 'searching'`, [runId, idx]).catch(() => {});
+        } finally { inFlight--; }
       }
     })).finally(() => { searching = false; });
     await Promise.all([searches, checkPlaces(runId, deps, () => alive, () => searching)]);
     if (!alive) return;
     const left = (await db.sql<{ n: number }>(`
-      select (select count(*) from search_list_search where run_id = $1 and status = 'pending')
-           + (select count(*) from search_list_place where run_id = $1 and contact_status is null) as n`, [runId])).rows[0]!;
+      select (select count(*) from search_list_search where run_id = $1
+                and (status in ('pending', 'searching') or (status = 'failed' and attempts < $2)))
+           + (select count(*) from search_list_place where run_id = $1 and contact_status is null) as n`, [runId, SEARCH_ATTEMPTS * SEARCH_ROUNDS])).rows[0]!;
     if (Number(left.n) === 0) {
       await db.sql(`update search_list_run set status = 'done', finished_at = now(), updated_at = now() where id = $1 and status = 'running'`, [runId]);
       console.log(`[search-list] run ${runId} done`);
     }
   } finally {
     clearInterval(beat);
+    await db.sql(`update search_list_search set status = 'pending' where run_id = $1 and status = 'searching'`, [runId]);
     await db.sql(`update search_list_run set lease_owner = null, lease_until = null where id = $1 and lease_owner = $2`, [runId, OWNER]);
   }
 }
@@ -403,7 +457,7 @@ export async function trial(runId: string, picks: Array<{ idx: number; worker: s
   }));
 }
 
-async function claim(): Promise<string | null> {
+export async function claim(): Promise<string | null> {
   const r = await db.sql<{ id: string }>(`
     update search_list_run set lease_owner = $1, lease_until = now() + make_interval(secs => $2), updated_at = now()
     where id = (select id from search_list_run
