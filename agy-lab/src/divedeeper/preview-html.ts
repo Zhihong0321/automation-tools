@@ -27,6 +27,23 @@ const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\.
 const dateOf = (iso: string | undefined | null) => (iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '');
 // "July 2023 in [1][3] vs …" reads as "July 2023 vs …": the citation and the word that led into it go.
 const noCites = (s: string) => s.replace(/(?:\s+(?:in|on|from|per|by|at))?\s*(?:\[\d+\])+/g, '').replace(/\s+([.,;:)])/g, '$1').replace(/\s+/g, ' ').trim();
+/** Research text set like print: curly quotes and apostrophes, real dashes and ellipses, and no line break
+ *  between a number and its unit or currency ("RM 1.2 million", "10.75 MWp", "435 days"). */
+const NB = '\u00a0';
+const typeset = (s: string) => s
+  .replace(/\.{3}/g, '…')
+  .replace(/(\S)\s+--?\s+(?=\S)/g, `$1${NB}– `)
+  .replace(/(\w)--(\w)/g, '$1—$2')
+  .replace(/\b((?:19|20)\d{2})-((?:19|20)\d{2})\b/g, '$1–$2')
+  .replace(/(\w)'(\w)/g, '$1’$2')
+  .replace(/(^|[\s(\[—–])'/g, '$1‘').replace(/'/g, '’')
+  .replace(/(^|[\s(\[—–])"/g, '$1“').replace(/"/g, '”')
+  .replace(/\b(RM|USD|SGD|SSM|No\.)\s+(?=\d)/g, `$1${NB}`)
+  .replace(/(\d)\s+(?=%|(?:MWp|kWp|kW|MW|GWh|MWh|kWh|km|sq\.? ?ft|mil|million|billion|days?|weeks?|months?|years?|hours?|reviews?|projects?|plants?|staff)\b)/g, `$1${NB}`);
+/** Ties the last two words of a short line together, so a title never ends on one word alone. */
+const tie = (s: string) => s.replace(/\s+(\S{1,14})$/, `${NB}$1`);
+/** A string for a CSS `content:` value. */
+const cssStr = (s: string) => `"${s.replace(/[\\"]/g, '\\$&').replace(/[\r\n<>]+/g, ' ')}"`;
 const shortName = (n: string) => n.replace(/\s+(Sdn\.?\s*Bhd\.?|Berhad|Bhd\.?|Enterprise|PLT|Pte\.?\s*Ltd\.?)$/i, '').trim() || n;
 const CLAIM = /\b(CIDB|SEDA|MyHIJAU|MyHijau|ISO|certif|accredit|licen[cs]|grade|award|member|partner|distributor|approved|appointed)\b/i;
 
@@ -56,7 +73,7 @@ export function buildPreview(dive: any, offer: Offer = {}, notes: PreviewNotes |
   const people = everyone.filter((p: any) => isLeadership(p.role));
   const staff = everyone.filter((p: any) => !isLeadership(p.role)).map((p: any) => String(p.name));
   /** Text written from the research, made fit for a public page. */
-  const P = (t: unknown) => noCites(scrub(t, { phones: true, staff }));
+  const P = (t: unknown) => typeset(noCites(scrub(t, { phones: true, staff })));
   const domains: string[] = id.official_domains ?? [];
   const ssm = (id.registration_numbers ?? []).find((x: string) => /^\d{12}$/.test(x)) ?? (id.registration_numbers ?? [])[0] ?? null;
   const town = String(id.address ?? '').match(/\b\d{5}\s+([^,]+)/)?.[1]?.trim() ?? 'your town';
@@ -67,6 +84,10 @@ export function buildPreview(dive: any, offer: Offer = {}, notes: PreviewNotes |
   const made = dateOf(dive?.finished_at) || dateOf(new Date().toISOString());
   // finished_at may arrive as a Date, whose String() starts with the weekday.
   const year = String(new Date(dive?.finished_at ?? Date.now()).getFullYear());
+  // The dive's number makes each preview a numbered edition, like a file reference.
+  const ref = dive?.id != null && /^\d+$/.test(String(dive.id)) ? `No.${NB}${String(dive.id).padStart(4, '0')}` : '';
+  const plural = (n: number, one: string, many = `${one}s`) => `${n}${NB}${n === 1 ? one : many}`;
+  const srcN = plural(sources.length, 'public source');
 
   const known = notes?.known?.length ? notes.known : [
     id.industry && { label: 'What you do', value: clip(String(id.industry), 90) },
@@ -81,6 +102,7 @@ export function buildPreview(dive: any, offer: Offer = {}, notes: PreviewNotes |
   // Every sign we hold beyond what this page shows stays locked for the full report.
   const moreSigns = Math.max(warnings.length - shown.length, contradictions.length + gaps.length - shown.length, 0);
   const typesFound = [...new Set(warnings.map((w) => w.type))];
+  const signCount = Math.max(warnings.length, contradictions.length + gaps.length);
   const hook = notes?.hook ? P(notes.hook) : `This preview was prepared for ${name} alone, from ${sources.length} public sources. Here is what they say about you, and where they do not agree.`;
 
   const ctaHref = offer.order_url && /^https?:\/\//.test(offer.order_url) ? offer.order_url : '#order';
@@ -126,7 +148,7 @@ h2 { font-size:clamp(34px,4.4vw,58px); max-width:16em; } .lead { font-size:19px;
 .hero h1 { font-size:clamp(40px,5.6vw,76px); letter-spacing:-0.035em; line-height:1.02; margin-top:18px; }
 .hero .lead { margin-top:22px; color:var(--on-dark); opacity:.86; } .ctas { display:flex; flex-wrap:wrap; gap:12px; margin-top:32px; }
 .file { background:var(--paper); color:var(--ink); padding:26px; display:grid; gap:14px; box-shadow:0 30px 60px -30px rgba(0,0,0,.6); transform:rotate(1.2deg); }
-.file .stamp { justify-self:start; font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--wrong); border:2px solid var(--wrong); padding:3px 8px; transform:rotate(-3deg); }
+.file .stamp { justify-self:start; font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--wrong); border:2px solid var(--wrong); padding:3px 8px; transform:rotate(-3deg); }
 .file h3 { font-size:24px; letter-spacing:-0.02em; } .file dl { margin:0; display:grid; gap:0; font-size:13.5px; }
 .file dl div { display:grid; grid-template-columns:96px minmax(0,1fr); gap:10px; padding:7px 0; border-top:1px solid var(--line); } .file dt { color:var(--muted); } .file dd { margin:0; overflow-wrap:anywhere; }
 .file .foot { font-size:12px; color:var(--muted); }
@@ -141,19 +163,19 @@ h2 { font-size:clamp(34px,4.4vw,58px); max-width:16em; } .lead { font-size:19px;
 /* warnings */
 .warn-section { background:var(--band); }
 .legend { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
-.tag { display:inline-block; font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; padding:4px 9px; }
+.tag { display:inline-block; font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:4px 9px; }
 .tag.contra { color:var(--contra); background:var(--contra-bg); } .tag.missing { color:var(--missing); background:var(--missing-bg); } .tag.outdated { color:var(--outdated); background:var(--outdated-bg); } .tag.wrong { color:var(--wrong); background:var(--wrong-bg); }
 .warns { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
-.warn { background:var(--paper); padding:24px; display:grid; gap:10px; align-content:start; border-top:4px solid var(--ink); }
+.warn { background:var(--paper); padding:24px; display:grid; gap:10px; align-content:start; border-top:3px solid var(--ink); }
 .warn.contra { border-top-color:var(--contra); } .warn.missing { border-top-color:var(--missing); } .warn.outdated { border-top-color:var(--outdated); } .warn.wrong { border-top-color:var(--wrong); }
 .warn h3 { font-size:21px; letter-spacing:-0.015em; line-height:1.2; } .warn .d { color:var(--grey); font-size:15px; } .warn .risk { font-size:14px; border-left:2px solid var(--ink); padding-left:10px; }
 .warn.first { grid-column:1/-1; background:var(--dark); color:var(--on-dark); } .warn.first .d { color:var(--on-dark-2); } .warn.first .risk { border-left-color:#fff; } .warn.first h3 { font-size:clamp(24px,2.6vw,30px); }
-.locked { background:var(--paper); padding:24px; display:grid; gap:12px; align-content:start; position:relative; overflow:hidden; border-top:4px solid var(--line); }
+.locked { background:var(--paper); padding:24px; display:grid; gap:12px; align-content:start; position:relative; overflow:hidden; border-top:3px solid var(--line); }
 .locked .bar { height:12px; background:var(--band); } .locked .bar.s { width:62%; } .locked .bar.m { width:84%; }
 .locked .lockmsg { position:absolute; inset:0; display:grid; place-content:center; text-align:center; gap:6px; background:linear-gradient(180deg, rgba(255,255,255,.2), rgba(255,255,255,.96) 55%); padding:20px; }
 .locked .lockmsg b { font-family:var(--display); font-size:44px; font-weight:600; letter-spacing:-0.03em; line-height:1; } .locked .lockmsg span { font-size:14px; color:var(--grey); }
 .five { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:2px; background:var(--line); margin-top:40px; border:1px solid var(--line); }
-.five div { background:var(--paper); padding:18px; display:grid; gap:8px; } .five .k { font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
+.five div { background:var(--paper); padding:18px; display:grid; gap:8px; } .five .k { font-size:12px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
 .five .v { font-family:var(--display); font-size:20px; font-weight:600; letter-spacing:-0.015em; color:var(--muted); } .five .lk { font-size:11px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--ink); }
 /* band */
 .band-cta { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:32px; align-items:center; padding-top:72px; padding-bottom:72px; }
@@ -193,10 +215,10 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
 .feat h3 { font-size:clamp(24px,2.6vw,32px); letter-spacing:-0.02em; line-height:1.15; } .feat .what { color:var(--grey); }
 .feat ul { margin:0; padding:0; list-style:none; display:grid; gap:0; font-size:15px; } .feat li { padding:9px 0 9px 22px; border-top:1px solid var(--line); position:relative; } .feat li::before { content:"→"; position:absolute; left:0; color:var(--muted); }
 .feat .hlb { display:inline-block; background:var(--ink); color:#fff; font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; padding:3px 8px; margin-right:10px; }
-.feat .q { font-family:var(--display); font-size:17px; color:var(--grey); margin-top:-4px; } .feat.spot .mock { box-shadow:inset 0 4px 0 var(--ink); }
+.feat .q { font-family:var(--display); font-size:17px; color:var(--grey); margin-top:-4px; } .feat.spot .mock { box-shadow:inset 0 3px 0 var(--ink); }
 .m-serp { background:#fff; padding:14px 16px; display:grid; gap:10px; box-shadow:0 1px 3px rgba(0,0,0,.07); } .m-q { font-size:13px; border:1px solid var(--line); border-radius:20px; padding:6px 14px; justify-self:stretch; }
 .m-hit { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 10px; align-items:center; } .m-hit .m-host { grid-column:1; } .m-hit .pill { grid-column:2; grid-row:1 / span 2; font-size:10px; }
-.feat .lockline { font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+.feat .lockline { font-size:12px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; }
 /* placeholder visuals, drawn like the full report's own */
 .mock { background:var(--band); padding:28px; display:grid; gap:14px; position:relative; margin:0; align-content:start; }
 .mock .cap, .tile .cap { font-size:12.5px; color:var(--muted); line-height:1.45; }
@@ -224,7 +246,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
 .pt { border-top:1px solid var(--line); }
 .m-score { display:grid; grid-template-columns:1fr 1fr; gap:8px; } .m-score div { background:#fff; padding:14px 16px; display:grid; gap:4px; box-shadow:0 1px 3px rgba(0,0,0,.07); }
 .m-score b { font-family:var(--display); font-size:34px; font-weight:600; letter-spacing:-0.03em; line-height:1; } .m-score small { font-size:14px; color:var(--muted); font-weight:500; } .m-score span { font-size:12px; color:var(--grey); }
-.m-matrix { width:100%; border-collapse:collapse; background:#fff; font-size:12.5px; } .m-matrix th { font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:600; padding:9px 4px; text-align:center; }
+.m-matrix { width:100%; border-collapse:collapse; background:#fff; font-size:12.5px; } .m-matrix th { font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); font-weight:600; padding:9px 4px; text-align:center; }
 .m-matrix td { padding:8px 4px; border-top:1px solid var(--line); text-align:center; } .m-matrix td:first-child { text-align:left; font-weight:500; padding-left:12px; }
 .m-dot { display:inline-grid; place-items:center; width:20px; height:20px; border-radius:50%; background:var(--band); color:var(--muted); font-size:11px; font-weight:700; }
 .m-dom { background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.07); } .m-dom h4 { margin:0; padding:11px 16px; background:var(--ink); color:#fff; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:13.5px; font-weight:600; letter-spacing:0; }
@@ -254,12 +276,27 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
 .tile .in { background:#fff; padding:16px; display:grid; gap:9px; font-size:13px; box-shadow:0 1px 3px rgba(0,0,0,.07); }
 .m-fix { display:grid; grid-template-columns:26px minmax(0,1fr) auto auto; gap:10px; align-items:center; padding:9px 0; border-top:1px solid var(--line); } .m-fix:first-child { border-top:0; }
 .m-fix .no { font-family:var(--display); font-weight:600; color:var(--muted); } .m-pill { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:3px 7px; background:var(--band); color:var(--grey); white-space:nowrap; } .m-pill.hi { color:var(--wrong); background:var(--wrong-bg); }
-.m-weeks { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; } .m-weeks div { display:grid; gap:7px; align-content:start; } .m-weeks b { font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; }
-.m-reply { background:var(--ink); padding:12px 14px; border-radius:12px 12px 4px 12px; justify-self:end; width:86%; display:grid; gap:7px; } .m-reply .rd { background:rgba(255,255,255,.32); } .m-reply small { color:#c9ced4; font-size:10.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; }
+.m-weeks { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; } .m-weeks div { display:grid; gap:7px; align-content:start; } .m-weeks b { font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; }
+.m-reply { background:var(--ink); padding:12px 14px; border-radius:12px 12px 4px 12px; justify-self:end; width:86%; display:grid; gap:7px; } .m-reply .rd { background:rgba(255,255,255,.32); } .m-reply small { color:#c9ced4; font-size:10.5px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; }
 .m-slug { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12.5px; background:#fff; padding:9px 12px; border-left:3px solid var(--ink); overflow-wrap:anywhere; }
 .m-code { margin:0; background:var(--dark); color:#c9d1d9; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12px; padding:16px; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; } .m-code .rd { background:rgba(255,255,255,.22); height:8px; }
 .m-faq { display:grid; gap:6px; padding:9px 0; border-top:1px solid var(--line); } .m-faq:first-child { border-top:0; } .m-faq b { font-size:13px; }
+/* the craft layer: type set like print, figures that line up, one label scale */
+body { font-kerning:normal; text-rendering:optimizeLegibility; font-feature-settings:"kern","calt"; }
+.dark, .order .panel, .parts a, .warn.first, .m-code, .m-board .me { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+p, li, dd, figcaption, .cap, .known .v { text-wrap:pretty; }
+.lead, .m-ask, .warn .d, .warn .risk, .known .v { hanging-punctuation:first allow-end; }
+.strip b, .five .v, .lockmsg b, .price, .m-board, .ledger, .m-score b, .steps div::before, .uses .un, .parts .n, .m-fix, .file dd, .fileno, ol.sources, .colophon { font-variant-numeric:tabular-nums lining-nums; }
+::selection { background:var(--ink); color:#fff; } .dark ::selection, .order .panel ::selection { background:#fff; color:var(--ink); }
+a:focus-visible { outline:2px solid currentColor; outline-offset:3px; }
+.filehead { display:flex; justify-content:space-between; align-items:center; gap:12px; } .fileno { font-size:11px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+.file dd.nf { color:var(--muted); font-style:italic; }
+.empty { font-family:var(--display); font-size:21px; font-weight:500; letter-spacing:-0.01em; line-height:1.35; color:var(--grey); max-width:32em; padding:22px 24px; border-left:3px solid var(--ink); background:var(--band); }
+.colophon { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:18px; padding-top:20px; margin-top:8px; border-top:1px solid var(--line); }
+.colophon div { display:grid; gap:4px; align-content:start; } .colophon .k { font-size:11px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); } .colophon span:not(.k) { color:var(--ink); font-size:13.5px; }
+footer .muted { color:var(--muted); font-weight:500; }
 @media (max-width:900px) {
+  .colophon { grid-template-columns:1fr 1fr; }
   section { padding-top:64px; padding-bottom:64px; } .hero { grid-template-columns:1fr; gap:40px; padding-top:56px; } .file { transform:none; }
   .parts { grid-template-columns:1fr; } .srcs { grid-template-columns:1fr 1fr; } .feat { grid-template-columns:1fr; gap:28px; } .feat:nth-child(even) .mock { order:0; } .tiles { grid-template-columns:1fr 1fr; }
   .strip { grid-template-columns:1fr 1fr; } .warns { grid-template-columns:1fr; } .five { grid-template-columns:1fr 1fr; } .band-cta, .order { grid-template-columns:1fr; }
@@ -270,12 +307,23 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
   .ledger td { display:block; padding:0; border:0; width:auto !important; } .ledger .where::before { content:"Checked against: "; font-weight:600; color:var(--ink); }
 }
 @media (max-width:560px) { .uses, .tiles, .srcs { grid-template-columns:1fr; } .tile.wide { grid-column:auto; } .m-weeks { grid-template-columns:1fr 1fr; } .mock { padding:18px; } .m-fix { grid-template-columns:22px minmax(0,1fr) auto; } .m-fix .eff { display:none; } }
-@media print { .top, .ctas, .band-cta .btn { display:none; } section { padding:36px 24px; break-inside:avoid; } .warn, .locked, .uses div, .feat, .tile, .parts a, .ledger tr { break-inside:avoid; } }
+@page { size:A4; margin:14mm 12mm 16mm;
+  @bottom-left { content:${cssStr(`${name} · Online Presence Audit ${year} · Preview`)}; font:500 8.5px/1 "Inter",system-ui,sans-serif; color:#8a9099; letter-spacing:.02em; }
+  @bottom-right { content:counter(page) " / " counter(pages); font:500 8.5px/1 "Inter",system-ui,sans-serif; color:#8a9099; font-variant-numeric:tabular-nums; } }
+@media print {
+  .top, .ctas, .band-cta .btn, .parts .go, .uses .ul { display:none; }
+  html { scroll-behavior:auto; } section { padding:32px 28px; } .hero, .thesis { padding-top:44px; padding-bottom:44px; }
+  .file { transform:none; box-shadow:none; border:1px solid var(--line); }
+  .head, h2, h3, .sub3, .eyebrow { break-after:avoid; } .head { break-inside:avoid; } p, li { orphans:3; widows:3; }
+  .warn, .locked, .uses div, .feat, .mock, .tile, .parts a, .ledger tr, .known div, .srcs div, .steps div, .five, .strip, .order .panel, .colophon { break-inside:avoid; }
+  details > :not(summary) { display:block; } details::details-content { display:block; content-visibility:visible; } details > summary { list-style:none; }
+  a.btn[href^="http"]::after { content:" · " attr(href); font-weight:400; }
+}
 `;
 
   const warnCard = (w: NonNullable<PreviewNotes['warnings']>[number], first = false) => {
     const [label, cls] = TYPE[w.type] ?? TYPE.contradiction;
-    return `<article class="warn ${cls}${first ? ' first' : ''}"><span class="tag ${cls}">${esc(label)}</span><h3>${esc(w.title)}</h3>${w.detail ? `<p class="d">${esc(w.detail)}</p>` : ''}${w.risk ? `<p class="risk">${esc(w.risk)}</p>` : ''}</article>`;
+    return `<article class="warn ${cls}${first ? ' first' : ''}"><span class="tag ${cls}">${esc(label)}</span><h3>${esc(tie(w.title))}</h3>${w.detail ? `<p class="d">${esc(w.detail)}</p>` : ''}${w.risk ? `<p class="risk">${esc(w.risk)}</p>` : ''}</article>`;
   };
   // ---------- inside the full report ----------
   // Placeholder versions of the full report's visuals: grey bars where this company's numbers go.
@@ -334,9 +382,8 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
   const spotlight: Record<string, string> = { ai: 'How top AI sees your brand', findability: 'How search engines index your company' };
   const title: Record<string, string> = { ...spotlight, reputation: 'Every Google review, and every reply', contact: 'Every way to reach you, traced', brand: 'Whether a stranger can tell what you sell, and why you', news: 'News, forums and social talk about you', assets: 'Every domain that carries your name' };
   /** One topic of a part: its placeholder visual beside what it checks and what the report gives. */
-  const feat = (c: string) => `<div class="feat${spotlight[c] ? ' spot' : ''}">${mocks[c]}<div class="txt"><span class="n">${spotlight[c] ? '<span class="hlb">Highlight</span>' : ''}${esc(CHAPTER_EYEBROW[c] ?? '')}</span><h3>${esc(title[c])}</h3>${OPENERS[c] ? `<p class="q">${esc(OPENERS[c].q[0])} ${esc(OPENERS[c].q[1])}</p>` : ''}<p class="what">${esc(what[c])}</p><ul>${inside[c].know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><p class="lockline">In your report: ${esc(inside[c].locked)}</p></div></div>`;
+  const feat = (c: string) => `<div class="feat${spotlight[c] ? ' spot' : ''}">${mocks[c]}<div class="txt"><span class="n">${spotlight[c] ? '<span class="hlb">Highlight</span>' : ''}${esc(CHAPTER_EYEBROW[c] ?? '')}</span><h3>${esc(tie(title[c]))}</h3>${OPENERS[c] ? `<p class="q">${esc(OPENERS[c].q[0])} ${esc(OPENERS[c].q[1])}</p>` : ''}<p class="what">${esc(what[c])}</p><ul>${inside[c].know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><p class="lockline">In your report: ${esc(inside[c].locked)}</p></div></div>`;
   const partHead = (n: number, id: string, lead: string) => `<div class="head"><p class="eyebrow">Part ${n} · ${esc(CHAPTER_EYEBROW[id])}</p><h2>${esc(PART_OPENERS[id].q[0])}<br><span class="g">${esc(PART_OPENERS[id].q[1])}</span></h2><p class="lead">${lead}</p></div>`;
-  const signCount = Math.max(warnings.length, contradictions.length + gaps.length);
   const officialSources: [string, string][] = [
     ['Bank Negara alert list', 'The Financial Consumer Alert list of unlicensed companies and schemes'],
     ['Securities Commission alerts', 'Investor alerts naming unauthorised firms'],
@@ -372,7 +419,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
   const ledgerRows = [...claimRows, ...signRows];
   const hiddenRows = Math.max(Math.max(warnings.length, contradictions.length + gaps.length) - signRows.length, 0) + Math.max(claims - claimRows.length, 0);
 
-  const lockedCard = (n: number) => `<article class="locked" aria-label="${n} more warning signs, in the full report"><div class="bar s"></div><div class="bar m"></div><div class="bar"></div><div class="bar m"></div><div class="bar s"></div><div class="lockmsg"><b>+${n}</b><span>more warning signs we found,<br>shown in your full report</span></div></article>`;
+  const lockedCard = (n: number) => `<article class="locked" aria-label="${n} more warning signs, in the full report"><div class="bar s"></div><div class="bar m"></div><div class="bar"></div><div class="bar m"></div><div class="bar s"></div><div class="lockmsg"><b>+${n}</b><span>more warning sign${n === 1 ? '' : 's'} we found,<br>shown in your full report</span></div></article>`;
 
   return `<!doctype html>
 <html lang="en">
@@ -393,30 +440,30 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
 <section class="dark hero">
   <div>
     <p class="eyebrow">Preview · prepared for ${esc(name)} · ${esc(made)}</p>
-    <h1>We read ${esc(sources.length)} public sources about ${esc(short)}.<br><span class="g">${warnings.length ? 'Not all of them tell the same story.' : 'Here is what they say.'}</span></h1>
-    <p class="lead">${esc(noCites(hook))}</p>
-    <div class="ctas">${cta('Get my full report')}<a class="btn ghost" href="#warnings">See the warning signs ↓</a></div>
+    <h1>${sources.length ? `We read ${esc(srcN)} about ${esc(short)}.` : `We searched the public record for ${esc(short)}.`}<br><span class="g">${warnings.length ? 'Not all of them tell the same story.' : 'Here is what they say.'}</span></h1>
+    <p class="lead">${esc(hook)}</p>
+    <div class="ctas">${cta('Get my full report')}<a class="btn ghost" href="#warnings">See the warning signs&nbsp;↓</a></div>
     <p class="anyone">Built from public sources only. Anyone can run this on you.</p>
   </div>
   <aside class="file" aria-label="Your file">
-    <span class="stamp">Prepared for you</span>
+    <div class="filehead"><span class="stamp">Prepared for you</span>${ref ? `<span class="fileno">${esc(ref)}</span>` : ''}</div>
     <h3>${esc(name)}</h3>
     <dl>
-      ${ssm ? `<div><dt>Registration</dt><dd>SSM ${esc(ssm)}</dd></div>` : ''}
+      <div><dt>Registration</dt>${ssm ? `<dd>SSM&nbsp;${esc(ssm)}</dd>` : '<dd class="nf">Not in any public source we read</dd>'}</div>
       ${id.address ? `<div><dt>Head office</dt><dd>${esc(clip(String(id.address), 90))}</dd></div>` : ''}
       ${domains.length ? `<div><dt>Websites</dt><dd>${esc(domains.join(', '))}</dd></div>` : ''}
       ${people.length ? `<div><dt>Leadership</dt><dd>${esc(people.slice(0, 3).map((p: any) => p.name).join(', '))}</dd></div>` : ''}
-      ${warnings.length ? `<div><dt>Warning signs</dt><dd><b style="color:var(--wrong)">${esc(Math.max(warnings.length, contradictions.length + gaps.length))} found</b> before the audit began</dd></div>` : ''}
+      ${warnings.length ? `<div><dt>Warning signs</dt><dd><b style="color:var(--wrong)">${esc(signCount)}&nbsp;found</b> before the audit began</dd></div>` : ''}
     </dl>
-    <p class="foot">Researched ${esc(made)} from ${esc(sources.length)} public sources</p>
+    <p class="foot">Researched ${esc(made)} from ${esc(srcN)}</p>
   </aside>
 </section>
 
 <div class="strip">
-  <div><b>${esc(sources.length)}</b><span>public sources read about ${esc(short)}</span></div>
-  <div><b>${esc(facts.length)}</b><span>facts on public record</span></div>
-  <div><b>${esc(contradictions.length)}</b><span>places where those sources disagree</span></div>
-  <div><b>${esc(gaps.length)}</b><span>questions they cannot answer</span></div>
+  <div><b>${esc(sources.length)}</b><span>public source${sources.length === 1 ? '' : 's'} read about ${esc(short)}</span></div>
+  <div><b>${esc(facts.length)}</b><span>fact${facts.length === 1 ? '' : 's'} on public record</span></div>
+  <div><b>${esc(contradictions.length)}</b><span>${contradictions.length === 1 ? 'place' : 'places'} where those sources disagree</span></div>
+  <div><b>${esc(gaps.length)}</b><span>${gaps.length === 1 ? 'question' : 'questions'} they cannot answer</span></div>
 </div>
 
 <section id="thesis" class="thesis">
@@ -429,14 +476,16 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
   <div class="head"><p class="eyebrow">What we already know about you</p>
     <h2>Not a template.<br><span class="g">Every line here is about ${esc(short)}.</span></h2>
     <p class="lead">Before a customer calls, before a bank lends or a tender panel shortlists, this is what public sources tell them about you.</p></div>
-  <div class="known">${known.map((k) => `<div><span class="k">${esc(k.label)}</span><span class="v">${esc(P(k.value))}</span></div>`).join('')}</div>
+  ${known.length ? `<div class="known">${known.map((k) => `<div><span class="k">${esc(k.label)}</span><span class="v">${esc(P(k.value))}</span></div>`).join('')}</div>
+  <p class="note">As public sources stated them on ${esc(made)}. Where they disagree, the warning signs below say so.</p>` : `<p class="empty">Public sources say very little about ${esc(short)} yet. That is a finding in itself: a buyer who looks you up has almost nothing to go on.</p>`}
   ${people.length ? `<div class="people">${people.slice(0, 8).map((p: any) => `<span><b>${esc(p.name)}</b>${p.role ? ` · ${esc(clip(String(p.role), 40))}` : ''}</span>`).join('')}</div>` : ''}
 </section>
 
 <section id="warnings" class="warn-section">
   <div class="head"><p class="eyebrow">Warning signs</p>
-    <h2>${esc(Math.max(warnings.length, contradictions.length + gaps.length))} warning signs,<br><span class="g">found before the audit even started.</span></h2>
-    <p class="lead">These come from public sources alone. Each one is something a customer, a bank or a tender officer can find, and none of them has been checked against your reviews, Google, AI assistants or the official registers yet.</p>
+    ${signCount ? `<h2>${esc(plural(signCount, 'warning sign'))},<br><span class="g">found before the audit even started.</span></h2>
+    <p class="lead">These come from public sources alone. Each one is something a customer, a bank or a tender officer can find, and none of them has been checked against your reviews, Google, AI assistants or the official registers yet.</p>` : `<h2>No warning signs,<br><span class="g">in public sources at least.</span></h2>
+    <p class="lead">What public sources say about ${esc(short)} hangs together. The full audit checks what they cannot: your contact details, reviews, Google, AI assistants and the official registers.</p>`}
     <div class="legend">${typesFound.map((t) => `<span class="tag ${TYPE[t][1]}">${esc(TYPE[t][0])}</span>`).join('')}</div></div>
   <div class="warns">${shown.map((w, i) => warnCard(w, i === 0)).join('')}${moreSigns ? lockedCard(moreSigns) : ''}</div>
   <div class="five" aria-label="Locked until you order">${CHAPTER_ORDER.map((c) => `<div><span class="k">${esc(CHAPTER_EYEBROW[c])}</span><span class="v">${esc(inside[c].locked)}</span><span class="lk">Locked</span></div>`).join('')}</div>
@@ -455,19 +504,19 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
     <p class="lead">This preview read what public sources say. The full report goes further: it traces how customers reach you, measures how the internet understands you and what people say, checks the official records, maps the domains that carry your name, runs Google’s own test on your website, and tells you what to do about it.</p></div>
   <div class="parts">
     <a href="#p-contact"><span class="n">01</span><h3>${esc(CHAPTER_EYEBROW.contact)}</h3><p>Every way a customer can reach you, and where each one really leads.</p>
-      <ul>${inside.contact.know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><span class="go">See what it shows ↓</span></a>
+      <ul>${inside.contact.know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><span class="go">See what it shows&nbsp;↓</span></a>
     <a href="#p-understanding"><span class="n">02</span><h3>${esc(CHAPTER_EYEBROW.understanding)}</h3><p>What AI assistants, search engines and your own pages say you sell, and why you.</p>
-      <ul><li class="hl">${esc(spotlight.ai)}</li><li class="hl">${esc(spotlight.findability)}</li><li>Whether a stranger can tell what you sell, and why you</li></ul><span class="go">See what it shows ↓</span></a>
+      <ul><li class="hl">${esc(spotlight.ai)}</li><li class="hl">${esc(spotlight.findability)}</li><li>Whether a stranger can tell what you sell, and why you</li></ul><span class="go">See what it shows&nbsp;↓</span></a>
     <a href="#p-voice"><span class="n">03</span><h3>${esc(CHAPTER_EYEBROW.voice)}</h3><p>What customers, forums and the news say about you and the people who run it.</p>
-      <ul><li>Every Google review, and every reply</li><li>News, forum and social talk</li><li>What is said about your key people</li></ul><span class="go">See what it shows ↓</span></a>
+      <ul><li>Every Google review, and every reply</li><li>News, forum and social talk</li><li>What is said about your key people</li></ul><span class="go">See what it shows&nbsp;↓</span></a>
     <a href="#p-credibility"><span class="n">04</span><h3>${esc(CHAPTER_EYEBROW.credibility)}</h3><p>The official sources a bank or tender panel checks, and every claim and warning sign.</p>
-      <ul><li>Regulator alert lists, courts, insolvency notices and trademark signals</li><li>Licences and awards, in their registers</li><li>The ${esc(signCount)} warning signs, settled</li></ul><span class="go">See what it shows ↓</span></a>
+      <ul><li>Regulator alert lists, courts, insolvency notices and trademark signals</li><li>Licences and awards, in their registers</li><li>The ${esc(signCount)} warning signs, settled</li></ul><span class="go">See what it shows&nbsp;↓</span></a>
     <a href="#p-assets"><span class="n">05</span><h3>${esc(CHAPTER_EYEBROW.assets)}</h3><p>Your domains, hosting and email, traced from the public internet.</p>
-      <ul>${inside.assets.know.slice(0, 3).map((k) => `<li>${esc(k)}</li>`).join('')}</ul><span class="go">See what it shows ↓</span></a>
+      <ul>${inside.assets.know.slice(0, 3).map((k) => `<li>${esc(k)}</li>`).join('')}</ul><span class="go">See what it shows&nbsp;↓</span></a>
     <a href="#p-speed"><span class="n">06</span><h3>${esc(CHAPTER_EYEBROW.speed)}</h3><p>Google’s own test of your official homepage, on a phone and a computer.</p>
-      <ul>${inside.speed.know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><span class="go">See what it shows ↓</span></a>
+      <ul>${inside.speed.know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><span class="go">See what it shows&nbsp;↓</span></a>
     <a href="#advice"><span class="n">07</span><h3>Analysis and suggestions</h3><p>What it all means for your business, and what to do, in order.</p>
-      <ul><li>Your fixes, least effort first</li><li>A plan for your first 30 days</li><li>Copy, replies and pages, written for you</li></ul><span class="go">See what it shows ↓</span></a>
+      <ul><li>Your fixes, least effort first</li><li>A plan for your first 30 days</li><li>Copy, replies and pages, written for you</li></ul><span class="go">See what it shows&nbsp;↓</span></a>
   </div>
 </section>
 
@@ -542,7 +591,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
 <section id="how" style="padding-top:0">
   <div class="head"><p class="eyebrow">How it works</p><h2>From this preview<br><span class="g">to your full report.</span></h2></div>
   <div class="steps">
-    <div><h3>This preview</h3><p>${esc(sources.length)} public sources, read for ${esc(short)}.</p><span class="now">Done</span></div>
+    <div><h3>This preview</h3><p>${esc(srcN.replace(/^./, (c) => c.toUpperCase()))}, read for ${esc(short)}.</p><span class="now">Done</span></div>
     <div><h3>You order</h3><p>${offer.contact ? esc(offer.contact) : 'Reply to the message that brought you this preview.'}</p></div>
     <div><h3>We run the full audit</h3><p>Every contact detail, AI assistants, search and Maps, your reviews and the news, the official records, and every domain that carries your name.</p></div>
     <div><h3>You get your report</h3><p>One link: desktop, mobile, and A4 to print or save as PDF.</p></div>
@@ -553,8 +602,8 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
   <div class="head"><p class="eyebrow">One report, four uses</p><h2>Know first.<br><span class="g">Fix first.</span></h2>
     <p class="lead">The same research we ran on ${esc(short)} works on any Malaysian company you deal with.</p></div>
   <div class="uses">
-    <div><span class="un">01</span><h3>Read it before your competitors do</h3><p>Everything in it is public. Know what a rival, a buyer or a bank can learn about ${esc(short)} before they use it.</p><a class="ul" href="#warnings">This is yours, above ↑</a></div>
-    <div><span class="un">02</span><h3>Fix it before your customers see it</h3><p>Old numbers, wrong AI answers, unanswered reviews: each one costs a sale quietly. The report puts them in order, with the fix written out.</p><a class="ul" href="#advice">See the fixes ↑</a></div>
+    <div><span class="un">01</span><h3>Read it before your competitors do</h3><p>Everything in it is public. Know what a rival, a buyer or a bank can learn about ${esc(short)} before they use it.</p><a class="ul" href="#warnings">This is yours, above&nbsp;↑</a></div>
+    <div><span class="un">02</span><h3>Fix it before your customers see it</h3><p>Old numbers, wrong AI answers, unanswered reviews: each one costs a sale quietly. The report puts them in order, with the fix written out.</p><a class="ul" href="#advice">See the fixes&nbsp;↑</a></div>
     <div><span class="un">03</span><h3>Read your competitors. Know what they don’t.</h3><p>How rivals show up to AI assistants, on Google and in reviews, where they are weak, and where you are already stronger.</p>${cta('Order one on a competitor', 'ul')}</div>
     <div><span class="un">04</span><h3>Choosing a supplier? Check them first.</h3><p>Before you sign or pay: their registration, regulator alerts, court records, licences, reviews and warning signs.</p>${cta('Check a supplier', 'ul')}</div>
   </div>
@@ -575,7 +624,13 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
 </section>
 
 <footer>
-  ${sources.length ? `<details><summary>The public sources behind this preview (${sources.length})</summary><ol class="sources">${sources.map((s: any) => `<li id="src-${esc(s.id)}" value="${esc(s.id)}">${/^https?:\/\//.test(s.url) ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(clip(String(s.title || hostOf(s.url)), 90))}</a> · ${esc(hostOf(s.url))}` : esc(s.title)}</li>`).join('')}</ol></details>` : ''}
+  ${sources.length ? `<details><summary>The public sources behind this preview <span class="muted">(${sources.length})</span></summary><ol class="sources">${sources.map((s: any) => `<li id="src-${esc(s.id)}" value="${esc(s.id)}">${/^https?:\/\//.test(s.url) ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(clip(String(s.title || hostOf(s.url)), 90))}</a> · ${esc(hostOf(s.url))}` : esc(s.title)}</li>`).join('')}</ol></details>` : ''}
+  <div class="colophon">
+    <div><span class="k">Prepared for</span><span>${esc(name)}</span></div>
+    <div><span class="k">Researched</span><span>${esc(made)}, from ${esc(srcN)}</span></div>
+    <div><span class="k">Edition</span><span>Preview${ref ? ` · ${esc(ref)}` : ''} · Online Presence Audit ${esc(year)}</span></div>
+    <div><span class="k">Method</span><span>Web pages, directories, news and registers anyone can open. No paid register is used in a preview.</span></div>
+  </div>
   <p>Online Presence Audit ${esc(year)} · Preview prepared for ${esc(name)}. Built from public sources only; nothing here has been checked against official registers yet.</p>
 </footer>
 

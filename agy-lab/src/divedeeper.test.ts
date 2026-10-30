@@ -119,7 +119,8 @@ test('the preview landing page builds from the company-dive alone, uses the edit
       contradictions: ['Founding month: July 2023 in [1] vs September 2023 in [2].'], gaps: ['Directors are not named.'], people: { people: [{ name: 'Ali', role: 'CEO' }] },
     },
   };
-  const html = buildPreview(dive, { price: 'RM 990' }).replace(/<style[\s\S]*?<\/style>/, '');
+  // Non-breaking spaces from the typesetting read as plain spaces here.
+  const html = buildPreview(dive, { price: 'RM 990' }).replace(/<style[\s\S]*?<\/style>/, '').replace(/\u00a0|&nbsp;/g, ' ');
   for (const s of ['Prepared for Acme Sdn Bhd', 'July 2023 vs September 2023.', 'Directors are not named.', 'Contradiction', 'Missing', 'Locked', 'RM 990', 'How important is an AI recommendation', 'id="src-1"']) assert.ok(html.includes(s), s);
   assert.ok(!/undefined|\[object Object\]|NaN/.test(html));
   assert.ok(!/\[\d+\]/.test(html.replace(/<details[\s\S]*<\/details>/g, '')), 'no [n] citations outside the research appendix');
@@ -127,7 +128,7 @@ test('the preview landing page builds from the company-dive alone, uses the edit
   // What the full report holds, in its six parts, with the company's own claims mapped to their register.
   for (const s of ['Contact and reachability', 'Digital assets', 'Part 1 · Contact and reachability', 'Part 2 · How the internet understands you', 'Part 3 · Reviews, discussion and news', 'Part 5 · Digital assets', 'Bank Negara alert list', 'is how clearly the market sees it.', 'Read it before your competitors do.', 'Fix it before your customers see it.', 'Choosing a supplier? Check them first.', 'SSM e-Info documents', 'acme.com.my · ?', 'About Ali', 'Part 4 · Credibility and official records', 'Part 6 · Website speed and quality', 'Part 7 · Analysis and suggestions', 'Seven parts, written for', 'How top AI sees your brand', 'How search engines index your company', 'Claims CIDB Grade G7 registration.', 'CIDB contractor register', 'acme.my', 'in Johor Bahru']) assert.ok(html.includes(s), s);
   assert.ok(buildPreview({ ...dive, finished_at: new Date('2026-10-25T10:00:00Z') }).includes('Online Presence Audit 2026'), 'a Date finished_at still gives the year');
-  const edited = buildPreview(dive, {}, { hook: 'Your award label is a year out.', known: [{ label: 'Founded', value: 'July 2023' }], warnings: [{ type: 'outdated', title: 'Award label still says 2024', detail: 'd', risk: 'r' }] });
+  const edited = buildPreview(dive, {}, { hook: 'Your award label is a year out.', known: [{ label: 'Founded', value: 'July 2023' }], warnings: [{ type: 'outdated', title: 'Award label still says 2024', detail: 'd', risk: 'r' }] }).replace(/\u00a0|&nbsp;/g, ' ');
   for (const s of ['Your award label is a year out.', 'Award label still says 2024', 'Outdated', 'July 2023']) assert.ok(edited.includes(s), s);
 });
 
@@ -145,7 +146,7 @@ test('the public preview names only leadership and shows no phone, private docum
   for (const html of [buildPreview(dive), buildPreview(dive, {}, notes)]) {
     for (const bad of ['Ali Staff', '2341', '7165685', 'uid=', 'proposal-production', 'quote-app.example', 'eternally.example']) assert.ok(!html.includes(bad), bad);
     assert.ok(html.includes('Boss Bin Owner'), 'leadership stays');
-    assert.ok(html.includes('We read 1 public sources'), 'only relevant, non-private sources are counted');
+    assert.ok(html.replace(/\u00a0/g, ' ').includes('We read 1 public source about'), 'only relevant, non-private sources are counted');
   }
 });
 
