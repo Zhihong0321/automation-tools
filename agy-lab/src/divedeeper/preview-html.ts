@@ -163,6 +163,11 @@ h2 { font-size:clamp(34px,4.4vw,58px); max-width:16em; } .lead { font-size:19px;
 .steps h3 { font-size:18px; } .steps p { font-size:14.5px; color:var(--grey); } .steps .now { color:var(--good); font-weight:600; font-size:12px; letter-spacing:.1em; text-transform:uppercase; }
 .uses { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }
 .uses div { background:var(--band); padding:22px; display:grid; gap:8px; align-content:start; border-top:3px solid var(--ink); }
+.uses .un { font-family:var(--display); font-size:28px; font-weight:500; letter-spacing:-0.04em; line-height:1; color:var(--muted); }
+.uses .ul { font-size:13px; font-weight:600; margin-top:6px; text-decoration:none; border-bottom:1px solid currentColor; justify-self:start; } .uses .ul:hover { opacity:.7; }
+.thesis { text-align:center; display:grid; justify-items:center; gap:18px; padding-top:112px; padding-bottom:112px; border-bottom:1px solid var(--line); }
+.thesis h2 { font-size:clamp(38px,5.4vw,72px); letter-spacing:-0.035em; max-width:none; } .thesis .lead { max-width:40em; }
+.hero .anyone { margin-top:18px; font-size:13.5px; color:var(--on-dark-2); }
 .uses h3 { font-size:19px; letter-spacing:-0.015em; line-height:1.2; } .uses p { font-size:14.5px; color:var(--grey); }
 /* order */
 .order { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,1fr); gap:56px; align-items:center; }
@@ -390,6 +395,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
     <h1>We read ${esc(sources.length)} public sources about ${esc(short)}.<br><span class="g">${warnings.length ? 'Not all of them tell the same story.' : 'Here is what they say.'}</span></h1>
     <p class="lead">${esc(noCites(hook))}</p>
     <div class="ctas">${cta('Get my full report')}<a class="btn ghost" href="#warnings">See the warning signs ↓</a></div>
+    <p class="anyone">Built from public sources only. Anyone can run this on you.</p>
   </div>
   <aside class="file" aria-label="Your file">
     <span class="stamp">Prepared for you</span>
@@ -412,6 +418,12 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
   <div><b>${esc(gaps.length)}</b><span>questions they cannot answer</span></div>
 </div>
 
+<section id="thesis" class="thesis">
+  <p class="eyebrow">Why this matters</p>
+  <h2>How good you are<br><span class="g">is how clearly the market sees it.</span></h2>
+  <p class="lead">Customers, banks, tender panels and AI assistants rarely see your work first. They see what is published about you, and decide from that. A strong business the market reads wrongly loses to a weaker one it reads clearly.</p>
+</section>
+
 <section id="known">
   <div class="head"><p class="eyebrow">What we already know about you</p>
     <h2>Not a template.<br><span class="g">Every line here is about ${esc(short)}.</span></h2>
@@ -431,7 +443,8 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
 </section>
 
 <section class="dark band-cta">
-  <div><p class="eyebrow">The full audit</p><h2>See what your customers see,<br><span class="g">and exactly what to fix.</span></h2></div>
+  <div><p class="eyebrow">The full audit</p><h2>Read it before your competitors do.<br><span class="g">Fix it before your customers see it.</span></h2>
+    <p class="lead" style="margin-top:16px">Everything on this page came from public sources. Anyone can find it, your rivals included.</p></div>
   ${cta('Get my full report')}
 </section>
 
@@ -526,13 +539,13 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
 </section>
 
 <section id="protect" style="padding-top:0">
-  <div class="head"><p class="eyebrow">Why it protects you</p><h2>One audit,<br><span class="g">four ways it guards your interest.</span></h2>
-    <p class="lead">The same research we ran on ${esc(short)} works on any company you deal with.</p></div>
+  <div class="head"><p class="eyebrow">One report, four uses</p><h2>Know first.<br><span class="g">Fix first.</span></h2>
+    <p class="lead">The same research we ran on ${esc(short)} works on any Malaysian company you deal with.</p></div>
   <div class="uses">
-    <div><h3>See yourself as customers do</h3><p>Customers search you before they call. Know what they find, so you fix it before it costs you a sale.</p></div>
-    <div><h3>Check a vendor before you sign</h3><p>Running a tender or choosing a supplier? See their registration, licences, reviews and warning signs before you commit money to them.</p></div>
-    <div><h3>Know your competitors</h3><p>How rivals show up on Google, in reviews and to AI assistants, and where you are already stronger than them.</p></div>
-    <div><h3>Win the client before the meeting</h3><p>Research a prospect first. Walk in knowing their business, their people and their gaps, and write a proposal that speaks to them.</p></div>
+    <div><span class="un">01</span><h3>Read it before your competitors do</h3><p>Everything in it is public. Know what a rival, a buyer or a bank can learn about ${esc(short)} before they use it.</p><a class="ul" href="#warnings">This is yours, above ↑</a></div>
+    <div><span class="un">02</span><h3>Fix it before your customers see it</h3><p>Old numbers, wrong AI answers, unanswered reviews: each one costs a sale quietly. The report puts them in order, with the fix written out.</p><a class="ul" href="#advice">See the fixes ↑</a></div>
+    <div><span class="un">03</span><h3>Read your competitors. Know what they don’t.</h3><p>How rivals show up to AI assistants, on Google and in reviews, where they are weak, and where you are already stronger.</p>${cta('Order one on a competitor', 'ul')}</div>
+    <div><span class="un">04</span><h3>Choosing a supplier? Check them first.</h3><p>Before you sign or pay: their registration, regulator alerts, court records, licences, reviews and warning signs.</p>${cta('Check a supplier', 'ul')}</div>
   </div>
 </section>
 
@@ -544,6 +557,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
       ${offer.price ? `<p class="price">${esc(offer.price)}</p>` : ''}
       <ul><li>Contact and reachability: every phone, email and WhatsApp, traced</li><li>How top AI sees your brand, and how search engines index you</li><li>Reviews, news and forum talk about you and your key people</li><li>Credibility: regulator alerts, courts, insolvency and your licences</li><li>Digital assets: your domains, hosting and email</li><li>Analysis and suggestions: fixes in order, a 30-day plan, the work written for you</li><li>Desktop, mobile and A4 PDF</li></ul>
       ${ctaHref !== '#order' ? cta('Get my full report') : `<p>${esc(offer.contact || 'Reply to the message that brought you this preview, and we will start your full audit.')}</p>`}
+      <p style="font-size:14px;color:var(--on-dark)">Need one on a competitor or a supplier? Same report, any Malaysian company.</p>
       <p style="font-size:13px;color:var(--on-dark-2)">This preview is yours to keep.</p>
     </div>
   </div>
