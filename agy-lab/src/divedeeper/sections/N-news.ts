@@ -5,8 +5,8 @@
 // Searches: Exa news for the legal and the short name; Brave for news, complaints (English and
 // Malay) and forum threads (Lowyat, Reddit, Facebook); and for up to three key people (directors,
 // founders, owners from the dive's people step) their name together with the company's.
-// A result is kept only when it names the company or the person. The company's own sites are
-// dropped. The LLM then judges each result in batches: is it about this company or person, or a
+// A result is kept only when it names the company or the person. The company's own sites, its own
+// social pages and staff pages carrying its name are dropped: they are the company talking. The LLM then judges each result in batches: is it about this company or person, or a
 // namesake; what kind of page; positive, neutral or negative; when; with a verbatim quote that is
 // checked against the text we have (a quote not found is dropped, the item kept without it).
 // No kill gates: a failed search or batch only shrinks the list.
@@ -14,6 +14,7 @@ import { nameOf, type Ctx, type Finding } from '../lib.ts';
 
 const KEY_ROLE = /director|founder|owner|shareholder|chief executive|ceo|managing|chairman|partner|principal|proprietor|pengarah|president/i;
 const SKIP_HOST = /(^|\.)(google\.[a-z.]+|linkedin\.com|jobstreet\.com|hiredly\.com|maukerja\.my|indeed\.com|glassdoor\.com)$/;
+const SOCIAL = /(^|\.)(facebook|instagram|tiktok|youtube|x|twitter|threads|xiaohongshu)\.com$/;
 
 type Hit = { url: string; title: string; text: string; date: string | null; via: string[]; person: string | null };
 
@@ -29,8 +30,13 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
 
   // ---- 1. Searches. ----
   const hits = new Map<string, Hit>();
+  // The company's own social pages, and staff pages carrying its name, are the company talking, not outside voices.
+  const ownSocial = (u: string) => {
+    if (!SOCIAL.test(N.hostOf(u)) || N.brand.length < 4) return false;
+    try { return decodeURIComponent(new URL(u).pathname).toLowerCase().split('/').filter(Boolean).slice(0, 2).some((seg) => seg.includes(N.brand)); } catch { return false; }
+  };
   const keep = (via: string, x: { url: string; title?: string; text?: string; date?: string | null }, person: string | null) => {
-    if (!x.url || N.own(x.url) || SKIP_HOST.test(N.hostOf(x.url))) return;
+    if (!x.url || N.own(x.url) || ownSocial(x.url) || SKIP_HOST.test(N.hostOf(x.url))) return;
     const text = String(x.text ?? '');
     const all = `${x.title ?? ''} ${text}`;
     const named = N.mentions(all) || (person ? all.toLowerCase().includes(person.toLowerCase()) : false);

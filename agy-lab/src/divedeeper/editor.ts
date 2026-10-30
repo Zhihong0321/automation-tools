@@ -212,7 +212,7 @@ export function resolve(dive: any, L: Record<string, any>) {
     // Until the judge has spoken, every point is "unclear": count what was traced, not "0 reach you".
     contact: contact.total ? (contact.judged ? `${contact.ok} of ${contact.total} contact points reach you` : `${contact.total} contact points traced`) : null,
     understanding: brandView.score != null ? `Understood ${brandView.score} out of 100` : tradeAnswers ? `Recommended in ${namedUs} of ${tradeAnswers} AI answers` : null,
-    voice: totalReviews ? `${replied} of ${totalReviews} reviews answered${news.counts ? ` · ${news.counts.news} news articles` : ''}` : news.counts ? `${news.counts.news} news articles, ${news.counts.negative} negative mentions` : null,
+    voice: totalReviews ? `${replied} of ${totalReviews} reviews answered${news.counts ? ` · ${news.counts.news} news article${news.counts.news === 1 ? '' : 's'}` : ''}` : news.counts ? `${news.counts.news} news articles, ${news.counts.negative} negative mentions` : null,
     credibility: risky.length ? `${risky.filter((c) => c.result === 'clear').length} of ${risky.length} risk checks clear${regCheckable ? ` · ${regOk} of ${regCheckable} claims confirmed` : ''}` : regCheckable ? `${regOk} of ${regCheckable} checkable claims confirmed` : null,
     assets: assetRows.length ? `${assetRows.length} domains · ${assetIssues} at risk` : null,
   };
