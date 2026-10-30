@@ -240,7 +240,7 @@ export function resolve(dive: any, L: Record<string, any>) {
     credentials: { cidb_grade: cidbGrade, cidb_detail: cidb?.detail ?? null, list: credentials, undersells },
     website: { issues: site.filter((x) => x.severity === 'high' || x.severity === 'medium').length, high: site.filter((x) => x.severity === 'high').length, copy_errors: copyErrors, phones },
     speed: { pages: psi, main_mobile: mainMobile },
-    contact, brand_view: brandView, news, records: { checks, risky }, assets: { domains: assetRows, issues: assetIssues, subdomains: L['A-assets']?.notes?.subdomains ?? [], lookalikes: L['A-assets']?.notes?.lookalikes ?? [] },
+    contact, brand_view: brandView, news, records: { checks, risky }, assets: { domains: assetRows, issues: assetIssues, subdomains: L['A-assets']?.notes?.subdomains ?? [], email: L['A-assets']?.notes?.email ?? [], blacklists: L['A-assets']?.notes?.blacklists ?? [], lookalikes: L['A-assets']?.notes?.lookalikes ?? [] },
     items: all,
   };
 }

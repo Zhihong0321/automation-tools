@@ -9,7 +9,12 @@
 //   - hosting: who owns the server's IP (RDAP of the address);
 //   - the site itself: status, redirect, parked or for-sale page, TLS certificate, CMS and version;
 //   - subdomains from the public certificate logs (crt.sh), checked for forgotten live sites;
-//   - lookalike domains: the brand word on .com, .my and .com.my, held by someone else or free.
+//   - lookalike domains: the brand word on .com, .my and .com.my, held by someone else or free;
+//   - email reputation, for every domain that receives mail: its mail servers' addresses on the
+//     Barracuda and SpamCop blacklists (free DNS lookups, each list proved working first with its
+//     own test entry), the SPF record read in full (duplicates, "allow anyone", over Google's limit
+//     of 10 lookups), DKIM keys on the usual names, DMARC, and MTA-STS / TLS reporting. Spamhaus
+//     refuses public DNS and its free key is non-commercial only, so it is named as not checked.
 // No LLM. Every lookup falls back: a failed one leaves its cell empty and logs a warning.
 import net from 'node:net';
 import tls from 'node:tls';
@@ -150,6 +155,67 @@ function techOf(headers: Record<string, string>, html: string): { stack: string[
   return { stack: [...stack], cms, version };
 }
 
+// ---------------------------------------------------------------- email reputation
+
+/** The blacklists that answer free DNS lookups (tested 2026-10-30); 127.0.0.2 is each one's own test entry. */
+const BLACKLISTS = [
+  { id: 'barracuda', name: 'Barracuda', zone: 'b.barracudacentral.org' },
+  { id: 'spamcop', name: 'SpamCop', zone: 'bl.spamcop.net' },
+];
+/** Where the big mail services keep their DKIM keys. */
+const DKIM_SELECTORS = ['google', 'selector1', 'selector2', 'default', 'dkim', 'mail', 'k1', 's1', 's2', 'zoho', 'zmail', 'mxvault', 'hostingermail1', 'x'];
+
+const txtOf = async (name: string): Promise<string[]> => (await dnsp.resolveTxt(name).catch(() => [] as string[][])).map((r) => r.join(''));
+
+/** "listed" | "clear" for one IPv4 address on one list; null when the lookup itself failed. */
+async function listed(ip: string, zone: string): Promise<'listed' | 'clear' | null> {
+  try {
+    const a = await dnsp.resolve4(`${ip.split('.').reverse().join('.')}.${zone}`);
+    // 127.0.0.x is a listing; anything else (127.255.255.x) is the list refusing to answer.
+    return a.some((x) => /^127\.0\.0\.\d+$/.test(x)) ? 'listed' : null;
+  } catch (e) {
+    return (e as any).code === 'ENOTFOUND' || (e as any).code === 'ENODATA' ? 'clear' : null;
+  }
+}
+
+/** Counts the DNS lookups an SPF check needs (include, a, mx, ptr, exists, redirect), following includes. */
+async function spfLookups(record: string, depth = 0, seen = new Set<string>()): Promise<number> {
+  let n = 0;
+  for (const term of record.split(/\s+/).slice(1)) {
+    const m = term.match(/^[+?~-]?(include|a|mx|ptr|exists|redirect)(?:[:=](.+))?$/i);
+    if (!m) continue;
+    n++;
+    const kind = m[1].toLowerCase();
+    if ((kind === 'include' || kind === 'redirect') && m[2] && depth < 6 && !seen.has(m[2])) {
+      seen.add(m[2]);
+      const inner = (await txtOf(m[2])).find((t) => /^v=spf1/i.test(t));
+      if (inner) n += await spfLookups(inner, depth + 1, seen);
+    }
+  }
+  return n;
+}
+
+async function emailReputation(domain: string, mx: string[]) {
+  const ips = [...new Set((await Promise.all(mx.slice(0, 4).map((h) => dnsp.resolve4(h).catch(() => [] as string[])))).flat())].slice(0, 6);
+  const lists: Record<string, { listed: string[]; checked: number; failed: number }> = {};
+  for (const bl of BLACKLISTS) {
+    const res = await Promise.all(ips.map(async (ip) => ({ ip, r: await listed(ip, bl.zone) })));
+    lists[bl.id] = { listed: res.filter((x) => x.r === 'listed').map((x) => x.ip), checked: res.filter((x) => x.r).length, failed: res.filter((x) => !x.r).length };
+  }
+  const spfs = (await txtOf(domain)).filter((t) => /^v=spf1/i.test(t));
+  const spf = spfs[0] ?? null;
+  const all = spf?.match(/([+?~-]?)all\b/i);
+  const dkim = (await Promise.all(DKIM_SELECTORS.map(async (s) => ((await txtOf(`${s}._domainkey.${domain}`)).some((t) => /v=DKIM1|k=rsa|p=/i.test(t)) ? s : null)))).filter(Boolean) as string[];
+  const dmarc = (await txtOf('_dmarc.' + domain)).find((t) => /^v=DMARC1/i.test(t)) ?? null;
+  return {
+    domain, mx: mx.slice(0, 4), ips, lists,
+    spf: { records: spfs.length, record: spf, lookups: spf ? await spfLookups(spf) : 0, all: all ? (all[1] || '+') + 'all' : null },
+    dkim, dmarc: dmarc ? (dmarc.match(/p=(\w+)/i)?.[1] ?? 'set') : null,
+    mta_sts: (await txtOf('_mta-sts.' + domain)).some((t) => /^v=STSv1/i.test(t)),
+    tls_rpt: (await txtOf('_smtp._tls.' + domain)).some((t) => /^v=TLSRPTv1/i.test(t)),
+  };
+}
+
 const SOCIAL = /^(?:[a-z]+\.)?(facebook|instagram|linkedin|tiktok|youtube|x|twitter|xiaohongshu|threads)\.com$/i;
 
 export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; notes: Record<string, unknown> }> {
@@ -230,6 +296,26 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
     }
   }
 
+  // ---- 3b. Email reputation: every domain that receives mail. ----
+  // Each list is proved to answer first (its test entry 127.0.0.2 must come back listed), so a
+  // list that refuses this network reads "could not check", never "clear".
+  const working = new Set<string>();
+  for (const bl of BLACKLISTS) if ((await listed('127.0.0.2', bl.zone)) === 'listed') working.add(bl.id); else ctx.log(`${bl.name} blacklist did not answer its test lookup; shown as not checked`);
+  const email = await Promise.all(assets.filter((a) => a.dns.mx.length).map((a) => emailReputation(a.domain, a.dns.mx)));
+  for (const e of email) {
+    for (const bl of BLACKLISTS) {
+      const l = e.lists[bl.id];
+      if (!working.has(bl.id)) { l.checked = 0; continue; }
+      if (l.listed.length) add({ title: `Your mail server for @${e.domain} is on the ${bl.name} spam blacklist`, detail: `${l.listed.join(', ')} (${e.mx.join(', ')}) is listed. Mail systems that use ${bl.name} reject or junk email from that server, so your quotes and invoices may never arrive. If the server is your web host's shared mail server, another customer of the host may have caused it; the fix sits with whoever runs the server.`, severity: 'high', source: bl.id === 'barracuda' ? `https://www.barracudacentral.org/lookups/lookup-reputation` : `https://www.spamcop.net/bl.shtml?${l.listed[0]}`, check: 'email-blacklist', domain: e.domain });
+    }
+    if (e.spf.records > 1) add({ title: `@${e.domain} has ${e.spf.records} SPF records, so its SPF check always fails`, detail: 'A domain may have only one SPF record. With two, receiving mail systems treat the check as broken, and your mail looks unverified.', severity: 'high', source: null, check: 'email-spf', domain: e.domain });
+    if (e.spf.all === '+all') add({ title: `The SPF record for @${e.domain} lets any server in the world send as you`, detail: `It ends in "+all". Replace it with "~all" or "-all" after listing the servers you really use.`, severity: 'high', source: null, check: 'email-spf', domain: e.domain, evidence: e.spf.record });
+    if (e.spf.lookups > 10) add({ title: `The SPF record for @${e.domain} is over the limit receivers accept`, detail: `Checking it takes ${e.spf.lookups} DNS lookups; the limit is 10, after which receivers count the check as failed. Remove services you no longer send from.`, severity: 'medium', source: null, check: 'email-spf', domain: e.domain, evidence: e.spf.record });
+    if (!e.dkim.length) add({ title: `No DKIM signing key found for @${e.domain} on the usual names`, detail: 'DKIM proves an email really came from you. Gmail and Yahoo have required it for bulk senders since 2024, and mail without it goes to spam more often. We looked where Google, Microsoft and the common hosts put the key; a key under an unusual name would not show here.', severity: 'low', source: null, check: 'email-dkim', domain: e.domain });
+  }
+  const cleanLists = email.every((e) => BLACKLISTS.every((bl) => !e.lists[bl.id].listed.length));
+  if (email.length) add({ title: `${email.length} email domain${email.length === 1 ? '' : 's'} checked: ${cleanLists ? 'no mail server on the spam blacklists we can check' : 'a mail server is blacklisted'}`, detail: `${email.map((e) => `@${e.domain}: ${e.ips.length} mail server address${e.ips.length === 1 ? '' : 'es'}, SPF ${e.spf.record ? (e.spf.records > 1 ? 'duplicated' : 'set') : 'missing'}, DKIM ${e.dkim.length ? 'found' : 'not found'}, DMARC ${e.dmarc ?? 'missing'}`).join('; ')}. Checked against ${BLACKLISTS.filter((b) => working.has(b.id)).map((b) => b.name).join(' and ') || 'no list (none answered)'}; Spamhaus, the list most mail systems use, needs a paid licence and was not checked.`, severity: 'info', source: null, check: 'inventory' });
+
   // ---- 4. Subdomains from the public certificate logs. ----
   const subs: any[] = [];
   for (const d of N.domains.slice(0, 3)) {
@@ -283,5 +369,5 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   }));
   const social = [...new Set(assets.flatMap((a) => a.site?.social ?? []))];
   add({ title: `${assets.length} domain${assets.length === 1 ? '' : 's'} traced to you`, detail: table.map((t) => `${t.domain} (${t.why.join(', ')}): ${t.registrar ? `registered with ${t.registrar}` : 'registrar unknown'}${t.expires ? `, renews by ${t.expires}` : ''}${t.host ? `, hosted at ${t.host}` : ''}${t.mail ? `, email by ${t.mail}` : ''}`).join('; ') + '.', severity: 'info', source: null, check: 'inventory' });
-  return { findings, notes: { domains: table, subdomains: subs, lookalikes, social } };
+  return { findings, notes: { domains: table, subdomains: subs, lookalikes, social, email, blacklists: BLACKLISTS.map((b) => ({ ...b, working: working.has(b.id) })) } };
 }
