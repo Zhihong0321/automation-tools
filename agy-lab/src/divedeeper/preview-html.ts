@@ -289,16 +289,19 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
     : /member|association/i.test(t) ? 'The association’s member list'
     : /ISO|certif|accredit/i.test(t) ? 'The certification body’s register'
     : 'The issuing body’s own register, where one exists';
-  const checkFor = (t: string) => /\b(CIDB|SEDA|MyHIJAU|ISO|licen[cs]e?d?|certif\w*|accredit\w*|award|member)\b/i.test(t) ? registerFor(t)
-    : /review|rating|star/i.test(t) ? 'Every Google review on your listings'
-    : /AI\b|ChatGPT|assistant/i.test(t) ? 'AI assistants, asked about you by name'
-    : /maps|listing|address|location|office|phone|contact/i.test(t) ? 'Google Maps, your websites and directories'
-    : /website|domain|page|link|site/i.test(t) ? 'Every page of your websites'
-    : 'Public registers and records';
+  // Judged on the title first, so a detail that mentions "About page" or "links" does not decide it.
+  const checkOne = (t: string) => /\b(CIDB|SEDA|MyHIJAU|ISO|licen[cs]e?d?|certif\w*|accredit\w*|award|member)\b/i.test(t) ? registerFor(t)
+    : /\b(SSM|registration|registry|register(ed)?|incorporat\w*|directors?|owners?|ownership|shareholders?|capital|revenue|financ\w*|accounts|headcount|employees?|staff)\b/i.test(t) ? 'Company registers and public records'
+    : /\b(reviews?|ratings?|stars?)\b/i.test(t) ? 'Every Google review on your listings'
+    : /\b(AI|ChatGPT|assistants?)\b/i.test(t) ? 'AI assistants, asked about you by name'
+    : /\b(maps|listings?|address(es)?|location|office|phones?|contact)\b/i.test(t) ? 'Google Maps, your websites and directories'
+    : /\b(websites?|domains?|pages?|links?|site)\b/i.test(t) ? 'Every page of your websites'
+    : '';
+  const checkFor = (title: string, detail: string) => checkOne(title) || checkOne(detail) || 'Public registers and records';
   const claimRows = facts.map((f) => String(f.fact ?? '')).filter((f) => CLAIM.test(f) && !/private limited/i.test(f)).slice(0, 3)
     .map((f) => ({ src: 'Your claim', said: clip(P(f), 120), where: registerFor(f) }));
   const signRows = warnings.slice(0, Math.max(6 - claimRows.length, 3))
-    .map((w) => ({ src: TYPE[w.type]?.[0] ?? 'Warning sign', said: w.title, where: checkFor(`${w.title} ${w.detail ?? ''}`) }));
+    .map((w) => ({ src: TYPE[w.type]?.[0] ?? 'Warning sign', said: w.title, where: checkFor(w.title, String(w.detail ?? '')) }));
   const ledgerRows = [...claimRows, ...signRows];
   const hiddenRows = Math.max(Math.max(warnings.length, contradictions.length + gaps.length) - signRows.length, 0) + Math.max(claims - claimRows.length, 0);
 
