@@ -17,6 +17,7 @@
 // its publicly named leadership: no staff names, no phone numbers, no private document links, and
 // no research write-up (privacy.ts). Sources are the ones the company-dive judged to be about them.
 import { CHAPTER_EYEBROW, CHAPTER_ORDER, NB, OPENERS, PART_OPENERS, esc, tie, typeset } from './report-html.ts';
+import { PARTNERS_CSS, partnersHtml } from './partners.ts';
 import { isLeadership, publicSources, scrub } from './privacy.ts';
 import type { PreviewNotes } from './preview-editor.ts';
 
@@ -316,7 +317,7 @@ footer .muted { color:var(--muted); font-weight:500; }
   details > :not(summary) { display:block; } details::details-content { display:block; content-visibility:visible; } details > summary { list-style:none; }
   a.btn[href^="http"]::after { content:" · " attr(href); font-weight:400; }
 }
-`;
+${PARTNERS_CSS}`;
 
   const warnCard = (w: NonNullable<PreviewNotes['warnings']>[number], first = false) => {
     const [label, cls] = TYPE[w.type] ?? TYPE.contradiction;
@@ -668,6 +669,7 @@ footer .muted { color:var(--muted); font-weight:500; }
     <div><span class="k">Method</span><span>Web pages, directories, news and registers anyone can open. No paid register is used in a preview.</span></div>
   </div>
   <p>Online Presence Audit ${esc(year)} · Preview prepared for ${esc(name)}. Built from public sources only; nothing here has been checked against official registers yet.</p>
+  ${partnersHtml()}
 </footer>
 
 </body>

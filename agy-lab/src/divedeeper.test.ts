@@ -164,3 +164,15 @@ test('the full report lists no private document or unrelated source, and its wri
   for (const bad of ['ee-proposal-production', 'inv-m2', 'other.example']) assert.ok(!html.includes(bad), bad);
   assert.ok(html.includes('a private customer document') && html.includes('acme.my'));
 });
+
+test('every report ends with the technology partner strip, one mark per partner', async () => {
+  const { reportPage } = await import('./companydive-report.ts');
+  const { PARTNERS } = await import('./divedeeper/partners.ts');
+  const dossier = reportPage({ company: 'Acme Sdn Bhd', status: 'done', dossier: '## Overview\nAcme sells solar panels [1].', sources: [{ id: 1, url: 'https://acme.my', title: 'Acme' }] }, 'abcdefghijklmnopqrst');
+  for (const html of [buildReport({ company: 'Acme' }, {}), buildPreview({ company: 'Acme' }), dossier]) {
+    assert.equal(html.match(/class="partners"/g)?.length, 1);
+    assert.match(html, /Technology partner/);
+    for (const p of PARTNERS) assert.ok(html.includes(`<span>${p.name}</span>`), p.name);
+  }
+  assert.deepEqual(PARTNERS.map((p) => p.name), ['Tavily', 'Brave Search', 'Exa', 'scraper.tech', 'Google PageSpeed Insights', 'DeepSeek', 'OpenAI']);
+});

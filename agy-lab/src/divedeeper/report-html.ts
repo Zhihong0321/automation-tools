@@ -16,6 +16,7 @@
 // the action plan from S5, each when it ran, else built in here. Used by the hub (divedeeper.ts) and by scripts/dive-deeper/report.ts.
 // A missing lane only drops its block; the report still builds.
 import { AREAS, DEPTS, deptOf, resolve, type Item } from './editor.ts';
+import { PARTNERS_CSS, partnersHtml } from './partners.ts';
 import { isPrivateUrl, publicSources, scrub } from './privacy.ts';
 
 /** Why each area matters, said once for every client. No market statistics we cannot source. */
@@ -312,7 +313,7 @@ a:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
   thead { display:table-header-group; } .board tr, .tasks tr, .quotes blockquote, .colophon, .aside, .empty { break-inside:avoid; } p, li { orphans:3; widows:3; }
   details > :not(summary) { display:block; } details::details-content { display:block; content-visibility:visible; } details > summary { list-style:none; }
 }
-`;
+${PARTNERS_CSS}`;
 
 /** One standalone document: the shared style (plus any page-specific css), the version switcher and the given pages. */
 export function shell(title: string, body: string, css = ''): string {
@@ -806,6 +807,7 @@ ${actionPlan()}
     <div><p class="lbl">Report</p><p>Online Presence Audit ${esc(R.checked_on.slice(0, 4))}${refNo ? ` · ${esc(refNo)}` : ''}</p></div>
   </div>
   <div class="note method" style="margin-top:8px"><p class="lbl">How we checked</p><p>Every phone number, email and WhatsApp link published about you was searched on the web and traced to where it leads. Your homepage and service pages were compared with what search results, independent pages and AI assistants say about you. News, forums and social media were searched for your company and its key people. Bank Negara and Securities Commission alert lists, published court judgments, insolvency notices, Bursa Malaysia, government websites and trademark listings were searched for your name; the MyIPO trademark register needs a login and was not searched; paid registers (SSM documents, CTOS, CCRIS) were not bought. Each domain was looked up in its registry (MYNIC or RDAP), its DNS, its hosting network and the public certificate logs; each mail server was checked against the Barracuda and SpamCop spam blacklists, and each email domain’s SPF, DKIM and DMARC records were read. Each official homepage was tested with Google PageSpeed Insights on mobile and desktop. Every Google review on your Maps listings was read. Maps ranks come from Google Maps searches without a phone’s location, so a customer nearby may see a slightly different order; web ranks come from Brave Search set to Malaysia. Each licence and award was looked up in its issuer’s own register. Every page of your websites was read and its links and numbers tested. AI answers come from ${esc(aiModels)}, asked each question several times, from memory and with a web search. The ready-to-use drafts were written with AI from these findings. Checked ${esc(checkedOn)}; background research from ${esc(dateOf(dive.finished_at))}.</p></div>
+  ${partnersHtml()}
   ${foot('Appendix')}
 </section>
 

@@ -9,6 +9,7 @@
 // mobile and A4 versions of one document; print is always A4. While the people
 // step is still finishing, its page polls and reloads when it is done.
 
+import { partnersHtml } from './divedeeper/partners.ts';
 import { esc, md, shell } from './divedeeper/report-html.ts';
 
 type View = Record<string, any> | null;
@@ -155,6 +156,7 @@ ${list.map((s, i) => {
   <h2 class="display">Every claim,<br><span class="g">traced to its source.</span></h2>
   ${(d.sources ?? []).length ? `<ol class="sources">${d.sources.map((s: any) => `<li id="src-${esc(s.id)}" value="${esc(s.id)}"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(clip(String(s.title || hostOf(s.url)), 90))}</a> · ${esc(hostOf(s.url))}</li>`).join('')}</ol>` : '<p class="note">No sources were cited.</p>'}
   <div class="note" style="margin-top:8px"><p class="lbl">How this was researched</p><p>Public sources were found with Brave and Tavily${stats.tavily_calls ? ` (${esc(stats.tavily_calls)} Tavily calls)` : ''}${d.people?.exa_calls ? `, and linked people with Exa (${esc(d.people.exa_calls)} calls)` : ''}. The report was written by an AI model and every fact is cited to its source in square brackets. Check anything important against the source before relying on it.</p></div>
+  ${partnersHtml()}
   ${foot()}
 </section>
 `;
