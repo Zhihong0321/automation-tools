@@ -112,7 +112,7 @@ test('a lane that cannot load comes back partial instead of throwing', async () 
   assert.match(r.warnings[0], /no lane file/);
 });
 
-test('the preview landing page builds from the company-dive alone, uses the editor notes, and keeps the five numbers locked', () => {
+test('the preview landing page builds from the company-dive alone, uses the editor notes, and shows the deeper dive as not run yet', () => {
   const dive = {
     company: 'Acme Sdn Bhd', finished_at: '2026-10-25T10:00:00Z', dossier: '## Identity\n\nAcme makes widgets [1].',
     result: {
@@ -123,7 +123,7 @@ test('the preview landing page builds from the company-dive alone, uses the edit
   };
   // Non-breaking spaces from the typesetting read as plain spaces here.
   const html = buildPreview(dive, { price: 'RM 990' }).replace(/<style[\s\S]*?<\/style>/, '').replace(/\u00a0|&nbsp;/g, ' ');
-  for (const s of ['Prepared for Acme Sdn Bhd', 'July 2023 vs September 2023.', 'Directors are not named.', 'Contradiction', 'Missing', 'Locked', 'RM 990', 'How important is an AI recommendation', 'id="src-1"']) assert.ok(html.includes(s), s);
+  for (const s of ['Prepared for Acme Sdn Bhd', 'July 2023 vs September 2023.', 'Directors are not named.', 'Contradiction', 'Missing', 'Surface scan', 'Not run yet', 'problems to uncover', 'RM 990', 'How important is an AI recommendation', 'id="src-1"']) assert.ok(html.includes(s), s);
   assert.ok(!/undefined|\[object Object\]|NaN/.test(html));
   assert.ok(!/\[\d+\]/.test(html.replace(/<details[\s\S]*<\/details>/g, '')), 'no [n] citations outside the research appendix');
   assert.ok(buildPreview({ company: 'Empty' }).includes('Empty'), 'a dive with no result still builds');

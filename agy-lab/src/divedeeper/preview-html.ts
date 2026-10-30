@@ -175,9 +175,16 @@ h2 { font-size:clamp(34px,4.4vw,58px); max-width:16em; } .lead { font-size:19px;
 .locked .bar { height:12px; background:var(--band); } .locked .bar.s { width:62%; } .locked .bar.m { width:84%; }
 .locked .lockmsg { position:absolute; inset:0; display:grid; place-content:center; text-align:center; gap:6px; background:linear-gradient(180deg, rgba(255,255,255,.2), rgba(255,255,255,.96) 55%); padding:20px; }
 .locked .lockmsg b { font-family:var(--display); font-size:44px; font-weight:600; letter-spacing:-0.03em; line-height:1; } .locked .lockmsg span { font-size:14px; color:var(--grey); }
-.five { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:2px; background:var(--line); margin-top:40px; border:1px solid var(--line); }
-.five div { background:var(--paper); padding:18px; display:grid; gap:8px; } .five .k { font-size:12px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
-.five .v { font-family:var(--display); font-size:20px; font-weight:600; letter-spacing:-0.015em; color:var(--muted); } .five .lk { font-size:11px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--ink); }
+/* what has run: the surface scan behind this preview, then the deeper dive that has not */
+.runs { display:grid; background:var(--paper); border:1px solid var(--line); margin-bottom:28px; }
+.run { display:grid; grid-template-columns:40px minmax(0,1fr) 128px 200px; gap:18px; align-items:center; padding:14px 22px; border-top:1px solid var(--line); }
+.run:first-child { border-top:0; } .run .rn { font-family:var(--display); font-size:15px; font-weight:600; color:var(--muted); }
+.run .rw { display:grid; gap:2px; } .run .rw b { font-family:var(--display); font-size:17px; font-weight:600; letter-spacing:-0.01em; line-height:1.25; } .run .rw span { font-size:13.5px; color:var(--grey); }
+.run .rs { justify-self:start; font-size:10.5px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); border:1.5px dashed #b4bac2; padding:3px 8px; white-space:nowrap; }
+.run .rc { display:grid; grid-template-columns:auto minmax(0,1fr); gap:10px; align-items:center; } .run .rc b { font-family:var(--display); font-size:30px; font-weight:600; letter-spacing:-0.03em; line-height:1; color:var(--muted); white-space:nowrap; } .run .rc span { font-size:12.5px; color:var(--grey); line-height:1.3; }
+.run.done { background:var(--dark); color:var(--on-dark); border-top:0; } .run.done .rn, .run.done .rw span, .run.done .rc span { color:var(--on-dark-2); }
+.run.done .rs { color:#8ee0b0; border:1.5px solid #8ee0b0; } .run.done .rc b { color:#ffb4ab; }
+.run.step { background:#fafbfc; } .run.total { border-top:2px solid var(--ink); } .run.total .rc b { color:var(--ink); }
 /* band */
 .band-cta { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:32px; align-items:center; padding-top:72px; padding-bottom:72px; }
 .band-cta h2 { font-size:clamp(30px,3.4vw,46px); }
@@ -289,7 +296,7 @@ body { font-kerning:normal; text-rendering:optimizeLegibility; font-feature-sett
 .dark, .order .panel, .parts a, .warn.first, .m-code, .m-board .me { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
 p, li, dd, figcaption, .cap, .known .v { text-wrap:pretty; }
 .lead, .m-ask, .warn .d, .warn .risk, .known .v { hanging-punctuation:first allow-end; }
-.strip b, .five .v, .lockmsg b, .price, .m-board, .ledger, .m-score b, .steps div::before, .uses .un, .parts .n, .m-fix, .file dd, .fileno, ol.sources, .colophon { font-variant-numeric:tabular-nums lining-nums; }
+.strip b, .run .rc b, .lockmsg b, .price, .m-board, .ledger, .m-score b, .steps div::before, .uses .un, .parts .n, .m-fix, .file dd, .fileno, ol.sources, .colophon { font-variant-numeric:tabular-nums lining-nums; }
 ::selection { background:var(--ink); color:#fff; } .dark ::selection, .order .panel ::selection { background:#fff; color:var(--ink); }
 a:focus-visible { outline:2px solid currentColor; outline-offset:3px; }
 .filehead { display:flex; justify-content:space-between; align-items:center; gap:12px; } .fileno { font-size:11px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
@@ -302,12 +309,13 @@ footer .muted { color:var(--muted); font-weight:500; }
   .colophon { grid-template-columns:1fr 1fr; }
   section { padding-top:64px; padding-bottom:64px; } .hero { grid-template-columns:1fr; gap:40px; padding-top:56px; } .file { transform:none; }
   .parts { grid-template-columns:1fr; } .parts a.wide ul { grid-template-columns:1fr; } .srcs { grid-template-columns:1fr 1fr; } .feat { grid-template-columns:1fr; gap:28px; } .feat:nth-child(even) .mock { order:0; } .tiles { grid-template-columns:1fr 1fr; }
-  .strip { grid-template-columns:1fr 1fr; } .warns { grid-template-columns:1fr; } .five { grid-template-columns:1fr 1fr; } .band-cta, .order { grid-template-columns:1fr; }
+  .strip { grid-template-columns:1fr 1fr; } .warns { grid-template-columns:1fr; } .band-cta, .order { grid-template-columns:1fr; }
   .uses { grid-template-columns:1fr 1fr; } .steps { grid-template-columns:1fr 1fr; } .top span.for { display:none; } .lead { font-size:17px; }
 }
 @media (max-width:700px) {
   .ledger thead { display:none; } .ledger tr { display:grid; gap:8px; padding:16px 18px; border-top:1px solid var(--line); } .ledger tr:first-child { border-top:0; }
   .ledger td { display:block; padding:0; border:0; width:auto !important; } .ledger .where::before { content:"Checked against: "; font-weight:600; color:var(--ink); }
+  .run { grid-template-columns:28px minmax(0,1fr); gap:6px 12px; padding:14px 16px; } .run .rs, .run .rc { grid-column:2; } .run .rc b { font-size:24px; }
 }
 @media (max-width:560px) { .uses, .tiles, .srcs { grid-template-columns:1fr; } .tile.wide { grid-column:auto; } .m-weeks { grid-template-columns:1fr 1fr; } .mock { padding:18px; } .m-fix { grid-template-columns:22px minmax(0,1fr) auto; } .m-fix .eff { display:none; } }
 @page { size:A4; margin:14mm 12mm 16mm;
@@ -318,7 +326,7 @@ footer .muted { color:var(--muted); font-weight:500; }
   html { scroll-behavior:auto; } section { padding:32px 28px; } .hero, .thesis { padding-top:44px; padding-bottom:44px; }
   .file { transform:none; box-shadow:none; border:1px solid var(--line); }
   .head, h2, h3, .sub3, .eyebrow { break-after:avoid; } .head { break-inside:avoid; } p, li { orphans:3; widows:3; }
-  .warn, .locked, .uses div, .feat, .mock, .tile, .parts a, .ledger tr, .known div, .srcs div, .steps div, .five, .strip, .order .panel, .colophon { break-inside:avoid; }
+  .warn, .locked, .uses div, .feat, .mock, .tile, .parts a, .ledger tr, .known div, .srcs div, .steps div, .runs, .strip, .order .panel, .colophon { break-inside:avoid; }
   details > :not(summary) { display:block; } details::details-content { display:block; content-visibility:visible; } details > summary { list-style:none; }
   a.btn[href^="http"]::after { content:" · " attr(href); font-weight:400; }
 }
@@ -428,7 +436,26 @@ footer .muted { color:var(--muted); font-weight:500; }
   const ledgerRows = [...claimRows, ...signRows];
   const hiddenRows = Math.max(Math.max(warnings.length, contradictions.length + gaps.length) - signRows.length, 0) + Math.max(claims - claimRows.length, 0);
 
-  const lockedCard = (n: number) => `<article class="locked" aria-label="${n} more warning signs, in the full report"><div class="bar s"></div><div class="bar m"></div><div class="bar"></div><div class="bar m"></div><div class="bar s"></div><div class="lockmsg"><b>+${n}</b><span>more warning sign${n === 1 ? '' : 's'} we found,<br>shown in your full report</span></div></article>`;
+  /** The deeper dive's six research areas, one line each on what they check. */
+  const SCAN: Record<string, string> = {
+    contact: 'Every published phone, email, WhatsApp link and address, and where each one really leads',
+    understanding: 'Search results, Maps, directories, AI assistants and your homepage, read as a buyer would',
+    voice: 'Google reviews, forums, social posts and news about you and your key people',
+    credibility: 'Regulator alert lists, courts, insolvency notices, registers, licence claims and trademarks',
+    assets: 'Domain ownership and expiry, hosting, email spoofing and email reputation',
+    speed: 'Google PageSpeed Insights, and what real Chrome visitors experienced',
+  };
+  const areaWord = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight'][CHAPTER_ORDER.length] ?? String(CHAPTER_ORDER.length);
+  // The preview is only the surface scan. The deeper dive has not run, so its count is unknown, never a number.
+  const runRow = (no: string, name: string, what: string, status: string, count: string, unit: string, cls = '') => `<div class="run${cls ? ` ${cls}` : ''}"><span class="rn">${no}</span><div class="rw"><b>${esc(name)}</b><span>${esc(what)}</span></div>${status ? `<span class="rs">${esc(status)}</span>` : '<span></span>'}<div class="rc"><b>${count}</b><span>${esc(unit)}</span></div></div>`;
+  const runs = `<div class="runs" aria-label="What has run so far, and what has not">
+    ${runRow('00', 'Surface scan', `${srcN} read, for this free preview`, 'Done', esc(signCount), signCount === 1 ? 'warning sign found' : 'warning signs found', 'done')}
+    ${CHAPTER_ORDER.map((c, i) => runRow(String(i + 1).padStart(2, '0'), CHAPTER_EYEBROW[c], SCAN[c] ?? '', 'Not run yet', '?', 'problems to uncover')).join('')}
+    ${runRow(String(CHAPTER_ORDER.length + 1).padStart(2, '0'), 'Full analysis', `All ${areaWord} areas read together, for the causes behind several problems at once`, 'Not run yet', '–', 'runs on what the areas find', 'step')}
+    ${runRow(String(CHAPTER_ORDER.length + 2).padStart(2, '0'), 'Action plan', 'Every problem turned into a task, by department, with the work written for you', 'Not run yet', '–', 'one task for each problem', 'step')}
+    ${runRow('', 'So far', 'Found by the surface scan alone. The rest can only be counted once the deeper dive runs.', '', `${esc(signCount)}&nbsp;+&nbsp;?`, 'problems in all', 'total')}
+  </div>`;
+  const lockedCard = (n: number) => `<article class="locked" aria-label="${n} more surface-scan warning signs, in the full report"><div class="bar s"></div><div class="bar m"></div><div class="bar"></div><div class="bar m"></div><div class="bar s"></div><div class="lockmsg"><b>+${n}</b><span>more from the surface scan,<br>shown in your full report</span></div></article>`;
 
   return `<!doctype html>
 <html lang="en">
@@ -462,7 +489,8 @@ footer .muted { color:var(--muted); font-weight:500; }
       ${id.address ? `<div><dt>Head office</dt><dd>${esc(clip(String(id.address), 90))}</dd></div>` : ''}
       ${domains.length ? `<div><dt>Websites</dt><dd>${esc(domains.join(', '))}</dd></div>` : ''}
       ${people.length ? `<div><dt>Leadership</dt><dd>${esc(people.slice(0, 3).map((p: any) => p.name).join(', '))}</dd></div>` : ''}
-      ${warnings.length ? `<div><dt>Warning signs</dt><dd><b style="color:var(--wrong)">${esc(signCount)}&nbsp;found</b> before the audit began</dd></div>` : ''}
+      <div><dt>Surface scan</dt><dd>${signCount ? `<b style="color:var(--wrong)">${esc(plural(signCount, 'warning sign'))}</b> found` : 'No warning signs found'}</dd></div>
+      <div><dt>Deeper dive</dt><dd>${esc(areaWord.replace(/^./, (c) => c.toUpperCase()))} research areas, the analysis and the action plan: <b>not run yet</b></dd></div>
     </dl>
     <p class="foot">Researched ${esc(made)} from ${esc(srcN)}</p>
   </aside>
@@ -491,14 +519,15 @@ footer .muted { color:var(--muted); font-weight:500; }
 </section>
 
 <section id="warnings" class="warn-section">
-  <div class="head"><p class="eyebrow">Warning signs</p>
-    ${signCount ? `<h2>${esc(plural(signCount, 'warning sign'))},<br><span class="g">found before the audit even started.</span></h2>
-    <p class="lead">These come from public sources alone. Each one is something a customer, a bank or a tender officer can find, and none of them has been checked against your reviews, Google, AI assistants, your domains or the official registers yet.</p>` : `<h2>No warning signs,<br><span class="g">in public sources at least.</span></h2>
+  <div class="head"><p class="eyebrow">Surface scan · warning signs</p>
+    ${signCount ? `<h2>The surface scan found ${esc(plural(signCount, 'warning sign'))}.<br><span class="g">The deeper dive has not run yet.</span></h2>
+    <p class="lead">This free preview is one surface scan: ${esc(srcN)} read for ${esc(short)}, nothing more. The deeper dive runs ${esc(areaWord)} research areas, a full analysis and an action plan, and none of them has started. Nobody can say how many more problems they will uncover until they run, us included.</p>` : `<h2>The surface scan found no warning signs.<br><span class="g">The deeper dive has not run yet.</span></h2>
     <p class="lead">What public sources say about ${esc(short)} hangs together. The full audit checks what they cannot: your contact details, reviews, Google, AI assistants, the official registers, your domains and email, and Google’s own test of your website.</p>`}
-    <div class="legend">${typesFound.map((t) => `<span class="tag ${TYPE[t][1]}">${esc(TYPE[t][0])}</span>`).join('')}</div></div>
+    </div>
+  ${runs}
+  ${typesFound.length ? `<div class="legend" style="margin-bottom:14px">${typesFound.map((t) => `<span class="tag ${TYPE[t][1]}">${esc(TYPE[t][0])}</span>`).join('')}</div>` : ''}
   <div class="warns">${shown.map((w, i) => warnCard(w, i === 0)).join('')}${moreSigns ? lockedCard(moreSigns) : ''}</div>
-  <div class="five" aria-label="Locked until you order">${CHAPTER_ORDER.map((c) => `<div><span class="k">${esc(CHAPTER_EYEBROW[c])}</span><span class="v">${esc(inside[c].locked)}</span><span class="lk">Locked</span></div>`).join('')}</div>
-  <p class="note">And these are only the warning signs public sources show. The ${['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven'][CHAPTER_ORDER.length] ?? CHAPTER_ORDER.length} numbers your customers decide on stay locked until the full audit runs.</p>
+  <p class="note">Every card here comes from the surface scan. What the deeper dive finds is not on this page, because it has not been looked for yet.</p>
 </section>
 
 <section class="dark band-cta">
@@ -550,7 +579,8 @@ footer .muted { color:var(--muted); font-weight:500; }
   <h3 class="sub3">Then every claim and warning sign about ${esc(short)}, settled</h3>
   <div class="cred"><table class="ledger"><thead><tr><th>What is said about ${esc(short)}</th><th>Checked against</th><th>Result</th></tr></thead><tbody>
     ${ledgerRows.map((r) => `<tr><td class="said"><span class="src">${esc(r.src)}</span><b>${esc(r.said)}</b></td><td class="where">${esc(r.where)}</td><td class="res"><span class="vstamp">In full report</span></td></tr>`).join('')}
-    ${hiddenRows ? `<tr class="hidden"><td class="said"><span class="src">+${esc(hiddenRows)} more</span>${rd('72%')}${rd('48%')}</td><td class="where">${rd('80%')}</td><td class="res"><span class="vstamp">In full report</span></td></tr>` : ''}
+    ${hiddenRows ? `<tr class="hidden"><td class="said"><span class="src">+${esc(hiddenRows)} more from the surface scan</span>${rd('72%')}${rd('48%')}</td><td class="where">${rd('80%')}</td><td class="res"><span class="vstamp">In full report</span></td></tr>` : ''}
+    <tr class="hidden"><td class="said"><span class="src">? more · from the deeper dive</span><b>Whatever the ${esc(areaWord)} research areas uncover</b></td><td class="where">Each in its own official source</td><td class="res"><span class="vstamp">Not run yet</span></td></tr>
   </tbody></table></div>
   <div class="outcomes"><span>Each claim ends with one result:</span><span class="pill good">Confirmed</span><span class="pill good">Better than you claim</span><span class="pill bad">Register says otherwise</span><span class="pill amb">Not found</span><span class="pill none">No public register</span></div>
   <p class="nochk"><b>Said plainly in the report, never guessed:</b> paid or closed registers are not checked automatically. That means SSM e-Info documents, CTOS and CCRIS, the MDI insolvency search, PDRM Semak Mule, the MyIPO trademark register (it needs a login) and the Spamhaus blacklist (it needs a paid licence).</p>
