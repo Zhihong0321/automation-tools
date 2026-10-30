@@ -92,7 +92,16 @@ export function buildPreview(dive: any, offer: Offer = {}, notes: PreviewNotes |
     ai: { know: ['How often AI assistants recommend you, and who instead', 'Every wrong phone, address or website they give out', 'The pages assistants read that list your rivals'], locked: '? of ? AI answers name you' },
     website: { know: [`Dead pages, empty pages and broken contact links on ${domains.length ? domains.join(', ') : 'your sites'}`, 'Screenshots of each problem', 'Numbers and addresses that differ from Google'], locked: '? urgent faults' },
     credentials: { know: [`Each of your ${claims || ''} licence and award claims, looked up in its register`.replace('  ', ' '), 'Claims the register contradicts, or shows you undersell', 'Claims no register can back'], locked: '? of ? claims confirmed' },
+    // The report's five parts.
+    contact: { know: ['Every phone, email and WhatsApp published about you, and where each one really leads', 'Old numbers, ex-staff lines and dead mailboxes still in public', 'Where Google Maps, directories and your site disagree'], locked: '? of ? contact details reach you' },
+    understanding: { know: ['Whether a stranger can tell what you sell, and why you', 'What AI assistants and search engines get right, wrong or miss', 'Selling points nobody outside your site repeats'], locked: 'Understood ? out of 100' },
+    voice: { know: ['Which reviews still have no reply from you', 'News, forum and social talk about you and your key people', 'What customers praise, ready for your website'], locked: '? of ? reviews answered' },
+    credibility: { know: ['Bank Negara and Securities Commission alert lists', 'Court judgments and winding-up notices naming you', 'Your licences and awards, in their registers'], locked: '? of ? risk checks clear' },
+    assets: { know: ['Who holds each of your domains, and when it expires', 'Where your sites are hosted and who carries your email', 'Whether anyone can send email pretending to be you'], locked: '? risks across your domains' },
   };
+  // The report part each topic sits in.
+  const partOf: Record<string, string> = { ai: 'understanding', findability: 'understanding', website: 'understanding', reputation: 'voice', credentials: 'credibility' };
+  const partNo = (c: string) => String(CHAPTER_ORDER.indexOf((partOf[c] ?? c) as any) + 1).padStart(2, '0');
 
   const css = `
 :root { --ink:#111418; --grey:#5c636d; --muted:#8a9099; --line:#e6e8eb; --band:#f2f3f5; --paper:#fff; --dark:#0e1013; --dark2:#1b2129; --on-dark:#f3f4f6; --on-dark-2:#9aa1ab;
@@ -384,27 +393,45 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
 
 <section id="inside" class="dark" style="padding-top:0">
   <div class="head"><p class="eyebrow">Inside your full report</p>
-    <h2>Three parts, written for ${esc(short)}.<br><span class="g">Here is what each one shows you.</span></h2>
-    <p class="lead">This preview read what public sources say. The full report goes further: it measures what your customers actually see, checks what is claimed about you, and tells you what to do about it.</p></div>
+    <h2>Six parts, written for ${esc(short)}.<br><span class="g">Here is what each one shows you.</span></h2>
+    <p class="lead">This preview read what public sources say. The full report goes further: it traces how customers reach you, measures what they see and hear about you, checks the records a stranger would check, maps the domains that carry your name, and tells you what to do about it.</p></div>
   <div class="parts">
-    <a href="#dive"><span class="n">01</span><h3>The deeper dive</h3><p>Four places customers judge you before they call, each measured.</p>
-      <ul>${diveChapters.map((c) => `<li${spotlight[c] ? ' class="hl"' : ''}>${esc(spotlight[c] ?? (c === 'reputation' ? 'Your Google reviews' : CHAPTER_EYEBROW[c]))}</li>`).join('')}</ul><span class="go">See what it shows ↓</span></a>
-    <a href="#cred"><span class="n">02</span><h3>The credibility check</h3><p>Every claim and warning sign, checked against the records a stranger would use.</p>
-      <ul><li>Licences and awards, in their registers</li><li>The ${esc(Math.max(warnings.length, contradictions.length + gaps.length))} warning signs, settled</li><li>What a bank or tender officer finds in ten minutes</li></ul><span class="go">See what it shows ↓</span></a>
-    <a href="#advice"><span class="n">03</span><h3>Analysis and suggestions</h3><p>What it all means for your business, and what to do, in order.</p>
+    <a href="#reach"><span class="n">01</span><h3>${esc(CHAPTER_EYEBROW.contact)}</h3><p>Every way a customer can reach you, and where each one really leads.</p>
+      <ul>${inside.contact.know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><span class="go">See what it shows ↓</span></a>
+    <a href="#dive"><span class="n">02</span><h3>${esc(CHAPTER_EYEBROW.understanding)}</h3><p>What search engines, AI assistants and your own pages say you sell, and why you.</p>
+      <ul>${(['ai', 'findability', 'website'] as const).map((c) => `<li${spotlight[c] ? ' class="hl"' : ''}>${esc(spotlight[c] ?? CHAPTER_EYEBROW[c])}</li>`).join('')}</ul><span class="go">See what it shows ↓</span></a>
+    <a href="#dive"><span class="n">03</span><h3>${esc(CHAPTER_EYEBROW.voice)}</h3><p>What customers, forums and the news say about you and the people who run it.</p>
+      <ul>${inside.voice.know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><span class="go">See what it shows ↓</span></a>
+    <a href="#cred"><span class="n">04</span><h3>${esc(CHAPTER_EYEBROW.credibility)}</h3><p>Every claim and warning sign, checked against the records a stranger would use.</p>
+      <ul><li>Regulator alert lists, courts and insolvency notices</li><li>Licences and awards, in their registers</li><li>The ${esc(Math.max(warnings.length, contradictions.length + gaps.length))} warning signs, settled</li></ul><span class="go">See what it shows ↓</span></a>
+    <a href="#reach"><span class="n">05</span><h3>${esc(CHAPTER_EYEBROW.assets)}</h3><p>Your domains, hosting and email, traced from the public internet.</p>
+      <ul>${inside.assets.know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><span class="go">See what it shows ↓</span></a>
+    <a href="#advice"><span class="n">06</span><h3>Analysis and suggestions</h3><p>What it all means for your business, and what to do, in order.</p>
       <ul><li>Your fixes, least effort first</li><li>A plan for your first 30 days</li><li>Copy, replies and pages, written for you</li></ul><span class="go">See what it shows ↓</span></a>
   </div>
 </section>
 
+<section id="reach">
+  <div class="head"><p class="eyebrow">Parts 1 and 5 · ${esc(CHAPTER_EYEBROW.contact)} and ${esc(CHAPTER_EYEBROW.assets).toLowerCase()}</p>
+    <h2>Can customers reach you,<br><span class="g">and who holds the keys to your name?</span></h2>
+    <p class="lead">Contact details and domains outlive the people who set them up. We trace every number, mailbox and domain published under ${esc(short)} to where it really leads today.</p></div>
+  <div class="tiles">
+    <div class="tile wide"><h3>${esc(CHAPTER_EYEBROW.contact)}</h3><p>Each contact detail, where it is published, and where it leads.</p>
+      <div class="in">${['Phone', 'WhatsApp', 'Email', 'Phone'].map((k, i) => `<div class="m-fix"><span class="no">${i + 1}</span>${rd(['62%', '54%', '70%', '48%'][i])}<span class="m-pill eff">${esc(k)}</span><span class="m-pill${i === 3 ? ' hi' : ''}">${['Reaches you', 'A staff member’s own', 'Reaches you', 'Out of date'][i]}</span></div>`).join('')}</div></div>
+    <div class="tile"><h3>${esc(CHAPTER_EYEBROW.assets)}</h3><p>${domains.length ? esc(domains.slice(0, 3).join(', ')) : 'Each of your domains'}: registrar, expiry, hosting, email and whether it can be faked.</p>
+      <div class="in">${[0, 1, 2].map(() => `<div class="m-faq"><b>.my</b>${rd('80%')}${rd('56%')}</div>`).join('')}</div></div>
+  </div>
+</section>
+
 <section id="dive">
-  <div class="head"><p class="eyebrow">Part 1 · The deeper dive</p>
+  <div class="head"><p class="eyebrow">Parts 2 and 3 · ${esc(CHAPTER_EYEBROW.understanding)}, and what people say</p>
     <h2>Four places customers judge you.<br><span class="g">We measure every one.</span></h2>
     <p class="lead">Each chapter opens with why it matters to ${/^[aeiou]/i.test(trade) ? 'an' : 'a'} ${esc(trade)} in ${esc(town)}, shows the evidence, what it costs you, and the first thing to fix. The grey bars below are where your own numbers go.</p></div>
-  <div class="feats">${diveChapters.map((c) => `<div class="feat${spotlight[c] ? ' spot' : ''}">${mocks[c]}<div class="txt"><span class="n">${spotlight[c] ? '<span class="hlb">Highlight</span>' : ''}Chapter ${String(CHAPTER_ORDER.indexOf(c) + 1).padStart(2, '0')} · ${esc(CHAPTER_EYEBROW[c])}</span><h3>${esc(spotlight[c] ?? `${OPENERS[c].q[0]} ${OPENERS[c].q[1]}`)}</h3>${spotlight[c] ? `<p class="q">${esc(OPENERS[c].q[0])} ${esc(OPENERS[c].q[1])}</p>` : ''}<p class="what">${esc(what[c])}</p><ul>${inside[c].know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><p class="lockline">In your report: ${esc(inside[c].locked)}</p></div></div>`).join('')}</div>
+  <div class="feats">${diveChapters.map((c) => `<div class="feat${spotlight[c] ? ' spot' : ''}">${mocks[c]}<div class="txt"><span class="n">${spotlight[c] ? '<span class="hlb">Highlight</span>' : ''}Part ${partNo(c)} · ${esc(CHAPTER_EYEBROW[c])}</span><h3>${esc(spotlight[c] ?? `${OPENERS[c].q[0]} ${OPENERS[c].q[1]}`)}</h3>${spotlight[c] ? `<p class="q">${esc(OPENERS[c].q[0])} ${esc(OPENERS[c].q[1])}</p>` : ''}<p class="what">${esc(what[c])}</p><ul>${inside[c].know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><p class="lockline">In your report: ${esc(inside[c].locked)}</p></div></div>`).join('')}</div>
 </section>
 
 <section id="cred" class="warn-section">
-  <div class="head"><p class="eyebrow">Part 2 · The credibility check</p>
+  <div class="head"><p class="eyebrow">Part 4 · ${esc(CHAPTER_EYEBROW.credibility)}</p>
     <h2>Every claim, checked<br><span class="g">where a stranger would check it.</span></h2>
     <p class="lead">Banks, tender panels and careful customers verify before they trust. We do it first: each licence, award and membership is looked up in the issuing body’s own register, and each warning sign is settled against the records. These are the first rows of ${esc(short)}’s check.</p></div>
   <div class="cred"><table class="ledger"><thead><tr><th>What is said about ${esc(short)}</th><th>Checked against</th><th>Result</th></tr></thead><tbody>
@@ -416,7 +443,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
 </section>
 
 <section id="advice">
-  <div class="head"><p class="eyebrow">Part 3 · Analysis and suggestions</p>
+  <div class="head"><p class="eyebrow">Part 6 · Analysis and suggestions</p>
     <h2>Not just what is wrong.<br><span class="g">What to do, in order, written for you.</span></h2>
     <p class="lead">We weigh every finding by what it costs you in customers and what it takes to fix, then write the work out so you or your web developer can start the same day.</p></div>
   <div class="tiles">

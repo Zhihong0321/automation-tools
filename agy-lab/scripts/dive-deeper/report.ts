@@ -8,8 +8,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { OUT } from '../../src/divedeeper/lib.ts';
 import { buildReport } from '../../src/divedeeper/report-html.ts';
+import { STAGE1_LANES } from '../../src/divedeeper/editor.ts';
 
-export const LANES = ['E-maps', 'H-maps', 'H-web', 'D-registry', 'C-merged', 'G-fixed', 'G-grounded', 'S2-consult', 'S3-editor'];
+export const LANES = [...STAGE1_LANES, 'S2-consult', 'S3-editor'];
 
 const diveId = process.argv[2];
 if (!diveId) { console.error('usage: node scripts/dive-deeper/report.ts <diveId> [out.html]'); process.exit(2); }

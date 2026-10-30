@@ -1,6 +1,27 @@
 # Country-specific deeper-dive pipelines (planning record)
 
-Status: planning only, recorded 2026-10-27. Nothing is coded yet.
+Status: recorded 2026-10-27. On 2026-10-30 the Malaysia pipeline was redone around the five parts below; the
+folder split and other countries are not built yet.
+
+## malaysia-deeper-dive: the report's parts (2026-10-30)
+
+The user set the report's focus. Each part is fed by its own lanes (`editor.ts` AREAS); C-merged's website checks are
+sorted into the part each one is about (`partOfCheck`).
+
+| Part | What it answers | Lanes |
+|---|---|---|
+| 1 Contact and reachability | Every phone, email, WhatsApp and address published about the company: does each still reach it, or an ex-employee, another business, a dead line? | **R-contacts** (new), C-merged contact checks |
+| 2 How the internet understands you | Do search, Maps, AI assistants and directories know what it sells and why choose it; up to date; selling points with proof | **B-brand** (new), G-fixed, G-grounded, H-maps, H-web, C-merged content checks |
+| 3 Reviews, discussion and news | Google reviews, plus news, forums and social talk about the company, brand and key people | E-maps, **N-news** (new) |
+| 4 Credibility and official records | BNM and SC alert lists, court judgments, winding-up notices, Bursa, .gov.my mentions, published financials; licences in their registers | **K-credibility** (new), D-registry, C-merged SSM check |
+| 5 Digital assets | Domains (MYNIC whois / RDAP), expiry, registrant, DNS, hosting network, email (MX, SPF, DMARC), certificate, CMS, subdomains (crt.sh), lookalike domains | **A-assets** (new, no LLM), C-merged SSL checks |
+| 6 Analysis and suggestions | Verdict, stories, fixes in order, 30-day plan, ready-to-use copy | S2-consult, S3-editor |
+
+Run order on the hub: H-maps, H-web, D-registry, G-fixed, G-grounded, K-credibility, N-news together; E-maps and C-merged
+after H-maps; then R-contacts, A-assets and B-brand (they read C-merged, H-maps, H-web and G-fixed); then S2 and S3.
+
+Not checked automatically, stated as such in the report: SSM e-Info documents, CTOS/CCRIS, MDI insolvency search (paid),
+PDRM Semak Mule. bnm.gov.my sits behind a bot check, so its alert list is read through Exa and Brave, never by passing it.
 
 ## Context
 

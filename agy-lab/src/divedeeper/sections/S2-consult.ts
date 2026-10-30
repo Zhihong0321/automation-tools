@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { OUT, type Ctx, type Finding } from '../lib.ts';
+import { STAGE1_LANES } from '../editor.ts';
 
 const host = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + ' …' : s);
@@ -37,7 +38,7 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   const id = r.identity ?? {};
   const name = String(id.legal_name ?? dive.company);
   const brand = name.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').trim().split(/\s+/)[0] ?? '';
-  const lanes = Object.fromEntries(['E-maps', 'H-maps', 'H-web', 'C-merged', 'D-registry', 'G-fixed', 'G-grounded'].map((l) => [l, stage1(ctx.diveId, l)]));
+  const lanes = Object.fromEntries(STAGE1_LANES.map((l) => [l, stage1(ctx.diveId, l)]));
   for (const [l, v] of Object.entries(lanes)) if (!v) ctx.warn(`stage-1 output ${l}-${ctx.diveId}.json missing; advice will skip what it covers`);
   const findings: Finding[] = [];
   const now = ctx.now();

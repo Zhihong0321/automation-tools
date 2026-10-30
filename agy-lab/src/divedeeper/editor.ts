@@ -5,14 +5,27 @@
 // Where sources conflict, the official register wins over the company-dive's research
 // (a CIDB grade read from CIDB beats one a website or directory printed).
 
-export type Area = 'reputation' | 'findability' | 'credentials' | 'website' | 'ai';
+// The malaysia-deeper-dive report is read in five parts, then the analysis. A lane can feed two
+// parts: C-merged's website checks are sorted by what each one is about (see partOfCheck).
+export type Area = 'contact' | 'understanding' | 'voice' | 'credibility' | 'assets';
 export const AREAS: { id: Area; title: string; lanes: string[] }[] = [
-  { id: 'reputation', title: 'Reviews and reputation', lanes: ['E-maps'] },
-  { id: 'findability', title: 'Being found on Google', lanes: ['H-maps', 'H-web'] },
-  { id: 'ai', title: 'What AI assistants say', lanes: ['G-fixed', 'G-grounded'] },
-  { id: 'website', title: 'Your websites', lanes: ['C-merged'] },
-  { id: 'credentials', title: 'Licences and awards', lanes: ['D-registry'] },
+  { id: 'contact', title: 'Contact and reachability', lanes: ['R-contacts', 'C-merged'] },
+  { id: 'understanding', title: 'How the internet understands you', lanes: ['B-brand', 'G-fixed', 'G-grounded', 'H-maps', 'H-web', 'C-merged'] },
+  { id: 'voice', title: 'Reviews, discussion and news', lanes: ['E-maps', 'N-news'] },
+  { id: 'credibility', title: 'Credibility and official records', lanes: ['K-credibility', 'D-registry', 'C-merged'] },
+  { id: 'assets', title: 'Digital assets', lanes: ['A-assets', 'C-merged'] },
 ];
+/** Every stage-1 lane, in the order the report reads them. */
+export const STAGE1_LANES = [...new Set(AREAS.flatMap((a) => a.lanes))];
+
+/** Which part a C-merged website check belongs to. */
+export function partOfCheck(check: string | undefined): Area {
+  const c = String(check ?? '');
+  if (/^(phone|whatsapp|tel|mailto|form|address|free-mail)/.test(c)) return 'contact';
+  if (/^(ssm)/.test(c)) return 'credibility';
+  if (/^(ssl|https-redirect|redirect-domain|defacement|mixed-content|credit-link)/.test(c)) return 'assets';
+  return 'understanding';
+}
 
 export type Item = { key: string; lane: string; area: Area; severity: string; title: string; detail: string; source: string | null; check?: string; raw: any };
 
@@ -24,13 +37,16 @@ const daysBetween = (a: string, b: string) => Math.round((Date.parse(b) - Date.p
 /** Every finding in the report, with a stable key (lane#index) the editor's plain titles hang on. */
 export function items(L: Record<string, any>): Item[] {
   const out: Item[] = [];
-  for (const a of AREAS) for (const lane of a.lanes) (L[lane]?.findings ?? []).forEach((f: any, i: number) => {
+  for (const lane of STAGE1_LANES) (L[lane]?.findings ?? []).forEach((f: any, i: number) => {
     if (isPrivate(f)) return;
     // Rollups repeat what the per-question findings say; the AI chart shows them instead.
     if (/^(rollup|domain-rollup)$/.test(String(f.kind ?? ''))) return;
+    // Inventory and summary lines feed the part's table and headline number, not the finding list.
+    if (/^(inventory|contact-summary|cred-summary)$/.test(String(f.check ?? ''))) return;
+    const area = lane === 'C-merged' ? partOfCheck(f.check) : AREAS.find((a) => a.lanes.includes(lane))!.id;
     // The register showing better than the claim (G7 where the site says G3) is a fix, not an alarm.
     const severity = f.direction === 'undersell' ? 'medium' : String(f.severity ?? 'info');
-    out.push({ key: `${lane}#${i}`, lane, area: a.id, severity, title: String(f.title ?? ''), detail: String(f.detail ?? ''), source: f.source ?? null, check: f.check, raw: f });
+    out.push({ key: `${lane}#${i}`, lane, area, severity, title: String(f.title ?? ''), detail: String(f.detail ?? ''), source: f.source ?? null, check: f.check, raw: f });
   });
   return out;
 }
@@ -158,18 +174,45 @@ export function resolve(dive: any, L: Record<string, any>) {
   // A claim the register contradicts by showing something better is an undersell, not a lie.
   const undersells = credentials.filter((c: any) => c.verdict === 'contradicted' && c.direction === 'undersell');
 
-  // ---- website ----
-  const site = all.filter((x) => x.area === 'website');
-  const copyErrors = site.filter((x) => /^(spelling|grammar|wording)/i.test(x.title) || x.check === 'llm' && /^(spelling|grammar|wording)/i.test(x.title)).length;
+  // ---- website (C-merged, whichever part its checks landed in) ----
+  const site = all.filter((x) => x.lane === 'C-merged');
+  const copyErrors = site.filter((x) => /^(spelling|grammar|wording)/i.test(x.title)).length;
   const phones = L['C-merged']?.notes?.sitePhones ?? null;
 
-  // ---- one status and one measured number per area ----
+  // ---- part 1: contact points ----
+  const inventory: any[] = L['R-contacts']?.notes?.inventory ?? [];
+  const contact = {
+    points: inventory, ok: inventory.filter((p) => p.status === 'current').length, total: inventory.length,
+    bad: inventory.filter((p) => !['current', 'unclear'].includes(p.status)).length,
+    left: inventory.filter((p) => p.left).length, summary: L['R-contacts']?.notes?.summary ?? null,
+  };
+
+  // ---- part 2: the brand as the internet understands it ----
+  const bn = L['B-brand']?.notes ?? {};
+  const brandView = { score: bn.coverage?.score ?? null, why: bn.why_choose_you ?? null, five: bn.five_second_test ?? null, offer: bn.offer ?? [], points: bn.selling_points ?? [], missing: bn.missing ?? [], summary: bn.summary ?? null };
+
+  // ---- part 3: news and discussion ----
+  const nn = L['N-news']?.notes ?? {};
+  const news = { items: nn.items ?? [], counts: nn.counts ?? null, people: nn.people ?? [] };
+
+  // ---- part 4: official records ----
+  const checks: any[] = L['K-credibility']?.notes?.checks ?? [];
+  const risky = checks.filter((c) => ['bnm', 'sc', 'court', 'insolvency'].includes(c.id));
+
+  // ---- part 5: digital assets ----
+  const assetRows: any[] = L['A-assets']?.notes?.domains ?? [];
+  const assetIssues = all.filter((x) => x.area === 'assets' && (x.severity === 'high' || x.severity === 'medium')).length;
+
+  // ---- one status and one measured number per part ----
+  const regOk = credentials.filter((c: any) => c.verdict === 'verified' || c.direction === 'undersell').length;
+  const regCheckable = credentials.filter((c: any) => !/can't check/.test(c.verdict)).length;
   const metric: Record<Area, string | null> = {
-    reputation: totalReviews ? `${replied} of ${totalReviews} reviews answered` : null,
-    findability: byArea[0]?.best_rank ? `#${byArea[0].best_rank} on Google Maps in ${byArea[0].area}` : byArea[0] ? `Not in the top ${byArea[0].of || 20} in ${byArea[0].area}` : null,
-    ai: tradeAnswers ? `Recommended in ${namedUs} of ${tradeAnswers} AI answers` : null,
-    website: `${site.filter((x) => x.severity === 'high').length} urgent faults on your sites`,
-    credentials: credentials.length ? `${credentials.filter((c: any) => c.verdict === 'verified' || c.direction === 'undersell').length} of ${credentials.filter((c: any) => !/can't check/.test(c.verdict)).length} checkable claims confirmed` : null,
+    // Until the judge has spoken, every point is "unclear": count what was traced, not "0 reach you".
+    contact: contact.total ? (inventory.some((p) => p.status && p.status !== 'unclear') ? `${contact.ok} of ${contact.total} contact points reach you` : `${contact.total} contact points traced`) : null,
+    understanding: brandView.score != null ? `Understood ${brandView.score} out of 100` : tradeAnswers ? `Recommended in ${namedUs} of ${tradeAnswers} AI answers` : null,
+    voice: totalReviews ? `${replied} of ${totalReviews} reviews answered${news.counts ? ` · ${news.counts.news} news articles` : ''}` : news.counts ? `${news.counts.news} news articles, ${news.counts.negative} negative mentions` : null,
+    credibility: risky.length ? `${risky.filter((c) => c.result === 'clear').length} of ${risky.length} risk checks clear${regCheckable ? ` · ${regOk} of ${regCheckable} claims confirmed` : ''}` : regCheckable ? `${regOk} of ${regCheckable} checkable claims confirmed` : null,
+    assets: assetRows.length ? `${assetRows.length} domains · ${assetIssues} at risk` : null,
   };
   const areas = AREAS.map((a) => {
     const ran = a.lanes.some((l) => L[l]);
@@ -185,6 +228,7 @@ export function resolve(dive: any, L: Record<string, any>) {
     ai: { memory: memory && { ...memory, trade: undefined }, search: search && { ...search, trade: undefined }, share: shareOfVoice, trade_answers: tradeAnswers, named_us: namedUs, trade_question: tradeQuestion, bad_domain: badDomain },
     credentials: { cidb_grade: cidbGrade, cidb_detail: cidb?.detail ?? null, list: credentials, undersells },
     website: { issues: site.filter((x) => x.severity === 'high' || x.severity === 'medium').length, high: site.filter((x) => x.severity === 'high').length, copy_errors: copyErrors, phones },
+    contact, brand_view: brandView, news, records: { checks, risky }, assets: { domains: assetRows, issues: assetIssues, subdomains: L['A-assets']?.notes?.subdomains ?? [], lookalikes: L['A-assets']?.notes?.lookalikes ?? [] },
     items: all,
   };
 }

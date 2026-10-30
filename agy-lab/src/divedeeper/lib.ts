@@ -228,14 +228,16 @@ export function makeCtx(diveId: string, section: string, lane: string) {
   }
 
   /** Exa search. `text: true` adds page text (capped by Exa's own maxCharacters). */
-  async function exa(query: string, opts: { numResults?: number; text?: boolean | number; type?: string; includeDomains?: string[]; startPublishedDate?: string } = {}): Promise<any[]> {
+  async function exa(query: string, opts: { numResults?: number; text?: boolean | number; type?: string; category?: string; includeDomains?: string[]; excludeDomains?: string[]; startPublishedDate?: string } = {}): Promise<any[]> {
     meter.exa.calls++;
     try {
       const body = {
         query,
         numResults: opts.numResults ?? 10,
         type: opts.type ?? 'auto',
+        ...(opts.category ? { category: opts.category } : {}),
         ...(opts.includeDomains ? { includeDomains: opts.includeDomains } : {}),
+        ...(opts.excludeDomains?.length ? { excludeDomains: opts.excludeDomains } : {}),
         ...(opts.startPublishedDate ? { startPublishedDate: opts.startPublishedDate } : {}),
         ...(opts.text ? { contents: { text: typeof opts.text === 'number' ? { maxCharacters: opts.text } : true } } : {}),
       };
@@ -351,4 +353,26 @@ export async function loadDive(diveId: string, fresh = false): Promise<any> {
 /** The dive's source list as [id] -> url, for citing back into findings. */
 export function sourceUrl(dive: any, id: number): string | null {
   return dive.result?.sources?.find((s: any) => s.id === id)?.url ?? null;
+}
+
+/** Another lane's saved output for this dive (out/<lane>-<diveId>.json), or null when it did not run. */
+export function readLane(diveId: string, lane: string): any | null {
+  const file = path.join(OUT, `${lane}-${diveId}.json`);
+  try { return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null; } catch { return null; }
+}
+
+/** The names a page has to carry to be about this company, and its own domains. */
+export function nameOf(dive: any) {
+  const id = dive.result?.identity ?? {};
+  const legal = String(id.legal_name ?? dive.company ?? '').trim();
+  const bare = legal.replace(/\b(sdn\.?\s*bhd\.?|berhad|bhd\.?|plt|enterprise|holdings?)(?=\W|$)/gi, '').replace(/[^\p{L}\p{N}&' ]+/gu, ' ').replace(/\s+/g, ' ').trim();
+  const short = String(id.aliases?.[0] ?? bare ?? legal).trim();
+  const brand = legal.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').trim().split(/\s+/)[0] ?? '';
+  const domains: string[] = [...new Set<string>((id.official_domains ?? []).map((d: string) => String(d).toLowerCase().replace(/^www\./, '')))];
+  const hostOf = (u: string | null | undefined) => { try { return u ? new URL(u).hostname.toLowerCase().replace(/^www\./, '') : ''; } catch { return ''; } };
+  const own = (u: string | null | undefined) => { const h = hostOf(u); return !!h && domains.some((d) => h === d || h.endsWith('.' + d)); };
+  /** True when the text names the company: the bare legal name or one of its aliases. */
+  const names = [bare, short, ...(id.aliases ?? [])].map((x: string) => String(x).toLowerCase()).filter((x: string) => x.length >= 4);
+  const mentions = (text: string) => { const t = String(text ?? '').toLowerCase().replace(/\s+/g, ' '); return names.some((n) => t.includes(n)); };
+  return { legal, bare, short, brand, domains, hostOf, own, mentions, address: String(id.address ?? ''), industry: String(id.industry ?? '') };
 }

@@ -1,9 +1,11 @@
 // Dive-deeper: the paid stage after a company-dive (docs/dive-deeper-plan.md, step 5).
 //
-// One run per company: the company-dive first (started through its own public API, never
-// touched), then dive-deeper stage 1 (reviews, Maps and web findability, registers, website
-// health, what AI says), stage 2 (consultation) and stage 3 (the editor), then one report stored in the
-// dive_deeper table and served at /dd/<public id>.
+// This is the malaysia-deeper-dive pipeline (docs/country-deeper-dive-plan.md): Malaysian
+// registers, regulators, courts and phone formats. One run per company: the company-dive first
+// (started through its own public API, never touched), then stage 1, whose lanes feed the report's
+// five parts (contact and reachability; how the internet understands the brand; reviews,
+// discussion and news; credibility and official records; digital assets), stage 2 (consultation)
+// and stage 3 (the editor), then one report stored in the dive_deeper table and served at /dd/<public id>.
 //
 // Isolation from company-dive (plan §2): own files, own table, own queue (one run at a time,
 // never in company-dive's queue), read-only on company_dive (plain selects). Everything here
@@ -30,9 +32,12 @@ export const enabled = (env: NodeJS.ProcessEnv = process.env): boolean => /^(1|t
 process.env.DD_G_MODELS ??= 'deepseek-v4.1-flash-1017';
 process.env.DD_G_JUDGE ??= 'deepseek-v4.1-flash-1017';
 
-/** The order lanes run in. E-maps reuses H-maps' listings and C-merged its Maps phones, so both wait for H-maps; S2 reads everything. */
-export const STAGE1_FIRST = [['H', 'maps'], ['H', 'web'], ['D', 'registry'], ['G', 'fixed'], ['G', 'grounded']] as const;
+/** The order lanes run in. E-maps reuses H-maps' listings and C-merged its Maps phones, so both wait for H-maps.
+ *  The last three read what the others found: R-contacts (C-merged's and H-maps' contacts), A-assets
+ *  (C-merged's domains and email addresses), B-brand (C-merged's pages, H-web's results, G-fixed's answers). S2 reads everything. */
+export const STAGE1_FIRST = [['H', 'maps'], ['H', 'web'], ['D', 'registry'], ['G', 'fixed'], ['G', 'grounded'], ['K', 'credibility'], ['N', 'news']] as const;
 export const STAGE1_AFTER_H = [['E', 'maps'], ['C', 'merged']] as const;
+export const STAGE1_LAST = [['R', 'contacts'], ['A', 'assets'], ['B', 'brand']] as const;
 export const STAGE2 = ['S2', 'consult'] as const;
 /** The editor reads everything, S2 included, and writes the report's words and screenshots. */
 export const STAGE3 = ['S3', 'editor'] as const;
@@ -183,6 +188,7 @@ async function execute(id: number): Promise<void> {
       ...STAGE1_FIRST.filter(([s, l]) => !(s === 'H' && l === 'maps')).map(([s, l]) => one(s, l)),
       hMaps.then(() => Promise.all(STAGE1_AFTER_H.map(([s, l]) => one(s, l)))),
     ]);
+    await Promise.all(STAGE1_LAST.map(([s, l]) => one(s, l)));
     await say('stage2', 'Writing the consultation');
     const s2 = await runLane(STAGE2[0], STAGE2[1], diveKey, dive);
     lanes['S2-consult'] = s2;
