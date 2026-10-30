@@ -23,6 +23,7 @@ import * as autoScan from './autoscan.ts';
 import * as contactWorker from './contact-worker.ts';
 import * as mapsWorker from './maps-worker.ts';
 import * as gmapWorker from './gmap-worker.ts';
+import * as countryResearch from './country-research.ts';
 import * as contactKeys from './contact-keys.ts';
 import * as extractLlm from './extract-llm.ts';
 import * as companyDive from './companydive.ts';
@@ -514,6 +515,7 @@ server.listen(PORT, '0.0.0.0', () => {
   void extractLlm.refresh();
   contactWorker.start();
   mapsWorker.start();
+  countryResearch.start();
   // Broker jobs live only in memory. Refill it from saved contact reports after
   // a restart, with no more concurrent jobs than the research lanes can run.
   setInterval(() => {

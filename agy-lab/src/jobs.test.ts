@@ -186,8 +186,9 @@ test('the snapshot joins a running job to the worker that claimed it', async () 
   assert.equal(finished.workers.find((item) => item.name === worker)?.done, 1);
 });
 
-test('m4-mini is retired from gmap.scan: never handed one, never counted live for it', async () => {
+test('m4-mini answers only country research Maps searches, and no longer country jobs', async () => {
   const job = create('gmap.scan', { keyword: 'factory', place: 'Taman Daya' }, 60_000);
+  const city = create('gmap.scan', { keyword: 'advertising agency', place: 'Ipoh, Perak, Malaysia', source: 'country.industry' }, 60_000);
   const claim = async (worker: string): Promise<string | null> => {
     let sent: Record<string, unknown> | null = null;
     const req = { method: 'GET', headers: {}, socket: { remoteAddress: '203.0.113.7' } } as unknown as http.IncomingMessage;
@@ -197,13 +198,16 @@ test('m4-mini is retired from gmap.scan: never handed one, never counted live fo
     await handle(req, res, url, { json: (_res, _status, body) => { sent = body as Record<string, unknown>; }, readJson: async () => ({}) });
     return (sent?.job as { id: string } | undefined)?.id ?? null;
   };
-  assert.equal(await claim('m4-mini'), null);
+  // The business scan was queued first, but the mini is handed the city search.
+  assert.equal(await claim('m4-mini'), city.id);
   assert.equal(job.status, 'pending');
-  await heartbeat('m4-mini', ['ping', 'gmap.scan']);
-  assert.deepEqual(snapshot().workers.find((w) => w.name === 'm4-mini')?.types, ['ping']);
+  assert.equal(await claim('m4-mini'), null, 'never a business scan or taman scan');
   // Any other machine still takes the scan.
   assert.equal(await claim('scan-host'), job.id);
   finish(job.id, true, {}, null);
+  finish(city.id, true, {}, null);
+  await heartbeat('m4-mini-country', ['country.industry']);
+  assert.ok(!(snapshot().workers.find((w) => w.name === 'm4-mini-country')?.types ?? []).includes('country.industry'), 'the hub runs country jobs now');
 });
 
 test('country research heartbeat renews only the current worker lease', async () => {

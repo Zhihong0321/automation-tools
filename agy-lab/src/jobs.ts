@@ -159,18 +159,43 @@ export function isDurableContactJob(type: string): boolean {
 
 /**
  * Job types a machine has been retired from, keyed by worker-name prefix so every
- * lane of that machine is covered. The mini's Maps daemon could not be stopped
- * from here, so the broker stops listening to it instead: its offer of
- * `gmap.scan` is dropped at the door, it is never handed one, and it no longer
- * counts toward liveTypes() — a business search then fails fast with "worker
- * is offline" rather than queueing a scan for a machine that should not run it.
+ * lane of that machine is covered. Its offer of the type is dropped at the
+ * door, it is never handed one, and it does not count toward liveTypes().
+ *
+ * The mini's country lane is retired since 2026-10-30: the hub runs
+ * country.industry itself (country-research.ts) and sends its Maps searches to
+ * the queue, where the mini can still answer them (countryScanOnly below).
  */
 const RETIRED_TYPES: Array<{ prefix: string; types: string[] }> = [
-  { prefix: 'm4-mini', types: ['gmap.scan'] },
+  { prefix: 'm4-mini', types: ['country.industry'] },
 ];
 
 export function isRetired(worker: string, type: string): boolean {
   return RETIRED_TYPES.some((r) => worker.startsWith(r.prefix) && r.types.includes(type));
+}
+
+/**
+ * The mini's Chrome Maps scan found 118 businesses in Taman Daya where the
+ * scraper.tech sweep found 1,838, so it gets no business search or taman scan.
+ * It answers only the per-city searches of country research, whose jobs carry
+ * `source: 'country.industry'`.
+ */
+function countryScanOnly(worker: string, job: Job): boolean {
+  return worker.startsWith('m4-mini') && job.type === 'gmap.scan'
+    && (job.payload as { source?: unknown } | null)?.source !== 'country.industry';
+}
+
+/**
+ * Keep an in-hub country job's lease alive and, with `progress`, record where
+ * it is. The progress route below does the same for a remote worker's post.
+ */
+export function renewCountryJob(id: string, worker: string, progress?: { phase: string; completed: number; total: number | null; message: string }): boolean {
+  const job = jobs.get(id);
+  if (!job || job.type !== 'country.industry' || job.status !== 'running' || job.worker !== worker) return false;
+  const updated = { ...job, leaseUpdatedAt: now(), ...(progress ? { progress: { ...progress, updatedAt: now() } } : {}) };
+  saveCountryJob(updated);
+  Object.assign(job, updated);
+  return true;
 }
 
 export function touch(name: string, ip: string | null, types?: string[] | null, group?: string | null): WorkerInfo {
@@ -266,6 +291,7 @@ function pending(types: string[] | null, worker: string): Job | null {
     if (types && !types.includes(job.type)) continue;
     const pin = pinnedTo(job);
     if (pin && pin !== worker) continue;
+    if (countryScanOnly(worker, job)) continue;
     return job;
   }
   return null;
@@ -286,7 +312,7 @@ function lease(job: Job, worker: string): Job {
 function wake(job: Job): void {
   const pin = pinnedTo(job);
   const i = waiters.findIndex((w) => !cooldownFor(workers.get(w.worker)?.cooldownGroup ?? null)
-    && (!w.types || w.types.includes(job.type)) && (!pin || pin === w.worker));
+    && (!w.types || w.types.includes(job.type)) && (!pin || pin === w.worker) && !countryScanOnly(w.worker, job));
   if (i === -1) return;
   const w = waiters.splice(i, 1)[0]!;
   clearTimeout(w.timer);
