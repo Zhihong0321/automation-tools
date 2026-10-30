@@ -84,7 +84,7 @@ export function parseBilling(subscription: unknown, usage: unknown): { limitUsd:
 
 async function extract(fetchImpl: FetchImpl) {
   const cfg = extractLlm.config();
-  if (!cfg) return { level: 'unknown' as Level, configured: false, note: 'CONTACT_LLM_URL is not set; contact research extracts with MiniMax' };
+  if (!cfg) return { level: 'unknown' as Level, configured: false, note: 'no extract model lane is saved on /workers; contact research extracts with MiniMax' };
   try {
     const billing = await cached('extract', async () => {
       const get = async (path: string) => {

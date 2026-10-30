@@ -352,7 +352,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     }
 
     if (method === 'POST' && p === '/api/email-marketing/drafts') {
-      if (!llm.config()) return send_(503, { error: 'CONTACT_LLM_URL, CONTACT_LLM_KEY and CONTACT_LLM_MODEL are not set on the hub' });
+      if (!llm.config()) return send_(503, { error: 'no extract model lane is saved on /workers' });
       const body = await ctx.readJson(req);
       const email = String(body.email ?? '').trim().toLowerCase();
       if (!email) return send_(400, { error: 'email is required' });

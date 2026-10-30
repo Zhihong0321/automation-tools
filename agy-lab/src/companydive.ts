@@ -144,7 +144,7 @@ export type Warn = (msg: string) => void | Promise<void>;
  */
 export async function streamChat(prompt: string, fetchImpl: typeof fetch = fetch): Promise<string> {
   const cfg = extractLlm.config();
-  if (!cfg) throw Object.assign(new Error('CONTACT_LLM_URL, CONTACT_LLM_KEY and CONTACT_LLM_MODEL are not all set'), { code: 'not_configured' });
+  if (!cfg) throw Object.assign(new Error('no extract model lane is saved on /workers'), { code: 'not_configured' });
   const res = await fetchImpl(cfg.url + '/chat/completions', {
     method: 'POST',
     headers: { authorization: 'Bearer ' + cfg.key, 'content-type': 'application/json' },

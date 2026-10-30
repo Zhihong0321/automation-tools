@@ -19,6 +19,7 @@ import crypto from 'node:crypto';
 import * as reportdb from './reportdb.ts';
 import * as brave from './brave.ts';
 import * as exa from './exa.ts';
+import * as extractLlm from './extract-llm.ts';
 import { configure, makeCtx } from './divedeeper/lib.ts';
 import { runLane, stageDive, type LaneResult } from './divedeeper/runner.ts';
 import { buildReport } from './divedeeper/report-html.ts';
@@ -98,7 +99,7 @@ function configureKeys(): void {
   let exaNext = 0;
   configure({
     secret: (name) => {
-      if (name === 'VECTIDE_DEEPSEEK_KEY') return process.env.CONTACT_LLM_KEY;
+      if (name === 'VECTIDE_DEEPSEEK_KEY') return extractLlm.pool().find((c) => c.url.includes('vectide.cn'))?.key ?? process.env.CONTACT_LLM_KEY;
       if (name === 'BRAVE_SEARCH_API_KEY') return brave.keys()[0];
       if (name === 'BRAVE_SEARCH_API_KEY_2') return brave.keys()[1];
       return undefined;
