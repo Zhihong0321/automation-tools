@@ -16,7 +16,7 @@
 // It sits on a public link and goes to someone who has not paid, so it names only the company and
 // its publicly named leadership: no staff names, no phone numbers, no private document links, and
 // no research write-up (privacy.ts). Sources are the ones the company-dive judged to be about them.
-import { CHAPTER_EYEBROW, CHAPTER_ORDER, OPENERS, PART_OPENERS, esc } from './report-html.ts';
+import { CHAPTER_EYEBROW, CHAPTER_ORDER, NB, OPENERS, PART_OPENERS, esc, tie, typeset } from './report-html.ts';
 import { isLeadership, publicSources, scrub } from './privacy.ts';
 import type { PreviewNotes } from './preview-editor.ts';
 
@@ -28,21 +28,6 @@ const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\.
 const dateOf = (iso: string | undefined | null) => (iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '');
 // "July 2023 in [1][3] vs …" reads as "July 2023 vs …": the citation and the word that led into it go.
 const noCites = (s: string) => s.replace(/(?:\s+(?:in|on|from|per|by|at))?\s*(?:\[\d+\])+/g, '').replace(/\s+([.,;:)])/g, '$1').replace(/\s+/g, ' ').trim();
-/** Research text set like print: curly quotes and apostrophes, real dashes and ellipses, and no line break
- *  between a number and its unit or currency ("RM 1.2 million", "10.75 MWp", "435 days"). */
-const NB = '\u00a0';
-const typeset = (s: string) => s
-  .replace(/\.{3}/g, '…')
-  .replace(/(\S)\s+--?\s+(?=\S)/g, `$1${NB}– `)
-  .replace(/(\w)--(\w)/g, '$1—$2')
-  .replace(/\b((?:19|20)\d{2})-((?:19|20)\d{2})\b/g, '$1–$2')
-  .replace(/(\w)'(\w)/g, '$1’$2')
-  .replace(/(^|[\s(\[—–])'/g, '$1‘').replace(/'/g, '’')
-  .replace(/(^|[\s(\[—–])"/g, '$1“').replace(/"/g, '”')
-  .replace(/\b(RM|USD|SGD|SSM|No\.)\s+(?=\d)/g, `$1${NB}`)
-  .replace(/(\d)\s+(?=%|(?:MWp|kWp|kW|MW|GWh|MWh|kWh|km|sq\.? ?ft|mil|million|billion|days?|weeks?|months?|years?|hours?|reviews?|projects?|plants?|staff)\b)/g, `$1${NB}`);
-/** Ties the last two words of a short line together, so a title never ends on one word alone. */
-const tie = (s: string) => s.replace(/\s+(\S{1,14})$/, `${NB}$1`);
 /** A string for a CSS `content:` value. */
 const cssStr = (s: string) => `"${s.replace(/[\\"]/g, '\\$&').replace(/[\r\n<>]+/g, ' ')}"`;
 const shortName = (n: string) => n.replace(/\s+(Sdn\.?\s*Bhd\.?|Berhad|Bhd\.?|Enterprise|PLT|Pte\.?\s*Ltd\.?)$/i, '').trim() || n;

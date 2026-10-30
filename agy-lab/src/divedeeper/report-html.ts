@@ -75,11 +75,33 @@ export const CHAPTER_EYEBROW: Record<string, string> = {
   reputation: 'Reputation', findability: 'Search and Maps', ai: 'AI assistants', website: 'Your websites', credentials: 'Licences and awards',
 };
 
+/** Research and editor text set like print: curly quotes and apostrophes, real dashes and ellipses, and no
+ *  line break between a number and its unit or currency ("RM 1.2 million", "10.75 MWp", "435 days"). */
+export const NB = '\u00a0';
+export const typeset = (s: string) => s
+  .replace(/\.{3}/g, '…')
+  .replace(/(\S)\s+--?\s+(?=\S)/g, `$1${NB}– `)
+  .replace(/(\w)--(\w)/g, '$1—$2')
+  .replace(/\b((?:19|20)\d{2})-((?:19|20)\d{2})\b/g, '$1–$2')
+  .replace(/(\w)'(\w)/g, '$1’$2')
+  .replace(/(^|[\s(\[—–])'/g, '$1‘').replace(/'/g, '’')
+  .replace(/(^|[\s(\[—–])"/g, '$1“').replace(/"/g, '”')
+  .replace(/\b(RM|USD|SGD|SSM|No\.)\s+(?=\d)/g, `$1${NB}`)
+  .replace(/(\d)\s+(?=%|(?:MWp|kWp|kW|MW|GWh|MWh|kWh|km|sq\.? ?ft|mil|million|billion|days?|weeks?|months?|years?|hours?|reviews?|projects?|plants?|staff)\b)/g, `$1${NB}`);
+/** Ties the last two words of a short line together, so a title never ends on one word alone. */
+export const tie = (s: string) => s.replace(/\s+(\S{1,14})$/, `${NB}$1`);
+/** typeset() through every string of a lane's notes, leaving links, slugs, ids and code alone. */
+export const typesetAll = (v: any, key = ''): any => (typeof v === 'string'
+  ? (/^(url|source|slug|href|img|key|theme|dept|when|ready|id|items|jsonld|effort|impact)$/i.test(key) || /^https?:\/\//.test(v) ? v : typeset(v))
+  : Array.isArray(v) ? v.map((x) => typesetAll(x, key))
+  : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'jsonld' ? x : typesetAll(x, k)]))
+  : v);
+
 export const esc = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 /** Markdown of the company-dive dossier to HTML: headings, tables, lists, bold, [n] citations. */
 export function md(src: string): string {
-  const inline = (s: string) => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\[(\d+)\]/g, '<a class="cite" href="#src-$1">[$1]</a>');
+  const inline = (s: string) => esc(typeset(s)).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\[(\d+)\]/g, '<a class="cite" href="#src-$1">[$1]</a>');
   const out: string[] = [];
   const lines = src.split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -209,6 +231,20 @@ pre { margin:0; background:var(--band); padding:12px; overflow-x:auto; font-size
 a.cite { font-size:.75em; text-decoration:none; vertical-align:super; color:var(--grey); }
 details > summary { cursor:pointer; font-family:var(--display); font-weight:600; font-size:15px; padding:10px 0; border-top:1px solid var(--line); }
 ol.sources { padding-left:28px; display:grid; gap:2px; font-size:10px; color:var(--grey); } ol.sources li { overflow-wrap:anywhere; }
+/* the craft layer: type set like print, figures that line up, a running foot on every sheet */
+body { font-kerning:normal; text-rendering:optimizeLegibility; font-feature-settings:"kern","calt"; }
+.dark, .panel.dark, .three .item:first-child, .rows a, .hero, .board tr.me td, .depts a:first-child, .weeks > div:first-child { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+h1, h2, h3, h4, .kicker { text-wrap:balance; } p, li, figcaption, blockquote, .verdict { text-wrap:pretty; }
+.lead, .verdict, blockquote, .quote, .reply .q { hanging-punctuation:first allow-end; }
+.stats b, .board, .band, .depts b, .three .n, .fixes > div::before, .aside .big, .pf, .colophon, ol.sources { font-variant-numeric:tabular-nums lining-nums; }
+::selection { background:var(--ink); color:#fff; } .dark ::selection, .panel.dark ::selection { background:#fff; color:var(--ink); }
+a:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
+.pf { border-top:1px solid var(--line); padding-top:5px; } .dark .pf { border-top-color:#2a3038; } .pf .sec { margin-right:12px; } .pf b { font-weight:600; color:var(--ink); } .dark .pf b { color:var(--on-dark); }
+.aside .checked { font-size:10px; color:var(--muted); }
+.empty { background:var(--band); border-left:3px solid var(--good); padding:10px 14px; font-size:12px; color:var(--grey); } .empty b { color:var(--ink); font-weight:600; }
+.quotes cite::before { content:"— "; }
+.colophon { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; border-top:1px solid var(--ink); padding-top:10px; margin-top:10px; font-size:11.5px; } .colophon p:not(.lbl) { color:var(--ink); }
+.method { max-width:62em; }
 /* Three versions of one document. The base above is the A4 sheet; on screen the <html> class picks
    v-a4 (sheets on a desk), v-desktop (wide sections) or v-mobile (one column). Print is always A4. */
 .viewbar, .chapnav { display:none; }
@@ -240,6 +276,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:10px; color:var
   .v-desktop .weeks ul { font-size:13px; } .v-desktop .reply { font-size:14px; } .v-desktop blockquote { font-size:14.5px; }
   .v-desktop .opener { gap:56px; } .v-desktop .aside .big { font-size:24px; } .v-desktop figcaption, .v-desktop .note { font-size:12.5px; }
   .v-desktop .shots { grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:18px; } .v-desktop .hero .hl { font-size:32px; }
+  .v-desktop .colophon { font-size:14px; } .v-desktop .empty { font-size:14.5px; padding:14px 18px; } .v-desktop .aside .checked { font-size:12px; }
 
   /* mobile: one column, thumb-sized type; on a wide screen it previews at phone width */
   .v-mobile body { font-size:16px; max-width:480px; margin:0 auto; box-shadow:0 0 0 1px var(--line); }
@@ -261,6 +298,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:10px; color:var
   .v-mobile .board .barc { display:none; } .v-mobile .board td { font-size:13.5px; padding:9px 6px; }
   .v-mobile .fixes > div { grid-template-columns:1fr; gap:6px; } .v-mobile .fixes .tags { justify-items:start; display:flex; gap:6px; } .v-mobile .fixes h4 { font-size:15px; }
   .v-mobile .box, .v-mobile .panel { font-size:14.5px; } .v-mobile .hero .hl { font-size:24px; } .v-mobile figcaption, .v-mobile .note { font-size:12.5px; }
+  .v-mobile .colophon { grid-template-columns:1fr 1fr; font-size:13.5px; } .v-mobile .empty { font-size:14px; }
   .v-mobile .gtop { flex-wrap:wrap; } .v-mobile pre { font-size:11px; } .v-mobile .small { font-size:14px; } .v-desktop .small { font-size:14px; }
 }
 /* A4 on a small screen: the sheets scroll sideways inside the desk instead of breaking. */
@@ -271,6 +309,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:10px; color:var
   body { background:none; } .page { margin:0; box-shadow:none; width:210mm; min-height:297mm; break-after:page; -webkit-box-decoration-break:clone; box-decoration-break:clone; }
   .page:last-child { break-after:auto; } .band tr, .box, .panel, figure, .fixes > div, .depts, .gcard, .reply, .three .item, .weeks, .hero, .pair, .opener, pre { break-inside:avoid; }
   h2, h3, h4, .sub, .tbl-h, .kicker, .lbl { break-after:avoid; }
+  thead { display:table-header-group; } .board tr, .tasks tr, .quotes blockquote, .colophon, .aside, .empty { break-inside:avoid; } p, li { orphans:3; widows:3; }
   details > :not(summary) { display:block; } details::details-content { display:block; content-visibility:visible; } details > summary { list-style:none; }
 }
 `;
@@ -331,8 +370,8 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   const s2 = L['S2-consult']?.notes ?? {};
   const ed = L['S3-editor']?.notes ?? {};
   // Runs before S4 kept the verdict, the stories and the mismatches in the editor's notes.
-  const an = L['S4-analysis']?.notes ?? ed;
-  const plain: Record<string, { title: string; why: string }> = ed.plain ?? {};
+  const an = typesetAll(L['S4-analysis']?.notes ?? ed);
+  const plain: Record<string, { title: string; why: string }> = typesetAll(ed.plain ?? {});
   const shots: any[] = ed.shots ?? [];
   const trade = String((R.plan?.trades ?? [])[0] ?? 'business like yours');
   const town = String(R.hq ?? (R.plan?.areas ?? [])[0] ?? 'your town');
@@ -346,7 +385,7 @@ export function buildReport(dive: any, L: Record<string, any>): string {
     if (!u || !/^https?:\/\//.test(u) || isPrivateUrl(u)) return '';
     const h = hostOf(u);
     const where = /google\.[a-z.]+$/.test(h) && /\/maps/.test(u) ? 'Google Maps' : /search\.brave\.com/.test(h) ? 'search results' : h;
-    return `<a class="see" href="${esc(u)}" target="_blank" rel="noopener">${esc(where)} ↗</a>`;
+    return `<a class="see" href="${esc(u)}" target="_blank" rel="noopener">${esc(where)}&nbsp;↗</a>`;
   };
   const dateOf = (iso: string | undefined | null) => (iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '');
   const monthOf = (ym: string) => new Date(ym + '-01T00:00:00Z').toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' });
@@ -358,8 +397,8 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   const rawTitle = (t: string) => t.replace(/^(VERIFIED|CONTRADICTED|NOT FOUND|CAN'T CHECK AUTOMATICALLY|PRIVATE):\s*/i, '').replace(/\s*\[\d+ of \d+ asks[^\]]*\]/g, '').replace(/deepseek-v[\d.]+-flash(-\d+)?/gi, 'DeepSeek').replace(/gpt-[\d.]+-?\w*/gi, 'GPT');
   /** Stage-2 text built from raw finding titles keeps their machine bits; strip them for print (and any private link). */
   const tidy = (t: unknown) => scrub(rawTitle(String(t ?? ''))).replace(/\s*\((?:DNS )?ENOTFOUND\)/g, '').replace(/doesnt_know/g, "don't know").replace(/\s*;?\s*others: [a-z_]+/g, '').replace(/\s{2,}/g, ' ');
-  const T = (x: Item) => scrub(plain[x.key]?.title || rawTitle(x.title));
-  const why = (x: Item) => scrub(plain[x.key]?.why || '');
+  const T = (x: Item) => typeset(scrub(plain[x.key]?.title || rawTitle(x.title)));
+  const why = (x: Item) => typeset(scrub(plain[x.key]?.why || ''));
   const stars = (n: number) => '★★★★★'.slice(0, Math.max(0, Math.min(5, n))) + '☆☆☆☆☆'.slice(0, 5 - Math.max(0, Math.min(5, n)));
   const areaOf = (id: string) => R.areas.find((a) => a.id === id);
   const byArea = (id: string) => R.items.filter((x) => x.area === id).sort((a, b) => (sevRank[a.severity] ?? 9) - (sevRank[b.severity] ?? 9));
@@ -374,12 +413,12 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   /** Finding rows in a banded table: status, finding with what it means, where we saw it. */
   const itemRows = (list: Item[]) => list.length ? `<table class="band items"><tbody>${list.map((x) => `<tr><td class="st-cell"><span class="pill ${sevClass(x.severity)}">${esc(sevWord(x.severity))}</span></td><td><p class="t">${esc(T(x))}</p>${why(x) ? `<p class="w">${esc(why(x))}</p>` : ''}</td><td class="where">${seeIt(x.source)}</td></tr>`).join('')}</tbody></table>` : '';
   let pageNo = 0;
-  const foot = () => `<footer class="pf"><span>${esc(name)} · Online Presence Audit ${esc(R.checked_on.slice(0, 4))}</span><span>${++pageNo}</span></footer>`;
+  const foot = (section = '') => `<footer class="pf"><span>${esc(name)} · Online Presence Audit ${esc(R.checked_on.slice(0, 4))}</span><span>${section ? `<span class="sec">${esc(section)}</span>` : ''}<b>${String(++pageNo).padStart(2, '0')}</b></span></footer>`;
 
   // ---------- visuals ----------
   /** Google-style card for an unanswered bad review. */
   const reviewCard = (x: any) => `<figure class="gcard"><div class="gtop"><span class="av" aria-hidden="true">${esc(String(x.author ?? '?').trim().charAt(0).toUpperCase())}</span><div><b>${esc(x.author)}</b> <span class="stars">${stars(x.stars)}</span><span class="muted"> · ${esc(dateOf(x.date))} · ${esc(x.listing)}</span></div></div>
-    ${x.text ? `<blockquote>${esc(clip(String(x.text), 420))}</blockquote>` : '<p class="muted">(a star rating with no text)</p>'}
+    ${x.text ? `<blockquote>“${esc(typeset(clip(String(x.text), 420)))}”</blockquote>` : '<p class="muted">(a star rating with no text)</p>'}
     <p class="noreply">No reply from the owner${x.days_open != null ? ` for ${esc(x.days_open)} days` : ''}</p></figure>`;
 
   /** Reviews a month, with the spike and the 1★ months marked. */
@@ -441,7 +480,7 @@ export function buildReport(dive: any, L: Record<string, any>): string {
     };
     return `<figure class="chart"><table class="board">${modes.map((md) => `<thead><tr><th colspan="3">${esc(md.label)}</th></tr></thead><tbody>${md.models.map(bar).join('')}</tbody>`).join('')}</table>
       <figcaption>Questions about you by name: phone, address, website, licences, reputation. <span class="k s-good"></span> right <span class="k s-fix"></span> partly right <span class="k s-urgent"></span> wrong <span class="k s-none"></span> did not know you</figcaption></figure>
-      ${(R.ai.memory?.wrong_examples ?? []).length ? `<div class="panel dark"><p class="lbl">What an assistant told a customer about you</p>${R.ai.memory!.wrong_examples.slice(0, 3).map((w: any) => `<p class="quote">“${esc(clip(w.claim, 140))}”</p>`).join('')}<p class="small">None of these is correct.</p></div>` : ''}`;
+      ${(R.ai.memory?.wrong_examples ?? []).length ? `<div class="panel dark"><p class="lbl">What an assistant told a customer about you</p>${R.ai.memory!.wrong_examples.slice(0, 3).map((w: any) => `<p class="quote">“${esc(typeset(clip(w.claim, 140)))}”</p>`).join('')}<p class="small">None of these is correct.</p></div>` : ''}`;
   }
 
   const shotFig = (s: any) => `<figure class="shot"><img src="data:image/jpeg;base64,${s.img}" alt="${esc(s.caption)}" loading="lazy"><figcaption><b>${esc(s.caption)}.</b> ${esc(hostOf(s.url))}${esc(pathOf(s.url))} · ${esc(dateOf(s.taken_at))}</figcaption></figure>`;
@@ -474,10 +513,10 @@ export function buildReport(dive: any, L: Record<string, any>): string {
     const b = R.brand_view;
     if (b.score == null && !b.offer.length) return '';
     const pill = (v: string) => { const [c, l] = PILL3[String(v)] ?? ['info', String(v || '–')]; return `<span class="pill ${c}">${esc(l)}</span>`; };
-    return `<div class="pair"><div class="panel dark"><p class="lbl">Why choose you, as a stranger reads it</p><p class="quote">${b.why ? `“${esc(clip(String(b.why), 220))}”` : 'Nothing online answers it.'}</p></div>
-      <div class="panel light"><p class="lbl">The five-second test of your homepage</p><p><b>${b.five?.pass === false ? 'Fails.' : b.five?.pass ? 'Passes.' : '–'}</b> ${esc(clip(String(b.five?.understood ?? ''), 160))}${b.five?.problem ? ` ${esc(clip(String(b.five.problem), 160))}` : ''}</p></div></div>
+    return `<div class="pair"><div class="panel dark"><p class="lbl">Why choose you, as a stranger reads it</p><p class="quote">${b.why ? `“${esc(typeset(clip(String(b.why), 220)))}”` : 'Nothing online answers it.'}</p></div>
+      <div class="panel light"><p class="lbl">The five-second test of your homepage</p><p><b>${b.five?.pass === false ? 'Fails.' : b.five?.pass ? 'Passes.' : '–'}</b> ${esc(typeset(clip(String(b.five?.understood ?? ''), 160)))}${b.five?.problem ? ` ${esc(clip(String(b.five.problem), 160))}` : ''}</p></div></div>
       ${b.offer.length ? `<table class="band"><thead><tr><th>What you sell</th><th>Outside your site</th><th>AI assistants</th></tr></thead><tbody>${b.offer.slice(0, 8).map((o: any) => `<tr><td>${esc(clip(String(o.item), 90))}</td><td>${pill(o.outside)}</td><td>${pill(o.ai)}</td></tr>`).join('')}</tbody></table>` : ''}
-      ${b.missing.length ? `<p class="note"><b>Questions buyers ask that nothing online answers:</b> ${esc(b.missing.slice(0, 6).join('; '))}.</p>` : ''}`;
+      ${b.missing.length ? `<p class="note"><b>Questions buyers ask that nothing online answers:</b> ${esc(typeset(b.missing.slice(0, 6).join('; ')))}.</p>` : ''}`;
   }
   const SENT: Record<string, [string, string]> = { positive: ['good', 'Positive'], neutral: ['info', 'Neutral'], negative: ['urgent', 'Negative'] };
   /** News, forum and social mentions of the company and its people, the negative ones first. */
@@ -486,7 +525,7 @@ export function buildReport(dive: any, L: Record<string, any>): string {
     if (!list.length) return R.news.counts ? '<p class="note">No news story, forum thread or public post about you or your key people turned up.</p>' : '';
     return `<table class="band"><thead><tr><th>When</th><th>What is said</th><th></th></tr></thead><tbody>${list.map((x: any) => {
       const [c, l] = SENT[x.sentiment] ?? SENT.neutral;
-      return `<tr><td class="small">${esc(x.date || '–')}<br><span class="muted">${esc(x.host)}</span></td><td><p class="t">${x.about === 'person' && x.person ? `<b>${esc(x.person)}:</b> ` : ''}${esc(clip(String(x.summary ?? x.title), 200))}</p>${x.quote ? `<p class="w">“${esc(clip(String(x.quote), 180))}”</p>` : ''}</td><td><span class="pill ${c}">${esc(l)}</span>${seeIt(x.url)}</td></tr>`;
+      return `<tr><td class="small">${esc(x.date || '–')}<br><span class="muted">${esc(x.host)}</span></td><td><p class="t">${x.about === 'person' && x.person ? `<b>${esc(x.person)}:</b> ` : ''}${esc(typeset(clip(String(x.summary ?? x.title), 200)))}</p>${x.quote ? `<p class="w">“${esc(clip(String(x.quote), 180))}”</p>` : ''}</td><td><span class="pill ${c}">${esc(l)}</span>${seeIt(x.url)}</td></tr>`;
     }).join('')}</tbody></table>`;
   }
   const CHECK_PILL: Record<string, [string, string]> = { signals: ['good', 'Signals found'], conflict: ['urgent', 'Possible conflict'], none: ['info', 'Nothing found'], clear: ['good', 'Clear'], found: ['urgent', 'Found'], public: ['good', 'Public'], not_public: ['info', 'Not public'], not_checked: ['info', 'Not checked'], could_not_check: ['info', 'Could not check'] };
@@ -496,7 +535,7 @@ export function buildReport(dive: any, L: Record<string, any>): string {
     if (!cs.length) return '';
     return `<table class="band"><thead><tr><th>Record</th><th>What it shows</th><th>Result</th></tr></thead><tbody>${cs.map((c: any) => {
       const [cls, lbl] = c.id === 'gov' && c.result === 'found' ? ['good', 'On record'] : CHECK_PILL[c.result] ?? CHECK_PILL.not_checked;
-      return `<tr><td><b>${esc(c.label)}</b>${c.where ? `<br><span class="muted small">${esc(c.where)}</span>` : ''}</td><td class="small">${esc(clip(String(c.detail ?? ''), 220))}</td><td><span class="pill ${cls}">${esc(lbl)}</span>${seeIt(c.source)}</td></tr>`;
+      return `<tr><td><b>${esc(c.label)}</b>${c.where ? `<br><span class="muted small">${esc(c.where)}</span>` : ''}</td><td class="small">${esc(typeset(clip(String(c.detail ?? ''), 220)))}</td><td><span class="pill ${cls}">${esc(lbl)}</span>${seeIt(c.source)}</td></tr>`;
     }).join('')}</tbody></table>`;
   }
   /** How the world's mail systems see each email domain: blacklists, then the records that prove mail is really yours. */
@@ -566,17 +605,17 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   };
   const themes = [...CHAPTER_ORDER] as string[];
   const edStories: any[] = (an.stories ?? []).filter((s: any) => themes.includes(s.theme));
-  const stories = (edStories.length ? edStories : themes.filter((t) => areaOf(t)?.ran && areaOf(t)?.status[0] !== 'good').slice(0, 3).map((t) => ({ theme: t, ...fallback[t]() })))
-    .map((s: any) => ({ ...fallback[s.theme](), ...Object.fromEntries(Object.entries(s).filter(([, v]) => typeof v === 'string' && v.trim())) }));
+  const stories: any[] = typesetAll((edStories.length ? edStories : themes.filter((t) => areaOf(t)?.ran && areaOf(t)?.status[0] !== 'good').slice(0, 3).map((t) => ({ theme: t, ...fallback[t]() })))
+    .map((s: any) => ({ ...fallback[s.theme](), ...Object.fromEntries(Object.entries(s).filter(([, v]) => typeof v === 'string' && v.trim())) })));
   const storyOf = (t: string) => stories.find((s: any) => s.theme === t);
   // The speed part shows only when Google scored a homepage; without its key the run has nothing to say there.
   const chapters = CHAPTER_ORDER.filter((id) => areaOf(id)?.ran && (id !== 'speed' || R.speed.pages.length > 0));
   const chapterNo = (id: string) => chapters.indexOf(id as any) + 1;
 
   const verdict = an.verdict ?? '';
-  const site = s2.site ?? null;
-  const ai = s2.ai ?? null;
-  const replies = s2.replies ?? null;
+  const site = typesetAll(s2.site ?? null);
+  const ai = typesetAll(s2.ai ?? null);
+  const replies = typesetAll(s2.replies ?? null);
   const targets: any[] = s2.reply_targets ?? [];
   // The client's own report may name their staff, but lists no private document and no source the dive judged unrelated.
   const sources = publicSources(r.sources) as any[];
@@ -595,7 +634,7 @@ export function buildReport(dive: any, L: Record<string, any>): string {
 
   // Private alerts: register data exposing personal IDs, plus private documents a search engine indexed.
   const privateItems: string[] = [];
-  for (const f of L['D-registry']?.findings ?? []) if (/^PRIVATE/i.test(f.title)) privateItems.push(`<b>${esc(f.title.replace(/^PRIVATE:\s*/i, ''))}.</b> ${esc(clip(String(f.detail ?? ''), 300))}`);
+  for (const f of L['D-registry']?.findings ?? []) if (/^PRIVATE/i.test(f.title)) privateItems.push(`<b>${esc(f.title.replace(/^PRIVATE:\s*/i, ''))}.</b> ${esc(typeset(clip(String(f.detail ?? ''), 300)))}`);
   const searched = [
     ...Object.values(L['G-grounded']?.notes?.search_results ?? {}).flatMap((v: any) => (Array.isArray(v) ? v : v?.rows ?? []).map((x: any) => x.url ?? x)),
     ...(L['H-web']?.notes?.nameRows ?? []).map((x: any) => x.url),
@@ -603,8 +642,9 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   const docs = [...new Set(searched.filter((u: string) => /proposal|invoice|\/inv[-/]|[?&]uid=|quotation/i.test(u)))];
   if (docs.length) privateItems.push(`<b>Search engines have indexed ${docs.length} private document link${docs.length === 1 ? '' : 's'}</b> (proposals or invoices meant for one customer). Put these behind a login or mark them no-index.`);
 
-  const mismatch: any[] = an.mismatch?.length ? an.mismatch : (r.contradictions ?? []).slice(0, 5).map((c: string) => ({ issue: c.replace(/\[\d+\]/g, '').replace(/\s+/g, ' ').trim(), settled: null }));
+  const mismatch: any[] = an.mismatch?.length ? an.mismatch : (r.contradictions ?? []).slice(0, 5).map((c: string) => ({ issue: typeset(c.replace(/\[\d+\]/g, '').replace(/\s+/g, ' ').trim()), settled: null }));
   const checkedOn = dateOf(R.checked_on);
+  const refNo = dive?.id != null && /^\d+$/.test(String(dive.id)) ? `No.${NB}${String(dive.id).padStart(4, '0')}` : '';
   // The assistants section G actually asked (the hub asks DeepSeek only), named for the method note.
   const modelNames = [...new Set(['G-fixed', 'G-grounded'].flatMap((l) => L[l]?.notes?.models ?? []).map((m: string) => (/deepseek/i.test(m) ? 'DeepSeek V4.1 Flash' : /gpt-6\.1/i.test(m) ? 'GPT-6.1' : m)))];
   const aiModels = modelNames.length ? modelNames.join(' and ') : 'AI assistants';
@@ -622,15 +662,15 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   <p class="eyebrow">Part ${n} · ${esc(CHAPTER_EYEBROW[id])}</p>
   <h2 class="display">${twoTone(op.q[0], op.q[1])}</h2>
   <div class="opener"><p class="lead">${esc(op.body({ trade, town }))}</p>
-    <div class="aside"><p class="lbl">What we measured</p><p class="big">${esc(a.metric ?? '–')}</p><span class="pill ${a.status[0]}">${esc(a.status[1])}</span></div></div>
+    <div class="aside"><p class="lbl">What we measured</p><p class="big">${esc(a.metric ?? 'Not measured in this run')}</p><span class="pill ${a.status[0]}">${esc(a.status[1])}</span><p class="checked">Checked ${esc(checkedOn)}</p></div></div>
   <h3 class="sub">What we found</h3>
   ${subtitle ? `<p class="kicker">${esc(subtitle)}</p>` : ''}
   ${s?.body ? `<p class="body">${esc(s.body)}</p>` : ''}
   ${visual(id)}
   ${s ? `<div class="pair"><div class="panel dark"><p class="lbl">What it costs you</p><p>${esc(s.cost)}</p></div><div class="panel light"><p class="lbl">Do this first</p><p>${esc(s.fix)}</p></div></div>` : ''}
-  ${list.length ? `<h4 class="tbl-h">The items that matter most</h4>${itemRows(list.slice(0, 6))}` : '<p class="note">Nothing urgent here.</p>'}
-  ${rest > 0 ? `<p class="note">${rest} more finding${rest === 1 ? '' : 's'} in this part are in the <a href="#appx-${id}">full checklist</a>.</p>` : ''}
-  ${foot()}
+  ${list.length ? `<h4 class="tbl-h">The items that matter most</h4>${itemRows(list.slice(0, 6))}` : `<p class="empty"><b>Nothing in this part is urgent or needs work.</b>${byArea(id).length ? ` Every check we ran here is in the <a href="#appx-${id}">full checklist</a>.` : ' Nothing turned up for the checklist either.'}</p>`}
+  ${rest > 0 ? `<p class="note">${rest} more finding${rest === 1 ? '' : 's'} in this part ${rest === 1 ? 'is' : 'are'} in the <a href="#appx-${id}">full checklist</a>.</p>` : ''}
+  ${foot(`Part ${n} · ${CHAPTER_EYEBROW[id]}`)}
 </section>`;
   }
 
@@ -651,7 +691,7 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   ${threads.length ? `<h3 class="sub">What ties it together</h3><div class="grid2">${threads.map((t: any) => `<div class="box"><h4>${esc(t.title)}</h4><p>${esc(t.body)}</p>${partsOf(t.themes ?? []) ? `<p class="small muted">Seen in ${partsOf(t.themes ?? [])}</p>` : ''}</div>`).join('')}</div>` : ''}
   ${lists.some(([, l]) => l.length) ? `<div class="grid3">${lists.filter(([, l]) => l.length).map(([h, l]) => `<div class="box"><h4>${esc(h)}</h4><ul>${l.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>`).join('')}</div>` : ''}
   ${!verdict && !(an.parts ?? []).length ? '<p class="note">The full analysis was not written in this run; each part above carries its own findings.</p>' : ''}
-  ${foot()}
+  ${foot(`Part ${chapters.length + 1} · Full analysis`)}
 </section>`;
   }
 
@@ -660,12 +700,12 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   const READY_AT: Record<string, string> = { homepage: 'd-site', fixes: 'd-site', pages: 'd-pages', replies: 'd-reviews', ask: 'd-reviews', faq: 'd-ai', ai: 'd-ai', jsonld: 'd-jsonld' };
   const itemByKey = new Map(R.items.map((x) => [x.key, x]));
   // Without S5 every urgent and needs-work finding still lands under the department that does it.
-  const plan: any[] = L['S5-plan']?.notes?.depts ?? DEPTS.map((d) => ({ dept: d.id, tasks: [], also: R.items.filter((x) => (x.severity === 'high' || x.severity === 'medium') && deptOf(x) === d.id).map((x) => ({ key: x.key, theme: x.area })) }));
+  const plan: any[] = typesetAll(L['S5-plan']?.notes?.depts) ?? DEPTS.map((d) => ({ dept: d.id, tasks: [], also: R.items.filter((x) => (x.severity === 'high' || x.severity === 'medium') && deptOf(x) === d.id).map((x) => ({ key: x.key, theme: x.area })) }));
   const readyWords: Record<string, string> = L['S5-plan']?.notes?.ready ?? {};
   function actionPlan(): string {
     const n = chapters.length + 2;
     const tasks = plan.reduce((t, d) => t + d.tasks.length, 0);
-    const rows = (d: any) => d.tasks.map((t: any) => `<tr><td class="cb" aria-hidden="true">☐</td><td><p class="t">${esc(t.task)}</p>${t.why ? `<p class="w">${esc(t.why)}</p>` : ''}${t.how ? `<p class="small">${esc(t.how)}</p>` : ''}${t.ready && READY_AT[t.ready] ? `<p class="small"><a class="see" href="#${READY_AT[t.ready]}">Done for you: ${esc(readyWords[t.ready] ?? 'a draft')} ↓</a></p>` : ''}</td><td class="tg"><div><span class="pill ${(WHEN[t.when] ?? WHEN.month)[0]}">${esc((WHEN[t.when] ?? WHEN.month)[1])}</span>${t.effort ? `<span class="pill info">${esc(t.effort)}</span>` : ''}${t.theme && chapters.includes(t.theme) ? partsOf([t.theme]) : ''}</div></td></tr>`).join('');
+    const rows = (d: any) => d.tasks.map((t: any) => `<tr><td class="cb" aria-hidden="true">☐</td><td><p class="t">${esc(t.task)}</p>${t.why ? `<p class="w">${esc(t.why)}</p>` : ''}${t.how ? `<p class="small">${esc(t.how)}</p>` : ''}${t.ready && READY_AT[t.ready] ? `<p class="small"><a class="see" href="#${READY_AT[t.ready]}">Done for you: ${esc(readyWords[t.ready] ?? 'a draft')}&nbsp;↓</a></p>` : ''}</td><td class="tg"><div><span class="pill ${(WHEN[t.when] ?? WHEN.month)[0]}">${esc((WHEN[t.when] ?? WHEN.month)[1])}</span>${t.effort ? `<span class="pill info">${esc(t.effort)}</span>` : ''}${t.theme && chapters.includes(t.theme) ? partsOf([t.theme]) : ''}</div></td></tr>`).join('');
     const also = (d: any) => d.also.map((a: any) => itemByKey.get(a.key)).filter(Boolean) as Item[];
     return `<section class="page" id="plan">
   <p class="eyebrow">Part ${n} · Action plan</p>
@@ -675,18 +715,18 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   ${DEPTS.map((d) => { const p = plan.find((x) => x.dept === d.id) ?? { tasks: [], also: [] }; const more = also(p); return `<div class="dept" id="plan-${d.id}"><h3 class="sub">${esc(d.title)} <span class="muted deptc">${esc(d.covers)}</span></h3><p class="note"><b>Who does it:</b> ${esc(d.who)}</p>
   ${p.tasks.length ? `<table class="band tasks"><tbody>${rows(p)}</tbody></table>` : ''}
   ${more.length ? `<p class="lbl">${p.tasks.length ? 'Also on this list' : 'To fix'}</p><ul class="plain small">${more.map((x) => `<li>${esc(T(x))} ${partsOf([x.area])}</li>`).join('')}</ul>` : ''}
-  ${!p.tasks.length && !more.length ? '<p class="note">Nothing for this department right now.</p>' : ''}</div>`; }).join('')}
-  ${foot()}
+  ${!p.tasks.length && !more.length ? '<p class="empty"><b>Nothing for this department right now.</b> No finding in this report needs its work.</p>' : ''}</div>`; }).join('')}
+  ${foot(`Part ${n} · Action plan`)}
 </section>`;
   }
 
   return shell(`${name}: Online Presence Audit`, `<section class="page dark cover">
-  <div class="cover-top"><b>${esc(name)}</b><span>Online Presence Audit ${esc(R.checked_on.slice(0, 4))}</span></div>
+  <div class="cover-top"><b>${esc(name)}</b><span>Online Presence Audit ${esc(R.checked_on.slice(0, 4))}${refNo ? ` · ${esc(refNo)}` : ''}</span></div>
   <div class="cover-mid">
     <h1>How customers, Google and AI<br><span class="g">see, reach and check your business.</span></h1>
     ${coverShot ? `<div><div class="phone"><img src="data:image/jpeg;base64,${coverShot.img}" alt="${esc(name)} homepage on a phone"></div><p class="phone-cap">${esc(hostOf(coverShot.url))} on a phone</p></div>` : ''}
   </div>
-  <div class="cover-bot"><div><b>Prepared for ${esc(name)}</b>SSM ${esc(R.identity.ssm ?? '–')}${R.identity.domains.length ? ` · ${esc(R.identity.domains.join(', '))}` : ''}</div><div><b>Checked ${esc(checkedOn)}</b>${R.reviews.total ? `${esc(R.reviews.total)} reviews read · ` : ''}${R.ai.trade_answers ? `${esc((R.ai.memory?.models ?? []).concat(R.ai.search?.models ?? []).reduce((t: number, m: any) => t + m.asked + m.trade_asked, 0))} AI answers checked · ` : ''}every page of your sites tested</div></div>
+  <div class="cover-bot"><div><b>Prepared for ${esc(name)}</b>${esc([R.identity.ssm ? `SSM${NB}${R.identity.ssm}` : '', R.identity.domains.join(', ')].filter(Boolean).join(' · '))}</div><div><b>Checked ${esc(checkedOn)}</b>${R.reviews.total ? `${esc(R.reviews.total)} reviews read · ` : ''}${R.ai.trade_answers ? `${esc((R.ai.memory?.models ?? []).concat(R.ai.search?.models ?? []).reduce((t: number, m: any) => t + m.asked + m.trade_asked, 0))} AI answers checked · ` : ''}every page of your sites tested</div></div>
 </section>
 
 <nav class="chapnav" aria-label="Sections"><a href="#glance">At a glance</a>${stories.length ? '<a href="#stories">Fix first</a>' : ''}${chapters.map((id) => `<a href="#ch-${id}">${esc(CHAPTER_EYEBROW[id])}</a>`).join('')}<a href="#analysis">Full analysis</a><a href="#stranger">Trust</a><a href="#plan">Action plan</a><a href="#ready">Ready to use</a><a href="#appendix">Checklist</a></nav>
@@ -697,16 +737,16 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   ${big.length ? `<div class="stats">${big.map(([id, v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('')}</div>` : ''}
   ${verdict ? `<p class="verdict" style="margin-top:14px">${esc(verdict)}</p>` : ''}
   <div class="rows" style="margin-top:auto">${chapters.map((id) => { const a = areaOf(id)!; return `<a href="#ch-${id}"><b>${esc(a.title)}</b><span>${esc(a.metric ?? '')}</span><span class="pill ${a.status[0]}">${esc(a.status[1])}</span></a>`; }).join('')}</div>
-  ${foot()}
+  ${foot('At a glance')}
 </section>
 
 ${stories.length ? `<section class="page" id="stories">
   <p class="eyebrow">Fix these first</p>
   <h2 class="display">${stories.length === 1 ? 'One problem' : `${['', 'One', 'Two', 'Three'][stories.length]} problems`}<br><span class="g">are costing you the most customers.</span></h2>
   <p class="lead" style="max-width:40em">Out of ${R.items.length} things we checked, these ${stories.length === 1 ? 'is the one' : `are the ${stories.length}`} that turn the most customers away. Each has its own part with the evidence.</p>
-  <div class="three">${stories.map((s: any, i: number) => `<div class="item"><span class="n">${String(i + 1).padStart(2, '0')}</span><div><p class="lbl">${esc(CHAPTER_EYEBROW[s.theme])} · Part ${chapterNo(s.theme)}</p><h3>${esc(s.headline)}</h3>
+  <div class="three">${stories.map((s: any, i: number) => `<div class="item"><span class="n">${String(i + 1).padStart(2, '0')}</span><div><p class="lbl">${esc(CHAPTER_EYEBROW[s.theme])} · Part ${chapterNo(s.theme)}</p><h3>${esc(tie(s.headline))}</h3>
     <div class="cols"><div><p class="lbl">What it costs you</p><p>${esc(s.cost)}</p></div><div><p class="lbl">Do this first</p><p>${esc(s.fix)}</p></div></div></div></div>`).join('')}</div>
-  ${foot()}
+  ${foot('Fix these first')}
 </section>` : ''}
 
 ${chapters.map(chapter).join('\n')}
@@ -718,16 +758,16 @@ ${analysis()}
   <h2 class="display">What a customer, bank or tender officer<br><span class="g">learns about you in ten minutes.</span></h2>
   <table class="band idtable"><tbody>
     <tr><td>Company</td><td><b>${esc(name)}</b></td></tr>
-    <tr><td>Registration</td><td>${esc(R.identity.ssm ?? '–')}</td></tr>
+    <tr><td>Registration</td><td>${R.identity.ssm ? esc(R.identity.ssm) : '<span class="muted">Not found in any public record we checked</span>'}</td></tr>
     ${R.credentials.cidb_grade ? `<tr><td>CIDB grade (official register)</td><td>${esc(R.credentials.cidb_grade)}</td></tr>` : ''}
     ${R.maps.our ? `<tr><td>Google rating</td><td>${esc(R.maps.our.rating)}★ from ${esc(R.maps.our.reviews)} reviews</td></tr>` : ''}
     ${R.identity.address ? `<tr><td>Address</td><td>${esc(R.identity.address)}</td></tr>` : ''}
     ${R.identity.domains.length ? `<tr><td>Websites</td><td>${esc(R.identity.domains.join(', '))}</td></tr>` : ''}
   </tbody></table>
   ${mismatch.length ? `<h3 class="sub">What does not add up</h3><table class="band"><tbody>${mismatch.map((m: any) => `<tr><td><p class="t">${esc(m.issue)}</p>${m.settled ? `<p class="w">The official register ${esc(m.settled)}</p>` : ''}</td><td class="where">${m.source ? seeIt(m.source) : ''}</td></tr>`).join('')}</tbody></table>` : ''}
-  ${R.reviews.good_quotes.length ? `<h3 class="sub">What your customers say, in their words</h3><div class="quotes">${R.reviews.good_quotes.map((q: any) => `<blockquote>${esc(clip(String(q.text), 260))}<cite>${esc(q.author)} · ${esc(dateOf(q.date))}</cite></blockquote>`).join('')}</div>${R.reviews.praise.length ? `<p class="note">Praised most for: ${esc(R.reviews.praise.map(([p, n]) => `${p} (${n})`).join(', '))}. None of this appears on your website yet.</p>` : ''}` : ''}
+  ${R.reviews.good_quotes.length ? `<h3 class="sub">What your customers say, in their words</h3><div class="quotes">${R.reviews.good_quotes.map((q: any) => `<blockquote>“${esc(typeset(clip(String(q.text), 260)))}”<cite>${esc(q.author)} · ${esc(dateOf(q.date))}</cite></blockquote>`).join('')}</div>${R.reviews.praise.length ? `<p class="note">Praised most for: ${esc(R.reviews.praise.map(([p, n]) => `${p} (${n})`).join(', '))}. None of this appears on your website yet.</p>` : ''}` : ''}
   ${privateItems.length ? `<div class="private"><p class="lbl" style="color:var(--urgent)">Private: for you only</p><ul class="plain">${privateItems.map((x) => `<li>${x}</li>`).join('')}</ul></div>` : ''}
-  ${foot()}
+  ${foot(`Part ${chapters.length + 1} · What a stranger sees`)}
 </section>
 
 ${actionPlan()}
@@ -743,14 +783,14 @@ ${actionPlan()}
   ${(site.pages_to_fix ?? []).length ? `<h4 class="tbl-h">Pages to fix</h4><table class="band"><thead><tr><th>Page</th><th>Problem</th><th>Fix</th></tr></thead><tbody>${site.pages_to_fix.map((p: any) => `<tr><td>${esc(p.page)}</td><td>${esc(p.problem)}</td><td>${esc(p.fix)}</td></tr>`).join('')}</tbody></table>` : ''}` : '<p class="note">The website plan was not written in this run.</p>'}
   ${(site?.pages_to_add ?? []).length ? `<h3 class="sub" id="d-pages">Pages to add, town by town</h3><div class="grid3">${site.pages_to_add.map((p: any) => `<div class="box"><code>${esc(p.slug)}</code><h4>${esc(p.title)}</h4><p class="muted">${esc(p.why)}</p><ul>${(p.outline ?? []).map((o: string) => `<li>${esc(o)}</li>`).join('')}</ul></div>`).join('')}</div>` : ''}
   <h3 class="sub" id="d-reviews">Review replies, ready to post</h3>
-  ${(replies?.replies ?? []).length ? `${replies.replies.map((x: any) => { const t = targets[x.i] ?? {}; return `<div class="reply"><div><p class="small"><span class="stars">${stars(Number(t.stars) || 0)}</span> <span class="muted">${esc(t.author ?? '')} · ${esc(dateOf(t.date))}</span></p>${t.text ? `<p class="q">${esc(clip(String(t.text), 260))}</p>` : '<p class="q">(star rating only)</p>'}</div><div><p class="a">${esc(x.reply)}</p>${x.reply_en ? `<p class="a muted">${esc(x.reply_en)}</p>` : ''}${x.note ? `<p class="small muted" style="margin-top:4px"><b>Before posting:</b> ${esc(x.note)}</p>` : ''}</div></div>`; }).join('')}
+  ${(replies?.replies ?? []).length ? `${replies.replies.map((x: any) => { const t = targets[x.i] ?? {}; return `<div class="reply"><div><p class="small"><span class="stars">${stars(Number(t.stars) || 0)}</span> <span class="muted">${esc(t.author ?? '')} · ${esc(dateOf(t.date))}</span></p>${t.text ? `<p class="q">${esc(typeset(clip(String(t.text), 260)))}</p>` : '<p class="q">(star rating only)</p>'}</div><div><p class="a">${esc(x.reply)}</p>${x.reply_en ? `<p class="a muted">${esc(x.reply_en)}</p>` : ''}${x.note ? `<p class="small muted" style="margin-top:4px"><b>Before posting:</b> ${esc(x.note)}</p>` : ''}</div></div>`; }).join('')}
   <div class="grid2" style="margin-top:6px">${replies.template_5star ? `<div class="box"><h4>Thank-you reply for 5★ reviews</h4><p>${esc(replies.template_5star)}</p></div>` : ''}${replies.ask_message ? `<div class="box"><h4>WhatsApp message asking for a review</h4><p>${esc(replies.ask_message)}</p></div>` : ''}</div>` : '<p class="note">No unanswered reviews needed a draft.</p>'}
   <h3 class="sub" id="d-ai">Getting recommended by AI assistants</h3>
   ${ai ? `${(ai.actions ?? []).length ? `<div class="fixes">${ai.actions.map((a: any) => `<div><div><h4>${esc(tidy(a.action))}</h4><p class="w">${esc(tidy(a.why))}</p><p class="small" style="margin-top:3px">${esc(tidy(a.how))}</p></div><div class="tags"><span class="pill info">${esc(a.effort)}</span><span class="pill ${a.impact === 'high' ? 'urgent' : 'fix'}">${esc(a.impact)} impact</span></div></div>`).join('')}</div>` : ''}
   ${(ai.faq ?? []).length ? `<h4 class="tbl-h">FAQ for your website</h4><div class="grid2">${ai.faq.map((x: any) => `<div class="box"><h4>${esc(x.q)}</h4><p>${esc(x.a)}</p></div>`).join('')}</div>` : ''}
   ${ai.measure ? `<p class="note"><b>How to track it:</b> ${esc(tidy(ai.measure))}</p>` : ''}` : '<p class="note">The AI plan was not written in this run.</p>'}
   ${s2.jsonld ? `<h4 class="tbl-h" id="d-jsonld">Business details for Google and AI</h4><p class="note">Ask your web developer to paste this into the &lt;head&gt; of every page, after checking the phone and address are the ones you want everywhere.</p><pre>${esc('<script type="application/ld+json">\n' + JSON.stringify(s2.jsonld, null, 2) + '\n</script>')}</pre>` : ''}
-  ${foot()}
+  ${foot(`Part ${chapters.length + 2} · Ready to use`)}
 </section>
 
 <section class="page" id="appendix">
@@ -758,9 +798,15 @@ ${actionPlan()}
   <h2 class="display">The full checklist.<br><span class="g">Every finding, part by part.</span></h2>
   ${AREAS.filter((a) => byArea(a.id).length).map((a) => { const list = byArea(a.id); return `<div id="appx-${a.id}"><h3 class="sub" style="font-size:17px">${esc(a.title)} <span class="muted" style="font-family:var(--body);font-size:11px;font-weight:400;letter-spacing:0">${list.filter((x) => x.severity === 'high').length} urgent · ${list.filter((x) => x.severity === 'medium').length} need work · ${list.length} in all</span></h3>${itemRows(list)}</div>`; }).join('')}
   <details><summary>Background research on the company</summary><p class="note" style="margin:4px 0 10px">Written from public sources on ${esc(dateOf(dive.finished_at))}, before the checks in this report. Where they differ, the checks are newer and win.</p><div class="dossier">${md(scrub(dive.dossier))}</div></details>
-  ${sources.length ? `<details><summary>Sources (${sources.length})</summary><ol class="sources">${sources.map((s: any) => `<li id="src-${esc(s.id)}" value="${esc(s.id)}">${/^https?:\/\//.test(s.url) ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(clip(String(s.title || hostOf(s.url)), 90))}</a> · ${esc(hostOf(s.url))}` : esc(s.title)}</li>`).join('')}</ol></details>` : ''}
-  <div class="note" style="margin-top:8px"><p class="lbl">How we checked</p><p>Every phone number, email and WhatsApp link published about you was searched on the web and traced to where it leads. Your homepage and service pages were compared with what search results, independent pages and AI assistants say about you. News, forums and social media were searched for your company and its key people. Bank Negara and Securities Commission alert lists, published court judgments, insolvency notices, Bursa Malaysia, government websites and trademark listings were searched for your name; the MyIPO trademark register needs a login and was not searched; paid registers (SSM documents, CTOS, CCRIS) were not bought. Each domain was looked up in its registry (MYNIC or RDAP), its DNS, its hosting network and the public certificate logs; each mail server was checked against the Barracuda and SpamCop spam blacklists, and each email domain's SPF, DKIM and DMARC records were read. Each official homepage was tested with Google PageSpeed Insights on mobile and desktop. Every Google review on your Maps listings was read. Maps ranks come from Google Maps searches without a phone’s location, so a customer nearby may see a slightly different order; web ranks come from Brave Search set to Malaysia. Each licence and award was looked up in its issuer’s own register. Every page of your websites was read and its links and numbers tested. AI answers come from ${esc(aiModels)}, asked each question several times, from memory and with a web search. The ready-to-use drafts were written with AI from these findings. Checked ${esc(checkedOn)}; background research from ${esc(dateOf(dive.finished_at))}.</p></div>
-  ${foot()}
+  ${sources.length ? `<details><summary>Sources <span class="muted">(${sources.length})</span></summary><ol class="sources">${sources.map((s: any) => `<li id="src-${esc(s.id)}" value="${esc(s.id)}">${/^https?:\/\//.test(s.url) ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(typeset(clip(String(s.title || hostOf(s.url)), 90)))}</a> · ${esc(hostOf(s.url))}` : esc(typeset(String(s.title ?? '')))}</li>`).join('')}</ol></details>` : ''}
+  <div class="colophon">
+    <div><p class="lbl">Prepared for</p><p>${esc(name)}</p></div>
+    <div><p class="lbl">Checked</p><p>${esc(checkedOn)}</p></div>
+    <div><p class="lbl">Background research</p><p>${esc(dateOf(dive.finished_at))}${sources.length ? `, from ${esc(sources.length)}${NB}public source${sources.length === 1 ? '' : 's'}` : ''}</p></div>
+    <div><p class="lbl">Report</p><p>Online Presence Audit ${esc(R.checked_on.slice(0, 4))}${refNo ? ` · ${esc(refNo)}` : ''}</p></div>
+  </div>
+  <div class="note method" style="margin-top:8px"><p class="lbl">How we checked</p><p>Every phone number, email and WhatsApp link published about you was searched on the web and traced to where it leads. Your homepage and service pages were compared with what search results, independent pages and AI assistants say about you. News, forums and social media were searched for your company and its key people. Bank Negara and Securities Commission alert lists, published court judgments, insolvency notices, Bursa Malaysia, government websites and trademark listings were searched for your name; the MyIPO trademark register needs a login and was not searched; paid registers (SSM documents, CTOS, CCRIS) were not bought. Each domain was looked up in its registry (MYNIC or RDAP), its DNS, its hosting network and the public certificate logs; each mail server was checked against the Barracuda and SpamCop spam blacklists, and each email domain’s SPF, DKIM and DMARC records were read. Each official homepage was tested with Google PageSpeed Insights on mobile and desktop. Every Google review on your Maps listings was read. Maps ranks come from Google Maps searches without a phone’s location, so a customer nearby may see a slightly different order; web ranks come from Brave Search set to Malaysia. Each licence and award was looked up in its issuer’s own register. Every page of your websites was read and its links and numbers tested. AI answers come from ${esc(aiModels)}, asked each question several times, from memory and with a web search. The ready-to-use drafts were written with AI from these findings. Checked ${esc(checkedOn)}; background research from ${esc(dateOf(dive.finished_at))}.</p></div>
+  ${foot('Appendix')}
 </section>
 
 `);

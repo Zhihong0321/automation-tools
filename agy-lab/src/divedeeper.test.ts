@@ -49,7 +49,7 @@ test('the report builds the parts, the full analysis and the action plan from da
     'S4-analysis': { notes: { verdict: 'Short summary.', parts: [{ theme: 'voice', assessment: 'Nobody answers the reviews.' }], threads: [{ title: 'Nobody owns the listing', body: 'b', themes: ['voice'] }], strengths: ['A 4.7 rating'] } },
     'S5-plan': { notes: { depts: [{ dept: 'social', tasks: [{ dept: 'social', task: 'Reply to reviews', why: 'none answered', how: 'h', when: 'week', effort: '1 hour', impact: 'high', theme: 'voice', ready: 'replies', items: ['E-maps#0'] }], also: [] }], ready: { replies: 'the review replies, ready to post' } } },
   };
-  const html = buildReport(dive, lanes);
+  const html = buildReport(dive, lanes).replace(/\u00a0|&nbsp;/g, ' ');
   for (const part of ['id="stories"', 'Short summary.', 'Nobody answers the reviews.', 'Nobody owns the listing', 'What you can build on', 'Your action plan', 'Social media', 'This week', 'Done for you: the review replies', 'Nothing for this department right now.', 'What a stranger sees', 'The full checklist', 'Background research', '1★ review with no reply', 'Reply to reviews', 'id="src-1"']) assert.ok(html.includes(part), part);
   assert.ok(!/undefined|\[object Object\]|NaN/.test(html.replace(/<style[\s\S]*?<\/style>/, '')));
 });
@@ -65,7 +65,7 @@ test('the report speaks the editor\'s plain words and never shows the lanes\' ma
       stories: [{ theme: 'understanding', headline: 'AI assistants send customers to the wrong address', body: 'b', cost: 'c', fix: 'f' }],
     } },
   };
-  const html = buildReport(dive, lanes).replace(/<style[\s\S]*?<\/style>/, '');
+  const html = buildReport(dive, lanes).replace(/<style[\s\S]*?<\/style>/, '').replace(/\u00a0|&nbsp;/g, ' ');
   for (const s of ['An AI assistant gives customers the wrong office address', 'AI assistants send customers to the wrong address', 'You are better than your website says.', 'Better than you claim']) assert.ok(html.includes(s), s);
   for (const bad of ['CONTRADICTED:', 'doesnt_know', 'gpt-6.1-sol', 'what=correct']) assert.ok(!html.includes(bad), bad);
   // Without S5, every urgent finding still lands under the department that does it.
@@ -89,7 +89,7 @@ test('the report reads in six research parts, each drawn from its own lanes', ()
       notes: { homes: [{ site: 'acme.my', url: 'https://acme.my/' }], pages: [{ ok: true, site: 'acme.my', strategy: 'mobile', scores: { performance: 42, accessibility: 91, 'best-practices': 77, seo: 85 }, lab: { 'Main content shown': '6.1 s' }, field: { scope: 'the whole site', overall: 'slow', metrics: { 'Main content shown': '4.2 s (slow)' } }, fixes: [], flags: [] }] } },
     'C-merged': { ran_at: at, findings: [{ title: 'Your SSM number is missing from the site', detail: 'd', severity: 'medium', source: null, check: 'ssm' }, { title: 'WhatsApp link does not open a chat', detail: 'd', severity: 'high', source: null, check: 'whatsapp' }] },
   };
-  const html = buildReport(dive, lanes).replace(/<style[\s\S]*?<\/style>/, '');
+  const html = buildReport(dive, lanes).replace(/<style[\s\S]*?<\/style>/, '').replace(/\u00a0|&nbsp;/g, ' ');
   for (const s of ['Part 1 · Contact and reachability', 'Part 2 · How the internet understands you', 'Part 3 · Reviews, discussion and news', 'Part 4 · Credibility and official records', 'Part 5 · Digital assets', 'Part 6 · Website speed and quality', 'Part 7 · Full analysis', 'Part 8 · Action plan', 'Google’s speed score',
     'Someone who has left', 'Fast installs across Johor.', 'Widget installation', 'A customer dispute over a late install.', 'Bank Negara Financial Consumer Alert list', 'Possible conflict', 'Acme Trading filed ACME in class 37', 'Exabytes', 'Can be faked', 'How the world’s mail systems see your email', 'Listed: Barracuda', 'Broken', '20 days']) assert.ok(html.includes(s), s);
   assert.ok(!/undefined|\[object Object\]|NaN/.test(html));
