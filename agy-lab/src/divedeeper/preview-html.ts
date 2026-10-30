@@ -447,7 +447,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
     <a href="#p-voice"><span class="n">03</span><h3>${esc(CHAPTER_EYEBROW.voice)}</h3><p>What customers, forums and the news say about you and the people who run it.</p>
       <ul><li>Every Google review, and every reply</li><li>News, forum and social talk</li><li>What is said about your key people</li></ul><span class="go">See what it shows ↓</span></a>
     <a href="#p-credibility"><span class="n">04</span><h3>${esc(CHAPTER_EYEBROW.credibility)}</h3><p>The official sources a bank or tender panel checks, and every claim and warning sign.</p>
-      <ul><li>Regulator alert lists, courts and insolvency notices</li><li>Licences and awards, in their registers</li><li>The ${esc(signCount)} warning signs, settled</li></ul><span class="go">See what it shows ↓</span></a>
+      <ul><li>Regulator alert lists, courts, insolvency notices and trademark signals</li><li>Licences and awards, in their registers</li><li>The ${esc(signCount)} warning signs, settled</li></ul><span class="go">See what it shows ↓</span></a>
     <a href="#p-assets"><span class="n">05</span><h3>${esc(CHAPTER_EYEBROW.assets)}</h3><p>Your domains, hosting and email, traced from the public internet.</p>
       <ul>${inside.assets.know.slice(0, 3).map((k) => `<li>${esc(k)}</li>`).join('')}</ul><span class="go">See what it shows ↓</span></a>
     <a href="#advice"><span class="n">06</span><h3>Analysis and suggestions</h3><p>What it all means for your business, and what to do, in order.</p>

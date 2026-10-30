@@ -10,7 +10,11 @@
 //     only when the page also names the company;
 //   - Bursa Malaysia: is it a listed company with public annual reports;
 //   - government sites (.gov.my): tender awards, vendor lists, grants, penalties naming it;
-//   - financial figures third parties publish about it (from the dive's research).
+//   - financial figures third parties publish about it (from the dive's research);
+//   - trademark signals: filings, registrations, oppositions and listings that mention the brand,
+//     another business using or filing the same name, and whether the company's own homepage
+//     marks the name ® or ™. The MyIPO register itself needs an account login, so it is not
+//     searched; the report says so, and "nothing found" is never read as "not registered".
 // Paid or closed registers (SSM e-Info, CTOS, CCRIS, MDI insolvency search, PDRM Semak Mule)
 // are listed as not checked, never guessed. One LLM call judges every hit: this company, a key
 // person, or a namesake. No kill gates: a failed search leaves that check "could not check".
@@ -19,7 +23,7 @@ import { nameOf, type Ctx, type Finding } from '../lib.ts';
 const LAW = ['kehakiman.gov.my', 'commonlii.org', 'cljlaw.com', 'lawnet.com', 'elaw.my', 'mlj.com.my', 'lexology.com', 'insolvensi.gov.my', 'mdi.gov.my'];
 const KEY_ROLE = /director|founder|owner|shareholder|chief executive|ceo|managing|chairman|pengarah/i;
 
-type Check = { id: string; label: string; where: string; result: 'clear' | 'found' | 'not_checked' | 'could_not_check' | 'public' | 'not_public'; detail: string; source: string | null };
+type Check = { id: string; label: string; where: string; result: 'clear' | 'found' | 'not_checked' | 'could_not_check' | 'public' | 'not_public' | 'signals' | 'conflict' | 'none'; detail: string; source: string | null };
 
 export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; notes: Record<string, unknown> }> {
   const r = dive.result ?? {};
@@ -61,8 +65,18 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
     ...people.map((p: string) => brave('court', `"${p}" "${N.short}" mahkamah OR court OR bankrupt OR muflis OR saman`, p)),
     brave('bursa', `"${N.short}" site:bursamalaysia.com`),
     exa('gov', `"${N.bare}"`, ['gov.my']), brave('gov', `"${N.short}" site:gov.my`),
+    brave('trademark', `"${N.short}" trademark OR "trade mark" OR "tanda dagangan" OR MyIPO OR "registered mark"`),
+    exa('trademark', `"${N.short}" trademark application or registration in Malaysia`),
   ]);
   // Only pages that name the company (or, for a person, name both) can be about it.
+  // Does the company's own homepage mark its name as a registered (®) or unregistered (™) trademark?
+  const marks: { url: string; mark: string }[] = [];
+  for (const d of N.domains.slice(0, 3)) {
+    const p = await ctx.page(`https://${d}/`, { headers: { accept: 'text/html' } });
+    const text = ctx.htmlText(p.html);
+    const m = text.match(/®|&reg;|\(R\)(?=\s|$)|™|registered trade ?mark/i) ?? p.html.match(/&reg;|&#174;|&trade;|&#8482;/i);
+    if (m) marks.push({ url: p.finalUrl || `https://${d}/`, mark: /™|trade;|8482/.test(m[0]) ? '™' : '®' });
+  }
   const named = hits.filter((h) => N.mentions(`${h.title} ${h.text}`) && (!h.person || `${h.title} ${h.text}`.toLowerCase().includes(h.person.toLowerCase())));
   ctx.log(`${hits.length} results, ${named.length} name the company`);
 
@@ -73,20 +87,21 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
     const got = ctx.parseJson(await ctx.llm(
       `Company: ${N.legal}${(r.identity?.registration_numbers ?? []).length ? ` (SSM ${(r.identity.registration_numbers).join(' / ')})` : ''}, ${N.industry}, ${N.address}. Key people: ${people.join(', ') || 'none known'}.\n` +
       `Each result below came from a search of official or legal sources. For each decide:\n` +
-      `- about: "company" (this exact company: same name AND nothing contradicts the registration number or address), "person" (one of the key people, clearly in connection with this company), "namesake" (a different entity or person), "irrelevant" (only a passing word match, a list page that does not name it, a generic page)\n` +
-      `- category: alert (named on a regulator's warning or alert list), court (a court case or judgment), insolvency (winding-up, liquidation, receivership, bankruptcy), listing (listed on Bursa: annual reports, announcements), government (named on a government site: tender award, vendor/registration list, grant, programme, penalty), other\n` +
+      `- about: "company" (this exact company: same name AND nothing contradicts the registration number or address), "person" (one of the key people, clearly in connection with this company), "same_name_other" (ONLY for trademarks: another business using, filing or holding a mark with the same or a confusingly similar name in a related trade), "namesake" (a different entity or person, unrelated trade), "irrelevant" (only a passing word match, a list page that does not name it, a generic page)\n` +
+      `- category: alert (named on a regulator's warning or alert list), court (a court case or judgment), insolvency (winding-up, liquidation, receivership, bankruptcy), listing (listed on Bursa: annual reports, announcements), government (named on a government site: tender award, vendor/registration list, grant, programme, penalty), trademark (a trademark application, registration, opposition, gazette notice or trademark listing for the name), other\n` +
+      `- holder: for trademarks, who files or holds the mark, if the page says; else ""\n` +
       `- role: for court cases, plaintiff / defendant / other / unclear; else ""\n` +
       `- outcome: one sentence: what the record says (case, year, result; award and value; list and why)\n` +
       `- sentiment: positive (builds trust) | neutral | negative (a risk a buyer would ask about)\n` +
       `- year: YYYY or ""\n\n` +
       batch.map((h, j) => `#${j} [${h.group}] ${h.title} | ${h.url}\n${h.text.slice(0, 1600)}`).join('\n\n') +
-      `\n\nReturn JSON only: {"items":[{"i":0,"about":"","category":"","role":"","outcome":"","sentiment":"","year":""}]}`,
+      `\n\nReturn JSON only: {"items":[{"i":0,"about":"","category":"","role":"","outcome":"","sentiment":"","year":"","holder":""}]}`,
     ));
     // An unread result could be the case or the alert, so its check cannot say "clear".
     if (!got) { ctx.warn(`credibility batch ${i / 14 + 1} did not parse; ${batch.length} results unjudged`); for (const h of batch) failed.add(h.group); continue; }
     for (const it of got.items ?? []) {
       const h = batch[Number(it?.i)];
-      if (h && ['company', 'person'].includes(it.about)) judged.push({ ...it, group: h.group, url: h.url, title: h.title, host: N.hostOf(h.url), person: it.about === 'person' ? h.person ?? null : null });
+      if (h && (['company', 'person'].includes(it.about) || (it.about === 'same_name_other' && it.category === 'trademark'))) judged.push({ ...it, group: h.group, url: h.url, title: h.title, host: N.hostOf(h.url), person: it.about === 'person' ? h.person ?? null : null });
     }
   }
   const of = (cats: string[]) => judged.filter((x) => cats.includes(x.category));
@@ -109,11 +124,25 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   checks.push({ id: 'gov', label: 'Named on government websites', where: '.gov.my', result: gov.length ? 'found' : failed.has('gov') ? 'could_not_check' : 'clear', detail: gov.length ? gov.slice(0, 4).map((x) => `${x.host}: ${x.outcome}`).join(' ') : 'no government page names it', source: gov[0]?.url ?? null });
   const fin = (r.facts ?? []).filter((f: any) => f.topic === 'size_financials');
   checks.push({ id: 'financials', label: 'Financial figures published by third parties', where: 'directories and data sellers', result: fin.length ? 'public' : 'not_public', detail: fin.length ? fin.slice(0, 3).map((f: any) => f.fact).join(' ') : 'no revenue, capital or headcount figures found in public sources', source: null });
+  const tm = of(['trademark']);
+  const tmOwn = tm.filter((x) => x.about === 'company');
+  const tmOther = tm.filter((x) => x.about === 'same_name_other');
+  checks.push({
+    id: 'trademark', label: 'Trademark signals on the public web', where: 'web search and your homepage; the MyIPO register needs a login and was not searched',
+    result: tmOther.length ? 'conflict' : tmOwn.length || marks.length ? 'signals' : failed.has('trademark') ? 'could_not_check' : 'none',
+    detail: [
+      ...tmOther.slice(0, 2).map((x) => `${x.holder || 'another business'}: ${x.outcome}`),
+      ...tmOwn.slice(0, 2).map((x) => x.outcome),
+      ...(marks.length ? [`your homepage marks the name ${marks[0].mark}`] : []),
+    ].join(' ') || (failed.has('trademark') ? 'pages that may mention a trademark for your name could not be read in this run' : 'no public page mentions a trademark for your name; that does not mean it is unregistered'),
+    source: (tmOther[0] ?? tmOwn[0])?.url ?? marks[0]?.url ?? null,
+  });
   for (const [id, label, why] of [
     ['ssm', 'SSM company profile, directors and financial statements', 'sold per document by SSM e-Info; not bought for this report'],
     ['ctos', 'CTOS / Experian credit reports and CCRIS', 'paid, or need the company’s consent'],
     ['mdi', 'Insolvency Department (MDI) search', 'a paid search per name'],
     ['mule', 'PDRM Semak Mule (numbers and bank accounts reported in scams)', 'not checked automatically'],
+    ['myipo', 'MyIPO trademark register (who holds the mark, and similar marks in your class)', 'needs a MyIPO account login, so it was not searched'],
   ] as const) checks.push({ id, label, where: '', result: 'not_checked', detail: why, source: null });
 
   // ---- 4. Findings. ----
@@ -127,5 +156,10 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   add({ title: `${clean} of 4 public risk checks come back clear`, detail: checks.filter((c) => ['bnm', 'sc', 'court', 'insolvency'].includes(c.id)).map((c) => `${c.label}: ${c.detail}`).join('; ') + '.', severity: clean === 4 ? 'info' : 'medium', source: null, check: 'cred-summary' });
   if (!listed.length) add({ title: 'A bank or buyer cannot read your accounts for free', detail: `You are not listed, so your financial statements are only on paid SSM documents${fin.length ? `, while directories already publish figures about you (${fin.slice(0, 2).map((f: any) => f.fact).join(' ')})` : ''}. Have a one-page company profile with capital, years running and key projects ready for tenders.`, severity: 'low', source: null, check: 'cred-financials' });
 
-  return { findings, notes: { checks, items: judged, people, searched: hits.length, failed: [...failed] } };
+  for (const x of tmOther) add({ title: `Another business uses or has filed your name as a trademark${x.holder ? `: ${x.holder}` : ''}`, detail: `${x.outcome} Whoever registers a name first in a class can stop others using it there. Who holds the mark is only on the MyIPO register, which this check could not search.`, severity: 'medium', source: x.url, check: 'cred-trademark' });
+  for (const x of tmOwn.slice(0, 2)) add({ title: `A public record of your trademark${x.year ? ` (${x.year})` : ''}`, detail: `${x.outcome} Show the registration number on your site and in tenders: a registered mark is proof a stranger can check.`, severity: 'info', source: x.url, check: 'cred-trademark' });
+  if (marks.some((m) => m.mark === '®') && !tmOwn.length) add({ title: 'Your homepage marks the name ® but no public record of a registration turned up', detail: `${marks.find((m) => m.mark === '®')!.url} uses ®. If the mark is registered, show its number; if it is not, using ® may be an offence under Malaysia's Trademarks Act 2019. The MyIPO register was not searched, so this is a signal, not a finding of fact.`, severity: 'low', source: marks.find((m) => m.mark === '®')!.url, check: 'cred-trademark' });
+  if (!tm.length && !marks.length && !failed.has('trademark')) add({ title: 'Nothing public shows your name as a trademark', detail: 'No filing, registration or listing turned up, and your site does not mark the name. If it is not registered, another business can file it first and stop you using it. The MyIPO register was not searched, so this is not proof either way.', severity: 'low', source: null, check: 'cred-trademark' });
+
+  return { findings, notes: { checks, items: judged, people, marks, searched: hits.length, failed: [...failed] } };
 }
