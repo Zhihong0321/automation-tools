@@ -66,7 +66,7 @@ function positive(value: unknown, fallback: number): number {
 export function resolveConfig(env: NodeJS.ProcessEnv = process.env): ContactConfig {
   return {
     timeoutMs: positive(env.CONTACT_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
-    lanes: Math.max(1, Math.floor(positive(env.CONTACT_LANES, 3))),
+    lanes: Math.max(1, Math.floor(positive(env.CONTACT_LANES, 8))),
   };
 }
 
@@ -1023,7 +1023,7 @@ async function lane(name: string, env: NodeJS.ProcessEnv): Promise<void> {
   }
 }
 
-/** CONTACT_LANES lanes (default 3), each one company at a time. */
+/** CONTACT_LANES lanes (default 8), each one company at a time. */
 export function start(env: NodeJS.ProcessEnv = process.env): void {
   const lanes = resolveConfig(env).lanes;
   for (let i = 0; i < lanes; i++) {

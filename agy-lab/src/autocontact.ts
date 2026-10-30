@@ -3,9 +3,14 @@ import * as jobs from './jobs.ts';
 import * as db from './reportdb.ts';
 import * as tavily from './tavily.ts';
 import * as exa from './exa.ts';
+import { resolveConfig } from './contact-worker.ts';
 
-const INTERVAL_MS = 60_000;
-const BATCH = 3;
+const INTERVAL_MS = 15_000;
+
+/** Keep one report waiting behind each research lane, so a lane never idles between ticks. */
+function batch(): number {
+  return resolveConfig().lanes * 2;
+}
 
 function modelName(): string {
   const model = (process.env.CONTACT_RESEARCH_MODEL?.trim() || 'research.contact').toLowerCase();
@@ -60,7 +65,7 @@ function workerLive(): boolean {
   return types.includes(contactResearchJobType());
 }
 
-/** Queue up to BATCH untouched leads when a matching worker is live. */
+/** Queue up to batch() untouched leads when a matching worker is live. */
 let pausedForQuota = false;
 
 /** The pi worker searches with Tavily or Exa, so it has no work to give while every key of both rests. */
@@ -105,7 +110,7 @@ export async function tick(): Promise<number> {
   try {
     // Saved reports are the durable queue. Do not mint new reports while older
     // ones are waiting for the research lanes.
-    const free = deps.backlog ? BATCH : Math.max(0, BATCH - await db.pendingContactReportCount());
+    const free = deps.backlog ? batch() : Math.max(0, batch() - await db.pendingContactReportCount());
     // Full lanes are the queue working, not a hold.
     if (!free) { noteHold(null); return 0; }
     // The backlog only offers leads checked against the blacklist; check new ones first.

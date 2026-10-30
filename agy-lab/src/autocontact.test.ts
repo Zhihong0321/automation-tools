@@ -5,7 +5,7 @@ import * as autoContact from './autocontact.ts';
 const company = (id: string) => ({ id, name: 'Co ' + id });
 const live = () => ['research.contact'];
 
-const ROUTING_ENV = ['CONTACT_RESEARCH_MODEL', 'MINIMAX_API_KEY', 'TAVILY_API_KEY', 'TAVILY_API_KEYS'] as const;
+const ROUTING_ENV = ['CONTACT_RESEARCH_MODEL', 'MINIMAX_API_KEY', 'TAVILY_API_KEY', 'TAVILY_API_KEYS', 'CONTACT_LANES'] as const;
 
 function withEnv(values: Partial<Record<typeof ROUTING_ENV[number], string>>, fn: () => Promise<void> | void) {
   const saved = Object.fromEntries(ROUTING_ENV.map((key) => [key, process.env[key]]));
@@ -87,7 +87,7 @@ test('a leftover gemini or agy model name routes to the pi worker, not a retired
   });
 });
 
-test('a live worker queues min(BATCH, backlog) and logs the count', () => withEnv({}, async () => {
+test('a live worker queues min(batch, backlog) and logs the count', () => withEnv({ CONTACT_LANES: '1' }, async () => {
   const launched: string[] = [];
   const lines: string[] = [];
   const orig = console.log;
@@ -98,9 +98,9 @@ test('a live worker queues min(BATCH, backlog) and logs the count', () => withEn
       backlog: async (limit) => ['1', '2', '3', '4', '5'].slice(0, limit).map(company),
       launch: async (row) => { launched.push(String(row.id)); },
     });
-    assert.equal(await autoContact.tick(), 3);
-    assert.deepEqual(launched, ['1', '2', '3']);
-    assert.ok(lines.some((line) => line.includes('[auto-queue] queued 3 contact research job(s)')));
+    assert.equal(await autoContact.tick(), 2);
+    assert.deepEqual(launched, ['1', '2']);
+    assert.ok(lines.some((line) => line.includes('[auto-queue] queued 2 contact research job(s)')));
   } finally {
     console.log = orig;
   }

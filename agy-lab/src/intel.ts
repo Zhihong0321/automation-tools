@@ -15,6 +15,7 @@ import { normalizePhoneNumber } from './phone.ts';
 import { importSalesAgents } from './atap-import.ts';
 import { searchParallelPeople } from './parallel-contact.ts';
 import * as autoContact from './autocontact.ts';
+import * as contactWorker from './contact-worker.ts';
 import * as autoScan from './autoscan.ts';
 export { normalizePhoneNumber };
 
@@ -2659,7 +2660,7 @@ export function orphanedContactReports(
 }
 
 /** Recovery runs as many reports at once as the contact worker has lanes. */
-const CONTACT_RECOVERY_WIDTH = Math.max(1, Number(process.env.CONTACT_LANES) || 3);
+const CONTACT_RECOVERY_WIDTH = contactWorker.resolveConfig().lanes;
 
 export async function resumeContactResearch(maxConcurrent = CONTACT_RECOVERY_WIDTH): Promise<number> {
   if (recoveringContact || !jobs.liveTypes().includes(autoContact.contactResearchJobType())) return 0;
