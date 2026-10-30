@@ -1,6 +1,6 @@
 # Country industry research
 
-Latest update: 2026-10-31.
+Latest update: 2026-10-31 (search lists added).
 
 Give the hub a country and an industry ("Malaysia", "advertising agency"). It
 returns one CSV of every business Google Maps lists for that industry in that
@@ -113,6 +113,8 @@ online.
 | What | Where |
 |---|---|
 | The country lane: plan, Maps through the queue, contacts, CSV | `agy-lab/src/country-research.ts` |
+| Search lists: tables, run loop, lease, trial, CSV, API | `agy-lab/src/search-list.ts` |
+| The `/search-lists` page | `agy-lab/src/search-list-page.ts` |
 | The pipeline's steps, copied from gmap-country-insdusty | `agy-lab/src/country/` |
 | Queue rules: mini only for country searches, its old country lane retired | `agy-lab/src/jobs.ts` (`countryScanOnly`, `RETIRED_TYPES`) |
 | scraper.tech lanes | `agy-lab/src/maps-worker.ts` |
@@ -122,6 +124,91 @@ online.
 
 The mini's own country lane, `m4-mini-country`, no longer takes
 `country.industry` jobs; the hub runs them.
+
+## Search lists: your own list of searches
+
+A country job plans its own searches, one per World Cities city. A search list
+runs the searches you give it instead: a CSV with the columns `country`,
+`city`, `industry`, `search_keyword`, any number of countries and industries.
+`outputs/gmaps-search-list/gmaps-search-list-1250.csv` is the first one: 25
+countries, 10 cities each, 5 industries, 1,250 searches.
+
+Upload it on the operator page `/search-lists`, or `POST /api/search-lists`
+with `{name, csv}`. **A new list starts paused.** Start, pause and retry from
+the page.
+
+How it runs:
+
+1. **Maps.** Each row is one `gmap.scan` job asking for `search_keyword`
+   exactly as written, up to 200 businesses. Five are in flight at once, so the
+   mini, the PC and the three scraper.tech lanes each have one. The mini takes
+   these searches (`source: 'search.list'`, allowed in `countryScanOnly`). A
+   search that fails or is blocked is asked once more; one that fails twice is
+   marked failed and the run goes on.
+2. **Merge.** One row per Google place id. A business found by several
+   searches (KL web design and KL digital marketing) is one row naming every
+   search that found it.
+3. **Website contacts.** The same plain-code step as country jobs, 12 websites
+   at a time, running alongside the searches rather than after them.
+
+### Where the results are stored
+
+In the report database (Postgres on Railway), three tables:
+
+| Table | One row per | Holds |
+|---|---|---|
+| `search_list_run` | list | name, status (`paused`, `running`, `done`), lease |
+| `search_list_search` | row of the CSV | its search, `pending`/`done`/`failed`, which worker answered, how many businesses |
+| `search_list_place` | business | the Maps fields, the searches that found it, the website contacts |
+
+The CSV is built from these rows when you download it, at any point in the
+run, for every country or one (`?country=Malaysia`). Columns: `country`,
+`city`, `industry`, `search_keyword`, then the country job's columns plus
+`place_id`. Businesses not yet checked show `research_status`
+`not_checked_yet`.
+
+### When something goes wrong
+
+Every finished search and every website check is its own saved row, so there
+is no checkpoint file to lose and nothing finished is redone.
+
+- **The hub redeploys or crashes.** The run's two-minute lease lapses, the hub
+  takes it again, and it carries on with the rows still `pending` and the
+  businesses not yet checked. A website check that was in flight is checked
+  again.
+- **You pause it.** No new searches start; the ones in flight finish and are
+  saved. Start picks up from there.
+- **A worker is off or Google refuses it.** The other workers take its
+  searches, as for country jobs.
+- **Searches or website checks fail.** They stay marked failed. **Retry
+  failures** puts them back, and only them.
+
+### The trial before the full run
+
+`POST /api/search-lists/:id/trial` with `{searches: [{idx, worker}]}` runs
+chosen rows of a paused list, each pinned to one worker, then checks the
+websites of what they found. Their results stay in the list, so the full run
+does not ask them again.
+
+The 1,250-search list is on the hub as `376382ba4ee4`, paused. Its trial ran
+on 2026-10-31, one row on each worker:
+
+| | Mac mini | scraper.tech | Windows PC |
+|---|---|---|---|
+| Search | Kuala Lumpur Digital marketing agency Malaysia | London Accounting firm United Kingdom | Sydney Web design company Australia |
+| Businesses | 116 | 200 (the cap) | 118 |
+| Website | 110 | 181 | 113 |
+| Email found | 67 | 115 | 58 |
+| Address in the searched city | street only, no city | 183 | 94, all NSW |
+
+- 434 businesses, every website checked: 322 `ok`, 7 `partial`, 30 no
+  website, 75 failed.
+- **50 of the 75 failures are HTTP 403**: sites that refuse the hub's Railway
+  address. The mini's country runs from home failed 8% of website checks; the
+  hub failed 17% here.
+- The PC's map starts centred on Kuala Lumpur; a search naming Sydney still
+  lands in Sydney.
+- The trial's CSV is `outputs/search-list-trial/trial-3-searches.csv`.
 
 ## Storage and limits
 
