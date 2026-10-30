@@ -1,5 +1,7 @@
 // /company-dive: a form, the recent dives, and the selected dive's live log,
-// dossier and sources. It uses the operator token the other console pages keep
+// dossier and sources. Each finished dive in the list carries its deeper dive:
+// a Start button, or the run's status and report, plus the preview link.
+// It uses the operator token the other console pages keep
 // in localStorage ('labToken'), and asks for it once if it is not there.
 import { OPERATOR_NAV, navHtml } from './nav.ts';
 
@@ -26,8 +28,13 @@ h1 { font-size:20px; margin:0 0 12px; }
 form { display:grid; gap:8px; margin-bottom:16px; }
 input, button { font:inherit; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--ink); }
 button { background:var(--accent); color:#fff; border:0; cursor:pointer; font-weight:600; }
-.list a { display:block; padding:8px 6px; border-bottom:1px solid var(--line); color:inherit; text-decoration:none; }
-.list a.on { background:var(--bg); }
+.list .row { border-bottom:1px solid var(--line); padding-bottom:8px; }
+.list .row.on { background:var(--bg); }
+.list a.pick { display:block; padding:8px 6px 2px; color:inherit; text-decoration:none; }
+.dd { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:2px 6px 0; font-size:13px; }
+.dd a { color:var(--accent); }
+button.small { padding:3px 10px; font-size:12px; }
+button:disabled { opacity:.5; cursor:default; }
 .muted { color:var(--muted); font-size:13px; }
 .bad { color:var(--bad); }
 .log { font:12px/1.5 ui-monospace, Menlo, Consolas, monospace; max-height:260px; overflow:auto; white-space:pre-wrap; background:var(--bg); padding:10px; border-radius:8px; }
@@ -70,12 +77,53 @@ async function api(path, opts = {}) {
   return res.json();
 }
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
-let current = Number(location.hash.slice(1)) || 0, timer = 0;
+let current = Number(location.hash.slice(1)) || 0, timer = 0, listTimer = 0;
+
+// Deeper dive per company-dive id, from /api/dive-deeper/pipeline; null when that pipeline is switched off.
+let pipe = null;
+async function loadPipeline() {
+  try {
+    const res = await fetch('/api/dive-deeper/pipeline', { headers: { authorization: 'Bearer ' + token } });
+    pipe = res.ok ? new Map(((await res.json()).companies || []).map((c) => [Number(c.dive_id), c])) : null;
+  } catch { pipe = null; }
+}
+
+const ddLabel = { queued: 'Queued', waiting_dive: 'Waiting for the dive', running: 'Running', done: 'Report', partial: 'Report (partial)', failed: 'Failed' };
+const ddBusy = (s) => s === 'queued' || s === 'waiting_dive' || s === 'running';
+
+function deeperHtml(r) {
+  if (!pipe || (r.status !== 'done' && r.status !== 'partial')) return '';
+  const c = pipe.get(Number(r.id));
+  const rep = c && c.report;
+  let h = '<span class="muted">Deeper dive:</span> ';
+  if (!rep) h += '<button class="small" data-deeper="' + r.id + '">Start</button>';
+  else {
+    h += '<a href="' + esc(rep.report_url) + '" target="_blank" rel="noopener">' + esc(ddLabel[rep.status] || rep.status) + '</a>';
+    if (rep.status === 'failed') h += ' <button class="small" data-retry="' + rep.run_id + '">Retry</button>';
+  }
+  if (c && c.preview_url) h += '<span class="muted">·</span><a href="' + esc(c.preview_url) + '" target="_blank" rel="noopener">Preview</a>';
+  return '<div class="dd">' + h + '</div>';
+}
 
 async function loadList() {
-  const rows = (await api('/api/company-dive')).dives || [];
-  $('list').innerHTML = rows.map((r) => '<a href="#' + r.id + '" class="' + (r.id === current ? 'on' : '') + '"><b>' + esc(r.company) + '</b><br><span class="muted">#' + r.id + ' · ' + esc(r.status) + (r.status === 'running' ? ' · ' + esc(r.stage) : '') + ' · ' + r.tavily_calls + ' Tavily</span></a>').join('') || '<p class="muted">No dives yet.</p>';
+  clearTimeout(listTimer);
+  const [out] = await Promise.all([api('/api/company-dive'), loadPipeline()]);
+  const rows = out.dives || [];
+  $('list').innerHTML = rows.map((r) => '<div class="row' + (r.id === current ? ' on' : '') + '"><a class="pick" href="#' + r.id + '"><b>' + esc(r.company) + '</b><br><span class="muted">#' + r.id + ' · ' + esc(r.status) + (r.status === 'running' ? ' · ' + esc(r.stage) : '') + ' · ' + r.tavily_calls + ' Tavily</span></a>' + deeperHtml(r) + '</div>').join('') || '<p class="muted">No dives yet.</p>';
+  if (pipe && [...pipe.values()].some((c) => c.report && ddBusy(c.report.status))) listTimer = setTimeout(loadList, 15000);
 }
+
+$('list').addEventListener('click', async (e) => {
+  const b = e.target.closest && e.target.closest('button[data-deeper], button[data-retry]');
+  if (!b) return;
+  b.disabled = true;
+  const dive = b.getAttribute('data-deeper');
+  const out = dive
+    ? await api('/api/dive-deeper', { method: 'POST', body: JSON.stringify({ dive_id: Number(dive) }) })
+    : await api('/api/dive-deeper/' + b.getAttribute('data-retry') + '/retry', { method: 'POST' });
+  if (out.error) { alert(out.error); b.disabled = false; return; }
+  loadList();
+});
 
 async function show(id) {
   clearTimeout(timer);
