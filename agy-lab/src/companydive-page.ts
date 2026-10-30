@@ -1,6 +1,7 @@
 // /company-dive: a form, the recent dives, and the selected dive's live log,
 // dossier and sources. Each finished dive in the list carries its deeper dive:
-// a Start button, or the run's status and report, plus the preview link.
+// a Start button, or the run's status and report, plus the preview link, and
+// what the dive, preview and deeper dive cost (LLM tokens and API calls, in USD).
 // It uses the operator token the other console pages keep
 // in localStorage ('labToken'), and asks for it once if it is not there.
 import { OPERATOR_NAV, navHtml } from './nav.ts';
@@ -105,11 +106,32 @@ function deeperHtml(r) {
   return '<div class="dd">' + h + '</div>';
 }
 
+const money = (x) => '$' + (x < 0.01 ? x.toFixed(4) : x.toFixed(3));
+// The dive's cost comes with the dive; the preview's and deeper dive's from the pipeline.
+function costs(id, dive) {
+  const c = pipe && pipe.get(Number(id));
+  return [['Dive', dive], ['Preview', c && c.preview_cost], ['Deeper dive', c && c.report && c.report.cost]].filter((p) => p[1]);
+}
+const rough = (c) => c.estimated || c.unpriced.length > 0;
+
+function costHtml(r) {
+  const parts = costs(r.id, r.cost);
+  if (!parts.length) return '';
+  const total = parts.reduce((n, p) => n + p[1].usd, 0);
+  return '<div class="dd muted">Cost ' + money(total) + (parts.some((p) => rough(p[1])) ? ' est.' : '') + (parts.length > 1 ? ' · ' + parts.map((p) => esc(p[0].toLowerCase()) + ' ' + money(p[1].usd)).join(' · ') : '') + '</div>';
+}
+
+function costTable(d) {
+  const rows = costs(d.id, d.cost).map((p) => '<tr><th colspan="3">' + esc(p[0]) + ' · ' + money(p[1].usd) + (rough(p[1]) ? ' (estimate)' : '') + '</th></tr>'
+    + p[1].lines.map((l) => '<tr><td>' + esc(l.item) + '</td><td class="muted">' + esc(l.detail) + (l.estimated ? ', tokens estimated from text length' : '') + '</td><td>' + (l.usd == null ? 'no price' : money(l.usd)) + '</td></tr>').join('')).join('');
+  return rows ? '<details><summary>Cost</summary><div class="dossier"><table>' + rows + '</table></div></details>' : '';
+}
+
 async function loadList() {
   clearTimeout(listTimer);
   const [out] = await Promise.all([api('/api/company-dive'), loadPipeline()]);
   const rows = out.dives || [];
-  $('list').innerHTML = rows.map((r) => '<div class="row' + (r.id === current ? ' on' : '') + '"><a class="pick" href="#' + r.id + '"><b>' + esc(r.company) + '</b><br><span class="muted">#' + r.id + ' · ' + esc(r.status) + (r.status === 'running' ? ' · ' + esc(r.stage) : '') + ' · ' + r.tavily_calls + ' Tavily</span></a>' + deeperHtml(r) + '</div>').join('') || '<p class="muted">No dives yet.</p>';
+  $('list').innerHTML = rows.map((r) => '<div class="row' + (r.id === current ? ' on' : '') + '"><a class="pick" href="#' + r.id + '"><b>' + esc(r.company) + '</b><br><span class="muted">#' + r.id + ' · ' + esc(r.status) + (r.status === 'running' ? ' · ' + esc(r.stage) : '') + ' · ' + r.tavily_calls + ' Tavily</span></a>' + deeperHtml(r) + costHtml(r) + '</div>').join('') || '<p class="muted">No dives yet.</p>';
   if (pipe && [...pipe.values()].some((c) => c.report && ddBusy(c.report.status))) listTimer = setTimeout(loadList, 15000);
 }
 
@@ -133,7 +155,8 @@ async function show(id) {
   const log = (d.log || []).map((l) => l.at.slice(11, 19) + '  ' + l.stage.padEnd(8) + ' ' + l.msg).join('\\n');
   let html = '<h1>' + esc(d.company) + ' <span class="muted">(' + esc(d.country) + ')</span></h1>'
     + '<div class="stats muted"><span>Status: <b class="' + (d.status === 'failed' ? 'bad' : '') + '">' + esc(d.status) + '</b></span>'
-    + '<span>Tavily: ' + d.tavily_calls + ' calls / ' + d.tavily_credits + ' credits</span><span>Brave: ' + d.brave_calls + '</span><span>LLM: ' + d.llm_calls + '</span></div>';
+    + '<span>Tavily: ' + d.tavily_calls + ' calls / ' + d.tavily_credits + ' credits</span><span>Brave: ' + d.brave_calls + '</span><span>LLM: ' + d.llm_calls + '</span>'
+    + (d.cost ? '<span>Cost: ' + money(d.cost.usd) + (rough(d.cost) ? ' est.' : '') + '</span>' : '') + '</div>' + costTable(d);
   if (d.report_url) html += '<p>Public report: <a href="' + esc(d.report_url) + '" target="_blank" rel="noopener">' + esc(d.report_url) + '</a></p>';
   if (d.error) html += '<p class="bad">' + esc(d.error) + '</p>';
   if (d.result && d.result.warnings && d.result.warnings.length) html += '<p class="bad">Finished with fallbacks:</p><ul>' + d.result.warnings.map((w) => '<li class="muted">' + esc(w) + '</li>').join('') + '</ul>';
@@ -147,7 +170,7 @@ async function show(id) {
     html += '<details open><summary>Sources (' + cited.size + ' cited, ' + r.sources.length + ' found)</summary><ol class="sources">'
       + r.sources.filter((s) => cited.has(s.id)).map((s) => '<li id="src-' + s.id + '" value="' + s.id + '"><a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.title || s.url) + '</a> <span class="muted">' + esc(s.url) + ' · ' + esc(s.found.join(', ')) + '</span></li>').join('') + '</ol></details>';
     html += '<details><summary>Tavily calls</summary><ol>' + r.tavily.map((c) => '<li>/' + esc(c.path) + ' — ' + esc(c.label) + ' · ' + c.credits + ' credits · ' + (c.ms / 1000).toFixed(1) + 's' + (c.ok ? '' : ' · <span class="bad">' + esc(c.note) + '</span>') + '</li>').join('') + '</ol></details>';
-    html += '<details><summary>LLM calls (' + r.llm.length + ')</summary><ol>' + r.llm.map((u) => '<li>' + esc(u.step) + ' — ' + esc(u.engine || '') + ' · ' + (u.ms / 1000).toFixed(0) + 's</li>').join('') + '</ol></details>';
+    html += '<details><summary>LLM calls (' + r.llm.length + ')</summary><ol>' + r.llm.map((u) => '<li>' + esc(u.step) + ' — ' + esc(u.engine || '') + ' · ' + (u.ms / 1000).toFixed(0) + 's' + (u.tokensIn != null ? ' · ' + u.tokensIn + ' in / ' + u.tokensOut + ' out tokens' : '') + '</li>').join('') + '</ol></details>';
     html += '<details><summary>Facts (' + r.facts.length + ')</summary><ul>' + r.facts.map((f) => '<li><b>' + esc(f.topic) + '</b> ' + esc(f.fact) + ' <span class="muted">[' + f.sources.join(', ') + '] ' + esc(f.confidence) + '</span></li>').join('') + '</ul></details>';
   }
   if (r) html += peopleHtml(d);
@@ -191,7 +214,8 @@ $('f').onsubmit = async (e) => {
   loadList();
 };
 window.onhashchange = () => { show(Number(location.hash.slice(1)) || 0); loadList(); };
-loadList(); show(current);
+// The list first, so the open dive's cost table has the preview and deeper dive too.
+loadList().finally(() => show(current));
 </script>
 </body>
 </html>`;

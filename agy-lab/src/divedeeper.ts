@@ -27,6 +27,7 @@ import { runLane, stageDive, type LaneResult } from './divedeeper/runner.ts';
 import { buildReport } from './divedeeper/report-html.ts';
 import { buildPreview, type Offer } from './divedeeper/preview-html.ts';
 import { editPreview } from './divedeeper/preview-editor.ts';
+import { addMeter, emptyUsage, price } from './cost.ts';
 import { page as browsePage } from './divedeeper-page.ts';
 
 export const enabled = (env: NodeJS.ProcessEnv = process.env): boolean => /^(1|true|on|yes)$/i.test(String(env.DIVE_DEEPER_ENABLED ?? '').trim());
@@ -79,6 +80,8 @@ function ensureTable(): Promise<unknown> {
       notes jsonb not null default '{}',
       created_at timestamptz not null default now()
     );
+    -- What writing the preview used (one LLM pass), for its cost.
+    alter table dive_preview add column if not exists meter jsonb;
   `).catch((err) => { tableReady = null; throw err; });
   return tableReady;
 }
@@ -299,7 +302,8 @@ async function writePreviewNotes(dive: any): Promise<void> {
     configureKeys();
     const ctx = makeCtx(String(dive.id), 'P', 'preview');
     const notes = await editPreview(dive, (p) => ctx.llm(p), ctx.parseJson, ctx.warn);
-    await reportdb.sql(`insert into dive_preview (dive_id, notes) values ($1, $2::jsonb) on conflict (dive_id) do update set notes = excluded.notes, created_at = now()`, [dive.id, JSON.stringify(notes ?? {})]);
+    await reportdb.sql(`insert into dive_preview (dive_id, notes, meter) values ($1, $2::jsonb, $3::jsonb) on conflict (dive_id) do update set notes = excluded.notes, meter = excluded.meter, created_at = now()`,
+      [dive.id, JSON.stringify(notes ?? {}), JSON.stringify(ctx.meter)]);
   } catch (err) {
     console.error(`[dive-preview ${dive.id}] notes failed`, err);
   } finally {
@@ -381,11 +385,12 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
   if (p === '/api/dive-deeper/pipeline' && method === 'GET') {
     const out = await reportdb.sql(`
       select c.id as dive_id, c.public_id as dive_public_id, c.company, c.status as dive_status, c.finished_at as dive_finished_at,
-             p.created_at as preview_written_at, (p.notes ? 'warnings') as preview_edited,
-             d.id as run_id, d.public_id as run_public_id, d.status as run_status, d.finished_at as run_finished_at
+             p.created_at as preview_written_at, (p.notes ? 'warnings') as preview_edited, p.meter as preview_meter,
+             d.id as run_id, d.public_id as run_public_id, d.status as run_status, d.finished_at as run_finished_at, d.meters as run_meters
         from company_dive c
         left join dive_preview p on p.dive_id = c.id
-        left join lateral (select id, public_id, status, finished_at from dive_deeper where dive_id = c.id order by id desc limit 1) d on true
+        left join lateral (select id, public_id, status, finished_at, (select jsonb_agg(v->'meter') from jsonb_each(lanes) e(k, v)) as meters
+                             from dive_deeper where dive_id = c.id order by id desc limit 1) d on true
        order by c.id desc limit 200`);
     const proto = String(req.headers['x-forwarded-proto'] ?? 'https').split(',')[0];
     const base = `${proto}://${req.headers['x-forwarded-host'] ?? req.headers.host}`;
@@ -395,7 +400,12 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
         dive_id: Number(r.dive_id), company: r.company, dive_status: r.dive_status, dive_finished_at: r.dive_finished_at,
         preview: r.preview_written_at ? (r.preview_edited ? 'ready' : 'ready, fallback wording') : editing.has(Number(r.dive_id)) ? 'writing' : ['done', 'partial'].includes(r.dive_status) ? 'waiting' : 'no dive yet',
         preview_url: r.dive_public_id ? `${base}/dp/${r.dive_public_id}` : null,
-        report: r.run_id ? { run_id: Number(r.run_id), status: r.run_status, finished_at: r.run_finished_at, report_url: `${base}/dd/${r.run_public_id}` } : null,
+        // Previews written before 2026-10-30 kept no meter, so their cost is unknown (null).
+        preview_cost: r.preview_meter ? price(addMeter(emptyUsage(), r.preview_meter)) : null,
+        report: r.run_id ? {
+          run_id: Number(r.run_id), status: r.run_status, finished_at: r.run_finished_at, report_url: `${base}/dd/${r.run_public_id}`,
+          cost: price((r.run_meters ?? []).reduce((u: ReturnType<typeof emptyUsage>, m: any) => addMeter(u, m), emptyUsage())),
+        } : null,
       })),
     });
     return true;
@@ -442,7 +452,8 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     const row = (await reportdb.sql<Row>(`select id, public_id, company, dive_id, status, stage, log, lanes, error, created_at, finished_at from dive_deeper where id = $1`, [Number(one[1])])).rows[0];
     if (!row) { ctx.json(res, 404, { error: 'no such run' }); return true; }
     const lanes = Object.fromEntries(Object.entries(row.lanes ?? {}).map(([k, v]) => [k, { status: v.status, findings: v.findings_count, warnings: v.warnings?.length ?? 0, first_warnings: (v.warnings ?? []).slice(0, 3).map((w) => w.slice(0, 240)), ms: v.ms, meter: v.meter }]));
-    ctx.json(res, 200, { ...row, lanes, ...links(req, row.public_id) });
+    const cost = price(Object.values(row.lanes ?? {}).reduce((u, v) => addMeter(u, v.meter as any), emptyUsage()));
+    ctx.json(res, 200, { ...row, lanes, cost, ...links(req, row.public_id) });
     return true;
   }
 

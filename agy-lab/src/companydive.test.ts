@@ -66,6 +66,7 @@ test('streamChat joins content deltas, drops reasoning, and sends no max_tokens'
     'data: {"choices":[{"delta":{"content":"{\\"ok\\""}}]}',
     ': keep-alive',
     'data: {"choices":[{"delta":{"content":": true}"}}]}',
+    'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":34}}',
     'data: [DONE]',
     '',
   ].join('\n');
@@ -76,7 +77,10 @@ test('streamChat joins content deltas, drops reasoning, and sends no max_tokens'
     const body = new ReadableStream({ start(c) { c.enqueue(bytes.slice(0, 40)); c.enqueue(bytes.slice(40)); c.close(); } });
     return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
   }) as typeof fetch;
-  assert.equal(await streamChat('hi', fake), '{"ok": true}');
+  const usage = { tokensIn: 0, tokensOut: 0 };
+  assert.equal(await streamChat('hi', fake, usage), '{"ok": true}');
+  assert.deepEqual(usage, { tokensIn: 12, tokensOut: 34 });
+  assert.deepEqual(sent.stream_options, { include_usage: true });
   assert.equal(sent.stream, true);
   assert.equal('max_tokens' in sent, false);
 });

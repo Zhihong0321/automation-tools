@@ -129,9 +129,10 @@ export type Finding = {
 
 export type Meter = {
   started: number;
-  llm: { calls: number; failed: number; promptChars: number; answerChars: number; tokensIn: number; tokensOut: number; byModel: Record<string, number> };
+  llm: { calls: number; failed: number; promptChars: number; answerChars: number; tokensIn: number; tokensOut: number; byModel: Record<string, number>; byModelTokens: Record<string, { in: number; out: number }> };
   maps: { calls: number; failed: number; byTool: Record<string, number> };
-  exa: { calls: number; failed: number; results: number };
+  /** priced: calls that reported their own cost; dollars: what they reported. */
+  exa: { calls: number; failed: number; results: number; priced: number; dollars: number };
   brave: { calls: number; failed: number };
   http: { calls: number; failed: number };
   other: Record<string, number>;
@@ -143,9 +144,9 @@ export function makeCtx(diveId: string, section: string, lane: string) {
   const warnings: string[] = [];
   const meter: Meter = {
     started: Date.now(),
-    llm: { calls: 0, failed: 0, promptChars: 0, answerChars: 0, tokensIn: 0, tokensOut: 0, byModel: {} },
+    llm: { calls: 0, failed: 0, promptChars: 0, answerChars: 0, tokensIn: 0, tokensOut: 0, byModel: {}, byModelTokens: {} },
     maps: { calls: 0, failed: 0, byTool: {} },
-    exa: { calls: 0, failed: 0, results: 0 },
+    exa: { calls: 0, failed: 0, results: 0, priced: 0, dollars: 0 },
     brave: { calls: 0, failed: 0 },
     http: { calls: 0, failed: 0 },
     other: {},
@@ -184,8 +185,12 @@ export function makeCtx(diveId: string, section: string, lane: string) {
           const body = JSON.parse(raw);
           const answer = String(body.choices?.[0]?.message?.content ?? '').trim();
           meter.llm.answerChars += answer.length;
-          meter.llm.tokensIn += Number(body.usage?.prompt_tokens ?? 0);
-          meter.llm.tokensOut += Number(body.usage?.completion_tokens ?? 0);
+          const tokensIn = Number(body.usage?.prompt_tokens ?? 0), tokensOut = Number(body.usage?.completion_tokens ?? 0);
+          meter.llm.tokensIn += tokensIn;
+          meter.llm.tokensOut += tokensOut;
+          const t = meter.llm.byModelTokens[model] ??= { in: 0, out: 0 };
+          t.in += tokensIn;
+          t.out += tokensOut;
           if (!answer) { warn(`llm ${model} returned an empty answer (attempt ${attempt + 1}, finish_reason ${body.choices?.[0]?.finish_reason ?? '?'}, ${body.usage?.completion_tokens ?? '?'} output tokens${body.error ? ', ' + String(body.error.code ?? body.error.message ?? '').slice(0, 80) : ''})`); continue; }
           return answer;
         } catch (e) {
@@ -250,8 +255,10 @@ export function makeCtx(diveId: string, section: string, lane: string) {
         });
       const raw = await res.text();
       if (!res.ok) { warn(`exa HTTP ${res.status}: ${raw.slice(0, 200)}`); meter.exa.failed++; return []; }
-      const results = JSON.parse(raw).results ?? [];
+      const out = JSON.parse(raw);
+      const results = out.results ?? [];
       meter.exa.results += results.length;
+      if (out.costDollars?.total != null) { meter.exa.priced++; meter.exa.dollars += Number(out.costDollars.total); }
       return results;
     } catch (e) {
       warn(`exa failed: ${(e as Error).message}`);

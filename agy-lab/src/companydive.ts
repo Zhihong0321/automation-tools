@@ -35,6 +35,7 @@ import * as tavily from './tavily.ts';
 import * as extractLlm from './extract-llm.ts';
 import * as pi from './pi.ts';
 import * as reportdb from './reportdb.ts';
+import { diveUsage, price } from './cost.ts';
 
 export type Source = {
   id: number;
@@ -129,7 +130,11 @@ export async function budgetedCall(
   }
 }
 
-export type LlmUse = { step: string; engine: string; ms: number; promptChars: number; answerChars: number };
+/** One answered LLM call. Tokens come from the provider's usage report; calls made before 2026-10-30 have none. */
+export type LlmUse = { step: string; engine: string; ms: number; promptChars: number; answerChars: number; tokensIn?: number; tokensOut?: number };
+
+/** What a provider says one call used, filled in by the call when it reports it. */
+export type TokenUse = { tokensIn: number; tokensOut: number };
 
 /** Where a stage that could not finish says so; the dive carries on. */
 export type Warn = (msg: string) => void | Promise<void>;
@@ -140,15 +145,16 @@ export type Warn = (msg: string) => void | Promise<void>;
  * that is still thinking keeps sending chunks, so nothing can cut a working call
  * off. (Node's fetch drops a connection only after five minutes of complete
  * silence, which is a dead socket, not a slow answer.) The reply is the content
- * deltas; reasoning deltas are read and dropped.
+ * deltas; reasoning deltas are read and dropped. The usage chunk at the end, when
+ * the provider sends one, lands in `usage`.
  */
-export async function streamChat(prompt: string, fetchImpl: typeof fetch = fetch): Promise<string> {
+export async function streamChat(prompt: string, fetchImpl: typeof fetch = fetch, usage?: TokenUse): Promise<string> {
   const cfg = extractLlm.config();
   if (!cfg) throw Object.assign(new Error('no extract model lane is saved on /workers'), { code: 'not_configured' });
   const res = await fetchImpl(cfg.url + '/chat/completions', {
     method: 'POST',
     headers: { authorization: 'Bearer ' + cfg.key, 'content-type': 'application/json' },
-    body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], temperature: 0, stream: true }),
+    body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], temperature: 0, stream: true, stream_options: { include_usage: true } }),
   });
   if (!res.ok || !res.body) throw new Error(`${cfg.model} answered HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const decoder = new TextDecoder();
@@ -162,14 +168,16 @@ export async function streamChat(prompt: string, fetchImpl: typeof fetch = fetch
       const data = line.trim().startsWith('data:') ? line.trim().slice(5).trim() : '';
       if (!data || data === '[DONE]') continue;
       try {
-        content += JSON.parse(data).choices?.[0]?.delta?.content ?? '';
+        const event = JSON.parse(data);
+        content += event.choices?.[0]?.delta?.content ?? '';
+        if (usage && event.usage) { usage.tokensIn = Number(event.usage.prompt_tokens ?? 0); usage.tokensOut = Number(event.usage.completion_tokens ?? 0); }
       } catch { /* a keep-alive or partial line, not content */ }
     }
   }
   return content;
 }
 
-type Engine = { name: string; call: (prompt: string) => Promise<string> };
+type Engine = { name: string; call: (prompt: string, usage: TokenUse) => Promise<string> };
 
 /**
  * The two models the hub has: deepseek (CONTACT_LLM_*) first, then Pi on MiniMax
@@ -179,7 +187,7 @@ type Engine = { name: string; call: (prompt: string) => Promise<string> };
 function engines(): Engine[] {
   const out: Engine[] = [];
   const ds = extractLlm.config();
-  if (ds) out.push({ name: ds.model, call: (prompt) => streamChat(prompt) });
+  if (ds) out.push({ name: ds.model, call: (prompt, usage) => streamChat(prompt, fetch, usage) });
   if (pi.config().apiKey) out.push({ name: `pi/${pi.config().model}`, call: async (prompt) => (await pi.ask(prompt, { tools: false, timeoutMs: 0 })).answer });
   return out;
 }
@@ -198,10 +206,12 @@ export async function ask(prompt: string, opts: { step: string; uses?: LlmUse[] 
   for (let round = 0; round <= waits.length; round++) {
     for (const engine of all) {
       const started = Date.now();
+      const usage: TokenUse = { tokensIn: 0, tokensOut: 0 };
       try {
-        const answer = stripThinking(await engine.call(prompt));
+        const answer = stripThinking(await engine.call(prompt, usage));
         if (!answer) throw new Error('empty answer');
-        opts.uses?.push({ step: opts.step, engine: engine.name, ms: Date.now() - started, promptChars: prompt.length, answerChars: answer.length });
+        opts.uses?.push({ step: opts.step, engine: engine.name, ms: Date.now() - started, promptChars: prompt.length, answerChars: answer.length,
+          ...(usage.tokensIn || usage.tokensOut ? usage : {}) });
         return answer;
       } catch (err) {
         errors.push(`${engine.name}: ${(err as Error).message.slice(0, 200)}`);
@@ -900,9 +910,10 @@ export async function handle(req: import('node:http').IncomingMessage, res: impo
   const method = req.method ?? 'GET';
   if (p === '/api/company-dive' && method === 'GET') {
     const out = await reportdb.sql(
-      `select id, public_id, company, country, status, stage, tavily_calls, tavily_credits, brave_calls, llm_calls, created_at, finished_at
+      `select id, public_id, company, country, status, stage, tavily_calls, tavily_credits, brave_calls, llm_calls, created_at, finished_at,
+              result->'llm' as llm, result->'people'->'llm' as people_llm, result->'people'->'exa' as people_exa
          from company_dive order by id desc limit 50`);
-    ctx.json(res, 200, { dives: out.rows.map((r) => ({ ...r, ...links(req, r as DiveRow) })) });
+    ctx.json(res, 200, { dives: out.rows.map(({ llm, people_llm, people_exa, ...r }: any) => ({ ...r, cost: price(diveUsage({ ...r, llm, people_llm, people_exa })), ...links(req, r as DiveRow) })) });
     return true;
   }
   if (p === '/api/company-dive' && method === 'POST') {
@@ -938,7 +949,8 @@ export async function handle(req: import('node:http').IncomingMessage, res: impo
   const m = p.match(/^\/api\/company-dive\/(\d+)$/);
   if (m && method === 'GET') {
     const row = (await reportdb.sql<DiveRow>(`select * from company_dive where id = $1`, [Number(m[1])])).rows[0];
-    if (row) ctx.json(res, 200, { ...row, ...links(req, row) });
+    const people = (row?.result as { people?: { llm?: LlmUse[]; exa?: [] } } | null)?.people;
+    if (row) ctx.json(res, 200, { ...row, cost: price(diveUsage({ ...row, llm: row.result?.llm, people_llm: people?.llm, people_exa: people?.exa })), ...links(req, row) });
     else ctx.json(res, 404, { error: 'no such dive' });
     return true;
   }
