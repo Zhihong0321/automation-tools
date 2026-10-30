@@ -88,7 +88,7 @@ test('the preview landing page builds from the company-dive alone, uses the edit
   assert.ok(!/\[\d+\]/.test(html.replace(/<details[\s\S]*<\/details>/g, '')), 'no [n] citations outside the research appendix');
   assert.ok(buildPreview({ company: 'Empty' }).includes('Empty'), 'a dive with no result still builds');
   // What the full report holds, in its three parts, with the company's own claims mapped to their register.
-  for (const s of ['Part 1 · The deeper dive', 'Part 2 · The credibility check', 'Part 3 · Analysis and suggestions', 'Claims CIDB Grade G7 registration.', 'CIDB contractor register', 'acme.my', 'in Johor Bahru']) assert.ok(html.includes(s), s);
+  for (const s of ['Part 1 · The deeper dive', 'Part 2 · The credibility check', 'Part 3 · Analysis and suggestions', 'How top AI sees your brand', 'How search engines index your company', 'Claims CIDB Grade G7 registration.', 'CIDB contractor register', 'acme.my', 'in Johor Bahru']) assert.ok(html.includes(s), s);
   assert.ok(buildPreview({ ...dive, finished_at: new Date('2026-10-25T10:00:00Z') }).includes('Online Presence Audit 2026'), 'a Date finished_at still gives the year');
   const edited = buildPreview(dive, {}, { hook: 'Your award label is a year out.', known: [{ label: 'Founded', value: 'July 2023' }], warnings: [{ type: 'outdated', title: 'Award label still says 2024', detail: 'd', risk: 'r' }] });
   for (const s of ['Your award label is a year out.', 'Award label still says 2024', 'Outdated', 'July 2023']) assert.ok(edited.includes(s), s);

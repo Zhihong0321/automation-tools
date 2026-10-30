@@ -88,7 +88,7 @@ export function buildPreview(dive: any, offer: Offer = {}, notes: PreviewNotes |
   // What each chapter of the full report unlocks for this company.
   const inside: Record<string, { know: string[]; locked: string }> = {
     reputation: { know: ['Which reviews still have no reply from you', 'Review spikes Google may hold back', 'What customers praise, ready for your website'], locked: '? of ? reviews answered' },
-    findability: { know: [`Your rank on Google Maps in ${town} and every town you serve`, 'Every business shown before you', 'Towns where you have no listing at all'], locked: '#? on Google Maps' },
+    findability: { know: ['What a search for your name shows: your own pages, third parties, outdated or negative results', 'Dead or broken pages of yours that search engines still index', `Your rank on Google Maps and in web search in ${town} and every town you serve`], locked: '#? on Google Maps' },
     ai: { know: ['How often AI assistants recommend you, and who instead', 'Every wrong phone, address or website they give out', 'The pages assistants read that list your rivals'], locked: '? of ? AI answers name you' },
     website: { know: [`Dead pages, empty pages and broken contact links on ${domains.length ? domains.join(', ') : 'your sites'}`, 'Screenshots of each problem', 'Numbers and addresses that differ from Google'], locked: '? urgent faults' },
     credentials: { know: [`Each of your ${claims || ''} licence and award claims, looked up in its register`.replace('  ', ' '), 'Claims the register contradicts, or shows you undersell', 'Claims no register can back'], locked: '? of ? claims confirmed' },
@@ -171,12 +171,17 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
 .parts a { background:var(--dark2); color:var(--on-dark); padding:28px; display:grid; gap:12px; align-content:start; text-decoration:none; border-top:3px solid #fff; }
 .parts a:hover { background:#232a34; } .parts .n { font-family:var(--display); font-size:56px; font-weight:500; letter-spacing:-0.04em; line-height:1; color:var(--on-dark-2); }
 .parts h3 { font-size:26px; letter-spacing:-0.02em; } .parts p { color:var(--on-dark-2); font-size:15px; }
+.parts li.hl { color:#fff; font-weight:600; padding-left:12px; border-left:3px solid #fff; }
 .parts ul { margin:0; padding:0; list-style:none; font-size:14px; } .parts li { padding:8px 0; border-top:1px solid rgba(255,255,255,.12); } .parts .go { font-size:13px; font-weight:600; margin-top:6px; }
 .feats { display:grid; gap:64px; }
 .feat { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,1fr); gap:56px; align-items:center; } .feat:nth-child(even) .mock { order:2; }
 .feat .txt { display:grid; gap:12px; align-content:start; } .feat .n { font-family:var(--display); font-size:15px; font-weight:600; color:var(--muted); }
 .feat h3 { font-size:clamp(24px,2.6vw,32px); letter-spacing:-0.02em; line-height:1.15; } .feat .what { color:var(--grey); }
 .feat ul { margin:0; padding:0; list-style:none; display:grid; gap:0; font-size:15px; } .feat li { padding:9px 0 9px 22px; border-top:1px solid var(--line); position:relative; } .feat li::before { content:"→"; position:absolute; left:0; color:var(--muted); }
+.feat .hlb { display:inline-block; background:var(--ink); color:#fff; font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; padding:3px 8px; margin-right:10px; }
+.feat .q { font-family:var(--display); font-size:17px; color:var(--grey); margin-top:-4px; } .feat.spot .mock { box-shadow:inset 0 4px 0 var(--ink); }
+.m-serp { background:#fff; padding:14px 16px; display:grid; gap:10px; box-shadow:0 1px 3px rgba(0,0,0,.07); } .m-q { font-size:13px; border:1px solid var(--line); border-radius:20px; padding:6px 14px; justify-self:stretch; }
+.m-hit { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 10px; align-items:center; } .m-hit .m-host { grid-column:1; } .m-hit .pill { grid-column:2; grid-row:1 / span 2; font-size:10px; }
 .feat .lockline { font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
 /* placeholder visuals, drawn like the full report's own */
 .mock { background:var(--band); padding:28px; display:grid; gap:14px; position:relative; margin:0; align-content:start; }
@@ -256,11 +261,12 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
       <div class="m-card"><div class="m-top"><span class="m-av">?</span><div style="display:grid;gap:6px;flex:1">${rd('38%')}<span class="m-stars">★<i>★★★★</i></span></div></div>${rd('96%')}${rd('88%')}${rd('62%')}<p class="m-noreply">No reply from the owner for ? days</p></div>
       <div class="m-bars" aria-hidden="true">${[22, 30, 18, 26, 40, 34, 28, 100, 36, 24, 30, 44, 38, 26, 32, 48, 30, 42].map((h, i) => `<i${i === 7 ? ' class="hot"' : ''} style="height:${h}%"></i>`).join('')}</div>
       <figcaption class="cap">Every Google review on your listings, month by month. Red marks a one-day spike Google may hold back.</figcaption></figure>`,
-    findability: `<figure class="mock" aria-label="Sample of the Google Maps chapter"><span class="m-lock">Your rank goes here</span>
+    findability: `<figure class="mock" aria-label="Sample of the search chapter"><span class="m-lock">Your search results go here</span>
+      <div class="m-serp"><p class="m-q">${esc(short)}</p>${[['Your page', '', '70%'], ['Third party', 'amb', '58%'], ['Dead page, still indexed', 'bad', '64%']].map(([t, c, w]) => `<div class="m-hit"><span class="m-host">${rd('30%')}</span>${rd(w)}<span class="pill ${c || 'none'}">${t}</span></div>`).join('')}</div>
       <table class="m-board"><tbody>${[['62%', 92], ['48%', 74], ['55%', 60]].map(([w, m], i) => `<tr><td class="rk">#${i + 1}</td><td>${rd(String(w))}</td><td style="width:30%"><span class="m-meter"><i style="width:${m}%"></i></span></td><td class="num">? reviews</td></tr>`).join('')}
       <tr class="gap"><td colspan="4">? more businesses before you</td></tr>
       <tr class="me"><td class="rk">#?</td><td colspan="2">You · ${esc(short)}</td><td class="num">? reviews</td></tr></tbody></table>
-      <figcaption class="cap">Google Maps, searching “${esc(query)}”, then every other town you serve.</figcaption></figure>`,
+      <figcaption class="cap">What a search for your name shows, then Google Maps and web search for “${esc(query)}” in every town you serve.</figcaption></figure>`,
     ai: `<figure class="mock" aria-label="Sample of the AI assistants chapter"><span class="m-lock">Your AI answers go here</span>
       <p class="m-ask">“Who is the best ${esc(query)}?”</p>
       <table class="m-board"><tbody>${[['44%', 88], ['58%', 66], ['36%', 40]].map(([w, m]) => `<tr><td>${rd(String(w))}</td><td style="width:34%"><span class="m-meter"><i style="width:${m}%"></i></span></td><td class="num">? of ?</td></tr>`).join('')}
@@ -275,11 +281,13 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
   };
   const what: Record<string, string> = {
     reputation: 'We read every Google review on every listing you have, and every reply you wrote back.',
-    findability: `We search Google Maps the way a customer does, in ${town} and in every town you serve, and record who shows up before you.`,
-    ai: 'We ask AI assistants who to hire, many times over, and what they know about you by name, from memory and with a web search.',
+    findability: `We search your name and your trade the way a customer does, on the web and on Google Maps, in ${town} and every town you serve. You see what search engines hold about you, and who shows up before you.`,
+    ai: 'We ask AI assistants the questions your customers ask, many times over: who to hire, and what they know about you by name, from memory and with a web search.',
     website: `We open every page of ${domains.length ? domains.join(', ') : 'your websites'}, test each link, form and phone number, and screenshot every fault.`,
   };
-  const diveChapters = CHAPTER_ORDER.filter((c) => c !== 'credentials');
+  // AI and search lead: they are where most customers now meet a business first.
+  const spotlight: Record<string, string> = { ai: 'How top AI sees your brand', findability: 'How search engines index your company' };
+  const diveChapters = ['ai', 'findability', 'reputation', 'website'] as const;
 
   // The credibility check: this company's own claims and warning signs, each with where it gets checked.
   const registerFor = (t: string) => /\bCIDB\b|\bG[1-7]\b|grade/i.test(t) ? 'CIDB contractor register'
@@ -380,7 +388,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
     <p class="lead">This preview read what public sources say. The full report goes further: it measures what your customers actually see, checks what is claimed about you, and tells you what to do about it.</p></div>
   <div class="parts">
     <a href="#dive"><span class="n">01</span><h3>The deeper dive</h3><p>Four places customers judge you before they call, each measured.</p>
-      <ul>${diveChapters.map((c) => `<li>${esc(CHAPTER_EYEBROW[c])}</li>`).join('')}</ul><span class="go">See what it shows ↓</span></a>
+      <ul>${diveChapters.map((c) => `<li${spotlight[c] ? ' class="hl"' : ''}>${esc(spotlight[c] ?? (c === 'reputation' ? 'Your Google reviews' : CHAPTER_EYEBROW[c]))}</li>`).join('')}</ul><span class="go">See what it shows ↓</span></a>
     <a href="#cred"><span class="n">02</span><h3>The credibility check</h3><p>Every claim and warning sign, checked against the records a stranger would use.</p>
       <ul><li>Licences and awards, in their registers</li><li>The ${esc(Math.max(warnings.length, contradictions.length + gaps.length))} warning signs, settled</li><li>What a bank or tender officer finds in ten minutes</li></ul><span class="go">See what it shows ↓</span></a>
     <a href="#advice"><span class="n">03</span><h3>Analysis and suggestions</h3><p>What it all means for your business, and what to do, in order.</p>
@@ -392,7 +400,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
   <div class="head"><p class="eyebrow">Part 1 · The deeper dive</p>
     <h2>Four places customers judge you.<br><span class="g">We measure every one.</span></h2>
     <p class="lead">Each chapter opens with why it matters to ${/^[aeiou]/i.test(trade) ? 'an' : 'a'} ${esc(trade)} in ${esc(town)}, shows the evidence, what it costs you, and the first thing to fix. The grey bars below are where your own numbers go.</p></div>
-  <div class="feats">${diveChapters.map((c, i) => `<div class="feat">${mocks[c]}<div class="txt"><span class="n">Chapter ${String(i + 1).padStart(2, '0')} · ${esc(CHAPTER_EYEBROW[c])}</span><h3>${esc(OPENERS[c].q[0])} ${esc(OPENERS[c].q[1])}</h3><p class="what">${esc(what[c])}</p><ul>${inside[c].know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><p class="lockline">In your report: ${esc(inside[c].locked)}</p></div></div>`).join('')}</div>
+  <div class="feats">${diveChapters.map((c) => `<div class="feat${spotlight[c] ? ' spot' : ''}">${mocks[c]}<div class="txt"><span class="n">${spotlight[c] ? '<span class="hlb">Highlight</span>' : ''}Chapter ${String(CHAPTER_ORDER.indexOf(c) + 1).padStart(2, '0')} · ${esc(CHAPTER_EYEBROW[c])}</span><h3>${esc(spotlight[c] ?? `${OPENERS[c].q[0]} ${OPENERS[c].q[1]}`)}</h3>${spotlight[c] ? `<p class="q">${esc(OPENERS[c].q[0])} ${esc(OPENERS[c].q[1])}</p>` : ''}<p class="what">${esc(what[c])}</p><ul>${inside[c].know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><p class="lockline">In your report: ${esc(inside[c].locked)}</p></div></div>`).join('')}</div>
 </section>
 
 <section id="cred" class="warn-section">
@@ -462,7 +470,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
       <p class="lead" style="margin-top:18px">You have seen what public sources say. The full audit shows what your customers see, settles every warning sign against the official records, and hands you the fixes.</p></div>
     <div class="panel">
       ${offer.price ? `<p class="price">${esc(offer.price)}</p>` : ''}
-      <ul><li>The deeper dive: your reviews, Google Maps, AI assistants and websites, measured</li><li>The credibility check: every claim and warning sign checked against the records</li><li>Analysis and suggestions: fixes in order, a 30-day plan, and the work written for you</li><li>Desktop, mobile and A4 PDF</li></ul>
+      <ul><li>The deeper dive: how top AI sees your brand, how search engines index you, your reviews and your websites</li><li>The credibility check: every claim and warning sign checked against the records</li><li>Analysis and suggestions: fixes in order, a 30-day plan, and the work written for you</li><li>Desktop, mobile and A4 PDF</li></ul>
       ${ctaHref !== '#order' ? cta('Get my full report') : `<p>${esc(offer.contact || 'Reply to the message that brought you this preview, and we will start your full audit.')}</p>`}
       <p style="font-size:13px;color:var(--on-dark-2)">This preview is yours to keep.</p>
     </div>
