@@ -24,6 +24,7 @@ import * as contactWorker from './contact-worker.ts';
 import * as mapsWorker from './maps-worker.ts';
 import * as gmapWorker from './gmap-worker.ts';
 import * as contactKeys from './contact-keys.ts';
+import * as extractLlm from './extract-llm.ts';
 import * as companyDive from './companydive.ts';
 import * as companyDivePeople from './companydive-people.ts';
 import { page as companyDivePage } from './companydive-page.ts';
@@ -383,7 +384,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // ---- contact-form delivery: one lead's message through its website contact form ----
   if (await contactFormDelivery.handle(req, res, url, { json, readJson })) return;
 
-  if (p === '/api/contact-keys' || p === '/api/gemini-contact-keys' || p === '/api/contact-stats') {
+  if (p === '/api/contact-keys' || p === '/api/gemini-contact-keys' || p === '/api/contact-stats' || p === '/api/llm-lanes') {
     if (await contactKeys.handleKeys(req, res, url, { json, readJson })) return;
   }
 
@@ -509,6 +510,8 @@ server.listen(PORT, '0.0.0.0', () => {
   autoScan.start();
   void siteEmails.start();
   emailMarketing.start();
+  // Extract model lanes saved on /workers; until they load, calls use CONTACT_LLM_*.
+  void extractLlm.refresh();
   contactWorker.start();
   mapsWorker.start();
   // Broker jobs live only in memory. Refill it from saved contact reports after

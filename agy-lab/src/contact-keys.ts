@@ -1,6 +1,8 @@
 // GET/POST /api/contact-keys: the search keys contact research rotates through,
 // Tavily and Exa, each shown in full with its quota state. Behind LAB_TOKEN.
+// GET/POST /api/llm-lanes: the extract model lanes (extract-llm.ts), kept in llm_lane.
 import * as db from './reportdb.ts';
+import * as extractLlm from './extract-llm.ts';
 import * as tavily from './tavily.ts';
 import * as exa from './exa.ts';
 
@@ -11,6 +13,28 @@ export async function handleKeys(req: { method?: string }, res: unknown, url: UR
   if (url.pathname === '/api/contact-stats' && (req.method ?? 'GET') === 'GET') {
     const days = Number(url.searchParams.get('days')) || 7;
     ctx.json(res, 200, { days, ...(await db.contactProviderStats(days)) });
+    return true;
+  }
+  if (url.pathname === '/api/llm-lanes') {
+    const method = req.method ?? 'GET';
+    if (method !== 'GET' && method !== 'POST') {
+      ctx.json(res, 405, { error: 'method not allowed' });
+      return true;
+    }
+    if (method === 'POST') {
+      const body = await ctx.readJson(req);
+      if (!Array.isArray(body.lanes)) {
+        ctx.json(res, 400, { error: 'lanes needs [{label, url, key, model, enabled}]' });
+        return true;
+      }
+      await extractLlm.replaceLanes(body.lanes as Array<Partial<extractLlm.LlmLane>>);
+    }
+    const lanes = await extractLlm.refresh();
+    ctx.json(res, 200, {
+      lanes: lanes.map((l) => ({ ...l, restingUntil: extractLlm.restingUntilFor(l.key) })),
+      // Empty table: calls still run on these CONTACT_LLM_* lanes.
+      fromEnv: lanes.some((l) => l.enabled) ? [] : extractLlm.pool().map((c) => ({ url: c.url, model: c.model })),
+    });
     return true;
   }
   if (url.pathname !== '/api/contact-keys' && url.pathname !== '/api/gemini-contact-keys') return false;

@@ -9,19 +9,33 @@
 // that fails on one provider (429, empty answer, error) moves to the next, and
 // a provider that answered 429 rests a minute.
 //
+// The lanes now live in the llm_lane table, managed on /workers through
+// /api/llm-lanes. While that table holds an enabled lane, the CONTACT_LLM_*
+// variables are ignored; they only serve a hub whose table is empty.
+//
 // Errors carry Pi's codes (rate_limit, timeout, length, empty, failed), so the
 // extract step's retry and the lane's cooldown treat both models alike.
+
+import * as db from './reportdb.ts';
 
 type FetchImpl = typeof fetch;
 
 export type LlmConfig = { url: string; key: string; model: string };
+export type LlmLane = LlmConfig & { id?: number; label: string; enabled: boolean };
 
 const HIVE_URL = 'https://api.thehive.ai/api/v3';
 const HIVE_MODEL = 'deepseek-ai/deepseek-v4.1-flash-1017';
 const REST_MS = 60_000;
 
-/** Every provider the extract step may call: CONTACT_LLM_* first, then each Hive key. */
+let saved: LlmConfig[] = [];
+
+/** Every provider the extract step may call: the saved lanes, else CONTACT_LLM_* then each Hive key. */
 export function pool(env: NodeJS.ProcessEnv = process.env): LlmConfig[] {
+  if (env === process.env && saved.length) return saved;
+  return envPool(env);
+}
+
+function envPool(env: NodeJS.ProcessEnv): LlmConfig[] {
   const out: LlmConfig[] = [];
   const url = env.CONTACT_LLM_URL?.trim().replace(/\/+$/, '') ?? '';
   const key = env.CONTACT_LLM_KEY?.trim() ?? '';
@@ -38,6 +52,66 @@ export function pool(env: NodeJS.ProcessEnv = process.env): LlmConfig[] {
 /** The first configured provider, or null when contact research stays on Pi. */
 export function config(env: NodeJS.ProcessEnv = process.env): LlmConfig | null {
   return pool(env)[0] ?? null;
+}
+
+async function ensureTable(): Promise<void> {
+  await db.sql(`
+    create table if not exists llm_lane (
+      id bigserial primary key,
+      label text not null default '',
+      url text not null,
+      api_key text not null,
+      model text not null,
+      enabled boolean not null default true,
+      created_at timestamptz not null default now()
+    );
+  `);
+}
+
+/** Every saved lane, disabled ones too, in the order calls take turns. */
+export async function listLanes(): Promise<LlmLane[]> {
+  await ensureTable();
+  const out = await db.sql(`select id, label, url, api_key, model, enabled from llm_lane order by id`);
+  return out.rows.map((row) => ({
+    id: Number(row.id), label: String(row.label ?? ''), url: String(row.url), key: String(row.api_key),
+    model: String(row.model), enabled: row.enabled !== false,
+  }));
+}
+
+/** Reload the saved lanes into the pool; a hub without a database keeps CONTACT_LLM_*. */
+export async function refresh(): Promise<LlmLane[]> {
+  if (!db.configured()) return [];
+  try {
+    const lanes = await listLanes();
+    saved = lanes.filter((l) => l.enabled).map(({ url, key, model }) => ({ url, key, model }));
+    return lanes;
+  } catch (err) {
+    console.error('[extract-llm] could not load llm_lane: ' + (err as Error).message);
+    return [];
+  }
+}
+
+/** Replace every saved lane; incomplete rows are dropped. */
+export async function replaceLanes(input: Array<Partial<LlmLane>>): Promise<LlmLane[]> {
+  const clean = input.map((l) => ({
+    label: String(l.label ?? '').trim(),
+    url: String(l.url ?? '').trim().replace(/\/+$/, ''),
+    key: String(l.key ?? '').trim(),
+    model: String(l.model ?? '').trim(),
+    enabled: l.enabled !== false,
+  })).filter((l) => /^https?:\/\//.test(l.url) && l.key && l.model);
+  await ensureTable();
+  await db.sql(`delete from llm_lane`);
+  for (const l of clean) {
+    await db.sql(`insert into llm_lane (label, url, api_key, model, enabled) values ($1, $2, $3, $4, $5)`, [l.label, l.url, l.key, l.model, l.enabled]);
+  }
+  return refresh();
+}
+
+/** When a lane that answered 429 may be called again, or null when it is awake. */
+export function restingUntilFor(key: string): string | null {
+  const until = restingUntil.get(key) ?? 0;
+  return until > Date.now() ? new Date(until).toISOString() : null;
 }
 
 let turn = 0;
