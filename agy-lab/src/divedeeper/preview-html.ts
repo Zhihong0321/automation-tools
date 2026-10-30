@@ -3,7 +3,10 @@
 //   1. it is about this company and nobody else: what public sources already say about them
 //   2. warning signs we found (contradictions, missing, outdated and wrong details), some shown,
 //      the rest and the five numbers customers decide on kept locked for the full report
-// Then what the full report unlocks, the done-for-you work, how it works, and the order panel.
+// Then what is inside the full report, shown in its three parts with placeholder versions of
+// the report's own visuals: the deeper dive (reviews, Maps, AI, websites), the credibility check
+// (this company's claims and warning signs, each with where it gets checked), and the analysis
+// and suggestions (fix list, 30-day plan, the drafts). Then how it works, and the order panel.
 // Same look as the full report (Inter, two-tone headlines, near-black bands), laid out as one
 // responsive page rather than A4 sheets.
 //
@@ -60,7 +63,8 @@ export function buildPreview(dive: any, offer: Offer = {}, notes: PreviewNotes |
   const trade = !kind ? 'business like yours' : /\b(installer|contractor|company|firm|shop|clinic|agency|supplier|provider|consultant|service)s?$/.test(kind) ? kind : `${kind} company`;
   const claims = facts.filter((f) => CLAIM.test(String(f.fact ?? '')) && !/private limited/i.test(String(f.fact))).length;
   const made = dateOf(dive?.finished_at) || dateOf(new Date().toISOString());
-  const year = String(dive?.finished_at ?? new Date().toISOString()).slice(0, 4);
+  // finished_at may arrive as a Date, whose String() starts with the weekday.
+  const year = String(new Date(dive?.finished_at ?? Date.now()).getFullYear());
 
   const known = notes?.known?.length ? notes.known : [
     id.industry && { label: 'What you do', value: clip(String(id.industry), 90) },
@@ -145,12 +149,7 @@ h2 { font-size:clamp(34px,4.4vw,58px); max-width:16em; } .lead { font-size:19px;
 /* band */
 .band-cta { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:32px; align-items:center; padding-top:72px; padding-bottom:72px; }
 .band-cta h2 { font-size:clamp(30px,3.4vw,46px); }
-/* unlock */
-.chapters { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; }
-.chapter { background:var(--band); padding:22px; display:grid; gap:10px; align-content:start; } .chapter .n { font-family:var(--display); font-size:32px; font-weight:500; color:var(--muted); letter-spacing:-0.04em; line-height:1; }
-.chapter h3 { font-size:19px; letter-spacing:-0.015em; line-height:1.2; } .chapter ul { margin:0; padding-left:16px; font-size:14px; color:var(--grey); display:grid; gap:4px; }
-.chapter .lockline { font-size:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--ink); border-top:1px solid var(--line); padding-top:10px; margin-top:auto; }
-.done { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; } .done div { border-top:2px solid var(--ink); padding-top:14px; display:grid; gap:6px; } .done h3 { font-size:19px; } .done p { color:var(--grey); font-size:15px; }
+/* how it works */
 .steps { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; counter-reset:st; }
 .steps div { counter-increment:st; display:grid; gap:6px; } .steps div::before { content:counter(st, decimal-leading-zero); font-family:var(--display); font-size:36px; font-weight:500; letter-spacing:-0.04em; color:var(--muted); }
 .steps h3 { font-size:18px; } .steps p { font-size:14.5px; color:var(--grey); } .steps .now { color:var(--good); font-weight:600; font-size:12px; letter-spacing:.1em; text-transform:uppercase; }
@@ -167,19 +166,142 @@ details > summary { cursor:pointer; font-family:var(--display); font-weight:600;
 .dossier table { width:100%; border-collapse:collapse; font-size:13px; } .dossier td, .dossier th { padding:6px 8px; text-align:left; vertical-align:top; } .dossier tbody tr:nth-child(odd) td { background:var(--band); }
 .plain { margin:0; padding-left:18px; display:grid; gap:4px; } a.cite { font-size:.75em; text-decoration:none; vertical-align:super; color:var(--grey); }
 ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sources li { overflow-wrap:anywhere; }
+/* inside the full report: the three parts */
+.parts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
+.parts a { background:var(--dark2); color:var(--on-dark); padding:28px; display:grid; gap:12px; align-content:start; text-decoration:none; border-top:3px solid #fff; }
+.parts a:hover { background:#232a34; } .parts .n { font-family:var(--display); font-size:56px; font-weight:500; letter-spacing:-0.04em; line-height:1; color:var(--on-dark-2); }
+.parts h3 { font-size:26px; letter-spacing:-0.02em; } .parts p { color:var(--on-dark-2); font-size:15px; }
+.parts ul { margin:0; padding:0; list-style:none; font-size:14px; } .parts li { padding:8px 0; border-top:1px solid rgba(255,255,255,.12); } .parts .go { font-size:13px; font-weight:600; margin-top:6px; }
+.feats { display:grid; gap:64px; }
+.feat { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,1fr); gap:56px; align-items:center; } .feat:nth-child(even) .mock { order:2; }
+.feat .txt { display:grid; gap:12px; align-content:start; } .feat .n { font-family:var(--display); font-size:15px; font-weight:600; color:var(--muted); }
+.feat h3 { font-size:clamp(24px,2.6vw,32px); letter-spacing:-0.02em; line-height:1.15; } .feat .what { color:var(--grey); }
+.feat ul { margin:0; padding:0; list-style:none; display:grid; gap:0; font-size:15px; } .feat li { padding:9px 0 9px 22px; border-top:1px solid var(--line); position:relative; } .feat li::before { content:"→"; position:absolute; left:0; color:var(--muted); }
+.feat .lockline { font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+/* placeholder visuals, drawn like the full report's own */
+.mock { background:var(--band); padding:28px; display:grid; gap:14px; position:relative; margin:0; align-content:start; }
+.mock .cap, .tile .cap { font-size:12.5px; color:var(--muted); line-height:1.45; }
+.m-lock { justify-self:start; font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--grey); border:1px solid #c9ced4; padding:3px 8px; background:var(--paper); }
+.rd { display:inline-block; height:9px; background:#d3d8de; border-radius:2px; vertical-align:middle; max-width:100%; }
+.m-card { background:#fff; padding:16px 18px; display:grid; gap:9px; box-shadow:0 1px 3px rgba(0,0,0,.07); }
+.m-top { display:flex; align-items:center; gap:10px; font-size:13px; } .m-av { flex:none; width:30px; height:30px; border-radius:50%; background:#c9ced4; display:grid; place-items:center; color:#fff; font-weight:700; font-size:13px; }
+.m-stars { color:#e8a500; letter-spacing:1px; font-size:13px; } .m-stars i { color:#d3d8de; font-style:normal; }
+.m-noreply { font-size:12px; font-weight:700; color:var(--wrong); }
+.m-bars { display:flex; align-items:flex-end; gap:3px; height:72px; border-bottom:1px solid #c9ced4; } .m-bars i { flex:1; background:#bfc5cc; } .m-bars i.hot { background:var(--wrong); }
+.m-board { width:100%; border-collapse:collapse; font-size:13.5px; background:#fff; } .m-board td { padding:10px 12px; border-top:1px solid var(--line); vertical-align:middle; }
+.m-board .rk { width:48px; font-weight:600; color:var(--muted); } .m-board .num { width:64px; text-align:right; color:var(--muted); font-size:12.5px; white-space:nowrap; }
+.m-board .me td { background:var(--ink); color:#fff; font-weight:600; } .m-board .me .rk, .m-board .me .num { color:#fff; }
+.m-board .gap td { color:var(--muted); font-size:12px; text-align:center; background:var(--band); padding:6px; }
+.m-meter { display:block; height:8px; background:var(--band); } .m-meter i { display:block; height:100%; background:#9aa1ab; }
+.m-ask { background:#fff; padding:12px 16px; border-radius:16px 16px 16px 4px; font-size:14px; justify-self:start; max-width:92%; box-shadow:0 1px 3px rgba(0,0,0,.07); }
+.m-stack { display:flex; height:14px; } .m-stack i { display:block; } .s-good { background:var(--good); } .s-fix { background:#e0a43a; } .s-urgent { background:var(--wrong); } .s-none { background:#bfc5cc; }
+.kk { display:inline-block; width:9px; height:9px; margin:0 3px 0 8px; vertical-align:baseline; } .kk:first-child { margin-left:0; }
+.m-browser { background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.08); } .m-url { display:flex; gap:10px; align-items:center; padding:9px 12px; background:#e6e9ec; font-size:12px; color:var(--grey); overflow:hidden; white-space:nowrap; }
+.m-url .dots { display:flex; gap:5px; } .m-url .dots i { width:9px; height:9px; border-radius:50%; background:#c4c9cf; }
+.m-page { padding:20px; display:grid; gap:10px; position:relative; min-height:210px; align-content:start; } .m-boxes { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:10px; } .m-boxes span { height:62px; background:var(--band); }
+.m-pin { position:absolute; background:var(--wrong); color:#fff; font-size:11px; font-weight:700; letter-spacing:.03em; padding:4px 8px; box-shadow:0 4px 10px -4px rgba(180,35,24,.6); }
+.m-btn { justify-self:start; background:var(--ink); color:#fff; font-size:11px; font-weight:600; padding:7px 12px; }
+/* credibility ledger */
+.cred { display:grid; grid-template-columns:minmax(0,1fr); gap:0; }
+.ledger { width:100%; border-collapse:collapse; background:var(--paper); font-size:15px; }
+.ledger th { text-align:left; font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); padding:14px 20px; font-weight:600; border-bottom:2px solid var(--ink); }
+.ledger td { padding:18px 20px; border-top:1px solid var(--line); vertical-align:top; } .ledger tr:first-child td { border-top:0; }
+.ledger .said { display:grid; gap:6px; } .ledger .said b { font-weight:500; } .ledger .where { color:var(--grey); font-size:14px; width:30%; } .ledger .res { width:1%; white-space:nowrap; }
+.ledger .src { font-size:10.5px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+.ledger tr.hidden td { background:#fafbfc; }
+.vstamp { display:inline-block; font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; border:2px dashed #b4bac2; color:var(--muted); padding:4px 9px; transform:rotate(-2deg); }
+.outcomes { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:20px; font-size:13px; color:var(--grey); }
+.pill { display:inline-block; font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:4px 9px; }
+.pill.good { color:var(--good); background:#e5f4ec; } .pill.bad { color:var(--wrong); background:var(--wrong-bg); } .pill.amb { color:var(--contra); background:var(--contra-bg); } .pill.none { color:var(--missing); background:var(--missing-bg); }
+/* analysis and suggestions */
+.tiles { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
+.tile { background:var(--band); padding:24px; display:grid; gap:12px; align-content:start; } .tile.wide { grid-column:span 2; }
+.tile h3 { font-size:20px; letter-spacing:-0.015em; } .tile > p { font-size:14.5px; color:var(--grey); }
+.tile .in { background:#fff; padding:16px; display:grid; gap:9px; font-size:13px; box-shadow:0 1px 3px rgba(0,0,0,.07); }
+.m-fix { display:grid; grid-template-columns:26px minmax(0,1fr) auto auto; gap:10px; align-items:center; padding:9px 0; border-top:1px solid var(--line); } .m-fix:first-child { border-top:0; }
+.m-fix .no { font-family:var(--display); font-weight:600; color:var(--muted); } .m-pill { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:3px 7px; background:var(--band); color:var(--grey); white-space:nowrap; } .m-pill.hi { color:var(--wrong); background:var(--wrong-bg); }
+.m-weeks { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; } .m-weeks div { display:grid; gap:7px; align-content:start; } .m-weeks b { font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; }
+.m-reply { background:var(--ink); padding:12px 14px; border-radius:12px 12px 4px 12px; justify-self:end; width:86%; display:grid; gap:7px; } .m-reply .rd { background:rgba(255,255,255,.32); } .m-reply small { color:#c9ced4; font-size:10.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; }
+.m-slug { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12.5px; background:#fff; padding:9px 12px; border-left:3px solid var(--ink); overflow-wrap:anywhere; }
+.m-code { margin:0; background:var(--dark); color:#c9d1d9; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12px; padding:16px; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; } .m-code .rd { background:rgba(255,255,255,.22); height:8px; }
+.m-faq { display:grid; gap:6px; padding:9px 0; border-top:1px solid var(--line); } .m-faq:first-child { border-top:0; } .m-faq b { font-size:13px; }
 @media (max-width:900px) {
   section { padding-top:64px; padding-bottom:64px; } .hero { grid-template-columns:1fr; gap:40px; padding-top:56px; } .file { transform:none; }
+  .parts { grid-template-columns:1fr; } .feat { grid-template-columns:1fr; gap:28px; } .feat:nth-child(even) .mock { order:0; } .tiles { grid-template-columns:1fr 1fr; }
   .strip { grid-template-columns:1fr 1fr; } .warns { grid-template-columns:1fr; } .five { grid-template-columns:1fr 1fr; } .band-cta, .order { grid-template-columns:1fr; }
-  .done { grid-template-columns:1fr; } .uses { grid-template-columns:1fr 1fr; } .steps { grid-template-columns:1fr 1fr; } .top span.for { display:none; } .lead { font-size:17px; }
+  .uses { grid-template-columns:1fr 1fr; } .steps { grid-template-columns:1fr 1fr; } .top span.for { display:none; } .lead { font-size:17px; }
 }
-@media (max-width:560px) { .uses { grid-template-columns:1fr; } }
-@media print { .top, .ctas, .band-cta .btn { display:none; } section { padding:36px 24px; break-inside:avoid; } .warn, .chapter, .locked, .uses div { break-inside:avoid; } }
+@media (max-width:700px) {
+  .ledger thead { display:none; } .ledger tr { display:grid; gap:8px; padding:16px 18px; border-top:1px solid var(--line); } .ledger tr:first-child { border-top:0; }
+  .ledger td { display:block; padding:0; border:0; width:auto !important; } .ledger .where::before { content:"Checked against: "; font-weight:600; color:var(--ink); }
+}
+@media (max-width:560px) { .uses, .tiles { grid-template-columns:1fr; } .tile.wide { grid-column:auto; } .m-weeks { grid-template-columns:1fr 1fr; } .mock { padding:18px; } .m-fix { grid-template-columns:22px minmax(0,1fr) auto; } .m-fix .eff { display:none; } }
+@media print { .top, .ctas, .band-cta .btn { display:none; } section { padding:36px 24px; break-inside:avoid; } .warn, .locked, .uses div, .feat, .tile, .parts a, .ledger tr { break-inside:avoid; } }
 `;
 
   const warnCard = (w: NonNullable<PreviewNotes['warnings']>[number], first = false) => {
     const [label, cls] = TYPE[w.type] ?? TYPE.contradiction;
     return `<article class="warn ${cls}${first ? ' first' : ''}"><span class="tag ${cls}">${esc(label)}</span><h3>${esc(w.title)}</h3>${w.detail ? `<p class="d">${esc(w.detail)}</p>` : ''}${w.risk ? `<p class="risk">${esc(w.risk)}</p>` : ''}</article>`;
   };
+  // ---------- inside the full report ----------
+  // Placeholder versions of the full report's visuals: grey bars where this company's numbers go.
+  const rd = (w: string) => `<span class="rd" style="width:${w}"></span>`;
+  const site = domains[0] ?? 'your website';
+  const query = `${kind || 'business'} ${town === 'your town' ? 'near me' : `in ${town}`}`;
+  const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const pageSlug = `/${slug(kind.split(/\s+/).slice(-2).join(' ') || 'services')}${town === 'your town' ? '' : `-${slug(town)}`}`;
+
+  const mocks: Record<string, string> = {
+    reputation: `<figure class="mock" aria-label="Sample of the reviews chapter"><span class="m-lock">Your reviews go here</span>
+      <div class="m-card"><div class="m-top"><span class="m-av">?</span><div style="display:grid;gap:6px;flex:1">${rd('38%')}<span class="m-stars">★<i>★★★★</i></span></div></div>${rd('96%')}${rd('88%')}${rd('62%')}<p class="m-noreply">No reply from the owner for ? days</p></div>
+      <div class="m-bars" aria-hidden="true">${[22, 30, 18, 26, 40, 34, 28, 100, 36, 24, 30, 44, 38, 26, 32, 48, 30, 42].map((h, i) => `<i${i === 7 ? ' class="hot"' : ''} style="height:${h}%"></i>`).join('')}</div>
+      <figcaption class="cap">Every Google review on your listings, month by month. Red marks a one-day spike Google may hold back.</figcaption></figure>`,
+    findability: `<figure class="mock" aria-label="Sample of the Google Maps chapter"><span class="m-lock">Your rank goes here</span>
+      <table class="m-board"><tbody>${[['62%', 92], ['48%', 74], ['55%', 60]].map(([w, m], i) => `<tr><td class="rk">#${i + 1}</td><td>${rd(String(w))}</td><td style="width:30%"><span class="m-meter"><i style="width:${m}%"></i></span></td><td class="num">? reviews</td></tr>`).join('')}
+      <tr class="gap"><td colspan="4">? more businesses before you</td></tr>
+      <tr class="me"><td class="rk">#?</td><td colspan="2">You · ${esc(short)}</td><td class="num">? reviews</td></tr></tbody></table>
+      <figcaption class="cap">Google Maps, searching “${esc(query)}”, then every other town you serve.</figcaption></figure>`,
+    ai: `<figure class="mock" aria-label="Sample of the AI assistants chapter"><span class="m-lock">Your AI answers go here</span>
+      <p class="m-ask">“Who is the best ${esc(query)}?”</p>
+      <table class="m-board"><tbody>${[['44%', 88], ['58%', 66], ['36%', 40]].map(([w, m]) => `<tr><td>${rd(String(w))}</td><td style="width:34%"><span class="m-meter"><i style="width:${m}%"></i></span></td><td class="num">? of ?</td></tr>`).join('')}
+      <tr class="me"><td>You · ${esc(short)}</td><td></td><td class="num">? of ?</td></tr></tbody></table>
+      <span class="m-stack" aria-hidden="true"><i class="s-good" style="width:34%"></i><i class="s-fix" style="width:18%"></i><i class="s-urgent" style="width:22%"></i><i class="s-none" style="width:26%"></i></span>
+      <figcaption class="cap">Asked about you by name: <span class="kk s-good"></span>right <span class="kk s-fix"></span>partly right <span class="kk s-urgent"></span>wrong <span class="kk s-none"></span>did not know you</figcaption></figure>`,
+    website: `<figure class="mock" aria-label="Sample of the websites chapter"><span class="m-lock">Your screenshots go here</span>
+      <div class="m-browser"><div class="m-url"><span class="dots"><i></i><i></i><i></i></span>${esc(site)}/…</div>
+        <div class="m-page">${rd('54%')}${rd('78%')}${rd('40%')}<div class="m-boxes"><span></span><span></span><span></span></div>
+          <span class="m-pin" style="top:14px;right:14px">Dead page</span><span class="m-pin" style="top:100px;left:10px">Empty service page</span><span class="m-pin" style="bottom:14px;right:18px">Phone differs from Google</span></div></div>
+      <figcaption class="cap">Every page of ${esc(domains.length ? domains.join(', ') : 'your websites')} opened, each link and phone number tested, each fault screenshotted.</figcaption></figure>`,
+  };
+  const what: Record<string, string> = {
+    reputation: 'We read every Google review on every listing you have, and every reply you wrote back.',
+    findability: `We search Google Maps the way a customer does, in ${town} and in every town you serve, and record who shows up before you.`,
+    ai: 'We ask AI assistants who to hire, many times over, and what they know about you by name, from memory and with a web search.',
+    website: `We open every page of ${domains.length ? domains.join(', ') : 'your websites'}, test each link, form and phone number, and screenshot every fault.`,
+  };
+  const diveChapters = CHAPTER_ORDER.filter((c) => c !== 'credentials');
+
+  // The credibility check: this company's own claims and warning signs, each with where it gets checked.
+  const registerFor = (t: string) => /\bCIDB\b|\bG[1-7]\b|grade/i.test(t) ? 'CIDB contractor register'
+    : /\bSEDA\b|RPVSP|RPVI/i.test(t) ? 'SEDA registered provider directories'
+    : /MyHIJAU/i.test(t) ? 'MyHIJAU directory'
+    : /award|winner/i.test(t) ? 'The award organiser’s list of winners'
+    : /member|association/i.test(t) ? 'The association’s member list'
+    : /ISO|certif|accredit/i.test(t) ? 'The certification body’s register'
+    : 'The issuing body’s own register, where one exists';
+  const checkFor = (t: string) => /\b(CIDB|SEDA|MyHIJAU|ISO|licen[cs]e?d?|certif\w*|accredit\w*|award|member)\b/i.test(t) ? registerFor(t)
+    : /review|rating|star/i.test(t) ? 'Every Google review on your listings'
+    : /AI\b|ChatGPT|assistant/i.test(t) ? 'AI assistants, asked about you by name'
+    : /maps|listing|address|location|office|phone|contact/i.test(t) ? 'Google Maps, your websites and directories'
+    : /website|domain|page|link|site/i.test(t) ? 'Every page of your websites'
+    : 'Public registers and records';
+  const claimRows = facts.map((f) => String(f.fact ?? '')).filter((f) => CLAIM.test(f) && !/private limited/i.test(f)).slice(0, 3)
+    .map((f) => ({ src: 'Your claim', said: clip(P(f), 120), where: registerFor(f) }));
+  const signRows = warnings.slice(0, Math.max(6 - claimRows.length, 3))
+    .map((w) => ({ src: TYPE[w.type]?.[0] ?? 'Warning sign', said: w.title, where: checkFor(`${w.title} ${w.detail ?? ''}`) }));
+  const ledgerRows = [...claimRows, ...signRows];
+  const hiddenRows = Math.max(Math.max(warnings.length, contradictions.length + gaps.length) - signRows.length, 0) + Math.max(claims - claimRows.length, 0);
+
   const lockedCard = (n: number) => `<article class="locked" aria-label="${n} more warning signs, in the full report"><div class="bar s"></div><div class="bar m"></div><div class="bar"></div><div class="bar m"></div><div class="bar s"></div><div class="lockmsg"><b>+${n}</b><span>more warning signs we found,<br>shown in your full report</span></div></article>`;
 
   return `<!doctype html>
@@ -249,22 +371,64 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
   ${cta('Get my full report')}
 </section>
 
-<section id="unlock">
-  <div class="head"><p class="eyebrow">What the full report unlocks</p>
-    <h2>Five questions your customers<br><span class="g">already ask about you.</span></h2></div>
-  <div class="chapters">${CHAPTER_ORDER.map((c, i) => `<div class="chapter"><span class="n">${String(i + 1).padStart(2, '0')}</span><p class="eyebrow">${esc(CHAPTER_EYEBROW[c])}</p><h3>${esc(OPENERS[c].q[0])} ${esc(OPENERS[c].q[1])}</h3><ul>${inside[c].know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><p class="lockline">Unlocks: ${esc(inside[c].locked)}</p></div>`).join('')}</div>
-  <p class="note">Each chapter opens with why it matters to a ${esc(trade)} in ${esc(town)} today, shows the evidence, what it costs you, and the first thing to fix.</p>
+<section id="inside" class="dark" style="padding-top:0">
+  <div class="head"><p class="eyebrow">Inside your full report</p>
+    <h2>Three parts, written for ${esc(short)}.<br><span class="g">Here is what each one shows you.</span></h2>
+    <p class="lead">This preview read what public sources say. The full report goes further: it measures what your customers actually see, checks what is claimed about you, and tells you what to do about it.</p></div>
+  <div class="parts">
+    <a href="#dive"><span class="n">01</span><h3>The deeper dive</h3><p>Four places customers judge you before they call, each measured.</p>
+      <ul>${diveChapters.map((c) => `<li>${esc(CHAPTER_EYEBROW[c])}</li>`).join('')}</ul><span class="go">See what it shows ↓</span></a>
+    <a href="#cred"><span class="n">02</span><h3>The credibility check</h3><p>Every claim and warning sign, checked against the records a stranger would use.</p>
+      <ul><li>Licences and awards, in their registers</li><li>The ${esc(Math.max(warnings.length, contradictions.length + gaps.length))} warning signs, settled</li><li>What a bank or tender officer finds in ten minutes</li></ul><span class="go">See what it shows ↓</span></a>
+    <a href="#advice"><span class="n">03</span><h3>Analysis and suggestions</h3><p>What it all means for your business, and what to do, in order.</p>
+      <ul><li>Your fixes, least effort first</li><li>A plan for your first 30 days</li><li>Copy, replies and pages, written for you</li></ul><span class="go">See what it shows ↓</span></a>
+  </div>
 </section>
 
-<section id="done" style="padding-top:0">
-  <div class="head"><p class="eyebrow">Done for you</p><h2>Not just a report.<br><span class="g">The fixes, written for you.</span></h2></div>
-  <div class="done">
-    <div><h3>Your fixes, in order</h3><p>The five changes that win back the most customers, least effort first, and a plan for your first 30 days.</p></div>
-    <div><h3>Your homepage, rewritten</h3><p>A new headline, proof points and sections, built only from facts the registers confirm.</p></div>
-    <div><h3>Review replies, ready to post</h3><p>A reply for every unanswered complaint, and a WhatsApp message asking customers for a review.</p></div>
-    <div><h3>Pages to add</h3><p>One page per service and town, outlined, so customers in each town can find you.</p></div>
-    <div><h3>Getting recommended by AI</h3><p>The pages assistants read, the corrections they need, and an FAQ written for them to quote.</p></div>
-    <div><h3>Business details for Google</h3><p>The structured data your web developer pastes in, so search engines read the right name, address and phone.</p></div>
+<section id="dive">
+  <div class="head"><p class="eyebrow">Part 1 · The deeper dive</p>
+    <h2>Four places customers judge you.<br><span class="g">We measure every one.</span></h2>
+    <p class="lead">Each chapter opens with why it matters to ${/^[aeiou]/i.test(trade) ? 'an' : 'a'} ${esc(trade)} in ${esc(town)}, shows the evidence, what it costs you, and the first thing to fix. The grey bars below are where your own numbers go.</p></div>
+  <div class="feats">${diveChapters.map((c, i) => `<div class="feat">${mocks[c]}<div class="txt"><span class="n">Chapter ${String(i + 1).padStart(2, '0')} · ${esc(CHAPTER_EYEBROW[c])}</span><h3>${esc(OPENERS[c].q[0])} ${esc(OPENERS[c].q[1])}</h3><p class="what">${esc(what[c])}</p><ul>${inside[c].know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><p class="lockline">In your report: ${esc(inside[c].locked)}</p></div></div>`).join('')}</div>
+</section>
+
+<section id="cred" class="warn-section">
+  <div class="head"><p class="eyebrow">Part 2 · The credibility check</p>
+    <h2>Every claim, checked<br><span class="g">where a stranger would check it.</span></h2>
+    <p class="lead">Banks, tender panels and careful customers verify before they trust. We do it first: each licence, award and membership is looked up in the issuing body’s own register, and each warning sign is settled against the records. These are the first rows of ${esc(short)}’s check.</p></div>
+  <div class="cred"><table class="ledger"><thead><tr><th>What is said about ${esc(short)}</th><th>Checked against</th><th>Result</th></tr></thead><tbody>
+    ${ledgerRows.map((r) => `<tr><td class="said"><span class="src">${esc(r.src)}</span><b>${esc(r.said)}</b></td><td class="where">${esc(r.where)}</td><td class="res"><span class="vstamp">In full report</span></td></tr>`).join('')}
+    ${hiddenRows ? `<tr class="hidden"><td class="said"><span class="src">+${esc(hiddenRows)} more</span>${rd('72%')}${rd('48%')}</td><td class="where">${rd('80%')}</td><td class="res"><span class="vstamp">In full report</span></td></tr>` : ''}
+  </tbody></table></div>
+  <div class="outcomes"><span>Each row ends with one result:</span><span class="pill good">Confirmed</span><span class="pill good">Better than you claim</span><span class="pill bad">Register says otherwise</span><span class="pill amb">Not found</span><span class="pill none">No public register</span></div>
+  <p class="note">Then one page of what a customer, bank or tender officer learns about you in ten minutes: your registration, Google rating, address and websites side by side, and what does not add up.</p>
+</section>
+
+<section id="advice">
+  <div class="head"><p class="eyebrow">Part 3 · Analysis and suggestions</p>
+    <h2>Not just what is wrong.<br><span class="g">What to do, in order, written for you.</span></h2>
+    <p class="lead">We weigh every finding by what it costs you in customers and what it takes to fix, then write the work out so you or your web developer can start the same day.</p></div>
+  <div class="tiles">
+    <div class="tile wide"><h3>Your fixes, in order</h3><p>The changes that win back the most customers, least effort first, each with why it matters.</p>
+      <div class="in">${[['1 hour', 'High'], ['1 day', 'High'], ['1 hour', 'Medium'], ['1 week', 'High'], ['1 day', 'Medium']].map(([e, im], i) => `<div class="m-fix"><span class="no">${i + 1}</span>${rd(['82%', '64%', '74%', '58%', '68%'][i])}<span class="m-pill eff">${e}</span><span class="m-pill${im === 'High' ? ' hi' : ''}">${im} impact</span></div>`).join('')}</div></div>
+    <div class="tile"><h3>Your first 30 days</h3><p>The same fixes, laid out week by week.</p>
+      <div class="in"><div class="m-weeks">${[1, 2, 3, 4].map((w) => `<div><b>Week ${w}</b>${rd('92%')}${rd('70%')}${w < 3 ? rd('84%') : ''}</div>`).join('')}</div></div></div>
+    <div class="tile"><h3>Your homepage, rewritten</h3><p>A new headline, proof points and sections, built only from facts we verified.</p>
+      <div class="m-browser"><div class="m-url"><span class="dots"><i></i><i></i><i></i></span>${esc(site)}</div><div class="m-page" style="min-height:0">${rd('86%')}${rd('60%')}${rd('74%')}<span class="m-btn">Your call to action</span></div></div></div>
+    <div class="tile"><h3>Review replies, ready to post</h3><p>A reply for every unanswered complaint, and a WhatsApp message asking for reviews.</p>
+      <div class="in"><span class="m-stars">★<i>★★★★</i></span>${rd('90%')}${rd('56%')}<div class="m-reply"><small>Your reply</small>${rd('94%')}${rd('70%')}</div></div></div>
+    <div class="tile"><h3>Pages to add, town by town</h3><p>One page per service and town, outlined, so customers in each town find you.</p>
+      <div class="in" style="background:none;box-shadow:none;padding:0"><span class="m-slug">${esc(pageSlug)}</span><span class="m-slug">${rd('62%')}</span><span class="m-slug">${rd('48%')}</span></div></div>
+    <div class="tile"><h3>Getting recommended by AI</h3><p>The pages assistants read, the corrections they need, and an FAQ written for them to quote.</p>
+      <div class="in">${[0, 1].map(() => `<div class="m-faq"><b>Q</b>${rd('80%')}${rd('64%')}</div>`).join('')}</div></div>
+    <div class="tile wide"><h3>Business details for Google and AI</h3><p>Structured data your web developer pastes into every page, so search engines and assistants read the right name, address and phone.</p>
+      <pre class="m-code">&lt;script type="application/ld+json"&gt;
+{ "@type": "LocalBusiness",
+  "name": "${esc(name)}",${domains.length ? `\n  "url": "https://${esc(domains[0])}",` : ''}
+  "telephone": ${rd('120px')},
+  "address": ${rd('220px')},
+  "areaServed": ${rd('160px')} }
+&lt;/script&gt;</pre></div>
   </div>
 </section>
 
@@ -295,7 +459,7 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
       <p class="lead" style="margin-top:18px">You have seen what public sources say. The full audit shows what your customers see, settles every warning sign against the official records, and hands you the fixes.</p></div>
     <div class="panel">
       ${offer.price ? `<p class="price">${esc(offer.price)}</p>` : ''}
-      <ul><li>Five chapters on what customers see</li><li>Every warning sign settled against the records</li><li>Fixes in order, and the work written for you</li><li>Desktop, mobile and A4 PDF</li></ul>
+      <ul><li>The deeper dive: your reviews, Google Maps, AI assistants and websites, measured</li><li>The credibility check: every claim and warning sign checked against the records</li><li>Analysis and suggestions: fixes in order, a 30-day plan, and the work written for you</li><li>Desktop, mobile and A4 PDF</li></ul>
       ${ctaHref !== '#order' ? cta('Get my full report') : `<p>${esc(offer.contact || 'Reply to the message that brought you this preview, and we will start your full audit.')}</p>`}
       <p style="font-size:13px;color:var(--on-dark-2)">This preview is yours to keep.</p>
     </div>
