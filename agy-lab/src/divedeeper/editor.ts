@@ -7,13 +7,14 @@
 
 // The malaysia-deeper-dive report is read in five parts, then the analysis. A lane can feed two
 // parts: C-merged's website checks are sorted by what each one is about (see partOfCheck).
-export type Area = 'contact' | 'understanding' | 'voice' | 'credibility' | 'assets';
+export type Area = 'contact' | 'understanding' | 'voice' | 'credibility' | 'assets' | 'speed';
 export const AREAS: { id: Area; title: string; lanes: string[] }[] = [
   { id: 'contact', title: 'Contact and reachability', lanes: ['R-contacts', 'C-merged'] },
   { id: 'understanding', title: 'How the internet understands you', lanes: ['B-brand', 'G-fixed', 'G-grounded', 'H-maps', 'H-web', 'C-merged'] },
   { id: 'voice', title: 'Reviews, discussion and news', lanes: ['E-maps', 'N-news'] },
   { id: 'credibility', title: 'Credibility and official records', lanes: ['K-credibility', 'D-registry', 'C-merged'] },
   { id: 'assets', title: 'Digital assets', lanes: ['A-assets', 'C-merged'] },
+  { id: 'speed', title: 'Website speed and quality', lanes: ['W-speed', 'C-merged'] },
 ];
 /** Every stage-1 lane, in the order the report reads them. */
 export const STAGE1_LANES = [...new Set(AREAS.flatMap((a) => a.lanes))];
@@ -24,6 +25,7 @@ export function partOfCheck(check: string | undefined): Area {
   if (/^(phone|whatsapp|tel|mailto|form|address|free-mail)/.test(c)) return 'contact';
   if (/^(ssm)/.test(c)) return 'credibility';
   if (/^(ssl|https-redirect|redirect-domain|defacement|mixed-content|credit-link)/.test(c)) return 'assets';
+  if (/^(slow|viewport)/.test(c)) return 'speed';
   return 'understanding';
 }
 
@@ -205,6 +207,12 @@ export function resolve(dive: any, L: Record<string, any>) {
   const assetRows: any[] = L['A-assets']?.notes?.domains ?? [];
   const assetIssues = all.filter((x) => x.area === 'assets' && (x.severity === 'high' || x.severity === 'medium')).length;
 
+  // ---- part 6: Google PageSpeed Insights on the official homepages ----
+  const psi: any[] = (L['W-speed']?.notes?.pages ?? []).filter((p: any) => p.ok);
+  // The site customers land on first: the first official domain's, else the first one Google scored.
+  const mainSite = L['W-speed']?.notes?.homes?.[0]?.site ?? psi[0]?.site ?? null;
+  const mainMobile = psi.find((p) => p.site === mainSite && p.strategy === 'mobile') ?? psi.find((p) => p.strategy === 'mobile') ?? null;
+
   // ---- one status and one measured number per part ----
   const regOk = credentials.filter((c: any) => c.verdict === 'verified' || c.direction === 'undersell').length;
   const regCheckable = credentials.filter((c: any) => !/can't check/.test(c.verdict)).length;
@@ -215,6 +223,7 @@ export function resolve(dive: any, L: Record<string, any>) {
     voice: totalReviews ? `${replied} of ${totalReviews} reviews answered${news.counts ? ` · ${news.counts.news} news article${news.counts.news === 1 ? '' : 's'}` : ''}` : news.counts ? `${news.counts.news} news articles, ${news.counts.negative} negative mentions` : null,
     credibility: risky.length ? `${risky.filter((c) => c.result === 'clear').length} of ${risky.length} risk checks clear${regCheckable ? ` · ${regOk} of ${regCheckable} claims confirmed` : ''}` : regCheckable ? `${regOk} of ${regCheckable} checkable claims confirmed` : null,
     assets: assetRows.length ? `${assetRows.length} domains · ${assetIssues} at risk` : null,
+    speed: mainMobile ? `${mainMobile.scores.performance} out of 100 on mobile, ${mainMobile.site}` : null,
   };
   const areas = AREAS.map((a) => {
     const ran = a.lanes.some((l) => L[l]);
@@ -230,6 +239,7 @@ export function resolve(dive: any, L: Record<string, any>) {
     ai: { memory: memory && { ...memory, trade: undefined }, search: search && { ...search, trade: undefined }, share: shareOfVoice, trade_answers: tradeAnswers, named_us: namedUs, trade_question: tradeQuestion, bad_domain: badDomain },
     credentials: { cidb_grade: cidbGrade, cidb_detail: cidb?.detail ?? null, list: credentials, undersells },
     website: { issues: site.filter((x) => x.severity === 'high' || x.severity === 'medium').length, high: site.filter((x) => x.severity === 'high').length, copy_errors: copyErrors, phones },
+    speed: { pages: psi, main_mobile: mainMobile },
     contact, brand_view: brandView, news, records: { checks, risky }, assets: { domains: assetRows, issues: assetIssues, subdomains: L['A-assets']?.notes?.subdomains ?? [], lookalikes: L['A-assets']?.notes?.lookalikes ?? [] },
     items: all,
   };

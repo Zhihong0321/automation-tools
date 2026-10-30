@@ -16,7 +16,7 @@ import { STAGE1_LANES, resolve, type Item } from '../editor.ts';
 import { takeShots, type ShotAsk } from '../shots.ts';
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + ' …' : s);
-const THEMES = ['contact', 'understanding', 'voice', 'credibility', 'assets'] as const;
+const THEMES = ['contact', 'understanding', 'voice', 'credibility', 'assets', 'speed'] as const;
 
 function stage(diveId: string, lane: string): any | null {
   const file = path.join(OUT, `${lane}-${diveId}.json`);
@@ -102,6 +102,7 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
     brand: { understood_out_of_100: R.brand_view.score, why_choose_you: R.brand_view.why, five_second_test: R.brand_view.five, offer: R.brand_view.offer, unanswered_buyer_questions: R.brand_view.missing },
     news_and_discussion: { counts: R.news.counts, negative: R.news.items.filter((x: any) => x.sentiment === 'negative').slice(0, 5).map((x: any) => `${x.date} ${x.host}: ${clip(String(x.summary), 160)}`) },
     official_records: R.records.checks.map((c: any) => `${c.label}: ${c.result}; ${clip(String(c.detail), 160)}`),
+    google_pagespeed: R.speed.pages.map((p: any) => ({ site: p.site, device: p.strategy, scores: p.scores, real_visitors: p.field?.overall ?? null, top_fixes: (p.fixes ?? []).slice(0, 3).map((f: any) => f.title) })),
     digital_assets: R.assets.domains.map((d: any) => ({ domain: d.domain, expires: d.expires, registrant: d.registrant, email_by: d.mail, dmarc: d.dmarc, site_status: d.site?.status ?? null })),
   };
   // Only these register results may settle a mismatch; the editor cites one by its R-number.
@@ -115,7 +116,7 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
     `Things public sources disagree on about the company:\n${mismatchesIn || '(none)'}\n\n` +
     `Official register results (the only things that settle anything):\n${regLines || '(none)'}\n\n` +
     `Return JSON only:\n{"verdict": "3 sentences: where they stand, the single biggest risk, the single biggest opportunity. Use real numbers.",\n` +
-    `"stories": [{"theme": "one of ${THEMES.join(', ')} (contact = contact and reachability, understanding = how the internet understands the brand, voice = reviews, discussion and news, credibility = official records and licences, assets = domains, hosting and email)", "headline": "at most 12 words, includes a real number", "body": "2-3 sentences: what we found and why it matters", "cost": "1 sentence: how this loses customers or money", "fix": "1 sentence: the first thing to do"}] (exactly 3, different themes, the three costing the most customers first),\n` +
+    `"stories": [{"theme": "one of ${THEMES.join(', ')} (contact = contact and reachability, understanding = how the internet understands the brand, voice = reviews, discussion and news, credibility = official records and licences, assets = domains, hosting and email, speed = Google PageSpeed scores of the official homepages)", "headline": "at most 12 words, includes a real number", "body": "2-3 sentences: what we found and why it matters", "cost": "1 sentence: how this loses customers or money", "fix": "1 sentence: the first thing to do"}] (exactly 3, different themes, the three costing the most customers first),\n` +
     `"mismatch": [{"issue": "1 sentence a customer, bank or tender officer would notice", "settled_by": "the R-number of the register result above that settles it, or null; directories, portfolio sites and the company's own pages settle nothing"}] (at most 5, the ones that most hurt trust; drop any the register settles in the company's favour unless their own site still says the wrong thing)}`,
   'editorial');
   if (!ed) ctx.warn('editorial did not parse; the report uses its built-in wording');

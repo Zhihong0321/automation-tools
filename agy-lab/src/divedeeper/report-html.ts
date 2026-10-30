@@ -62,10 +62,14 @@ export const PART_OPENERS: Record<string, { q: [string, string]; body: (t: { tra
     q: ['Who really holds the keys', 'to your name online?'],
     body: () => 'Your domains, email and website sit with registrars, hosting companies and whoever set them up. A domain that expires, is registered in someone else’s name, or lets anyone send email as you can take the business offline or be used against your customers. All of it can be traced from the public internet, so we traced it.',
   },
+  speed: {
+    q: ['How does Google rate', 'your website?'],
+    body: () => 'Google runs its own test on every page it lists: how fast it shows on a phone and a computer, whether everyone can use it, whether it follows good practice, and whether Google can read it. A slow phone page loses visitors before it finishes loading, and Google counts speed when it decides who to show first. We ran Google’s own test, PageSpeed Insights, on your official homepages, and read what real Chrome visitors experienced over the last 28 days.',
+  },
 };
-export const CHAPTER_ORDER = ['contact', 'understanding', 'voice', 'credibility', 'assets'] as const;
+export const CHAPTER_ORDER = ['contact', 'understanding', 'voice', 'credibility', 'assets', 'speed'] as const;
 export const CHAPTER_EYEBROW: Record<string, string> = {
-  contact: 'Contact and reachability', understanding: 'How the internet understands you', voice: 'Reviews, discussion and news', credibility: 'Credibility and official records', assets: 'Digital assets',
+  contact: 'Contact and reachability', understanding: 'How the internet understands you', voice: 'Reviews, discussion and news', credibility: 'Credibility and official records', assets: 'Digital assets', speed: 'Website speed and quality',
   // Topics inside the parts (the preview names them on their own).
   reputation: 'Reputation', findability: 'Search and Maps', ai: 'AI assistants', website: 'Your websites', credentials: 'Licences and awards',
 };
@@ -501,6 +505,16 @@ export function buildReport(dive: any, L: Record<string, any>): string {
     }).join('')}</tbody></table>
       ${live.length ? `<p class="note">The public certificate logs also show ${esc(live.length)} live subdomain${live.length === 1 ? '' : 's'}: ${esc(live.slice(0, 6).map((x: any) => x.name).join(', '))}.</p>` : ''}`;
   }
+  /** Google's four scores for each official homepage, on mobile and desktop, and what real visitors saw. */
+  function speedTable(): string {
+    const ps = R.speed.pages;
+    if (!ps.length) return '';
+    const cell = (n: number | undefined) => (n == null ? '<td class="num">–</td>' : `<td class="num"><span class="pill ${n >= 90 ? 'good' : n >= 50 ? 'fix' : 'urgent'}">${esc(n)}</span></td>`);
+    const real = ps.filter((p: any) => p.field && Object.keys(p.field.metrics).length);
+    return `<table class="band"><thead><tr><th>Homepage</th><th>Speed</th><th>Accessibility</th><th>Best practices</th><th>SEO</th></tr></thead><tbody>${ps.map((p: any) => `<tr><td><b>${esc(p.site)}</b><br><span class="muted small">${p.strategy === 'mobile' ? 'on a phone' : 'on a computer'}${p.lab?.['Main content shown'] ? ` · main content in ${esc(p.lab['Main content shown'])}` : ''}</span></td>${cell(p.scores?.performance)}${cell(p.scores?.accessibility)}${cell(p.scores?.['best-practices'])}${cell(p.scores?.seo)}</tr>`).join('')}</tbody></table>
+      ${ps.filter((p: any) => p.fixes?.length && (p.scores?.performance ?? 100) < 90).map((p: any) => `<h4 class="tbl-h">Google’s top fixes for ${esc(p.site)} ${p.strategy === 'mobile' ? 'on a phone' : 'on a computer'}</h4><table class="band"><tbody>${p.fixes.map((f: any) => `<tr><td>${esc(f.title)}</td><td class="where">${esc(f.saving)}</td></tr>`).join('')}</tbody></table>`).join('')}
+      <p class="note">Google’s scores out of 100: <span class="pill good">90+</span> good, <span class="pill fix">50–89</span> needs work, <span class="pill urgent">under 50</span> poor. ${real.length ? `Real Chrome visitors over the last 28 days: ${esc(real.map((p: any) => `${p.site} on ${p.strategy === 'mobile' ? 'phones' : 'computers'} rated ${p.field.overall || 'unrated'}`).join('; '))}.` : 'Google has too few real visitors on record to rate your sites’ real-world speed.'}</p>`;
+  }
   /** A topic inside a part, headed by its own question. */
   const topic = (id: string, inner: string) => (inner.trim() ? `<h4 class="tbl-h">${esc(OPENERS[id].q[0])} ${esc(OPENERS[id].q[1])}</h4>${inner}` : '');
 
@@ -510,6 +524,7 @@ export function buildReport(dive: any, L: Record<string, any>): string {
     if (theme === 'voice') { const n = newsTable(); return `${topic('reputation', `${R.reviews.unanswered_low.slice(-2).reverse().map(reviewCard).join('')}${timeline()}`)}${n ? `<h4 class="tbl-h">In the news, on forums and on social media</h4>${n}` : ''}`; }
     if (theme === 'credibility') return `${checksTable()}${creds.length || credUnchecked.length ? `<h4 class="tbl-h">${esc(OPENERS.credentials.q[0])} ${esc(OPENERS.credentials.q[1])}</h4>${credTable(creds)}${credUnchecked.length ? `<p class="note">No public register exists for ${credUnchecked.length} other claim${credUnchecked.length === 1 ? '' : 's'} (${esc(credUnchecked.slice(0, 4).map((c: any) => clip(c.claim, 40)).join('; '))}${credUnchecked.length > 4 ? '; …' : ''}), so a stranger has to take your word for them.</p>` : ''}` : ''}`;
     if (theme === 'assets') return assetTable();
+    if (theme === 'speed') return speedTable();
     return '';
   }
 
@@ -519,6 +534,7 @@ export function buildReport(dive: any, L: Record<string, any>): string {
     understanding: () => ({ headline: R.brand_view.score != null ? `The internet understands your business ${R.brand_view.score} out of 100` : `AI assistants recommended you in ${R.ai.named_us} of ${R.ai.trade_answers} answers`, body: R.brand_view.summary ?? `When a customer asks an AI assistant who to hire, it names ${R.ai.share.slice(0, 3).map((s) => s.name).join(', ')} instead.`, cost: 'A buyer who cannot tell what you sell, or why you are better, moves on to a business that says it plainly.', fix: R.brand_view.why ? 'Put your reason to be chosen, with proof, at the top of your homepage and in every listing.' : 'Write one sentence on why customers choose you, with proof, and use it everywhere.' }),
     voice: () => ({ headline: R.reviews.total ? `${R.reviews.replied} of your ${R.reviews.total} Google reviews have a reply from you` : `${R.news.counts?.news ?? 0} news articles name you`, body: R.reviews.unanswered_low.length ? `${R.reviews.unanswered_low.length} review${R.reviews.unanswered_low.length === 1 ? '' : 's'} of 1–2★ sit on your listing with no answer, the oldest for ${R.reviews.unanswered_low[0].days_open} days.` : 'What strangers say about you is the part of your reputation you do not write yourself.', cost: 'A complaint with no answer is the first thing a careful customer reads, and it reads as if nobody is listening.', fix: 'Reply publicly to every 1–2★ review this week, then to the rest.' }),
     credibility: () => ({ headline: `${R.records.risky.filter((c: any) => c.result === 'clear').length} of ${R.records.risky.length} public risk checks come back clear`, body: 'Alert lists, court judgments and insolvency notices are what a bank or tender panel checks first.', cost: 'One unexplained record can end a tender or a credit application before anyone asks you about it.', fix: 'Have a short explanation ready for anything found here, and show the records that work in your favour.' }),
+    speed: () => ({ headline: R.speed.main_mobile ? `Google scores your homepage ${R.speed.main_mobile.scores.performance} out of 100 for speed on a phone` : 'Google could not score your homepage', body: 'Most customers open your site on a phone first. Google measures how long the page takes to show and to respond, and uses it when it ranks you.', cost: 'Visitors who wait for a slow page leave before they see what you offer.', fix: 'Hand Google’s top fixes in this part to your web developer, starting with the biggest saving.' }),
     assets: () => ({ headline: `${R.assets.issues} risks in the domains and email that carry your name`, body: 'Expiring domains, domains held in someone else’s name, and email anyone can fake.', cost: 'A lapsed domain takes your website and every email address down at once.', fix: 'Turn on auto-renew, move every domain into the company’s name, and add SPF and DMARC to your email domain.' }),
   };
   const themes = [...CHAPTER_ORDER] as string[];
@@ -526,7 +542,8 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   const stories = (edStories.length ? edStories : themes.filter((t) => areaOf(t)?.ran && areaOf(t)?.status[0] !== 'good').slice(0, 3).map((t) => ({ theme: t, ...fallback[t]() })))
     .map((s: any) => ({ ...fallback[s.theme](), ...Object.fromEntries(Object.entries(s).filter(([, v]) => typeof v === 'string' && v.trim())) }));
   const storyOf = (t: string) => stories.find((s: any) => s.theme === t);
-  const chapters = CHAPTER_ORDER.filter((id) => areaOf(id)?.ran);
+  // The speed part shows only when Google scored a homepage; without its key the run has nothing to say there.
+  const chapters = CHAPTER_ORDER.filter((id) => areaOf(id)?.ran && (id !== 'speed' || R.speed.pages.length > 0));
   const chapterNo = (id: string) => chapters.indexOf(id as any) + 1;
 
   const verdict = ed.verdict ?? s2.top?.summary ?? '';
@@ -547,6 +564,7 @@ export function buildReport(dive: any, L: Record<string, any>): string {
     areaOf('voice')?.ran && R.reviews.total ? ['voice', `${R.reviews.replied}/${R.reviews.total}`, 'Google reviews with a reply from you'] : null,
     areaOf('credibility')?.ran && R.records.risky.length ? ['credibility', `${R.records.risky.filter((c: any) => c.result === 'clear').length}/${R.records.risky.length}`, 'public risk checks clear'] : areaOf('credibility')?.ran && checkable ? ['credibility', `${okClaims}/${checkable}`, 'claims the official registers confirm'] : null,
     areaOf('assets')?.ran && R.assets.domains.length ? ['assets', String(R.assets.issues), `risks across your ${R.assets.domains.length} domains`] : null,
+    areaOf('speed')?.ran && R.speed.main_mobile ? ['speed', String(R.speed.main_mobile.scores.performance), `out of 100: Google’s speed score for your homepage on a phone`] : null,
   ].filter(Boolean) as [string, string, string][]);
 
   // Private alerts: register data exposing personal IDs, plus private documents a search engine indexed.
@@ -603,7 +621,7 @@ export function buildReport(dive: any, L: Record<string, any>): string {
 
 <section class="page dark" id="glance">
   <p class="eyebrow">At a glance</p>
-  <h2 class="display">Where you stand,<br><span class="g">in ${['no', 'one', 'two', 'three', 'four', 'five'][big.length] ?? big.length} numbers.</span></h2>
+  <h2 class="display">Where you stand,<br><span class="g">in ${['no', 'one', 'two', 'three', 'four', 'five', 'six'][big.length] ?? big.length} numbers.</span></h2>
   ${big.length ? `<div class="stats">${big.map(([id, v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('')}</div>` : ''}
   ${verdict ? `<p class="verdict" style="margin-top:14px">${esc(verdict)}</p>` : ''}
   <div class="rows" style="margin-top:auto">${chapters.map((id) => { const a = areaOf(id)!; return `<a href="#ch-${id}"><b>${esc(a.title)}</b><span>${esc(a.metric ?? '')}</span><span class="pill ${a.status[0]}">${esc(a.status[1])}</span></a>`; }).join('')}</div>
@@ -673,7 +691,7 @@ ${chapters.map(chapter).join('\n')}
   ${AREAS.filter((a) => byArea(a.id).length).map((a) => { const list = byArea(a.id); return `<div id="appx-${a.id}"><h3 class="sub" style="font-size:17px">${esc(a.title)} <span class="muted" style="font-family:var(--body);font-size:11px;font-weight:400;letter-spacing:0">${list.filter((x) => x.severity === 'high').length} urgent · ${list.filter((x) => x.severity === 'medium').length} need work · ${list.length} in all</span></h3>${itemRows(list)}</div>`; }).join('')}
   <details><summary>Background research on the company</summary><p class="note" style="margin:4px 0 10px">Written from public sources on ${esc(dateOf(dive.finished_at))}, before the checks in this report. Where they differ, the checks are newer and win.</p><div class="dossier">${md(scrub(dive.dossier))}</div></details>
   ${sources.length ? `<details><summary>Sources (${sources.length})</summary><ol class="sources">${sources.map((s: any) => `<li id="src-${esc(s.id)}" value="${esc(s.id)}">${/^https?:\/\//.test(s.url) ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(clip(String(s.title || hostOf(s.url)), 90))}</a> · ${esc(hostOf(s.url))}` : esc(s.title)}</li>`).join('')}</ol></details>` : ''}
-  <div class="note" style="margin-top:8px"><p class="lbl">How we checked</p><p>Every phone number, email and WhatsApp link published about you was searched on the web and traced to where it leads. Your homepage and service pages were compared with what search results, independent pages and AI assistants say about you. News, forums and social media were searched for your company and its key people. Bank Negara and Securities Commission alert lists, published court judgments, insolvency notices, Bursa Malaysia, government websites and trademark listings were searched for your name; the MyIPO trademark register needs a login and was not searched; paid registers (SSM documents, CTOS, CCRIS) were not bought. Each domain was looked up in its registry (MYNIC or RDAP), its DNS, its hosting network and the public certificate logs. Every Google review on your Maps listings was read. Maps ranks come from Google Maps searches without a phone’s location, so a customer nearby may see a slightly different order; web ranks come from Brave Search set to Malaysia. Each licence and award was looked up in its issuer’s own register. Every page of your websites was read and its links and numbers tested. AI answers come from ${esc(aiModels)}, asked each question several times, from memory and with a web search. The ready-to-use drafts were written with AI from these findings. Checked ${esc(checkedOn)}; background research from ${esc(dateOf(dive.finished_at))}.</p></div>
+  <div class="note" style="margin-top:8px"><p class="lbl">How we checked</p><p>Every phone number, email and WhatsApp link published about you was searched on the web and traced to where it leads. Your homepage and service pages were compared with what search results, independent pages and AI assistants say about you. News, forums and social media were searched for your company and its key people. Bank Negara and Securities Commission alert lists, published court judgments, insolvency notices, Bursa Malaysia, government websites and trademark listings were searched for your name; the MyIPO trademark register needs a login and was not searched; paid registers (SSM documents, CTOS, CCRIS) were not bought. Each domain was looked up in its registry (MYNIC or RDAP), its DNS, its hosting network and the public certificate logs. Each official homepage was tested with Google PageSpeed Insights on mobile and desktop. Every Google review on your Maps listings was read. Maps ranks come from Google Maps searches without a phone’s location, so a customer nearby may see a slightly different order; web ranks come from Brave Search set to Malaysia. Each licence and award was looked up in its issuer’s own register. Every page of your websites was read and its links and numbers tested. AI answers come from ${esc(aiModels)}, asked each question several times, from memory and with a web search. The ready-to-use drafts were written with AI from these findings. Checked ${esc(checkedOn)}; background research from ${esc(dateOf(dive.finished_at))}.</p></div>
   ${foot()}
 </section>
 

@@ -97,6 +97,7 @@ export function buildPreview(dive: any, offer: Offer = {}, notes: PreviewNotes |
     understanding: { know: ['Whether a stranger can tell what you sell, and why you', 'What AI assistants and search engines get right, wrong or miss', 'Selling points nobody outside your site repeats'], locked: 'Understood ? out of 100' },
     voice: { know: ['Which reviews still have no reply from you', 'News, forum and social talk about you and your key people', 'What customers praise, ready for your website'], locked: '? of ? reviews answered' },
     credibility: { know: ['Bank Negara and Securities Commission alert lists', 'Court judgments and winding-up notices naming you', 'Your licences and awards, in their registers'], locked: '? of ? risk checks clear' },
+    speed: { know: ['Google’s own speed, accessibility, best-practice and SEO scores for your homepage', 'How it does on a phone and on a computer, and what real visitors experienced', 'Google’s top fixes, biggest saving first'], locked: '? out of 100 on a phone' },
     assets: { know: ['Who holds each of your domains, and when it expires', 'Where your sites are hosted and who carries your email', 'Whether anyone can send email pretending to be you', 'Forgotten subdomains, and lookalike domains held by someone else'], locked: '? risks across your domains' },
     news: { know: ['News stories and press that name you', 'Complaints and forum threads, in English and Malay', 'What is said about the people who run it'], locked: '? mentions, ? of them negative' },
     brand: { know: ['A score out of 100: how much of your offer an outsider learns without visiting your site', 'A five-second test of your homepage: can a first-time visitor tell what you sell?', 'Selling points nobody outside your site repeats, and details others have out of date'], locked: 'Understood ? out of 100' },
@@ -151,7 +152,7 @@ h2 { font-size:clamp(34px,4.4vw,58px); max-width:16em; } .lead { font-size:19px;
 .locked .bar { height:12px; background:var(--band); } .locked .bar.s { width:62%; } .locked .bar.m { width:84%; }
 .locked .lockmsg { position:absolute; inset:0; display:grid; place-content:center; text-align:center; gap:6px; background:linear-gradient(180deg, rgba(255,255,255,.2), rgba(255,255,255,.96) 55%); padding:20px; }
 .locked .lockmsg b { font-family:var(--display); font-size:44px; font-weight:600; letter-spacing:-0.03em; line-height:1; } .locked .lockmsg span { font-size:14px; color:var(--grey); }
-.five { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:2px; background:var(--line); margin-top:40px; border:1px solid var(--line); }
+.five { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:2px; background:var(--line); margin-top:40px; border:1px solid var(--line); }
 .five div { background:var(--paper); padding:18px; display:grid; gap:8px; } .five .k { font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
 .five .v { font-family:var(--display); font-size:20px; font-weight:600; letter-spacing:-0.015em; color:var(--muted); } .five .lk { font-size:11px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--ink); }
 /* band */
@@ -450,8 +451,8 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
 
 <section id="inside" class="dark" style="padding-top:0">
   <div class="head"><p class="eyebrow">Inside your full report</p>
-    <h2>Six parts, written for ${esc(short)}.<br><span class="g">Here is what each one shows you.</span></h2>
-    <p class="lead">This preview read what public sources say. The full report goes further: it traces how customers reach you, measures how the internet understands you and what people say, checks the official records, maps the domains that carry your name, and tells you what to do about it.</p></div>
+    <h2>Seven parts, written for ${esc(short)}.<br><span class="g">Here is what each one shows you.</span></h2>
+    <p class="lead">This preview read what public sources say. The full report goes further: it traces how customers reach you, measures how the internet understands you and what people say, checks the official records, maps the domains that carry your name, runs Google’s own test on your website, and tells you what to do about it.</p></div>
   <div class="parts">
     <a href="#p-contact"><span class="n">01</span><h3>${esc(CHAPTER_EYEBROW.contact)}</h3><p>Every way a customer can reach you, and where each one really leads.</p>
       <ul>${inside.contact.know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><span class="go">See what it shows ↓</span></a>
@@ -463,7 +464,9 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
       <ul><li>Regulator alert lists, courts, insolvency notices and trademark signals</li><li>Licences and awards, in their registers</li><li>The ${esc(signCount)} warning signs, settled</li></ul><span class="go">See what it shows ↓</span></a>
     <a href="#p-assets"><span class="n">05</span><h3>${esc(CHAPTER_EYEBROW.assets)}</h3><p>Your domains, hosting and email, traced from the public internet.</p>
       <ul>${inside.assets.know.slice(0, 3).map((k) => `<li>${esc(k)}</li>`).join('')}</ul><span class="go">See what it shows ↓</span></a>
-    <a href="#advice"><span class="n">06</span><h3>Analysis and suggestions</h3><p>What it all means for your business, and what to do, in order.</p>
+    <a href="#p-speed"><span class="n">06</span><h3>${esc(CHAPTER_EYEBROW.speed)}</h3><p>Google’s own test of your official homepage, on a phone and a computer.</p>
+      <ul>${inside.speed.know.map((k) => `<li>${esc(k)}</li>`).join('')}</ul><span class="go">See what it shows ↓</span></a>
+    <a href="#advice"><span class="n">07</span><h3>Analysis and suggestions</h3><p>What it all means for your business, and what to do, in order.</p>
       <ul><li>Your fixes, least effort first</li><li>A plan for your first 30 days</li><li>Copy, replies and pages, written for you</li></ul><span class="go">See what it shows ↓</span></a>
   </div>
 </section>
@@ -500,8 +503,16 @@ ol.sources { padding-left:28px; display:grid; gap:2px; font-size:12px; } ol.sour
   <div class="feats">${feat('assets')}</div>
 </section>
 
+<section id="p-speed" class="pt">
+  ${partHead(6, 'speed', `We run Google PageSpeed Insights, Google’s own test, on ${esc(domains.length ? domains.join(', ') : 'your official homepage')}, on a phone and on a computer, and read what real Chrome visitors experienced over the last 28 days.`)}
+  <div class="tiles"><div class="tile wide"><h3>Google’s four scores, out of 100</h3><p>For each homepage, on a phone and on a computer.</p>
+    <div class="in">${['Speed', 'Accessibility', 'Best practices', 'SEO'].map((k, i) => `<div class="m-fix"><span class="no">${i + 1}</span>${rd(['70%', '54%', '62%', '46%'][i])}<span class="m-pill eff">${esc(k)}</span><span class="m-pill">? / 100</span></div>`).join('')}</div></div>
+    <div class="tile"><h3>Google’s top fixes</h3><p>${esc(inside.speed.know[2])}, ready to hand to your web developer.</p>
+    <div class="in">${[0, 1, 2].map(() => `<div class="m-faq"><b>Fix</b>${rd('80%')}${rd('48%')}</div>`).join('')}</div></div></div>
+</section>
+
 <section id="advice" class="pt">
-  <div class="head"><p class="eyebrow">Part 6 · Analysis and suggestions</p>
+  <div class="head"><p class="eyebrow">Part 7 · Analysis and suggestions</p>
     <h2>Not just what is wrong.<br><span class="g">What to do, in order, written for you.</span></h2>
     <p class="lead">We weigh every finding by what it costs you in customers and what it takes to fix, then write the work out so you or your web developer can start the same day.</p></div>
   <div class="tiles">

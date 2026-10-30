@@ -4,7 +4,8 @@
 // registers, regulators, courts and phone formats. One run per company: the company-dive first
 // (started through its own public API, never touched), then stage 1, whose lanes feed the report's
 // five parts (contact and reachability; how the internet understands the brand; reviews,
-// discussion and news; credibility and official records; digital assets), stage 2 (consultation)
+// discussion and news; credibility and official records; digital assets; website speed and quality
+// from Google PageSpeed Insights), stage 2 (consultation)
 // and stage 3 (the editor), then one report stored in the dive_deeper table and served at /dd/<public id>.
 //
 // Isolation from company-dive (plan §2): own files, own table, own queue (one run at a time,
@@ -36,7 +37,7 @@ process.env.DD_G_JUDGE ??= 'deepseek-v4.1-flash-1017';
 /** The order lanes run in. E-maps reuses H-maps' listings and C-merged its Maps phones, so both wait for H-maps.
  *  The last three read what the others found: R-contacts (C-merged's and H-maps' contacts), A-assets
  *  (C-merged's domains and email addresses), B-brand (C-merged's pages, H-web's results, G-fixed's answers). S2 reads everything. */
-export const STAGE1_FIRST = [['H', 'maps'], ['H', 'web'], ['D', 'registry'], ['G', 'fixed'], ['G', 'grounded'], ['K', 'credibility'], ['N', 'news']] as const;
+export const STAGE1_FIRST = [['H', 'maps'], ['H', 'web'], ['D', 'registry'], ['G', 'fixed'], ['G', 'grounded'], ['K', 'credibility'], ['N', 'news'], ['W', 'speed']] as const;
 export const STAGE1_AFTER_H = [['E', 'maps'], ['C', 'merged']] as const;
 export const STAGE1_LAST = [['R', 'contacts'], ['A', 'assets'], ['B', 'brand']] as const;
 export const STAGE2 = ['S2', 'consult'] as const;
