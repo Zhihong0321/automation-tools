@@ -24,6 +24,8 @@ import * as contactWorker from './contact-worker.ts';
 import * as mapsWorker from './maps-worker.ts';
 import * as gmapWorker from './gmap-worker.ts';
 import * as countryResearch from './country-research.ts';
+import * as searchList from './search-list.ts';
+import { searchListPage } from './search-list-page.ts';
 import * as contactKeys from './contact-keys.ts';
 import * as extractLlm from './extract-llm.ts';
 import * as companyDive from './companydive.ts';
@@ -242,6 +244,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     return void res.end(countryIndustryPage());
   }
 
+  if (method === 'GET' && (p === '/search-lists' || p === '/search-lists/')) {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
+    return void res.end(searchListPage());
+  }
+
   if (method === 'GET' && (p === '/company-dive' || p === '/company-dive/')) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
     return void res.end(companyDivePage());
@@ -363,6 +370,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (p === '/api/jobs' || p.startsWith('/api/jobs/')) {
     if (await jobs.handle(req, res, url, { json, readJson })) return;
   }
+
+  // ---- search lists: a CSV of Maps searches, run to the end by the hub -------
+  if (await searchList.handle(req, res, url, { json, readJson })) return;
 
   // ---- the Gmap Local Worker package, engine and sweep words ---------------
   if (p.startsWith('/api/gmap-worker/') && await gmapWorker.handle(req, res, url, { json }, 'operator')) return;
@@ -516,6 +526,7 @@ server.listen(PORT, '0.0.0.0', () => {
   contactWorker.start();
   mapsWorker.start();
   countryResearch.start();
+  searchList.start();
   // Broker jobs live only in memory. Refill it from saved contact reports after
   // a restart, with no more concurrent jobs than the research lanes can run.
   setInterval(() => {

@@ -177,12 +177,14 @@ export function isRetired(worker: string, type: string): boolean {
 /**
  * The mini's Chrome Maps scan found 118 businesses in Taman Daya where the
  * scraper.tech sweep found 1,838, so it gets no business search or taman scan.
- * It answers only the per-city searches of country research, whose jobs carry
- * `source: 'country.industry'`.
+ * It answers only the per-city searches of country research and the searches
+ * of a search list, whose jobs carry `source: 'country.industry'` or
+ * `source: 'search.list'`.
  */
+const MINI_SOURCES = new Set(['country.industry', 'search.list']);
 function countryScanOnly(worker: string, job: Job): boolean {
   return worker.startsWith('m4-mini') && job.type === 'gmap.scan'
-    && (job.payload as { source?: unknown } | null)?.source !== 'country.industry';
+    && !MINI_SOURCES.has(String((job.payload as { source?: unknown } | null)?.source ?? ''));
 }
 
 /**

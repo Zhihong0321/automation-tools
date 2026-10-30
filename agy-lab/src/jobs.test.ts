@@ -186,9 +186,10 @@ test('the snapshot joins a running job to the worker that claimed it', async () 
   assert.equal(finished.workers.find((item) => item.name === worker)?.done, 1);
 });
 
-test('m4-mini answers only country research Maps searches, and no longer country jobs', async () => {
+test('m4-mini answers only country research and search list Maps searches, and no longer country jobs', async () => {
   const job = create('gmap.scan', { keyword: 'factory', place: 'Taman Daya' }, 60_000);
   const city = create('gmap.scan', { keyword: 'advertising agency', place: 'Ipoh, Perak, Malaysia', source: 'country.industry' }, 60_000);
+  const listed = create('gmap.scan', { keyword: 'Ipoh Accounting firm Malaysia', source: 'search.list' }, 60_000);
   const claim = async (worker: string): Promise<string | null> => {
     let sent: Record<string, unknown> | null = null;
     const req = { method: 'GET', headers: {}, socket: { remoteAddress: '203.0.113.7' } } as unknown as http.IncomingMessage;
@@ -200,6 +201,7 @@ test('m4-mini answers only country research Maps searches, and no longer country
   };
   // The business scan was queued first, but the mini is handed the city search.
   assert.equal(await claim('m4-mini'), city.id);
+  assert.equal(await claim('m4-mini'), listed.id);
   assert.equal(job.status, 'pending');
   assert.equal(await claim('m4-mini'), null, 'never a business scan or taman scan');
   // Any other machine still takes the scan.
