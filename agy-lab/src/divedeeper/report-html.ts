@@ -542,7 +542,7 @@ export function buildReport(dive: any, L: Record<string, any>): string {
   const okClaims = R.credentials.list.filter((c: any) => c.verdict === 'verified' || c.direction === 'undersell').length;
   const checkable = R.credentials.list.filter((c: any) => !/can't check/.test(c.verdict)).length;
   const big: [string, string, string][] = ([
-    areaOf('contact')?.ran && R.contact.points.some((p: any) => p.status && p.status !== 'unclear') ? ['contact', `${R.contact.ok}/${R.contact.total}`, 'contact details that reach you'] : null,
+    areaOf('contact')?.ran && R.contact.judged ? ['contact', `${R.contact.ok}/${R.contact.total}`, 'contact details that reach you'] : null,
     areaOf('understanding')?.ran && R.brand_view.score != null ? ['understanding', `${R.brand_view.score}`, 'out of 100: how well the internet understands you'] : areaOf('understanding')?.ran && R.ai.trade_answers ? ['understanding', `${R.ai.named_us}/${R.ai.trade_answers}`, 'AI answers that recommend you'] : null,
     areaOf('voice')?.ran && R.reviews.total ? ['voice', `${R.reviews.replied}/${R.reviews.total}`, 'Google reviews with a reply from you'] : null,
     areaOf('credibility')?.ran && R.records.risky.length ? ['credibility', `${R.records.risky.filter((c: any) => c.result === 'clear').length}/${R.records.risky.length}`, 'public risk checks clear'] : areaOf('credibility')?.ran && checkable ? ['credibility', `${okClaims}/${checkable}`, 'claims the official registers confirm'] : null,

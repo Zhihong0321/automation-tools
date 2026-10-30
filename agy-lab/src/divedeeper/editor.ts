@@ -185,6 +185,7 @@ export function resolve(dive: any, L: Record<string, any>) {
     points: inventory, ok: inventory.filter((p) => p.status === 'current').length, total: inventory.length,
     bad: inventory.filter((p) => !['current', 'unclear'].includes(p.status)).length,
     left: inventory.filter((p) => p.left).length, summary: L['R-contacts']?.notes?.summary ?? null,
+    judged: L['R-contacts']?.notes?.judged === true,
   };
 
   // ---- part 2: the brand as the internet understands it ----
@@ -193,7 +194,8 @@ export function resolve(dive: any, L: Record<string, any>) {
 
   // ---- part 3: news and discussion ----
   const nn = L['N-news']?.notes ?? {};
-  const news = { items: nn.items ?? [], counts: nn.counts ?? null, people: nn.people ?? [] };
+  // Counts are only a verdict when every page found was judged.
+  const news = { items: nn.items ?? [], counts: nn.counts && nn.unjudged === 0 ? nn.counts : null, people: nn.people ?? [] };
 
   // ---- part 4: official records ----
   const checks: any[] = L['K-credibility']?.notes?.checks ?? [];
@@ -208,7 +210,7 @@ export function resolve(dive: any, L: Record<string, any>) {
   const regCheckable = credentials.filter((c: any) => !/can't check/.test(c.verdict)).length;
   const metric: Record<Area, string | null> = {
     // Until the judge has spoken, every point is "unclear": count what was traced, not "0 reach you".
-    contact: contact.total ? (inventory.some((p) => p.status && p.status !== 'unclear') ? `${contact.ok} of ${contact.total} contact points reach you` : `${contact.total} contact points traced`) : null,
+    contact: contact.total ? (contact.judged ? `${contact.ok} of ${contact.total} contact points reach you` : `${contact.total} contact points traced`) : null,
     understanding: brandView.score != null ? `Understood ${brandView.score} out of 100` : tradeAnswers ? `Recommended in ${namedUs} of ${tradeAnswers} AI answers` : null,
     voice: totalReviews ? `${replied} of ${totalReviews} reviews answered${news.counts ? ` · ${news.counts.news} news articles` : ''}` : news.counts ? `${news.counts.news} news articles, ${news.counts.negative} negative mentions` : null,
     credibility: risky.length ? `${risky.filter((c) => c.result === 'clear').length} of ${risky.length} risk checks clear${regCheckable ? ` · ${regOk} of ${regCheckable} claims confirmed` : ''}` : regCheckable ? `${regOk} of ${regCheckable} checkable claims confirmed` : null,

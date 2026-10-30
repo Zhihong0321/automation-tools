@@ -190,7 +190,7 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
     findings,
     notes: {
       inventory: list.map((p: any) => ({ id: p.id, kind: p.kind, value: p.value, where: p.where, on_site: p.on_site, on_maps: p.on_maps, status: p.status, owner: p.owner, left: p.left, reason: p.reason, fix: p.fix, also_on: (p.web ?? []).filter((w: any) => !w.own).length })),
-      summary: verdict?.summary ?? null, inconsistent: verdict?.inconsistent ?? [], lookups,
+      judged: !!verdict, summary: verdict?.summary ?? null, inconsistent: verdict?.inconsistent ?? [], lookups,
     },
   };
 }
