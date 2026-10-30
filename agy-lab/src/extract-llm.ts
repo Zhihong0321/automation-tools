@@ -5,8 +5,9 @@
 // 2026-10-24. Unset, contact research stays on Pi.
 //
 // CONTACT_LLM_HIVE_KEYS (comma-separated) adds Hive accounts serving the same
-// deepseek model. Calls take turns across Vectide and every Hive key, and a
-// provider that answers 429 rests a minute while the call moves to the next.
+// deepseek model. Calls take turns across Vectide and every Hive key. A call
+// that fails on one provider (429, empty answer, error) moves to the next, and
+// a provider that answered 429 rests a minute.
 //
 // Errors carry Pi's codes (rate_limit, timeout, length, empty, failed), so the
 // extract step's retry and the lane's cooldown treat both models alike.
@@ -71,8 +72,7 @@ export async function ask(
       return await askOne(prompt, opts, c, fetchImpl);
     } catch (err) {
       last = err as Error;
-      if ((err as { code?: string }).code !== 'rate_limit') throw err;
-      restingUntil.set(c.key, Date.now() + REST_MS);
+      if ((err as { code?: string }).code === 'rate_limit') restingUntil.set(c.key, Date.now() + REST_MS);
     }
   }
   throw last!;

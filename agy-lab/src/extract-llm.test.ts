@@ -75,3 +75,22 @@ test('calls take turns, and a 429 moves the call to the next provider', async ()
   assert.equal((await ask('x', {}, providers, fetchImpl)).answer, 'b', 'a rests after its 429');
   assert.deepEqual(seen, ['a', 'b', 'b', 'c', 'b']);
 });
+
+test('an empty answer moves the call on without resting the provider', async () => {
+  resetForTests();
+  const providers = ['a', 'b'].map((key) => ({ url: 'https://llm.example/v1', key, model: 'm' }));
+  const seen: string[] = [];
+  const fetchImpl = (async (_url: string, init: RequestInit) => {
+    const key = String((init.headers as Record<string, string>).authorization).slice(7);
+    seen.push(key);
+    const content = key === 'a' && seen.length === 1 ? '' : key;
+    return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content } }] }));
+  }) as unknown as typeof fetch;
+  assert.equal((await ask('x', {}, providers, fetchImpl)).answer, 'b');
+  assert.equal((await ask('x', {}, providers, fetchImpl)).answer, 'b');
+  assert.equal((await ask('x', {}, providers, fetchImpl)).answer, 'a', 'a was not rested');
+  assert.deepEqual(seen, ['a', 'b', 'b', 'a']);
+  const all = providers.map((p) => ({ ...p }));
+  const empty = (async () => new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '' } }] }))) as unknown as typeof fetch;
+  assert.equal(await ask('x', {}, all, empty).catch((e) => e.code), 'empty', 'every provider empty still reports empty');
+});
