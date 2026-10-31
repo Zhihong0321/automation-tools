@@ -95,6 +95,13 @@ per status (`not-checked` for businesses no job has finished) and per search
 list. A row opens to its website, Maps link, form verdict, emails with their
 mail provider, typed phones and social links.
 
+Its **Run step 2 on unchecked leads** button (`POST /api/list-step2/run-unchecked
+{run?}`) works on the list picked in the page, or on every list: paused step-2
+jobs carry on, and one new job per list takes every business no job holds yet
+(and whose step-1 website check is finished). Pressing it again later only adds
+what is new, such as businesses a still-running list found since. The page shows
+each active job's progress with a Pause button.
+
 A job takes only businesses whose step-1 website check is finished. Over a run
 that is still going, make a later job for the rest.
 

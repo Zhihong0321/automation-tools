@@ -384,7 +384,7 @@ function migrate(): Promise<void> {
 }
 
 /** A job over a search-list run: all its checked businesses, a random sample, or chosen place_keys. */
-export async function createJob(runId: string, opts: { name?: string; sample?: number; placeKeys?: string[] }): Promise<string> {
+export async function createJob(runId: string, opts: { name?: string; sample?: number; placeKeys?: string[]; unchecked?: boolean }): Promise<string> {
   await migrate();
   const run = (await db.sql(`select id from search_list_run where id = $1`, [runId])).rows[0];
   if (!run) throw invalid('no such search list run');
@@ -392,7 +392,9 @@ export async function createJob(runId: string, opts: { name?: string; sample?: n
   const name = opts.name || (opts.placeKeys ? `${opts.placeKeys.length} chosen leads of ${runId}` : opts.sample ? `sample of ${opts.sample} from ${runId}` : `all of ${runId}`);
   await db.sql(`insert into list_step2_job (id, name, source_run_id) values ($1, $2, $3)`, [id, name, runId]);
   // Only businesses step 1 has finished with; a running list's later ones need a later job.
-  const where = `run_id = $2 and contact_status is not null and contact_status <> 'running'`;
+  // `unchecked`: only businesses no step-2 job holds yet, so asking again never queues one twice.
+  const where = `run_id = $2 and contact_status is not null and contact_status <> 'running'` + (opts.unchecked
+    ? ` and not exists (select 1 from list_step2_lead x where x.run_id = search_list_place.run_id and x.place_key = search_list_place.place_key)` : '');
   if (opts.placeKeys) await db.sql(`insert into list_step2_lead (job_id, run_id, place_key, place_id)
     select $1, run_id, place_key, business->>'place_id' from search_list_place where ${where} and place_key = any($3::text[])`, [id, runId, opts.placeKeys]);
   else if (opts.sample) await db.sql(`insert into list_step2_lead (job_id, run_id, place_key, place_id)
@@ -400,6 +402,27 @@ export async function createJob(runId: string, opts: { name?: string; sample?: n
   else await db.sql(`insert into list_step2_lead (job_id, run_id, place_key, place_id)
     select $1, run_id, place_key, business->>'place_id' from search_list_place where ${where}`, [id, runId]);
   return id;
+}
+
+/**
+ * The page's button: on one search list, or on all of them, paused step-2 jobs
+ * carry on and one new job takes every business no job holds yet. Nothing new
+ * to take makes no job.
+ */
+export async function runUnchecked(runId?: string): Promise<{ resumed: number; created: Array<{ id: string; run: string; leads: number }> }> {
+  await migrate();
+  const runs = runId ? [runId] : (await db.sql<{ id: string }>(`select id from search_list_run order by created_at`)).rows.map((r) => r.id);
+  let resumed = 0;
+  const created: Array<{ id: string; run: string; leads: number }> = [];
+  for (const run of runs) {
+    resumed += (await db.sql(`update list_step2_job set status = 'running', updated_at = now() where source_run_id = $1 and status = 'paused'`, [run])).rowCount ?? 0;
+    const id = await createJob(run, { unchecked: true, name: `unchecked leads of ${run}` });
+    const leads = Number((await db.sql<{ n: number }>(`select count(*)::int as n from list_step2_lead where job_id = $1`, [id])).rows[0]?.n ?? 0);
+    if (!leads) { await db.sql(`delete from list_step2_job where id = $1`, [id]); continue; }
+    await db.sql(`update list_step2_job set status = 'running', updated_at = now() where id = $1`, [id]);
+    created.push({ id, run, leads });
+  }
+  return { resumed, created };
 }
 
 export async function jobStatus(id: string): Promise<Record<string, unknown> | null> {
@@ -619,6 +642,12 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
         return json(res, 201, await jobStatus(id)), true;
       }
       return false;
+    }
+    if (p === '/api/list-step2/run-unchecked' && method === 'POST') {
+      const body = await readJson(req);
+      const run = typeof body.run === 'string' && body.run ? body.run : undefined;
+      if (run && !/^[a-f0-9]{12}$/.test(run)) throw invalid('run is a search list id');
+      return json(res, 202, await runUnchecked(run)), true;
     }
     if (p === '/api/list-step2/browse' && method === 'GET') {
       const run = url.searchParams.get('run') || undefined;
