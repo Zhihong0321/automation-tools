@@ -520,13 +520,15 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
     ctx.meter.other.languagetool_bytes += bytes;
     let body: any = null;
     for (let attempt = 0; attempt < 2 && !body; attempt++) {
+      const c = ctx.call('web', `LanguageTool ${bytes} bytes`);
       try {
         const res = await fetch(LT_URL, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body: new URLSearchParams({ text: b.text, language: 'en-GB', enabledOnly: 'false' }) });
         const raw = await res.text();
+        c.done({ ok: res.ok, note: `HTTP ${res.status}` });
         if (res.status === 429) { ctx.warn(`LanguageTool 429 (attempt ${attempt + 1}); waiting a minute`); await sleep(61000); continue; }
         if (!res.ok) { ctx.warn(`LanguageTool HTTP ${res.status}: ${raw.slice(0, 160)}`); if (res.status === 403) ltDead = true; break; }
         body = JSON.parse(raw);
-      } catch (e) { ctx.warn(`LanguageTool failed: ${(e as Error).message}`); }
+      } catch (e) { c.done({ ok: false, note: (e as Error).message.slice(0, 200) }); ctx.warn(`LanguageTool failed: ${(e as Error).message}`); }
     }
     if (!body) continue;
     for (const m of body.matches ?? []) {

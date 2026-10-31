@@ -16,6 +16,7 @@
 
 import * as exa from './exa.ts';
 import * as reportdb from './reportdb.ts';
+import { PRICES } from './cost.ts';
 import { ask, askJson, type DiveRow, type DiveResult, type LlmUse, type Warn } from './companydive.ts';
 
 export const MAX_EXA_CALLS = 20;
@@ -39,7 +40,7 @@ export type PeopleResult = {
   error?: string;
   people: Person[];
   rejected: Array<{ name: string; reason: string }>;
-  exa: Array<{ n: number; query: string; kind: string; results: number; dollars: number; ok: boolean; note?: string }>;
+  exa: Array<{ n: number; at?: string; query: string; kind: string; results: number; dollars: number; ms?: number; ok: boolean; usd?: number; note?: string }>;
   llm: LlmUse[];
   log: Array<{ at: string; msg: string }>;
   warnings: string[];
@@ -216,6 +217,8 @@ export async function findPeople(row: DiveRow, save: (p: PeopleResult) => Promis
     for (const q of queries) {
       if (out.exa.length >= MAX_EXA_CALLS) break;
       const n = out.exa.length + 1;
+      const started = Date.now();
+      const at = new Date(started).toISOString();
       try {
         const { results, dollars } = await exaSearch(bodyFor(q));
         let added = 0;
@@ -226,11 +229,12 @@ export async function findPeople(row: DiveRow, save: (p: PeopleResult) => Promis
           hits.push({ ...hit, id: hits.length + 1 });
           added++;
         }
-        out.exa.push({ n, query: q.query, kind: q.kind, results: results.length, dollars, ok: true });
+        // Exa's own price when it sends one, else the list price.
+        out.exa.push({ n, at, query: q.query, kind: q.kind, results: results.length, dollars, ms: Date.now() - started, ok: true, usd: dollars || PRICES.exaSearch });
         await say(`Exa ${n} (${q.kind}) "${q.query}": ${results.length} results, ${added} new`);
       } catch (err) {
         const code = (err as { code?: string }).code;
-        if (code !== 'quota' && code !== 'not_installed') out.exa.push({ n, query: q.query, kind: q.kind, results: 0, dollars: 0, ok: false, note: (err as Error).message.slice(0, 200) });
+        if (code !== 'quota' && code !== 'not_installed') out.exa.push({ n, at, query: q.query, kind: q.kind, results: 0, dollars: 0, ms: Date.now() - started, ok: false, usd: 0, note: (err as Error).message.slice(0, 200) });
         await warn(`Exa "${q.query}" failed: ${(err as Error).message}`);
       }
     }

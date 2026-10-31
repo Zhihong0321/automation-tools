@@ -14,6 +14,7 @@ import os from 'node:os';
 import tls from 'node:tls';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { startCall, type ApiCall, type ApiName } from '../cost.ts';
 
 export const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const SECTIONS = path.join(HERE, 'sections');
@@ -136,6 +137,8 @@ export type Meter = {
   brave: { calls: number; failed: number };
   http: { calls: number; failed: number };
   other: Record<string, number>;
+  /** Every request one by one, each retry and each key tried included, with its tokens and cost (since 2026-10-31). */
+  calls: ApiCall[];
 };
 
 export type Ctx = ReturnType<typeof makeCtx>;
@@ -150,6 +153,16 @@ export function makeCtx(diveId: string, section: string, lane: string) {
     brave: { calls: 0, failed: 0 },
     http: { calls: 0, failed: 0 },
     other: {},
+    calls: [],
+  };
+  /**
+   * Time one request; the first `done` adds it to the meter's call log and later
+   * ones are ignored. Lanes that call an API themselves use this too.
+   */
+  const call = (api: ApiName, what: string, extra: Partial<ApiCall> = {}) => {
+    const c = startCall(api, what, extra);
+    let rec: ApiCall | null = null;
+    return { done: (end: Partial<ApiCall> & { ok: boolean }): ApiCall => { if (!rec) { rec = c.done(end); meter.calls.push(rec); } return rec; } };
   };
   const warn = (msg: string) => {
     warnings.push(msg);
@@ -158,8 +171,9 @@ export function makeCtx(diveId: string, section: string, lane: string) {
   const log = (msg: string) => console.log(`  ${msg}`);
 
   /** One chat call on the OpenAI-compatible router. Retries once on 429/5xx/transport; '' on failure. */
-  async function llm(prompt: string, opts: { model?: string; system?: string; temperature?: number } = {}): Promise<string> {
+  async function llm(prompt: string, opts: { model?: string; system?: string; temperature?: number; label?: string } = {}): Promise<string> {
     const model = opts.model ?? DEFAULT_MODEL;
+    const what = opts.label ?? lane;
     // toWellFormed: page text cut mid-emoji leaves half a surrogate pair, which Vectide rejects (HTTP 400).
     const messages = [...(opts.system ? [{ role: 'system', content: opts.system.toWellFormed() }] : []), { role: 'user', content: prompt.toWellFormed() }];
     const { url, key } = route(model);
@@ -172,6 +186,7 @@ export function makeCtx(diveId: string, section: string, lane: string) {
     try {
       let busy = 0;
       for (let attempt = 0; attempt < 2; attempt++) {
+        const c = call('llm', what, { model });
         try {
           const res = await fetch(url + '/chat/completions', {
             method: 'POST',
@@ -179,6 +194,7 @@ export function makeCtx(diveId: string, section: string, lane: string) {
             body: JSON.stringify({ model, messages, temperature: opts.temperature ?? 0 }),
           });
           const raw = await res.text();
+          if (!res.ok) c.done({ ok: false, note: `HTTP ${res.status}: ${raw.slice(0, 200)}` });
           if (res.status === 429 && busy < LLM_429_RETRIES) { await sleep(Math.min(30_000, 2_000 * 2 ** busy++)); attempt--; continue; }
           if (res.status === 429 || res.status >= 500) { warn(`llm ${model} HTTP ${res.status} (attempt ${attempt + 1})`); continue; }
           if (!res.ok) { warn(`llm ${model} HTTP ${res.status}: ${raw.slice(0, 200)}`); break; }
@@ -191,9 +207,11 @@ export function makeCtx(diveId: string, section: string, lane: string) {
           const t = meter.llm.byModelTokens[model] ??= { in: 0, out: 0 };
           t.in += tokensIn;
           t.out += tokensOut;
+          c.done({ ok: Boolean(answer), tokensIn, tokensOut, ...(answer ? {} : { note: `empty answer, finish_reason ${body.choices?.[0]?.finish_reason ?? '?'}` }) });
           if (!answer) { warn(`llm ${model} returned an empty answer (attempt ${attempt + 1}, finish_reason ${body.choices?.[0]?.finish_reason ?? '?'}, ${body.usage?.completion_tokens ?? '?'} output tokens${body.error ? ', ' + String(body.error.code ?? body.error.message ?? '').slice(0, 80) : ''})`); continue; }
           return answer;
         } catch (e) {
+          c.done({ ok: false, note: (e as Error).message.slice(0, 200) });
           warn(`llm ${model} failed: ${(e as Error).message} (attempt ${attempt + 1})`);
         }
       }
@@ -210,21 +228,26 @@ export function makeCtx(diveId: string, section: string, lane: string) {
     meter.maps.byTool[tool] = (meter.maps.byTool[tool] ?? 0) + 1;
     const base = (process.env.SCRAPER_TECH_BASE_URL ?? 'https://mcp.scraper.tech').replace(/\/+$/, '');
     for (let attempt = 0; attempt < 2; attempt++) {
+      const c = call('maps', `${tool} ${Object.values(args).join(' ')}`);
       try {
         const res = await fetch(`${base}/${secret('SCRAPER_TECH_KEY')}`, {
           method: 'POST',
           headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
           body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name: tool, arguments: { country: 'my', ...args } } }),
         });
-        if (res.status >= 500) { warn(`maps ${tool} HTTP ${res.status}`); continue; }
-        if (!res.ok) { warn(`maps ${tool} HTTP ${res.status}`); break; }
+        if (res.status >= 500) { c.done({ ok: false, note: `HTTP ${res.status}` }); warn(`maps ${tool} HTTP ${res.status}`); continue; }
+        if (!res.ok) { c.done({ ok: false, note: `HTTP ${res.status}` }); warn(`maps ${tool} HTTP ${res.status}`); break; }
         const rpc = await res.json() as any;
         const raw = rpc.result?.content?.[0]?.text ?? '';
-        const data = JSON.parse(raw);
+        let data: any;
+        try { data = JSON.parse(raw); } catch (e) { c.done({ ok: true, note: 'answer was not JSON' }); throw e; }
         // search_maps answers {status:"ok", data}; reviews has no status field at all.
-        if (rpc.result?.isError || (data.status !== undefined && data.status !== 'ok')) { warn(`maps ${tool}: ${String(data.message ?? raw).slice(0, 200)}`); break; }
+        // A request scraper.tech answered is billed, error or not.
+        if (rpc.result?.isError || (data.status !== undefined && data.status !== 'ok')) { c.done({ ok: true, note: String(data.message ?? raw).slice(0, 200) }); warn(`maps ${tool}: ${String(data.message ?? raw).slice(0, 200)}`); break; }
+        c.done({ ok: true });
         return data;
       } catch (e) {
+        c.done({ ok: false, note: (e as Error).message.slice(0, 200) });
         warn(`maps ${tool} failed: ${(e as Error).message}`);
       }
     }
@@ -235,6 +258,7 @@ export function makeCtx(diveId: string, section: string, lane: string) {
   /** Exa search. `text: true` adds page text (capped by Exa's own maxCharacters). */
   async function exa(query: string, opts: { numResults?: number; text?: boolean | number; type?: string; category?: string; includeDomains?: string[]; excludeDomains?: string[]; startPublishedDate?: string } = {}): Promise<any[]> {
     meter.exa.calls++;
+    const c = call('exa', query);
     try {
       const body = {
         query,
@@ -254,13 +278,16 @@ export function makeCtx(diveId: string, section: string, lane: string) {
           body: JSON.stringify(body),
         });
       const raw = await res.text();
-      if (!res.ok) { warn(`exa HTTP ${res.status}: ${raw.slice(0, 200)}`); meter.exa.failed++; return []; }
+      if (!res.ok) { c.done({ ok: false, note: `HTTP ${res.status}: ${raw.slice(0, 200)}` }); warn(`exa HTTP ${res.status}: ${raw.slice(0, 200)}`); meter.exa.failed++; return []; }
       const out = JSON.parse(raw);
       const results = out.results ?? [];
       meter.exa.results += results.length;
       if (out.costDollars?.total != null) { meter.exa.priced++; meter.exa.dollars += Number(out.costDollars.total); }
+      // Exa's own price when it sends one, else the list price.
+      c.done({ ok: true, results: results.length, ...(out.costDollars?.total != null ? { usd: Number(out.costDollars.total) } : {}) });
       return results;
     } catch (e) {
+      c.done({ ok: false, note: (e as Error).message.slice(0, 200) });
       warn(`exa failed: ${(e as Error).message}`);
       meter.exa.failed++;
       return [];
@@ -272,16 +299,20 @@ export function makeCtx(diveId: string, section: string, lane: string) {
     meter.brave.calls++;
     const keys = [secret('BRAVE_SEARCH_API_KEY'), secret('BRAVE_SEARCH_API_KEY_2')].filter(Boolean);
     for (const key of keys) {
+      const c = call('brave', query);
       try {
         const u = new URL('https://api.search.brave.com/res/v1/web/search');
         u.searchParams.set('q', query);
         u.searchParams.set('count', String(opts.count ?? 20));
         u.searchParams.set('country', opts.country ?? 'MY');
         const res = await fetch(u, { headers: { 'X-Subscription-Token': key, accept: 'application/json' } });
-        if (res.status === 429) { warn('brave 429, trying the next key'); continue; }
-        if (!res.ok) { warn(`brave HTTP ${res.status}`); continue; }
-        return (await res.json() as any).web?.results ?? [];
+        if (res.status === 429) { c.done({ ok: false, note: 'HTTP 429' }); warn('brave 429, trying the next key'); continue; }
+        if (!res.ok) { c.done({ ok: false, note: `HTTP ${res.status}` }); warn(`brave HTTP ${res.status}`); continue; }
+        const results = (await res.json() as any).web?.results ?? [];
+        c.done({ ok: true, results: results.length });
+        return results;
       } catch (e) {
+        c.done({ ok: false, note: (e as Error).message.slice(0, 200) });
         warn(`brave failed: ${(e as Error).message}`);
       }
     }
@@ -293,24 +324,28 @@ export function makeCtx(diveId: string, section: string, lane: string) {
   async function page(url: string, init: RequestInit = {}): Promise<{ url: string; finalUrl: string; status: number; ms: number; headers: Record<string, string>; html: string; error?: string }> {
     meter.http.calls++;
     const t = Date.now();
+    const c = call('web', url);
     try {
       const headers = { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36', ...(init.headers as Record<string, string>) };
       const ca = extraCaFor(url);
       if (ca) {
         const r = await httpsWithCa(url, { method: init.method, headers, body: init.body as string | undefined }, ca);
+        c.done({ ok: true, note: `HTTP ${r.status}` });
         return { url, finalUrl: r.url, status: r.status, ms: Date.now() - t, headers: r.headers, html: r.text };
       }
       const res = await fetch(url, { redirect: 'follow', ...init, headers });
       const html = await res.text();
+      c.done({ ok: true, note: `HTTP ${res.status}` });
       return { url, finalUrl: res.url, status: res.status, ms: Date.now() - t, headers: Object.fromEntries(res.headers), html };
     } catch (e) {
       meter.http.failed++;
+      c.done({ ok: false, note: (e as Error).message.slice(0, 200) });
       const cause = (e as any).cause;
       return { url, finalUrl: url, status: 0, ms: Date.now() - t, headers: {}, html: '', error: `${(e as Error).message}${cause ? ' (' + (cause.code ?? cause.message) + ')' : ''}` };
     }
   }
 
-  return { diveId, section, lane, warnings, meter, warn, log, llm, maps, exa, brave, page, parseJson, htmlText, now: () => new Date().toISOString() };
+  return { diveId, section, lane, warnings, meter, warn, log, call, llm, maps, exa, brave, page, parseJson, htmlText, now: () => new Date().toISOString() };
 }
 
 /** First JSON object or array in a model answer, or null. Never throws. */

@@ -24,7 +24,7 @@ function stage(diveId: string, lane: string): any | null {
 
 async function askJson(ctx: Ctx, prompt: string, label: string): Promise<any> {
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const got = ctx.parseJson(await ctx.llm(prompt));
+    const got = ctx.parseJson(await ctx.llm(prompt, { label }));
     if (got) return got;
     ctx.warn(`${label} did not parse (attempt ${attempt})`);
   }

@@ -3,7 +3,8 @@
 // price() turns it into lines and a total. Prices are the plans we pay for (the
 // source sits beside each). A call with no per-call price is counted and named in
 // `unpriced`, never guessed. Calls from before tokens were recorded are estimated
-// from text length and marked so.
+// from text length and marked so. Every call is also kept one by one as an
+// ApiCall: when it ran, what it was for, what it used and what it cost.
 import type { LlmUse } from './companydive.ts';
 import type { Meter } from './divedeeper/lib.ts';
 
@@ -43,12 +44,86 @@ export type Usage = {
   mapsCalls: number;
   /** Free calls: PageSpeed, WHOIS, DNS, page fetches. */
   httpCalls: number;
+  /** Calls that failed before the service did billable work. */
+  failedCalls: number;
+};
+
+export type ApiName = 'llm' | 'tavily' | 'brave' | 'exa' | 'maps' | 'web';
+
+/**
+ * One request to an outside service, as it happened. A retry is its own call.
+ * `usd` is fixed when the call is made; null means the service has no per-call
+ * price we know (MiniMax on its token plan).
+ */
+export type ApiCall = {
+  at: string;
+  api: ApiName;
+  /** The step, label, query or URL the call was for. */
+  what: string;
+  model?: string;
+  tokensIn?: number;
+  tokensOut?: number;
+  /** Tavily credits. */
+  credits?: number;
+  results?: number;
+  ms: number;
+  ok: boolean;
+  usd: number | null;
+  note?: string;
+  /** Set when calls from several deeper-dive lanes are listed together. */
+  lane?: string;
 };
 
 export type CostLine = { item: string; detail: string; usd: number | null; estimated?: boolean };
 export type Cost = { usd: number; estimated: boolean; unpriced: string[]; lines: CostLine[] };
 
-export const emptyUsage = (): Usage => ({ llm: {}, tavilyCalls: 0, tavilyCredits: 0, braveCalls: 0, exaCalls: 0, exaReported: 0, exaDollars: 0, mapsCalls: 0, httpCalls: 0 });
+export const emptyUsage = (): Usage => ({ llm: {}, tavilyCalls: 0, tavilyCredits: 0, braveCalls: 0, exaCalls: 0, exaReported: 0, exaDollars: 0, mapsCalls: 0, httpCalls: 0, failedCalls: 0 });
+
+/** What one LLM call cost, or null for a model with no per-token price. */
+export function llmUsd(model: string, tokensIn: number, tokensOut: number): number | null {
+  const perM = llmPrice(model);
+  return perM == null ? null : (tokensIn + tokensOut) / 1e6 * perM;
+}
+
+/** The list price of one call. A failed call costs nothing unless it reported tokens. */
+export function callUsd(c: Pick<ApiCall, 'api' | 'ok' | 'model' | 'tokensIn' | 'tokensOut' | 'credits'>): number | null {
+  switch (c.api) {
+    case 'llm': return llmUsd(c.model ?? 'unknown', c.tokensIn ?? 0, c.tokensOut ?? 0);
+    case 'tavily': return (c.credits ?? 0) * PRICES.tavilyCredit;
+    case 'brave': return c.ok ? PRICES.braveCall : 0;
+    case 'exa': return c.ok ? PRICES.exaSearch : 0;
+    case 'maps': return c.ok ? PRICES.mapsCall : 0;
+    case 'web': return 0;
+  }
+}
+
+/** Start timing a call; `done` returns its record with the time taken and the cost (list price unless `usd` is given). */
+export function startCall(api: ApiName, what: string, extra: Partial<ApiCall> = {}): { done: (end: Partial<ApiCall> & { ok: boolean }) => ApiCall } {
+  const started = Date.now();
+  const at = new Date(started).toISOString();
+  return {
+    done: (end) => {
+      const c: ApiCall = { at, api, what: what.slice(0, 300), ...extra, ...end, ms: Date.now() - started, usd: null };
+      c.usd = end.usd !== undefined ? end.usd : callUsd(c);
+      return c;
+    },
+  };
+}
+
+/** A per-call log. An LLM call that failed but reported tokens still counts: those tokens were billed. */
+export function addCalls(u: Usage, calls: ApiCall[] | null | undefined): Usage {
+  for (const c of calls ?? []) {
+    const billedLlm = c.api === 'llm' && (c.ok || c.tokensIn || c.tokensOut);
+    if (!c.ok && !billedLlm) { u.failedCalls++; continue; }
+    if (c.api === 'llm') addLlm(u, c.model || 'unknown', { calls: 1, tokensIn: c.tokensIn ?? 0, tokensOut: c.tokensOut ?? 0, estimated: false });
+    else if (c.api === 'tavily') { u.tavilyCalls++; u.tavilyCredits += c.credits ?? 0; }
+    else if (c.api === 'brave') u.braveCalls++;
+    else if (c.api === 'exa') { u.exaCalls++; u.exaReported++; u.exaDollars += c.usd ?? 0; }
+    else if (c.api === 'maps') u.mapsCalls++;
+    else u.httpCalls++;
+  }
+  return u;
+}
 
 function addLlm(u: Usage, model: string, t: LlmTally): void {
   const has = u.llm[model] ?? { calls: 0, tokensIn: 0, tokensOut: 0, estimated: false };
@@ -59,6 +134,7 @@ function addLlm(u: Usage, model: string, t: LlmTally): void {
 export function addLlmUses(u: Usage, uses: LlmUse[] | null | undefined): Usage {
   for (const c of uses ?? []) {
     const known = c.tokensIn != null || c.tokensOut != null;
+    if (c.ok === false && !c.tokensIn && !c.tokensOut) { u.failedCalls++; continue; }
     addLlm(u, c.engine || 'unknown', {
       calls: 1,
       tokensIn: known ? Number(c.tokensIn ?? 0) : Math.round((c.promptChars ?? 0) * TOKENS_PER_CHAR),
@@ -72,6 +148,8 @@ export function addLlmUses(u: Usage, uses: LlmUse[] | null | undefined): Usage {
 /** One deeper-dive lane's (or the preview's) meter. */
 export function addMeter(u: Usage, m: Partial<Meter> | null | undefined): Usage {
   if (!m) return u;
+  // Meters since 2026-10-31 keep every call; older ones kept only totals.
+  if (m.calls?.length) return addCalls(u, m.calls);
   const llm = m.llm;
   if (llm) {
     const byTokens = llm.byModelTokens ?? {};
@@ -95,7 +173,7 @@ export function addMeter(u: Usage, m: Partial<Meter> | null | undefined): Usage 
 }
 
 /** A company-dive row: its counters plus the LLM and Exa calls kept in its result. */
-export function diveUsage(row: { tavily_calls?: number; tavily_credits?: number; brave_calls?: number; llm?: LlmUse[] | null; people_llm?: LlmUse[] | null; people_exa?: Array<{ dollars?: number; ok?: boolean }> | null }): Usage {
+export function diveUsage(row: { tavily_calls?: number; tavily_credits?: number; brave_calls?: number; llm?: LlmUse[] | null; people_llm?: LlmUse[] | null; people_exa?: Array<{ dollars?: number; usd?: number; ok?: boolean }> | null }): Usage {
   const u = emptyUsage();
   u.tavilyCalls = Number(row.tavily_calls ?? 0);
   u.tavilyCredits = Number(row.tavily_credits ?? 0);
@@ -103,10 +181,45 @@ export function diveUsage(row: { tavily_calls?: number; tavily_credits?: number;
   addLlmUses(u, row.llm);
   addLlmUses(u, row.people_llm);
   for (const e of row.people_exa ?? []) {
+    if (e.ok === false) { u.failedCalls++; continue; }
     u.exaCalls++;
-    if (e.ok !== false) { u.exaReported++; u.exaDollars += Number(e.dollars ?? 0); }
+    u.exaReported++;
+    u.exaDollars += Number(e.usd ?? e.dollars ?? 0);
   }
   return u;
+}
+
+type DiveLogs = {
+  llm?: LlmUse[] | null;
+  tavily?: Array<{ at?: string; path: string; label: string; credits: number; ms: number; ok: boolean; note?: string; usd?: number }> | null;
+  brave?: ApiCall[] | null;
+  people?: { llm?: LlmUse[] | null; exa?: Array<{ at?: string; query: string; kind: string; results: number; dollars: number; ms?: number; ok: boolean; note?: string; usd?: number }> | null } | null;
+};
+
+/**
+ * A company-dive's calls one by one, oldest first. Calls logged before
+ * 2026-10-31 carry no time and sort first; their cost is worked out from what
+ * they recorded, and an LLM call without tokens gets tokens estimated from text.
+ */
+export function diveCalls(result: DiveLogs | null | undefined): ApiCall[] {
+  if (!result) return [];
+  const llm = (uses: LlmUse[] | null | undefined): ApiCall[] => (uses ?? []).map((c) => {
+    const known = c.tokensIn != null || c.tokensOut != null;
+    const tokensIn = known ? Number(c.tokensIn ?? 0) : Math.round(c.promptChars * TOKENS_PER_CHAR);
+    const tokensOut = known ? Number(c.tokensOut ?? 0) : Math.round(c.answerChars * TOKENS_PER_CHAR);
+    const ok = c.ok !== false;
+    const note = c.note ?? (known || !ok ? undefined : 'tokens estimated from text length');
+    return { at: c.at ?? '', api: 'llm', what: c.step, model: c.engine, ...(ok || known ? { tokensIn, tokensOut } : {}), ms: c.ms, ok,
+      usd: c.usd !== undefined ? c.usd : ok || known ? llmUsd(c.engine, tokensIn, tokensOut) : 0, ...(note ? { note } : {}) };
+  });
+  const out: ApiCall[] = [
+    ...llm(result.llm),
+    ...(result.tavily ?? []).map((c): ApiCall => ({ at: c.at ?? '', api: 'tavily', what: `${c.label} (${c.path})`, credits: c.credits, ms: c.ms, ok: c.ok, usd: c.usd ?? c.credits * PRICES.tavilyCredit, ...(c.note ? { note: c.note } : {}) })),
+    ...(result.brave ?? []),
+    ...llm(result.people?.llm),
+    ...(result.people?.exa ?? []).map((c): ApiCall => ({ at: c.at ?? '', api: 'exa', what: `${c.kind}: ${c.query}`, results: c.results, ms: c.ms ?? 0, ok: c.ok, usd: c.usd ?? (c.ok ? c.dollars : 0), ...(c.note ? { note: c.note } : {}) })),
+  ];
+  return out.sort((a, b) => a.at.localeCompare(b.at));
 }
 
 const llmPrice = (model: string): number | null => LLM_PER_M.find((p) => p.model.test(model))?.usd ?? null;
@@ -132,6 +245,7 @@ export function price(u: Usage): Cost {
   }
   if (u.mapsCalls) lines.push({ item: 'Google Maps (scraper.tech)', detail: calls(u.mapsCalls), usd: u.mapsCalls * PRICES.mapsCall });
   if (u.httpCalls) lines.push({ item: 'Other web calls', detail: `${calls(u.httpCalls)}, free`, usd: 0 });
+  if (u.failedCalls) lines.push({ item: 'Failed calls', detail: `${calls(u.failedCalls)}, not billed`, usd: 0 });
   return {
     usd: lines.reduce((s, l) => s + (l.usd ?? 0), 0),
     estimated: lines.some((l) => l.estimated),

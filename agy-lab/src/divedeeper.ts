@@ -27,7 +27,7 @@ import { runLane, stageDive, type LaneResult } from './divedeeper/runner.ts';
 import { buildReport } from './divedeeper/report-html.ts';
 import { buildPreview, type Offer } from './divedeeper/preview-html.ts';
 import { editPreview } from './divedeeper/preview-editor.ts';
-import { addMeter, emptyUsage, price } from './cost.ts';
+import { addMeter, emptyUsage, price, type ApiCall } from './cost.ts';
 import { page as browsePage } from './divedeeper-page.ts';
 
 export const enabled = (env: NodeJS.ProcessEnv = process.env): boolean => /^(1|true|on|yes)$/i.test(String(env.DIVE_DEEPER_ENABLED ?? '').trim());
@@ -451,9 +451,12 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
   if (one && method === 'GET') {
     const row = (await reportdb.sql<Row>(`select id, public_id, company, dive_id, status, stage, log, lanes, error, created_at, finished_at from dive_deeper where id = $1`, [Number(one[1])])).rows[0];
     if (!row) { ctx.json(res, 404, { error: 'no such run' }); return true; }
-    const lanes = Object.fromEntries(Object.entries(row.lanes ?? {}).map(([k, v]) => [k, { status: v.status, findings: v.findings_count, warnings: v.warnings?.length ?? 0, first_warnings: (v.warnings ?? []).slice(0, 3).map((w) => w.slice(0, 240)), ms: v.ms, meter: v.meter }]));
+    const lanes = Object.fromEntries(Object.entries(row.lanes ?? {}).map(([k, v]) => [k, { status: v.status, findings: v.findings_count, warnings: v.warnings?.length ?? 0, first_warnings: (v.warnings ?? []).slice(0, 3).map((w) => w.slice(0, 240)), ms: v.ms, meter: v.meter && { ...(v.meter as object), calls: undefined } }]));
     const cost = price(Object.values(row.lanes ?? {}).reduce((u, v) => addMeter(u, v.meter as any), emptyUsage()));
-    ctx.json(res, 200, { ...row, lanes, cost, ...links(req, row.public_id) });
+    // Every lane's calls in one list, oldest first; runs before 2026-10-31 kept only totals, so theirs is empty.
+    const calls = Object.entries(row.lanes ?? {}).flatMap(([lane, v]) => ((v.meter as { calls?: ApiCall[] } | undefined)?.calls ?? []).map((c) => ({ ...c, lane })))
+      .sort((a, b) => a.at.localeCompare(b.at));
+    ctx.json(res, 200, { ...row, lanes, cost, calls, ...links(req, row.public_id) });
     return true;
   }
 

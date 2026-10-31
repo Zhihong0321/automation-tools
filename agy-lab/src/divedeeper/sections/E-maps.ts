@@ -66,20 +66,24 @@ async function reviewsCall(ctx: Ctx, args: Record<string, string>): Promise<any>
   ctx.meter.maps.byTool.reviews = (ctx.meter.maps.byTool.reviews ?? 0) + 1;
   const base = (process.env.SCRAPER_TECH_BASE_URL ?? 'https://mcp.scraper.tech').replace(/\/+$/, '');
   for (let attempt = 0; attempt < 2; attempt++) {
+    const c = ctx.call('maps', `reviews ${Object.values(args).join(' ')}`);
     try {
       const res = await fetch(`${base}/${secret('SCRAPER_TECH_KEY')}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
         body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name: 'reviews', arguments: { country: 'my', ...args } } }),
       });
-      if (res.status >= 500) { ctx.warn(`maps reviews HTTP ${res.status}`); continue; }
-      if (!res.ok) { ctx.warn(`maps reviews HTTP ${res.status}`); break; }
+      if (res.status >= 500) { c.done({ ok: false, note: `HTTP ${res.status}` }); ctx.warn(`maps reviews HTTP ${res.status}`); continue; }
+      if (!res.ok) { c.done({ ok: false, note: `HTTP ${res.status}` }); ctx.warn(`maps reviews HTTP ${res.status}`); break; }
       const rpc = await res.json() as any;
+      // A request scraper.tech answered is billed, error or not.
+      c.done({ ok: true });
       const raw = rpc.result?.content?.[0]?.text ?? '';
       const data = JSON.parse(raw);
       if (rpc.result?.isError || !data?.data) { ctx.warn(`maps reviews: ${String(raw).slice(0, 200)}`); break; }
       return data;
     } catch (e) {
+      c.done({ ok: false, note: (e as Error).message.slice(0, 200) });
       ctx.warn(`maps reviews failed: ${(e as Error).message}`);
     }
   }

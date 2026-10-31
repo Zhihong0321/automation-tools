@@ -35,7 +35,7 @@ import * as tavily from './tavily.ts';
 import * as extractLlm from './extract-llm.ts';
 import * as pi from './pi.ts';
 import * as reportdb from './reportdb.ts';
-import { diveUsage, price } from './cost.ts';
+import { diveCalls, diveUsage, llmUsd, price, startCall, PRICES, type ApiCall } from './cost.ts';
 
 export type Source = {
   id: number;
@@ -69,6 +69,8 @@ export type DiveResult = {
   tavily: TavilyCall[];
   llm: LlmUse[];
   braveCalls: number;
+  /** Every Brave request, one by one (since 2026-10-31). */
+  brave?: ApiCall[];
   /** Stages that could not finish and fell back; empty on a clean run. */
   warnings: string[];
 };
@@ -91,7 +93,7 @@ const TOPICS = ['identity', 'ownership_people', 'products_services', 'projects_c
 
 export const MAX_TAVILY_CALLS = 15;
 
-export type TavilyCall = { n: number; path: string; label: string; credits: number; ms: number; ok: boolean; note?: string };
+export type TavilyCall = { n: number; at?: string; path: string; label: string; credits: number; ms: number; ok: boolean; usd?: number; note?: string };
 
 /** Counts a dive's Tavily calls and refuses the one past the cap. A call no key accepted costs nothing and is not counted. */
 export class Budget {
@@ -116,22 +118,28 @@ export async function budgetedCall(
 ): Promise<Record<string, any>> {
   if (budget.left <= 0) throw new BudgetSpent(`Tavily budget of ${budget.max} calls is spent`);
   const started = Date.now();
+  const at = new Date(started).toISOString();
   try {
     const out = await request(path, body);
-    budget.calls.push({ n: budget.used + 1, path, label, credits: Number(out.usage?.credits ?? 0), ms: Date.now() - started, ok: true });
+    const credits = Number(out.usage?.credits ?? 0);
+    budget.calls.push({ n: budget.used + 1, at, path, label, credits, ms: Date.now() - started, ok: true, usd: credits * PRICES.tavilyCredit });
     return out;
   } catch (err) {
     const code = (err as { code?: string }).code;
     // Refused before Tavily did any work: no budget spent.
     if (code !== 'quota' && code !== 'not_installed') {
-      budget.calls.push({ n: budget.used + 1, path, label, credits: 0, ms: Date.now() - started, ok: false, note: (err as Error).message.slice(0, 200) });
+      budget.calls.push({ n: budget.used + 1, at, path, label, credits: 0, ms: Date.now() - started, ok: false, usd: 0, note: (err as Error).message.slice(0, 200) });
     }
     throw err;
   }
 }
 
-/** One answered LLM call. Tokens come from the provider's usage report; calls made before 2026-10-30 have none. */
-export type LlmUse = { step: string; engine: string; ms: number; promptChars: number; answerChars: number; tokensIn?: number; tokensOut?: number };
+/**
+ * One LLM call. Tokens come from the provider's usage report; calls made before
+ * 2026-10-30 have none. Since 2026-10-31 a failed attempt is kept too (ok false),
+ * with its time and its cost in USD (null for a model with no per-token price).
+ */
+export type LlmUse = { step: string; engine: string; ms: number; promptChars: number; answerChars: number; tokensIn?: number; tokensOut?: number; at?: string; ok?: boolean; usd?: number | null; note?: string };
 
 /** What a provider says one call used, filled in by the call when it reports it. */
 export type TokenUse = { tokensIn: number; tokensOut: number };
@@ -188,7 +196,7 @@ function engines(): Engine[] {
   const out: Engine[] = [];
   const ds = extractLlm.config();
   if (ds) out.push({ name: ds.model, call: (prompt, usage) => streamChat(prompt, fetch, usage) });
-  if (pi.config().apiKey) out.push({ name: `pi/${pi.config().model}`, call: async (prompt) => (await pi.ask(prompt, { tools: false, timeoutMs: 0 })).answer });
+  if (pi.config().apiKey) out.push({ name: `pi/${pi.config().model}`, call: async (prompt, usage) => (await pi.ask(prompt, { tools: false, timeoutMs: 0 }, usage)).answer });
   return out;
 }
 
@@ -207,14 +215,19 @@ export async function ask(prompt: string, opts: { step: string; uses?: LlmUse[] 
     for (const engine of all) {
       const started = Date.now();
       const usage: TokenUse = { tokensIn: 0, tokensOut: 0 };
+      const record = (answerChars: number, ok: boolean, note?: string) => opts.uses?.push({
+        step: opts.step, engine: engine.name, at: new Date(started).toISOString(), ms: Date.now() - started, promptChars: prompt.length, answerChars, ok,
+        // A failed attempt that reported no tokens was not billed; an answer with none is estimated when read (cost.ts diveCalls).
+        ...(usage.tokensIn || usage.tokensOut ? { ...usage, usd: llmUsd(engine.name, usage.tokensIn, usage.tokensOut) } : ok ? {} : { usd: 0 }),
+        ...(note ? { note } : {}) });
       try {
         const answer = stripThinking(await engine.call(prompt, usage));
         if (!answer) throw new Error('empty answer');
-        opts.uses?.push({ step: opts.step, engine: engine.name, ms: Date.now() - started, promptChars: prompt.length, answerChars: answer.length,
-          ...(usage.tokensIn || usage.tokensOut ? usage : {}) });
+        record(answer.length, true);
         return answer;
       } catch (err) {
         errors.push(`${engine.name}: ${(err as Error).message.slice(0, 200)}`);
+        record(0, false, (err as Error).message.slice(0, 200));
       }
     }
     if (round < waits.length) await new Promise((r) => setTimeout(r, waits[round]));
@@ -499,7 +512,7 @@ export type DiveStats = { tavily: TavilyCall[]; llmCalls: number; braveCalls: nu
 export async function run(company: string, country: string, progress: Progress): Promise<{ result: DiveResult; dossier: string }> {
   const budget = new Budget();
   const uses: LlmUse[] = [];
-  const counts = { brave: 0 };
+  const counts = { brave: 0, braveLog: [] as ApiCall[] };
   try {
     return await dive(company, country, progress, budget, uses, counts);
   } catch (err) {
@@ -508,7 +521,7 @@ export async function run(company: string, country: string, progress: Progress):
   }
 }
 
-async function dive(company: string, country: string, progress: Progress, budget: Budget, uses: LlmUse[], counts: { brave: number }): Promise<{ result: DiveResult; dossier: string }> {
+async function dive(company: string, country: string, progress: Progress, budget: Budget, uses: LlmUse[], counts: { brave: number; braveLog: ApiCall[] }): Promise<{ result: DiveResult; dossier: string }> {
   const short = shortName(company);
   const cc = COUNTRY_CODES[country.trim().toLowerCase()];
   const tavilyCountry = cc ? country.trim().toLowerCase() : undefined;
@@ -555,7 +568,7 @@ async function dive(company: string, country: string, progress: Progress, budget
   ];
   for (const [label, query, kind] of braveQueries) {
     try {
-      const hits = await brave.search(query, { country: cc, kind });
+      const hits = await brave.search(query, { country: cc, kind, onCall: (c) => counts.braveLog.push({ ...c, what: `${label}: ${c.what}` }) });
       counts.brave++;
       for (const h of hits) ledger.add(h.url, h.title, h.snippets, `brave:${label}`);
       await say('discover', `Brave ${label}: ${hits.length} results`);
@@ -739,6 +752,7 @@ async function dive(company: string, country: string, progress: Progress, budget
     tavily: budget.calls,
     llm: uses,
     braveCalls: counts.brave,
+    brave: counts.braveLog,
     warnings,
   };
   await say('done', `Tavily ${budget.used}/${budget.max} calls, ${budget.credits} credits; Brave ${counts.brave}; LLM ${uses.length} calls`);
@@ -950,7 +964,7 @@ export async function handle(req: import('node:http').IncomingMessage, res: impo
   if (m && method === 'GET') {
     const row = (await reportdb.sql<DiveRow>(`select * from company_dive where id = $1`, [Number(m[1])])).rows[0];
     const people = (row?.result as { people?: { llm?: LlmUse[]; exa?: [] } } | null)?.people;
-    if (row) ctx.json(res, 200, { ...row, cost: price(diveUsage({ ...row, llm: row.result?.llm, people_llm: people?.llm, people_exa: people?.exa })), ...links(req, row) });
+    if (row) ctx.json(res, 200, { ...row, cost: price(diveUsage({ ...row, llm: row.result?.llm, people_llm: people?.llm, people_exa: people?.exa })), calls: diveCalls(row.result as Parameters<typeof diveCalls>[0]), ...links(req, row) });
     else ctx.json(res, 404, { error: 'no such dive' });
     return true;
   }

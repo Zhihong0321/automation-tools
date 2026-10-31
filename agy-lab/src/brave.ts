@@ -5,6 +5,8 @@
 // free tier allows about one query a second per key, so calls are spaced and a
 // 429/402 moves on to the next key.
 
+import { startCall, type ApiCall } from './cost.ts';
+
 type FetchImpl = typeof fetch;
 
 export type BraveHit = { url: string; title: string; snippets: string[]; age?: string };
@@ -34,10 +36,10 @@ function hits(rows: Array<Record<string, any>> | undefined): BraveHit[] {
   }));
 }
 
-/** One Brave query. kind 'news' uses the news endpoint. */
+/** One Brave query. kind 'news' uses the news endpoint. `onCall` hears every request, a key that refused included. */
 export async function search(
   q: string,
-  opts: { country?: string; kind?: 'web' | 'news'; count?: number } = {},
+  opts: { country?: string; kind?: 'web' | 'news'; count?: number; onCall?: (c: ApiCall) => void } = {},
   allKeys: string[] = keys(),
   fetchImpl: FetchImpl = fetch,
 ): Promise<BraveHit[]> {
@@ -50,17 +52,31 @@ export async function search(
   for (let tries = 0; tries < allKeys.length; tries++) {
     const key = allKeys[keyIndex % allKeys.length];
     await spaced();
-    const res = await fetchImpl(`${BASE}/${kind}/search?${params}`, {
-      headers: { 'X-Subscription-Token': key, accept: 'application/json' },
-    });
+    const call = startCall('brave', `${kind}: ${q}`);
+    let res: Response;
+    try {
+      res = await fetchImpl(`${BASE}/${kind}/search?${params}`, {
+        headers: { 'X-Subscription-Token': key, accept: 'application/json' },
+      });
+    } catch (err) {
+      opts.onCall?.(call.done({ ok: false, note: (err as Error).message.slice(0, 200) }));
+      throw err;
+    }
     if (res.status === 429 || res.status === 402) {
       lastErr = `HTTP ${res.status} ${(await res.text()).slice(0, 200)}`;
+      opts.onCall?.(call.done({ ok: false, note: lastErr }));
       keyIndex++;
       continue;
     }
-    if (!res.ok) throw new Error(`Brave ${kind} answered HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    if (!res.ok) {
+      const msg = `Brave ${kind} answered HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`;
+      opts.onCall?.(call.done({ ok: false, note: msg }));
+      throw new Error(msg);
+    }
     const body = await res.json() as Record<string, any>;
-    return hits(kind === 'news' ? body.results : body.web?.results);
+    const found = hits(kind === 'news' ? body.results : body.web?.results);
+    opts.onCall?.(call.done({ ok: true, results: found.length }));
+    return found;
   }
   throw new Error(`Brave: every key refused (${lastErr})`);
 }

@@ -319,8 +319,10 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   // ---- 4. Subdomains from the public certificate logs. ----
   const subs: any[] = [];
   for (const d of N.domains.slice(0, 3)) {
+    const c = ctx.call('web', `crt.sh ${d}`);
     try {
       const res = await fetch(`https://crt.sh/?q=%25.${encodeURIComponent(d)}&output=json`);
+      c.done({ ok: res.ok, note: `HTTP ${res.status}` });
       if (!res.ok) { ctx.warn(`crt.sh ${d}: HTTP ${res.status}`); continue; }
       const rows = await res.json() as any[];
       const names = [...new Set(rows.flatMap((x) => String(x.name_value ?? '').split('\n')).map((n) => n.toLowerCase().replace(/^\*\./, '')).filter((n) => n.endsWith('.' + d) && n !== 'www.' + d))].slice(0, 25);
@@ -331,6 +333,7 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
       }
       for (const s of live.filter((x) => !x.a.length)) subs.push({ name: s.name, status: null, title: '', resolves: false });
     } catch (e) {
+      c.done({ ok: false, note: (e as Error).message.slice(0, 200) });
       ctx.warn(`crt.sh ${d} failed: ${(e as Error).message}`);
     }
   }

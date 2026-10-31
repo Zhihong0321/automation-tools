@@ -57,7 +57,13 @@ export interface AskOutcome {
   answer: string;
   ms: number;
   model: string;
+  /** Summed over every model turn of the run (tool rounds and the nudge included); 0 when MiniMax reported none. */
+  tokensIn: number;
+  tokensOut: number;
 }
+
+/** What a run used, filled in by the runner as it ends, even when it fails. */
+export type RunUsage = { tokensIn: number; tokensOut: number };
 
 export interface AskError extends Error {
   /** `not_configured` | `timeout` | `rate_limit` | `length` | `empty` | `failed` — what the caller should do about it. */
@@ -208,9 +214,9 @@ function loader(tools: boolean): ResourceLoader {
   };
 }
 
-type Runner = (prompt: string, opts: Required<AskOptions>) => Promise<string>;
+type Runner = (prompt: string, opts: Required<AskOptions>, usage?: RunUsage) => Promise<string>;
 
-async function runSdk(prompt: string, opts: Required<AskOptions>): Promise<string> {
+async function runSdk(prompt: string, opts: Required<AskOptions>, usage?: RunUsage): Promise<string> {
   const cfg = config();
   if (!cfg.apiKey) throw fail('not_configured', 'MINIMAX_API_KEY is not set, so the Pi worker cannot run.');
   const rt = await modelRuntime(cfg.apiKey);
@@ -271,6 +277,13 @@ async function runSdk(prompt: string, opts: Required<AskOptions>): Promise<strin
     return answer;
   } finally {
     clearTimeout(timer);
+    if (usage) {
+      for (const m of session.messages as Array<{ role?: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number } }>) {
+        if (m.role !== 'assistant' || !m.usage) continue;
+        usage.tokensIn += (m.usage.input ?? 0) + (m.usage.cacheRead ?? 0) + (m.usage.cacheWrite ?? 0);
+        usage.tokensOut += m.usage.output ?? 0;
+      }
+    }
     session.dispose();
   }
 }
@@ -300,7 +313,7 @@ export function busy(): { inFlight: number; waiting: number; max: number } {
   return { inFlight, waiting: waiting.length, max: config().maxConcurrent };
 }
 
-export async function ask(prompt: string, opts: AskOptions = {}): Promise<AskOutcome> {
+export async function ask(prompt: string, opts: AskOptions = {}, usage: RunUsage = { tokensIn: 0, tokensOut: 0 }): Promise<AskOutcome> {
   const full: Required<AskOptions> = {
     timeoutMs: opts.timeoutMs ?? 300_000,
     tools: opts.tools !== false,
@@ -309,9 +322,9 @@ export async function ask(prompt: string, opts: AskOptions = {}): Promise<AskOut
   };
   const started = Date.now();
   return withSlot(async () => {
-    const answer = await runner(prompt, full);
+    const answer = await runner(prompt, full, usage);
     if (!answer) throw fail('empty', 'Pi finished without an answer.');
-    return { answer, ms: Date.now() - started, model: config().model };
+    return { answer, ms: Date.now() - started, model: config().model, tokensIn: usage.tokensIn, tokensOut: usage.tokensOut };
   });
 }
 

@@ -27,7 +27,7 @@ const brief = (out: any, n = 30) => (out?.findings ?? []).slice(0, n).map((f: Fi
 /** One LLM call parsed as JSON, asked a second time if the first answer does not parse. */
 async function askJson(ctx: Ctx, prompt: string, label: string): Promise<any> {
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const got = ctx.parseJson(await ctx.llm(prompt));
+    const got = ctx.parseJson(await ctx.llm(prompt, { label }));
     if (got) return got;
     ctx.warn(`${label} did not parse (attempt ${attempt})`);
   }

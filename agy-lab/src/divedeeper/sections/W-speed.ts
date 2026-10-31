@@ -78,20 +78,23 @@ export function readPsi(d: any, base: Pick<Psi, 'url' | 'site' | 'strategy'>): P
   return { ...base, ok: true, scores, lab, field, fixes, flags };
 }
 
-async function pageSpeed(url: string, site: string, strategy: 'mobile' | 'desktop', token: string): Promise<Psi> {
+async function pageSpeed(ctx: Ctx, url: string, site: string, strategy: 'mobile' | 'desktop', token: string): Promise<Psi> {
   const q = new URLSearchParams({ url, strategy });
   for (const c of ['performance', 'accessibility', 'best-practices', 'seo']) q.append('category', c);
   let last = '';
   for (let attempt = 0; attempt < 2; attempt++) {
+    const c = ctx.call('web', `PageSpeed ${strategy} ${url}`);
     try {
       const res = await fetch(`${API}?${q}`, { headers: { authorization: `Bearer ${token}` } });
       const d = await res.json() as any;
-      if (res.ok && d.lighthouseResult) return readPsi(d, { url, site, strategy });
+      if (res.ok && d.lighthouseResult) { c.done({ ok: true }); return readPsi(d, { url, site, strategy }); }
       last = `HTTP ${res.status}: ${String(d.error?.message ?? 'no Lighthouse result').slice(0, 200)}`;
+      c.done({ ok: false, note: last });
       if (res.status !== 429 && res.status < 500) break;
       await new Promise((r) => setTimeout(r, 10_000));
     } catch (e) {
       last = (e as Error).message;
+      c.done({ ok: false, note: last.slice(0, 200) });
     }
   }
   return { url, site, strategy, ok: false, error: last };
@@ -118,7 +121,7 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   ctx.meter.other.pagespeed = 0;
   const runs = await Promise.all([...homes].flatMap(([site, url]) => (['mobile', 'desktop'] as const).map((st) => {
     ctx.meter.other.pagespeed++;
-    return pageSpeed(url, site, st, token);
+    return pageSpeed(ctx, url, site, st, token);
   })));
   for (const x of runs.filter((r) => !r.ok)) ctx.warn(`PageSpeed ${x.strategy} ${x.url}: ${x.error}`);
 

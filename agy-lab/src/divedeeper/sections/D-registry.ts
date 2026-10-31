@@ -60,11 +60,14 @@ function objectAround(text: string, i: number, start = '{"uuid"'): any {
 async function getBytes(ctx: Ctx, url: string): Promise<Buffer | null> {
   ctx.meter.http.calls++;
   ctx.meter.other.pdf = (ctx.meter.other.pdf ?? 0) + 1;
+  const c = ctx.call('web', url);
   try {
     const res = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130 Safari/537.36' } });
+    c.done({ ok: true, note: `HTTP ${res.status}` });
     if (!res.ok) { ctx.warn(`pdf ${url}: HTTP ${res.status}`); return null; }
     return Buffer.from(await res.arrayBuffer());
   } catch (e) {
+    c.done({ ok: false, note: (e as Error).message.slice(0, 200) });
     ctx.meter.http.failed++;
     ctx.warn(`pdf ${url} failed: ${(e as Error).message}`);
     return null;
