@@ -88,8 +88,9 @@ Sample: [dive-deeper-report-eternalgy.html](dive-deeper-report-eternalgy.html).
 ## Fully automatic, on Railway
 
 Everything runs inside the hub on Railway (`ee-auto`). Nothing needs this PC, and nothing calls
-Claude: every AI step uses DeepSeek (`deepseek-v4.1-flash-1017` through Vectide, the hub's
-`CONTACT_LLM_*` settings).
+Claude: every AI step uses DeepSeek (`deepseek-v4.1-flash-1017`) on every enabled lane saved on
+`/workers`, through the app's one LLM router ([core/README.md](../agy-lab/src/core/README.md)). MiniMax
+is used only when every lane has failed.
 
 | Step | Trigger | Runs where | AI used | Stored in (Postgres on Railway) | Link |
 |---|---|---|---|---|---|

@@ -14,7 +14,7 @@ import type http from 'node:http';
 import crypto from 'node:crypto';
 import * as db from './reportdb.ts';
 import * as emailList from './email-list.ts';
-import * as sl from './smartlead.ts';
+import { smartlead as sl } from './core/index.ts';
 
 type Ctx = {
   json: (res: http.ServerResponse, status: number, body: unknown) => void;

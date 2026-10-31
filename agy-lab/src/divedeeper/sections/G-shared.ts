@@ -69,28 +69,15 @@ const STUB_RE = /^(I['’]ll|I will|Let me) (check|search|look)/i;
 /** Some router models (gpt-6.1-sol) run a web search on their own and leave citation markers. */
 export const SEARCH_MARK = /turn\d+search\d+|<Cite\b|【\d+†|\bturn\d+(news|view|fetch)\d+|<Entity\b|<AsyncImage\b/i;
 
-/** Per-model token tally. lib's meter only splits CALLS by model, so this taps fetch (read-only:
- *  it clones each chat/completions response and reads `usage`). Never throws. */
-export const usage: Record<string, { calls: number; tokensIn: number; tokensOut: number }> = {};
-let tapped = false;
-export function tapUsage() {
-  if (tapped) return;
-  tapped = true;
-  const real = globalThis.fetch;
-  globalThis.fetch = (async (input: any, init?: any) => {
-    const res = await real(input, init);
-    try {
-      const url = String(typeof input === 'string' ? input : input?.url ?? input);
-      if (url.endsWith('/chat/completions') && init?.body) {
-        const model = JSON.parse(String(init.body)).model ?? '?';
-        res.clone().json().then((b: any) => {
-          const u = (usage[model] ??= { calls: 0, tokensIn: 0, tokensOut: 0 });
-          u.calls++; u.tokensIn += Number(b?.usage?.prompt_tokens ?? 0); u.tokensOut += Number(b?.usage?.completion_tokens ?? 0);
-        }).catch(() => { /* non-JSON error body: lib warns on it */ });
-      }
-    } catch { /* never break the real call */ }
-    return res;
-  }) as typeof fetch;
+/** Per-model token tally, from the lane's per-call log (every LLM call goes through core/llm.ts and lands there). */
+export function usageByModel(ctx: Ctx): Record<string, { calls: number; tokensIn: number; tokensOut: number }> {
+  const out: Record<string, { calls: number; tokensIn: number; tokensOut: number }> = {};
+  for (const c of ctx.meter.calls) {
+    if (c.api !== 'llm') continue;
+    const u = (out[c.model ?? '?'] ??= { calls: 0, tokensIn: 0, tokensOut: 0 });
+    u.calls++; u.tokensIn += c.tokensIn ?? 0; u.tokensOut += c.tokensOut ?? 0;
+  }
+  return out;
 }
 
 /** gpt-6.1-sol answers in a chat-app markup (<box>, <Entity value=...>, <Cite refs=...>) and once
@@ -126,7 +113,6 @@ export async function pool<T, R>(items: T[], n: number, fn: (x: T, i: number) =>
 
 /** Name, trade and area from the dive. One LLM call at temperature 0, with a plain fallback. */
 export async function profileOf(ctx: Ctx, dive: any): Promise<Profile> {
-  tapUsage();
   // The template must be the SAME every run, but even at temperature 0 the profile call drifted
   // ("my house" / "my property" / "my house or business"). Reuse the profile of the last G run for
   // this dive (read-only from out/); DD_G_NEW_PROFILE=1 builds a fresh one.

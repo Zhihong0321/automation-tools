@@ -1,3 +1,5 @@
+import { parallel } from './core/index.ts';
+
 /** Parallel FindAll Entity Search adapter. Only the returned profile and description
  * are treated as evidence; this endpoint does not return phone or email fields. */
 export function parallelObjective(company: Record<string, unknown>, targetRole?: string | null): string {
@@ -33,18 +35,7 @@ export function parallelPeople(company: Record<string, unknown>, response: unkno
 }
 
 export async function searchParallelPeople(company: Record<string, unknown>, targetRole?: string | null): Promise<{ response: Record<string, unknown>; people: Record<string, unknown>[] }> {
-  const key = process.env.PARALLEL_API_KEY?.trim();
-  if (!key) throw new Error('PARALLEL_API_KEY is not configured');
-  const response = await fetch('https://api.parallel.ai/v1beta/findall/entity-search', {
-    method: 'POST',
-    headers: { 'x-api-key': key, 'content-type': 'application/json' },
-    body: JSON.stringify({ entity_type: 'people', objective: parallelObjective(company, targetRole), match_limit: 20 }),
-    signal: AbortSignal.timeout(90_000),
-  });
-  if (!response.ok) throw new Error(`Parallel Entity Search returned HTTP ${response.status}`);
-  const payload = await response.json();
-  if (!payload || typeof payload !== 'object' || !Array.isArray((payload as Record<string, unknown>).entities)) {
-    throw new Error('Parallel Entity Search returned an invalid response');
-  }
-  return { response: payload as Record<string, unknown>, people: parallelPeople(company, payload) };
+  // The request goes through the app's core (core/parallel.ts).
+  const response = await parallel.entitySearch({ entity_type: 'people', objective: parallelObjective(company, targetRole), match_limit: 20 });
+  return { response, people: parallelPeople(company, response) };
 }

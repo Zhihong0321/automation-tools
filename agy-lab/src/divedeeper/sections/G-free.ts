@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { OUT, type Ctx, type Finding } from '../lib.ts';
-import { ANSWER_MODELS, ANSWER_TEMP, JUDGE_MODEL, MAX_PROMPTS, usage, askAndJudge, findingsFrom, profileOf, signatures, type Profile, type Prompt } from './G-shared.ts';
+import { ANSWER_MODELS, ANSWER_TEMP, JUDGE_MODEL, MAX_PROMPTS, usageByModel, askAndJudge, findingsFrom, profileOf, signatures, type Profile, type Prompt } from './G-shared.ts';
 
 async function customerPrompts(ctx: Ctx, dive: any, p: Profile): Promise<Prompt[]> {
   if (process.env.DD_G_REUSE) {
@@ -62,7 +62,7 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   return {
     findings,
     notes: {
-      profile, answer_temperature: ANSWER_TEMP, models: ANSWER_MODELS, judge: JUDGE_MODEL, usage_by_model: usage,
+      profile, answer_temperature: ANSWER_TEMP, models: ANSWER_MODELS, judge: JUDGE_MODEL, usage_by_model: usageByModel(ctx),
       prompts, signatures: signatures(judged),
       answers: judged.map((j) => ({ id: j.prompt.id, model: j.model, outcome: j.outcome, searched: j.searched, stub: j.stub, answer: j.answer, claims: j.claims, dropped: j.dropped, competitors: j.competitors, confused_with: j.confused_with, recommended: j.recommended, judge_summary: j.judge_summary })),
       limit: 'Answers reflect training data unless the model searched by itself (see searched).',

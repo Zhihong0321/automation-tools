@@ -11,17 +11,13 @@
 // Provider reads are cached for five minutes, so a page refreshing every minute
 // does not spend anyone's rate limit.
 import * as db from './reportdb.ts';
-import * as tavily from './tavily.ts';
-import * as exa from './exa.ts';
-import * as pi from './pi.ts';
-import * as extractLlm from './extract-llm.ts';
+import { exa, llm as extractLlm, pi, tavily } from './core/index.ts';
 import * as autoScan from './autoscan.ts';
 
 type FetchImpl = typeof fetch;
 export type Level = 'ok' | 'warn' | 'bad' | 'unknown';
 
 const CACHE_MS = 5 * 60_000;
-const MINIMAX_URL = 'https://api.minimax.io/v1/api/openplatform/coding_plan/remains';
 
 const tail = (secret: string) => (secret.length <= 4 ? '••••' : '••••' + secret.slice(-4));
 const iso = (v: unknown) => (v == null ? null : new Date(v as string).toISOString());
@@ -62,9 +58,7 @@ async function minimax(fetchImpl: FetchImpl) {
   if (!key) return { level: 'unknown' as Level, configured: false, note: 'MINIMAX_API_KEY is not set' };
   try {
     const windows = await cached('minimax', async () => {
-      const res = await fetchImpl(MINIMAX_URL, { headers: { authorization: 'Bearer ' + key }, signal: AbortSignal.timeout(15_000) });
-      if (!res.ok) throw new Error(`MiniMax answered HTTP ${res.status}`);
-      return parseMinimax(await res.json());
+      return parseMinimax(await pi.remains(fetchImpl));
     });
     const worst = Math.min(...windows.flatMap((w) => [w.intervalLeftPct, w.weekLeftPct].filter((n): n is number => n != null)));
     return { level: Number.isFinite(worst) ? levelFor(worst, 100) : 'unknown' as Level, configured: true, keyTail: tail(key), windows };
@@ -82,23 +76,23 @@ export function parseBilling(subscription: unknown, usage: unknown): { limitUsd:
   return { limitUsd: limit, usedUsd, leftUsd: Math.max(0, limit - usedUsd) };
 }
 
+/** Every LLM lane's balance, from the lane's own account endpoint where it has one (one-api style). */
 async function extract(fetchImpl: FetchImpl) {
-  const cfg = extractLlm.config();
-  if (!cfg) return { level: 'unknown' as Level, configured: false, note: 'no extract model lane is saved on /workers; contact research extracts with MiniMax' };
-  try {
-    const billing = await cached('extract', async () => {
-      const get = async (path: string) => {
-        const res = await fetchImpl(cfg.url + path, { headers: { authorization: 'Bearer ' + cfg.key }, signal: AbortSignal.timeout(15_000) });
-        if (!res.ok) throw new Error(`${path} answered HTTP ${res.status}`);
-        return res.json();
-      };
-      return parseBilling(await get('/dashboard/billing/subscription'), await get('/dashboard/billing/usage'));
-    });
-    if (!billing) return { level: 'unknown' as Level, configured: true, model: cfg.model, host: new URL(cfg.url).host, note: 'the provider gave no balance' };
-    return { level: levelFor(billing.leftUsd, billing.limitUsd), configured: true, model: cfg.model, host: new URL(cfg.url).host, keyTail: tail(cfg.key), ...billing };
-  } catch (err) {
-    return { level: 'unknown' as Level, configured: true, model: cfg.model, host: new URL(cfg.url).host, error: (err as Error).message };
-  }
+  const all = extractLlm.pool();
+  if (!all.length) return { level: 'unknown' as Level, configured: false, note: 'no LLM lane is saved on /workers' };
+  const lanes = await Promise.all(all.map(async (cfg) => {
+    const base = { lane: extractLlm.laneName(cfg), model: cfg.model, host: new URL(cfg.url).host, keyTail: tail(cfg.key), restingUntil: extractLlm.restingUntilFor(cfg.key), busy: extractLlm.busyFor(cfg.key) };
+    try {
+      const billing = await cached('extract:' + cfg.key, async () =>
+        parseBilling(await extractLlm.laneGet(cfg, '/dashboard/billing/subscription', fetchImpl), await extractLlm.laneGet(cfg, '/dashboard/billing/usage', fetchImpl)));
+      if (!billing) return { ...base, level: 'unknown' as Level, note: 'the provider gave no balance' };
+      return { ...base, level: levelFor(billing.leftUsd, billing.limitUsd), ...billing };
+    } catch (err) {
+      return { ...base, level: 'unknown' as Level, error: (err as Error).message };
+    }
+  }));
+  // The page's tile shows the first lane; every lane is listed beside it.
+  return { ...lanes[0], configured: true, lanes };
 }
 
 async function tavilyKeys() {

@@ -1,8 +1,7 @@
 // Queues contact research for untouched leads while a matching worker is live.
 import * as jobs from './jobs.ts';
 import * as db from './reportdb.ts';
-import * as tavily from './tavily.ts';
-import * as exa from './exa.ts';
+import { exa, tavily } from './core/index.ts';
 import { resolveConfig } from './contact-worker.ts';
 
 const INTERVAL_MS = 15_000;

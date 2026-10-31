@@ -75,6 +75,15 @@ The method is deliberately dumb and therefore trustworthy:
 
 No guessing at library internals, no reading strings out of a Go binary.
 
+## Outside APIs: `src/core/`
+
+Every LLM, Tavily, Exa, Brave, scraper.tech Maps and Google PageSpeed call goes
+through [`src/core/`](src/core/README.md), and nothing else talks to those services.
+The LLM router there uses every enabled deepseek lane saved on /workers, several at
+once. It rests a lane after a 429 and moves on, and falls back to MiniMax only after
+every lane failed. Each request is logged with its lane, tokens and USD.
+`src/core/core-door.test.ts` fails the build when a file goes around it.
+
 ## API
 
 Everything the page does is a plain HTTP call, so the whole harness can be driven

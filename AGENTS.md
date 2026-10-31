@@ -39,3 +39,19 @@ re-read whole files.
 After big code changes, refresh the graph with `graft build` (deterministic,
 no API key, $0).
 <!-- graft:end -->
+
+## Outside APIs go through `agy-lab/src/core/` only
+
+Every call to an LLM, Tavily, Exa, Brave, scraper.tech Maps or Google PageSpeed
+goes through `agy-lab/src/core/` (rules: `agy-lab/src/core/README.md`). Code
+outside that folder imports `./core/index.ts` and calls it; it never sends a
+request to one of those services, never picks a key, and never picks an LLM
+lane. `core-door.test.ts` fails the build when a file goes around it.
+
+- **LLM:** `llm.chat()` uses every enabled deepseek lane on /workers (the
+  `llm_lane` table), several at once, rests a lane for a minute after a 429 and
+  moves on, and uses MiniMax only after every lane failed twice.
+- **Keys and lanes** live in the app database (/workers, /auto-queue), not in
+  Railway variables.
+- **Every request is logged** as an `ApiCall`: lane or key pool, model, tokens,
+  USD, time, ok or failed.

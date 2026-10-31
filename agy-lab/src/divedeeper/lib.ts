@@ -5,8 +5,10 @@
 // the context and returns an empty value, so a lane ends partial, never dead
 // (no timeouts, no max_tokens, no throw-on-parse-fail).
 //
-// Keys come from the local vault (D:\Tools\my-vault\vault.json) unless the env
-// already has them: EE_AUTO_LAB_TOKEN, SCRAPER_TECH_KEY, ZM_AI_FIXED_KEY,
+// LLM, Maps, Exa and Brave calls go through ../core (core/README.md): on the hub,
+// every LLM lane on /workers and the hub's key pools. On this machine the local
+// vault (D:\Tools\my-vault\vault.json) is the fallback, unless the env already has
+// the keys: EE_AUTO_LAB_TOKEN, SCRAPER_TECH_KEY, ZM_AI_FIXED_KEY, VECTIDE_DEEPSEEK_KEY,
 // EXA_API_KEY, BRAVE_SEARCH_API_KEY.
 import fs from 'node:fs';
 import https from 'node:https';
@@ -14,6 +16,7 @@ import os from 'node:os';
 import tls from 'node:tls';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as core from '../core/index.ts';
 import { startCall, type ApiCall, type ApiName } from '../cost.ts';
 
 export const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -25,39 +28,27 @@ const LOCAL_OUT = path.join(HERE, '..', '..', 'scripts', 'dive-deeper', 'out');
 export const OUT = process.env.DD_OUT_DIR
   ?? (fs.existsSync(path.dirname(LOCAL_OUT)) ? LOCAL_OUT : path.join(os.tmpdir(), 'dive-deeper'));
 
-/** The hub plugs in its own key sources and Exa route (its keys can sit behind a proxy). */
-type Hooks = { secret?: (name: string) => string | undefined; exaSearch?: (body: Record<string, unknown>) => Promise<Response> };
+/** The hub plugs in its own key sources. */
+type Hooks = { secret?: (name: string) => string | undefined };
 let hooks: Hooks = {};
 export function configure(h: Hooks): void { hooks = { ...hooks, ...h }; }
 const VAULT = process.env.VAULT_PATH ?? 'D:/Tools/my-vault/vault.json';
 const LAB = (process.env.LAB_URL ?? 'https://ee-auto.up.railway.app').replace(/\/+$/, '');
-// deepseek goes to Vectide (the 1B-token pack, as the hub does since 2026-10-26); anything else
-// (gpt-6.1-sol in section G) stays on the ZM router. DD_LLM_URL / DD_LLM_KEY_NAME override both.
-const ROUTES = {
-  deepseek: { url: 'https://vectide.cn/v1', key: 'VECTIDE_DEEPSEEK_KEY' },
-  other: { url: 'https://asiasouth.up.railway.app/v1', key: 'ZM_AI_FIXED_KEY' },
-};
-function route(model: string): { url: string; key: string } {
-  const r = model.startsWith('deepseek') ? ROUTES.deepseek : ROUTES.other;
-  return { url: (process.env.DD_LLM_URL ?? r.url).replace(/\/+$/, ''), key: secret(process.env.DD_LLM_KEY_NAME ?? r.key) };
-}
 export const DEFAULT_MODEL = process.env.DD_LLM_MODEL ?? 'deepseek-v4.1-flash-1017';
 
-// One queue of LLM calls for the whole process, shared by every lane running at once.
-const LLM_CONCURRENCY = Math.max(1, Number(process.env.DD_LLM_CONCURRENCY ?? 3) || 3);
-const LLM_429_RETRIES = 8;
-let llmInFlight = 0;
-const llmWaiting: Array<() => void> = [];
-async function llmSlot(): Promise<void> {
-  if (llmInFlight < LLM_CONCURRENCY) { llmInFlight++; return; }
-  await new Promise<void>((resolve) => llmWaiting.push(resolve));
-  llmInFlight++;
+/**
+ * Every LLM, Maps, Exa and Brave call goes through the app's core (core/README.md):
+ * on the hub, the LLM lanes saved on /workers and the hub's key pools. A run on
+ * this machine has no hub database, so the core gets the vault's keys as the
+ * fallback it uses only when it has none of its own.
+ */
+function vaultLanes(): core.llm.LlmConfig[] {
+  return ['VECTIDE_DEEPSEEK_KEY', 'ZM_AI_FIXED_KEY'].flatMap((name) => {
+    const c = vault().find((v) => v.name === name);
+    const model = name === 'VECTIDE_DEEPSEEK_KEY' ? 'deepseek-v4.1-flash-1017' : 'gpt-6.1-sol';
+    return c?.secret && c.baseUrl ? [{ url: c.baseUrl.replace(/\/+$/, ''), key: c.secret, model, label: `vault ${name}` }] : [];
+  });
 }
-function llmRelease(): void {
-  llmInFlight--;
-  llmWaiting.shift()?.();
-}
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Servers that leave their intermediate certificate out of the TLS handshake. Seen 2026-10-26:
 // cims.cidb.gov.my answers the hub (Railway, Southeast Asia) with only its leaf, signed by
@@ -170,154 +161,78 @@ export function makeCtx(diveId: string, section: string, lane: string) {
   };
   const log = (msg: string) => console.log(`  ${msg}`);
 
-  /** One chat call on the OpenAI-compatible router. Retries once on 429/5xx/transport; '' on failure. */
+  /** One chat call through the app's LLM router (core/llm.ts); '' when every lane and MiniMax failed. */
   async function llm(prompt: string, opts: { model?: string; system?: string; temperature?: number; label?: string } = {}): Promise<string> {
     const model = opts.model ?? DEFAULT_MODEL;
-    const what = opts.label ?? lane;
-    // toWellFormed: page text cut mid-emoji leaves half a surrogate pair, which Vectide rejects (HTTP 400).
-    const messages = [...(opts.system ? [{ role: 'system', content: opts.system.toWellFormed() }] : []), { role: 'user', content: prompt.toWellFormed() }];
-    const { url, key } = route(model);
     meter.llm.calls++;
     meter.llm.byModel[model] = (meter.llm.byModel[model] ?? 0) + 1;
     meter.llm.promptChars += prompt.length + (opts.system?.length ?? 0);
-    // Vectide takes about 3 calls at once and answers 429 to the rest, so every call waits for
-    // a slot, and a 429 is asked again after a growing pause. Patience, not a cap: no timeout.
-    await llmSlot();
     try {
-      let busy = 0;
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const c = call('llm', what, { model });
-        try {
-          const res = await fetch(url + '/chat/completions', {
-            method: 'POST',
-            headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' },
-            body: JSON.stringify({ model, messages, temperature: opts.temperature ?? 0 }),
-          });
-          const raw = await res.text();
-          if (!res.ok) c.done({ ok: false, note: `HTTP ${res.status}: ${raw.slice(0, 200)}` });
-          if (res.status === 429 && busy < LLM_429_RETRIES) { await sleep(Math.min(30_000, 2_000 * 2 ** busy++)); attempt--; continue; }
-          if (res.status === 429 || res.status >= 500) { warn(`llm ${model} HTTP ${res.status} (attempt ${attempt + 1})`); continue; }
-          if (!res.ok) { warn(`llm ${model} HTTP ${res.status}: ${raw.slice(0, 200)}`); break; }
-          const body = JSON.parse(raw);
-          const answer = String(body.choices?.[0]?.message?.content ?? '').trim();
-          meter.llm.answerChars += answer.length;
-          const tokensIn = Number(body.usage?.prompt_tokens ?? 0), tokensOut = Number(body.usage?.completion_tokens ?? 0);
-          meter.llm.tokensIn += tokensIn;
-          meter.llm.tokensOut += tokensOut;
-          const t = meter.llm.byModelTokens[model] ??= { in: 0, out: 0 };
-          t.in += tokensIn;
-          t.out += tokensOut;
-          c.done({ ok: Boolean(answer), tokensIn, tokensOut, ...(answer ? {} : { note: `empty answer, finish_reason ${body.choices?.[0]?.finish_reason ?? '?'}` }) });
-          if (!answer) { warn(`llm ${model} returned an empty answer (attempt ${attempt + 1}, finish_reason ${body.choices?.[0]?.finish_reason ?? '?'}, ${body.usage?.completion_tokens ?? '?'} output tokens${body.error ? ', ' + String(body.error.code ?? body.error.message ?? '').slice(0, 80) : ''})`); continue; }
-          return answer;
-        } catch (e) {
-          c.done({ ok: false, note: (e as Error).message.slice(0, 200) });
-          warn(`llm ${model} failed: ${(e as Error).message} (attempt ${attempt + 1})`);
-        }
-      }
+      const out = await core.llm.chat(prompt, { step: opts.label ?? lane, model, system: opts.system, temperature: opts.temperature, log: meter.calls, lanes: vaultLanes() });
+      meter.llm.answerChars += out.answer.length;
+      meter.llm.tokensIn += out.tokensIn;
+      meter.llm.tokensOut += out.tokensOut;
+      const t = meter.llm.byModelTokens[model] ??= { in: 0, out: 0 };
+      t.in += out.tokensIn;
+      t.out += out.tokensOut;
+      return out.answer;
+    } catch (e) {
+      warn(`llm ${model} failed on every lane: ${(e as Error).message.slice(0, 300)}`);
       meter.llm.failed++;
       return '';
-    } finally {
-      llmRelease();
     }
   }
 
-  /** One scraper.tech Maps MCP tool call. Returns the API's parsed JSON, or null. */
-  async function maps(tool: 'search_maps' | 'place_info' | 'reviews' | 'place_photos', args: Record<string, string>): Promise<any> {
+  /** One scraper.tech Maps tool call (core/maps.ts). Returns the API's parsed JSON, or null. */
+  async function maps(tool: core.maps.MapsTool, args: Record<string, string>): Promise<any> {
     meter.maps.calls++;
     meter.maps.byTool[tool] = (meter.maps.byTool[tool] ?? 0) + 1;
-    const base = (process.env.SCRAPER_TECH_BASE_URL ?? 'https://mcp.scraper.tech').replace(/\/+$/, '');
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const c = call('maps', `${tool} ${Object.values(args).join(' ')}`);
-      try {
-        const res = await fetch(`${base}/${secret('SCRAPER_TECH_KEY')}`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name: tool, arguments: { country: 'my', ...args } } }),
-        });
-        if (res.status >= 500) { c.done({ ok: false, note: `HTTP ${res.status}` }); warn(`maps ${tool} HTTP ${res.status}`); continue; }
-        if (!res.ok) { c.done({ ok: false, note: `HTTP ${res.status}` }); warn(`maps ${tool} HTTP ${res.status}`); break; }
-        const rpc = await res.json() as any;
-        const raw = rpc.result?.content?.[0]?.text ?? '';
-        let data: any;
-        try { data = JSON.parse(raw); } catch (e) { c.done({ ok: true, note: 'answer was not JSON' }); throw e; }
-        // search_maps answers {status:"ok", data}; reviews has no status field at all.
-        // A request scraper.tech answered is billed, error or not.
-        if (rpc.result?.isError || (data.status !== undefined && data.status !== 'ok')) { c.done({ ok: true, note: String(data.message ?? raw).slice(0, 200) }); warn(`maps ${tool}: ${String(data.message ?? raw).slice(0, 200)}`); break; }
-        c.done({ ok: true });
-        return data;
-      } catch (e) {
-        c.done({ ok: false, note: (e as Error).message.slice(0, 200) });
-        warn(`maps ${tool} failed: ${(e as Error).message}`);
-      }
+    try {
+      return await core.maps.call(tool, { country: 'my', ...args }, { log: meter.calls, key: secret('SCRAPER_TECH_KEY') || undefined });
+    } catch (e) {
+      warn(`maps ${tool}: ${(e as Error).message.slice(0, 200)}`);
+      meter.maps.failed++;
+      return null;
     }
-    meter.maps.failed++;
-    return null;
   }
 
-  /** Exa search. `text: true` adds page text (capped by Exa's own maxCharacters). */
+  /** Exa search (core/exa.ts, the hub's key pool). `text: true` adds page text (capped by Exa's own maxCharacters). */
   async function exa(query: string, opts: { numResults?: number; text?: boolean | number; type?: string; category?: string; includeDomains?: string[]; excludeDomains?: string[]; startPublishedDate?: string } = {}): Promise<any[]> {
     meter.exa.calls++;
-    const c = call('exa', query);
+    const body = {
+      query,
+      numResults: opts.numResults ?? 10,
+      type: opts.type ?? 'auto',
+      ...(opts.category ? { category: opts.category } : {}),
+      ...(opts.includeDomains ? { includeDomains: opts.includeDomains } : {}),
+      ...(opts.excludeDomains?.length ? { excludeDomains: opts.excludeDomains } : {}),
+      ...(opts.startPublishedDate ? { startPublishedDate: opts.startPublishedDate } : {}),
+      ...(opts.text ? { contents: { text: typeof opts.text === 'number' ? { maxCharacters: opts.text } : true } } : {}),
+    };
     try {
-      const body = {
-        query,
-        numResults: opts.numResults ?? 10,
-        type: opts.type ?? 'auto',
-        ...(opts.category ? { category: opts.category } : {}),
-        ...(opts.includeDomains ? { includeDomains: opts.includeDomains } : {}),
-        ...(opts.excludeDomains?.length ? { excludeDomains: opts.excludeDomains } : {}),
-        ...(opts.startPublishedDate ? { startPublishedDate: opts.startPublishedDate } : {}),
-        ...(opts.text ? { contents: { text: typeof opts.text === 'number' ? { maxCharacters: opts.text } : true } } : {}),
-      };
-      const res = hooks.exaSearch
-        ? await hooks.exaSearch(body)
-        : await fetch('https://api.exa.ai/search', {
-          method: 'POST',
-          headers: { 'x-api-key': secret('EXA_API_KEY'), 'content-type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-      const raw = await res.text();
-      if (!res.ok) { c.done({ ok: false, note: `HTTP ${res.status}: ${raw.slice(0, 200)}` }); warn(`exa HTTP ${res.status}: ${raw.slice(0, 200)}`); meter.exa.failed++; return []; }
-      const out = JSON.parse(raw);
+      const out = await core.exa.request('search', body, { log: meter.calls, what: query, apiKey: secret('EXA_API_KEY') || undefined });
       const results = out.results ?? [];
       meter.exa.results += results.length;
       if (out.costDollars?.total != null) { meter.exa.priced++; meter.exa.dollars += Number(out.costDollars.total); }
-      // Exa's own price when it sends one, else the list price.
-      c.done({ ok: true, results: results.length, ...(out.costDollars?.total != null ? { usd: Number(out.costDollars.total) } : {}) });
       return results;
     } catch (e) {
-      c.done({ ok: false, note: (e as Error).message.slice(0, 200) });
-      warn(`exa failed: ${(e as Error).message}`);
+      warn(`exa failed: ${(e as Error).message.slice(0, 200)}`);
       meter.exa.failed++;
       return [];
     }
   }
 
-  /** Brave web search; returns web.results (title, url, description, age...). */
+  /** Brave web search (core/brave.ts); returns web.results (title, url, description, age...). */
   async function brave(query: string, opts: { count?: number; country?: string } = {}): Promise<any[]> {
     meter.brave.calls++;
-    const keys = [secret('BRAVE_SEARCH_API_KEY'), secret('BRAVE_SEARCH_API_KEY_2')].filter(Boolean);
-    for (const key of keys) {
-      const c = call('brave', query);
-      try {
-        const u = new URL('https://api.search.brave.com/res/v1/web/search');
-        u.searchParams.set('q', query);
-        u.searchParams.set('count', String(opts.count ?? 20));
-        u.searchParams.set('country', opts.country ?? 'MY');
-        const res = await fetch(u, { headers: { 'X-Subscription-Token': key, accept: 'application/json' } });
-        if (res.status === 429) { c.done({ ok: false, note: 'HTTP 429' }); warn('brave 429, trying the next key'); continue; }
-        if (!res.ok) { c.done({ ok: false, note: `HTTP ${res.status}` }); warn(`brave HTTP ${res.status}`); continue; }
-        const results = (await res.json() as any).web?.results ?? [];
-        c.done({ ok: true, results: results.length });
-        return results;
-      } catch (e) {
-        c.done({ ok: false, note: (e as Error).message.slice(0, 200) });
-        warn(`brave failed: ${(e as Error).message}`);
-      }
+    const keys = core.brave.keys().length ? core.brave.keys() : [secret('BRAVE_SEARCH_API_KEY'), secret('BRAVE_SEARCH_API_KEY_2')].filter(Boolean);
+    try {
+      return await core.brave.searchRaw(query, { count: opts.count ?? 20, country: opts.country ?? 'MY', extraSnippets: false, log: meter.calls }, keys);
+    } catch (e) {
+      warn(`brave failed: ${(e as Error).message.slice(0, 200)}`);
+      meter.brave.failed++;
+      return [];
     }
-    meter.brave.failed++;
-    return [];
   }
 
   /** Plain GET of a page. Never throws: a failure comes back as status 0 with `error`. */

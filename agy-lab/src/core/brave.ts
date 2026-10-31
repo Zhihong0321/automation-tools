@@ -5,7 +5,7 @@
 // free tier allows about one query a second per key, so calls are spaced and a
 // 429/402 moves on to the next key.
 
-import { startCall, type ApiCall } from './cost.ts';
+import { startCall, type ApiCall } from '../cost.ts';
 
 type FetchImpl = typeof fetch;
 
@@ -36,47 +36,55 @@ function hits(rows: Array<Record<string, any>> | undefined): BraveHit[] {
   }));
 }
 
-/** One Brave query. kind 'news' uses the news endpoint. `onCall` hears every request, a key that refused included. */
-export async function search(
+type SearchOpts = { country?: string; kind?: 'web' | 'news'; count?: number; extraSnippets?: boolean; what?: string; log?: ApiCall[]; onCall?: (c: ApiCall) => void };
+
+/** One Brave query. kind 'news' uses the news endpoint. Every request, a key that refused included, is logged. */
+export async function search(q: string, opts: SearchOpts = {}, allKeys: string[] = keys(), fetchImpl: FetchImpl = fetch): Promise<BraveHit[]> {
+  return hits(await searchRaw(q, opts, allKeys, fetchImpl));
+}
+
+/** The same query, answered with Brave's own rows (title, url, description, age, extra_snippets...). */
+export async function searchRaw(
   q: string,
-  opts: { country?: string; kind?: 'web' | 'news'; count?: number; onCall?: (c: ApiCall) => void } = {},
+  opts: SearchOpts = {},
   allKeys: string[] = keys(),
   fetchImpl: FetchImpl = fetch,
-): Promise<BraveHit[]> {
+): Promise<Array<Record<string, any>>> {
   if (!allKeys.length) throw new Error('BRAVE_API_KEYS is not set');
   const kind = opts.kind ?? 'web';
   const params = new URLSearchParams({ q, count: String(opts.count ?? 20) });
   if (opts.country) params.set('country', opts.country);
-  if (kind === 'web') params.set('extra_snippets', 'true');
+  if (kind === 'web' && opts.extraSnippets !== false) params.set('extra_snippets', 'true');
+  const onCall = (c: ApiCall) => { const rec = opts.what ? { ...c, what: `${opts.what}: ${c.what}` } : c; opts.log?.push(rec); opts.onCall?.(rec); };
   let lastErr = '';
   for (let tries = 0; tries < allKeys.length; tries++) {
     const key = allKeys[keyIndex % allKeys.length];
     await spaced();
-    const call = startCall('brave', `${kind}: ${q}`);
+    const call = startCall('brave', `${kind}: ${q}`, { provider: 'brave' });
     let res: Response;
     try {
       res = await fetchImpl(`${BASE}/${kind}/search?${params}`, {
         headers: { 'X-Subscription-Token': key, accept: 'application/json' },
       });
     } catch (err) {
-      opts.onCall?.(call.done({ ok: false, note: (err as Error).message.slice(0, 200) }));
+      onCall(call.done({ ok: false, note: (err as Error).message.slice(0, 200) }));
       throw err;
     }
     if (res.status === 429 || res.status === 402) {
       lastErr = `HTTP ${res.status} ${(await res.text()).slice(0, 200)}`;
-      opts.onCall?.(call.done({ ok: false, note: lastErr }));
+      onCall(call.done({ ok: false, note: lastErr }));
       keyIndex++;
       continue;
     }
     if (!res.ok) {
       const msg = `Brave ${kind} answered HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`;
-      opts.onCall?.(call.done({ ok: false, note: msg }));
+      onCall(call.done({ ok: false, note: msg }));
       throw new Error(msg);
     }
     const body = await res.json() as Record<string, any>;
-    const found = hits(kind === 'news' ? body.results : body.web?.results);
-    opts.onCall?.(call.done({ ok: true, results: found.length }));
-    return found;
+    const rows: Array<Record<string, any>> = (kind === 'news' ? body.results : body.web?.results) ?? [];
+    onCall(call.done({ ok: true, results: rows.length }));
+    return rows;
   }
   throw new Error(`Brave: every key refused (${lastErr})`);
 }

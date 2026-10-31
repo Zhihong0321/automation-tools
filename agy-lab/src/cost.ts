@@ -61,6 +61,8 @@ export type ApiCall = {
   /** The step, label, query or URL the call was for. */
   what: string;
   model?: string;
+  /** Which lane or key pool served it: the lane's label on /workers, or MiniMax. */
+  provider?: string;
   tokensIn?: number;
   tokensOut?: number;
   /** Tavily credits. */
@@ -209,7 +211,7 @@ export function diveCalls(result: DiveLogs | null | undefined): ApiCall[] {
     const tokensOut = known ? Number(c.tokensOut ?? 0) : Math.round(c.answerChars * TOKENS_PER_CHAR);
     const ok = c.ok !== false;
     const note = c.note ?? (known || !ok ? undefined : 'tokens estimated from text length');
-    return { at: c.at ?? '', api: 'llm', what: c.step, model: c.engine, ...(ok || known ? { tokensIn, tokensOut } : {}), ms: c.ms, ok,
+    return { at: c.at ?? '', api: 'llm', what: c.step, model: c.engine, ...(c.provider ? { provider: c.provider } : {}), ...(ok || known ? { tokensIn, tokensOut } : {}), ms: c.ms, ok,
       usd: c.usd !== undefined ? c.usd : ok || known ? llmUsd(c.engine, tokensIn, tokensOut) : 0, ...(note ? { note } : {}) };
   });
   const out: ApiCall[] = [

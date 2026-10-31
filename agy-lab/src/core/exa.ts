@@ -3,7 +3,8 @@
 // Exa has no usage endpoint to read, so a key rests on the error that says it is
 // spent: out of credits or refused rests it for a day, a rate limit for a minute,
 // and the hub counts each key's spend itself from the costDollars on each answer.
-import * as db from './reportdb.ts';
+import * as db from '../reportdb.ts';
+import { startCall, type ApiCall } from '../cost.ts';
 import { createKeyPool, type Lease, type SearchHit } from './tavily.ts';
 
 export const KEY_CONCURRENCY = 2;
@@ -115,55 +116,97 @@ function fail(message: string, code: string): Error {
   return Object.assign(new Error(message), { code });
 }
 
-type SearchOpts = { numResults?: number; includeDomains?: string[]; timeoutMs?: number; fetchImpl?: FetchImpl };
+type SearchOpts = { numResults?: number; includeDomains?: string[]; timeoutMs?: number; fetchImpl?: FetchImpl; log?: ApiCall[]; what?: string };
+type CallOpts = { what?: string; log?: ApiCall[]; timeoutMs?: number; fetchImpl?: FetchImpl };
 
-/** One Exa search with the given key, as Tavily-shaped hits: url, title, and the highlight sentences as content. */
-export async function searchWithKey(query: string, apiKey: string, opts: SearchOpts = {}): Promise<SearchHit[]> {
+/**
+ * Any Exa endpoint (search, contents, answer) with one key: the request every
+ * Exa call in the app ends in. Errors carry the codes releaseFor reads
+ * (rate_limit, quota, timeout). Counts the key's spend and logs one ApiCall,
+ * priced by Exa's own costDollars when it sends one.
+ */
+export async function requestWithKey(path: string, body: Record<string, unknown>, apiKey: string, opts: CallOpts = {}): Promise<Record<string, any>> {
+  const call = startCall('exa', opts.what ?? `${path}: ${String(body.query ?? '').slice(0, 200)}`, { provider: `exa ${via(apiKey)}` });
   try {
-    const { hits, dollars } = await searchOnce(query, apiKey, opts);
+    const out = await requestOnce(path, body, apiKey, opts);
+    const dollars = Number(out.costDollars?.total ?? 0);
     record(apiKey, { dollars });
-    return hits;
+    opts.log?.push(call.done({ ok: true, results: Array.isArray(out.results) ? out.results.length : undefined, ...(out.costDollars?.total != null ? { usd: dollars } : {}) }));
+    return out;
   } catch (cause) {
     record(apiKey, { error: (cause as Error).message ?? String(cause) });
+    opts.log?.push(call.done({ ok: false, note: (cause as Error).message.slice(0, 200) }));
     throw cause;
   }
 }
 
-async function searchOnce(query: string, apiKey: string, opts: SearchOpts): Promise<{ hits: SearchHit[]; dollars: number }> {
-  const target = endpoint(apiKey, 'search');
+async function requestOnce(path: string, body: Record<string, unknown>, apiKey: string, opts: CallOpts): Promise<Record<string, any>> {
+  const target = endpoint(apiKey, path);
   let res: Response;
   try {
     res = await (opts.fetchImpl ?? fetch)(target.url, {
       method: 'POST',
       headers: target.headers,
-      body: JSON.stringify({
-        query,
-        numResults: opts.numResults ?? 8,
-        type: 'auto',
-        ...(opts.includeDomains ? { includeDomains: opts.includeDomains } : {}),
-        contents: { highlights: { numSentences: 3, highlightsPerUrl: 2 } },
-      }),
-      signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000),
+      body: JSON.stringify(body),
+      ...(opts.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
     });
   } catch (cause) {
     const name = cause instanceof Error ? cause.name : '';
-    throw fail(name === 'TimeoutError' || name === 'AbortError' ? 'exa search timed out' : `upstream error: ${(cause as Error)?.message ?? cause}`, 'timeout');
+    throw fail(name === 'TimeoutError' || name === 'AbortError' ? `exa ${path} timed out` : `upstream error: ${(cause as Error)?.message ?? cause}`, 'timeout');
   }
   const raw = await res.text();
   if (res.status === 429) throw fail(`429 rate_limit_error: exa rate limit: ${raw.slice(0, 200)}`, 'rate_limit');
   if (res.status === 401 || res.status === 402 || res.status === 403 || (!res.ok && /credit|balance|billing|quota|payment/i.test(raw))) {
     throw fail(`exa key refused or out of credits (${res.status}): ${raw.slice(0, 200)}`, 'quota');
   }
-  if (!res.ok) throw fail(`upstream error: exa answered ${res.status}: ${raw.slice(0, 200)}`, 'timeout');
-  let body: { results?: Array<{ url?: string; title?: string; highlights?: string[] }>; costDollars?: { total?: number } };
-  try { body = JSON.parse(raw); } catch { return { hits: [], dollars: 0 }; }
+  if (!res.ok) throw fail(`upstream error: exa ${path} answered ${res.status}: ${raw.slice(0, 200)}`, 'timeout');
+  try { return JSON.parse(raw); } catch { throw fail(`exa ${path} answered non-JSON`, 'timeout'); }
+}
+
+/**
+ * Any Exa endpoint through the shared pool: a spent or refused key rests and
+ * the call moves to the next key. `apiKey` pins one key (a caller holding a
+ * lease, or a local script with its own key when the pool is empty).
+ */
+export async function request(path: string, body: Record<string, unknown>, opts: CallOpts & { apiKey?: string } = {}): Promise<Record<string, any>> {
+  await refresh();
+  const tries = pool.stats().length;
+  if (!tries && opts.apiKey) return requestWithKey(path, body, opts.apiKey, opts);
+  if (!tries) throw fail('no Exa key is configured', 'not_installed');
+  let lastErr = '';
+  for (let attempt = 0; attempt < tries; attempt++) {
+    if (!available()) break;
+    const lease = await pool.acquire();
+    try {
+      const out = await requestWithKey(path, body, lease.secret, opts);
+      lease.release();
+      return out;
+    } catch (cause) {
+      releaseFor(lease, cause);
+      const code = (cause as { code?: string }).code;
+      if (code !== 'rate_limit' && code !== 'quota') throw cause;
+      lastErr = (cause as Error).message;
+    }
+  }
+  throw fail(`every Exa key is resting (${lastErr || 'no credit'})`, 'quota');
+}
+
+/** One Exa search with the given key, as Tavily-shaped hits: url, title, and the highlight sentences as content. */
+export async function searchWithKey(query: string, apiKey: string, opts: SearchOpts = {}): Promise<SearchHit[]> {
+  const body = await requestWithKey('search', {
+    query,
+    numResults: opts.numResults ?? 8,
+    type: 'auto',
+    ...(opts.includeDomains ? { includeDomains: opts.includeDomains } : {}),
+    contents: { highlights: { numSentences: 3, highlightsPerUrl: 2 } },
+  }, apiKey, { ...opts, timeoutMs: opts.timeoutMs ?? 30_000, what: opts.what ?? `search: ${query}` }) as { results?: Array<{ url?: string; title?: string; highlights?: string[] }> };
   const clean = (v: unknown, max: number) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
   const hits = (body.results ?? []).flatMap((item): SearchHit[] => {
     const url = typeof item.url === 'string' ? item.url.trim() : '';
     if (!/^https?:\/\//i.test(url)) return [];
     return [{ url, title: clean(item.title, 200), content: clean((item.highlights ?? []).join(' '), 600) }];
   });
-  return { hits, dollars: body.costDollars?.total ?? 0 };
+  return hits;
 }
 
 /** Rest the key the way the error asks: a day for a refused or spent key, a minute for a rate limit. */

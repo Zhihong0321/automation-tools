@@ -12,32 +12,12 @@
 // (the cloud-platform scope is refused, and an x-goog-user-project header gives 403).
 // No LLM. No kill gates: a call that fails is retried once, then warned, and the other pages still
 // report. A call takes 15-60 s, so every page and device runs at once.
-import crypto from 'node:crypto';
+import { pagespeed, type ApiCall } from '../../core/index.ts';
 import { nameOf, secret, type Ctx, type Finding } from '../lib.ts';
 
-const API = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed';
-const b64url = (b: Buffer | string) => Buffer.from(b).toString('base64url');
-
-let cached: { token: string; until: number } | null = null;
-/** A Google access token from the service account, cached until a minute before it expires; '' on failure. */
-export async function pagespeedToken(warn: (m: string) => void): Promise<string> {
-  if (cached && Date.now() < cached.until) return cached.token;
-  let sa: any;
-  try { sa = JSON.parse(secret('GOOGLE_PAGESPEED_SERVICE_ACCOUNT')); } catch { warn('GOOGLE_PAGESPEED_SERVICE_ACCOUNT is missing or not JSON'); return ''; }
-  try {
-    const now = Math.floor(Date.now() / 1000);
-    const head = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: sa.private_key_id }));
-    const body = b64url(JSON.stringify({ iss: sa.client_email, aud: sa.token_uri, scope: 'openid', iat: now, exp: now + 3600 }));
-    const sig = crypto.createSign('RSA-SHA256').update(`${head}.${body}`).sign(sa.private_key).toString('base64url');
-    const res = await fetch(sa.token_uri, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${head}.${body}.${sig}` }) });
-    const j = await res.json() as any;
-    if (!res.ok || !j.access_token) { warn(`Google token HTTP ${res.status}: ${String(j.error_description ?? j.error ?? '').slice(0, 160)}`); return ''; }
-    cached = { token: j.access_token, until: Date.now() + (Number(j.expires_in ?? 3600) - 60) * 1000 };
-    return cached.token;
-  } catch (e) {
-    warn(`Google token failed: ${(e as Error).message}`);
-    return '';
-  }
+/** A Google access token from the service account (core/pagespeed.ts); '' on failure. */
+export async function pagespeedToken(warn: (m: string) => void, log?: ApiCall[]): Promise<string> {
+  return pagespeed.token(secret('GOOGLE_PAGESPEED_SERVICE_ACCOUNT'), warn, log);
 }
 
 export type Psi = {
@@ -79,25 +59,11 @@ export function readPsi(d: any, base: Pick<Psi, 'url' | 'site' | 'strategy'>): P
 }
 
 async function pageSpeed(ctx: Ctx, url: string, site: string, strategy: 'mobile' | 'desktop', token: string): Promise<Psi> {
-  const q = new URLSearchParams({ url, strategy });
-  for (const c of ['performance', 'accessibility', 'best-practices', 'seo']) q.append('category', c);
-  let last = '';
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const c = ctx.call('web', `PageSpeed ${strategy} ${url}`);
-    try {
-      const res = await fetch(`${API}?${q}`, { headers: { authorization: `Bearer ${token}` } });
-      const d = await res.json() as any;
-      if (res.ok && d.lighthouseResult) { c.done({ ok: true }); return readPsi(d, { url, site, strategy }); }
-      last = `HTTP ${res.status}: ${String(d.error?.message ?? 'no Lighthouse result').slice(0, 200)}`;
-      c.done({ ok: false, note: last });
-      if (res.status !== 429 && res.status < 500) break;
-      await new Promise((r) => setTimeout(r, 10_000));
-    } catch (e) {
-      last = (e as Error).message;
-      c.done({ ok: false, note: last.slice(0, 200) });
-    }
+  try {
+    return readPsi(await pagespeed.run(url, strategy, token, { log: ctx.meter.calls }), { url, site, strategy });
+  } catch (e) {
+    return { url, site, strategy, ok: false, error: (e as Error).message };
   }
-  return { url, site, strategy, ok: false, error: last };
 }
 
 export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; notes: Record<string, unknown> }> {
@@ -116,7 +82,7 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   if (!homes.size) { ctx.warn('no official homepage answered, so Google PageSpeed had nothing to test'); return { findings, notes: { pages: [] } }; }
 
   // ---- 2. Google PageSpeed Insights, every page and device at once. ----
-  const token = await pagespeedToken(ctx.warn);
+  const token = await pagespeedToken(ctx.warn, ctx.meter.calls);
   if (!token) return { findings, notes: { pages: [] } };
   ctx.meter.other.pagespeed = 0;
   const runs = await Promise.all([...homes].flatMap(([site, url]) => (['mobile', 'desktop'] as const).map((st) => {

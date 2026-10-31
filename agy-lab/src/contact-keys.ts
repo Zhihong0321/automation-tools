@@ -2,9 +2,7 @@
 // Tavily and Exa, each shown in full with its quota state. Behind LAB_TOKEN.
 // GET/POST /api/llm-lanes: the extract model lanes (extract-llm.ts), kept in llm_lane.
 import * as db from './reportdb.ts';
-import * as extractLlm from './extract-llm.ts';
-import * as tavily from './tavily.ts';
-import * as exa from './exa.ts';
+import { exa, llm as extractLlm, tavily } from './core/index.ts';
 
 type Ctx = { json: (res: unknown, status: number, body: unknown) => void; readJson: (req: unknown) => Promise<Record<string, unknown>> };
 

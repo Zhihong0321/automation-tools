@@ -8,7 +8,8 @@
 // /usage read shows credits again, which is how it wakes when Tavily resets the
 // month. When every key rests, slots() is 0, the contact lanes stop taking jobs
 // and the auto-queue stops creating them.
-import * as db from './reportdb.ts';
+import * as db from '../reportdb.ts';
+import { startCall, type ApiCall } from '../cost.ts';
 
 export const KEY_CONCURRENCY = 2;
 /** One contact job is two advanced searches at two credits each. */
@@ -229,7 +230,23 @@ export type SearchHit = { url: string; title: string; content: string };
 export async function searchWithKey(
   query: string,
   apiKey: string,
-  opts: { maxResults?: number; depth?: 'basic' | 'advanced'; timeoutMs?: number; fetchImpl?: FetchImpl } = {},
+  opts: { maxResults?: number; depth?: 'basic' | 'advanced'; timeoutMs?: number; fetchImpl?: FetchImpl; log?: ApiCall[]; what?: string } = {},
+): Promise<SearchHit[]> {
+  const call = startCall('tavily', opts.what ?? `search: ${query}`, { provider: 'tavily' });
+  try {
+    const hits = await searchOnce(query, apiKey, opts);
+    opts.log?.push(call.done({ ok: true, results: hits.length, credits: (opts.depth ?? 'advanced') === 'advanced' ? 2 : 1 }));
+    return hits;
+  } catch (cause) {
+    opts.log?.push(call.done({ ok: false, note: (cause as Error).message.slice(0, 200) }));
+    throw cause;
+  }
+}
+
+async function searchOnce(
+  query: string,
+  apiKey: string,
+  opts: { maxResults?: number; depth?: 'basic' | 'advanced'; timeoutMs?: number; fetchImpl?: FetchImpl },
 ): Promise<SearchHit[]> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   let res: Response;
@@ -290,7 +307,23 @@ export function releaseFor(lease: Lease, cause: unknown): void {
 export async function request(
   path: 'search' | 'extract' | 'map' | 'crawl',
   body: Record<string, unknown>,
-  opts: { timeoutMs?: number; fetchImpl?: FetchImpl } = {},
+  opts: { timeoutMs?: number; fetchImpl?: FetchImpl; log?: ApiCall[]; what?: string } = {},
+): Promise<Record<string, any>> {
+  const call = startCall('tavily', opts.what ?? `${path}: ${String(body.query ?? body.url ?? '').slice(0, 200)}`, { provider: 'tavily' });
+  try {
+    const out = await requestPool(path, body, opts);
+    opts.log?.push(call.done({ ok: true, credits: Number(out.usage?.credits ?? 0) }));
+    return out;
+  } catch (cause) {
+    opts.log?.push(call.done({ ok: false, note: (cause as Error).message.slice(0, 200) }));
+    throw cause;
+  }
+}
+
+async function requestPool(
+  path: 'search' | 'extract' | 'map' | 'crawl',
+  body: Record<string, unknown>,
+  opts: { timeoutMs?: number; fetchImpl?: FetchImpl },
 ): Promise<Record<string, any>> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   await refresh();
@@ -330,8 +363,46 @@ export async function request(
   throw fail('every Tavily key is out of credits until its quota resets', 'quota');
 }
 
+/**
+ * Any Tavily endpoint with one key the caller holds (a contact job's lease).
+ * Quota and rate-limit errors carry the codes releaseFor reads; a 403 says the
+ * endpoint is not on the key's plan (unsupported).
+ */
+export async function requestWithKey<T = Record<string, any>>(
+  path: string,
+  body: Record<string, unknown>,
+  apiKey: string,
+  opts: { timeoutMs?: number; fetchImpl?: FetchImpl; log?: ApiCall[]; what?: string } = {},
+): Promise<T & { usage?: { credits?: number } }> {
+  const call = startCall('tavily', opts.what ?? `${path}: ${String(body.query ?? body.url ?? '').slice(0, 200)}`, { provider: 'tavily' });
+  let res: Response;
+  try {
+    res = await (opts.fetchImpl ?? fetch)(`https://api.tavily.com/${path}`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + apiKey, 'content-type': 'application/json' },
+      body: JSON.stringify({ ...body, include_usage: true }),
+      ...(opts.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
+    });
+  } catch (cause) {
+    const name = cause instanceof Error ? cause.name : '';
+    const err = fail(name === 'TimeoutError' || name === 'AbortError' ? `tavily ${path} timed out` : `upstream error: ${(cause as Error)?.message ?? cause}`, 'timeout');
+    opts.log?.push(call.done({ ok: false, note: err.message.slice(0, 200) }));
+    throw err;
+  }
+  const raw = await res.text();
+  const refuse = (message: string, code: string) => { opts.log?.push(call.done({ ok: false, note: message.slice(0, 200) })); return fail(message, code); };
+  if (res.status === 432 || res.status === 433) throw refuse(`tavily quota exceeded (${res.status}): ${raw.slice(0, 200)}`, 'quota');
+  if (res.status === 429) throw refuse(`429 rate_limit_error: tavily rate limit: ${raw.slice(0, 200)}`, 'rate_limit');
+  if (!res.ok) throw refuse(`upstream error: tavily ${path} answered ${res.status}: ${raw.slice(0, 200)}`, res.status === 403 ? 'unsupported' : 'timeout');
+  let out: T & { usage?: { credits?: number } };
+  try { out = JSON.parse(raw); } catch { throw refuse(`tavily ${path} answered non-JSON`, 'timeout'); }
+  // The caller counts the credits against its key (it holds the lease).
+  opts.log?.push(call.done({ ok: true, credits: Number(out.usage?.credits ?? 0) }));
+  return out;
+}
+
 /** One search through the shared pool. */
-export async function search(query: string, opts: { maxResults?: number; depth?: 'basic' | 'advanced'; timeoutMs?: number } = {}): Promise<SearchHit[]> {
+export async function search(query: string, opts: { maxResults?: number; depth?: 'basic' | 'advanced'; timeoutMs?: number; log?: ApiCall[]; what?: string } = {}): Promise<SearchHit[]> {
   await refresh();
   if (!pool.stats().length) throw fail('no Tavily key is configured', 'not_installed');
   if (!available()) throw fail('every Tavily key is out of credits until its quota resets', 'quota');

@@ -11,7 +11,7 @@
 //      DD_G_REPEAT, DD_G_BRIEF=0 (no brevity request), DD_G_MODELS, DD_G_JUDGE.
 // Limit: the models on our keys have no web access; answers reflect training data only.
 import type { Ctx, Finding } from '../lib.ts';
-import { ANSWER_MODELS, ANSWER_TEMP, BRIEF, JUDGE_MODEL, MAX_PROMPTS, usage, askAndJudge, checkDomains, findingsFrom, majority, profileOf, signatures, type Profile, type Prompt } from './G-shared.ts';
+import { ANSWER_MODELS, ANSWER_TEMP, BRIEF, JUDGE_MODEL, MAX_PROMPTS, usageByModel, askAndJudge, checkDomains, findingsFrom, majority, profileOf, signatures, type Profile, type Prompt } from './G-shared.ts';
 
 export function fixedQuestions(p: Profile): Prompt[] {
   const all: Prompt[] = [
@@ -47,7 +47,7 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   return {
     findings,
     notes: {
-      profile, answer_temperature: ANSWER_TEMP, repeat, brief: BRIEF, domains: dom.domains, max_answer_chars: Math.max(0, ...judged.map((j) => j.answer.length)), models: ANSWER_MODELS, judge: JUDGE_MODEL, usage_by_model: usage,
+      profile, answer_temperature: ANSWER_TEMP, repeat, brief: BRIEF, domains: dom.domains, max_answer_chars: Math.max(0, ...judged.map((j) => j.answer.length)), models: ANSWER_MODELS, judge: JUDGE_MODEL, usage_by_model: usageByModel(ctx),
       prompts, signatures: signatures(judged),
       answers: judged.map((j) => ({ id: j.prompt.id, sample: j.sample, model: j.model, outcome: j.outcome, searched: j.searched, stub: j.stub, answer: j.answer, claims: j.claims, dropped: j.dropped, competitors: j.competitors, confused_with: j.confused_with, recommended: j.recommended, judge_summary: j.judge_summary })),
       limit: 'deepseek answers from training data only; gpt-6.1-sol sometimes runs its own web search (see searched), so its answers can reflect the live web.',

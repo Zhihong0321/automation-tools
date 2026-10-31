@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { OUT, type Ctx, type Finding } from '../lib.ts';
-import { ANSWER_MODELS, ANSWER_TEMP, BRIEF, JUDGE_MODEL, MAX_PROMPTS, usage, askAndJudge, checkDomains, findingsFrom, profileOf, signatures, type Prompt } from './G-shared.ts';
+import { ANSWER_MODELS, ANSWER_TEMP, BRIEF, JUDGE_MODEL, MAX_PROMPTS, usageByModel, askAndJudge, checkDomains, findingsFrom, profileOf, signatures, type Prompt } from './G-shared.ts';
 import { fixedQuestions } from './G-fixed.ts';
 
 const SYSTEM = 'You are a helpful assistant with web search. Use the search results provided when they are relevant, cite the URLs you rely on, and say so when the results do not answer the question.';
@@ -59,7 +59,7 @@ export async function run(ctx: Ctx, dive: any): Promise<{ findings: Finding[]; n
   return {
     findings,
     notes: {
-      profile, answer_temperature: ANSWER_TEMP, brief: BRIEF, domains: dom.domains, max_answer_chars: Math.max(0, ...judged.map((j) => j.answer.length)), models: ANSWER_MODELS, judge: JUDGE_MODEL, usage_by_model: usage,
+      profile, answer_temperature: ANSWER_TEMP, brief: BRIEF, domains: dom.domains, max_answer_chars: Math.max(0, ...judged.map((j) => j.answer.length)), models: ANSWER_MODELS, judge: JUDGE_MODEL, usage_by_model: usageByModel(ctx),
       prompts, search_hits: hits, search_results: Object.fromEntries([...results].map(([q, r]) => [q, r.map((x: any) => ({ title: x.title, url: x.url, text: String(x.text ?? '').slice(0, 1200) }))])), signatures: signatures(judged),
       answers: judged.map((j) => ({ id: j.prompt.id, model: j.model, outcome: j.outcome, searched: j.searched, stub: j.stub, answer: j.answer, claims: j.claims, dropped: j.dropped, competitors: j.competitors, confused_with: j.confused_with, recommended: j.recommended, judge_summary: j.judge_summary })),
       limit: 'Simulated search assistant: Exa results pasted into the prompt. Real Perplexity/ChatGPT use their own search index and ranking.',

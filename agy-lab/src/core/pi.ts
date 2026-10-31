@@ -332,3 +332,14 @@ export function status(): Record<string, unknown> {
   const cfg = config();
   return { engine: 'pi', provider: PROVIDER, model: cfg.model, configured: Boolean(cfg.apiKey), ...busy() };
 }
+
+const REMAINS_URL = 'https://api.minimax.io/v1/api/openplatform/coding_plan/remains';
+
+/** The Token Plan's usage windows, from MiniMax itself (the key health page). */
+export async function remains(fetchImpl: typeof fetch = fetch): Promise<unknown> {
+  const key = config().apiKey;
+  if (!key) throw fail('not_configured', 'MINIMAX_API_KEY is not set');
+  const res = await fetchImpl(REMAINS_URL, { headers: { authorization: 'Bearer ' + key }, signal: AbortSignal.timeout(15_000) });
+  if (!res.ok) throw new Error(`MiniMax answered HTTP ${res.status}`);
+  return res.json();
+}

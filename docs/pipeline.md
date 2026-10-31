@@ -158,8 +158,8 @@ First live run: 22 jobs in 10 minutes, 19 completed, 1 failed and then succeeded
 
 | | |
 |---|---|
-| Files | [contact-worker.ts](../agy-lab/src/contact-worker.ts), [contact-exa.ts](../agy-lab/src/contact-exa.ts), [extract-llm.ts](../agy-lab/src/extract-llm.ts), [pi.ts](../agy-lab/src/pi.ts) |
-| Switches | `CONTACT_LLM_URL`, `CONTACT_LLM_KEY`, `CONTACT_LLM_MODEL` (vault `ZM_AI_FIXED_KEY`), `CONTACT_LANES` (default 3), `CONTACT_TIMEOUT_MS` (default 180,000) |
+| Files | [contact-worker.ts](../agy-lab/src/contact-worker.ts), [contact-exa.ts](../agy-lab/src/contact-exa.ts), [core/llm.ts](../agy-lab/src/core/llm.ts) (the app's one LLM router, rules in [core/README.md](../agy-lab/src/core/README.md)) |
+| Switches | LLM lanes on `/workers` (the `llm_lane` table; `CONTACT_LLM_*` only when it is empty), `CONTACT_LANES` (default 3), `CONTACT_TIMEOUT_MS` (default 180,000) |
 | Keys | Exa and Tavily keys are kept in the hub: `GET /api/contact-keys`, or the `/workers` page. `EXA_API_KEYS` / `TAVILY_API_KEYS` are read only when the hub has none stored. |
 | Status | `GET /api/jobs` (lanes `pi-contact`), `GET /api/contact-keys` (quota per key), `GET /api/contact-stats` (finds per provider) |
 | Cost | Exa about $0.017 a company. Tavily fallback about 4 credits a company, on free keys. |
@@ -170,9 +170,10 @@ Two steps per company:
    resting, or Exa fails, the job falls back to the v2 pipeline on Tavily (19 free keys, 1,000
    credits a month each).
 2. **Read.** A model reads the pages found and pulls out people, phones and emails. It may only return
-   what is printed on those pages. With the three `CONTACT_LLM_*` variables set this model is
-   **deepseek-v4.1-flash-1017**. Without them it falls back to Pi on MiniMax, whose Token Plan ran out
-   on 2026-10-24. Pi on MiniMax still serves report rounds and translation.
+   what is printed on those pages. The model is **deepseek-v4.1-flash-1017** on every enabled lane
+   saved on `/workers`, through the app's one LLM router (`core/llm.ts`): the lanes take turns, a lane
+   that answers 429 rests and the call moves to the next. Pi on MiniMax serves report rounds and
+   translation, and is the router's last resort for other callers.
 
 Search providers compared: [search-providers.md](search-providers.md).
 

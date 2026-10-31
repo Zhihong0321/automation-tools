@@ -13,15 +13,12 @@
 // printed in text we handed it; a name is kept only as it is printed there.
 import * as db from './reportdb.ts';
 import * as jobs from './jobs.ts';
-import * as pi from './pi.ts';
-import * as extractLlm from './extract-llm.ts';
-import * as tavily from './tavily.ts';
-import * as exa from './exa.ts';
+import { exa, llm as extractLlm, pi, tavily } from './core/index.ts';
 
 export const JOB_TYPE = 'research.contact.pi';
 export const WORKER_NAME = 'pi-contact';
 export const KEY_CONCURRENCY = tavily.KEY_CONCURRENCY;
-export { createKeyPool } from './tavily.ts';
+export const createKeyPool = tavily.createKeyPool;
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 const MAX_SOURCES = 12;
@@ -826,8 +823,8 @@ async function extractOnce(target: Target, pages: Page[], results: Source[], opt
     const prompt = extractContactsPrompt(target, pages, results);
     // CONTACT_LLM_* names this step's own model; without it, Pi.
     answer = extractLlm.config()
-      ? (await extractLlm.ask(prompt, { timeoutMs: opts.timeoutMs, maxTokens: EXTRACT_MAX_TOKENS })).answer
-      : (await pi.ask(prompt, { ...opts, tools: false, maxTokens: EXTRACT_MAX_TOKENS })).answer;
+      ? (await extractLlm.ask(prompt, { timeoutMs: opts.timeoutMs, maxTokens: EXTRACT_MAX_TOKENS, step: 'contact extract' })).answer
+      : (await extractLlm.agent(prompt, { ...opts, tools: false, maxTokens: EXTRACT_MAX_TOKENS, step: 'contact extract' })).answer;
   } catch (cause) {
     const code = (cause as { code?: string }).code;
     throw Object.assign(

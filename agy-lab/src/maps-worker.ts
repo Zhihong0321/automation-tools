@@ -21,13 +21,13 @@
 // (found: 0), and only a transport error or a non-ok status fails the job. The
 // Mac mini's "an empty feed is never 0" rule was about a throttled IP, which
 // this path does not have.
+import { maps } from './core/index.ts';
 import * as jobs from './jobs.ts';
 import * as db from './reportdb.ts';
 
 export const JOB_TYPE = 'gmap.scan';
 export const WORKER_NAME = 'scraper-tech-maps';
 
-const DEFAULT_BASE_URL = 'https://mcp.scraper.tech';
 export const DEFAULT_MAX = 200;
 const MAX_LIMIT = 500;
 const CALL_TIMEOUT_MS = 90_000;
@@ -143,8 +143,7 @@ function positive(value: unknown, fallback: number): number {
 
 export function resolveConfig(env: NodeJS.ProcessEnv = process.env): MapsConfig {
   return {
-    key: String(env.SCRAPER_TECH_KEY ?? '').trim(),
-    baseUrl: String(env.SCRAPER_TECH_BASE_URL ?? DEFAULT_BASE_URL).trim().replace(/\/+$/, ''),
+    ...maps.config(env),
     lanes: Math.max(1, Math.floor(positive(env.MAPS_LANES, 3))),
   };
 }
@@ -180,41 +179,11 @@ export function toBusiness(row: Row): Business {
 export async function searchMaps(
   config: MapsConfig, query: string, limit: number, fetchImpl: FetchImpl = fetch,
 ): Promise<Row[]> {
-  const body = JSON.stringify({
-    jsonrpc: '2.0', id: Date.now(), method: 'tools/call',
-    params: { name: 'search_maps', arguments: { query, limit: String(limit), country: 'my', lang: 'en' } },
-  });
-  let lastError: unknown = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    let res: Response;
-    try {
-      res = await fetchImpl(`${config.baseUrl}/${config.key}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
-        body,
-        signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
-      });
-    } catch (cause) {
-      lastError = cause;
-      continue;
-    }
-    if (res.status >= 500) { lastError = fail(`scraper.tech answered HTTP ${res.status}`); continue; }
-    if (!res.ok) throw fail(`scraper.tech answered HTTP ${res.status}`, res.status === 429 ? 'rate_limit' : 'engine_error');
-    const rpc = await res.json() as { result?: { isError?: boolean; content?: Array<{ text?: string }> }; error?: { message?: string } };
-    if (rpc.error) throw fail('scraper.tech: ' + (rpc.error.message ?? 'JSON-RPC error'));
-    const raw = rpc.result?.content?.[0]?.text ?? '';
-    let data: { status?: string; data?: unknown; message?: string };
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      throw fail('scraper.tech returned no JSON: ' + raw.slice(0, 200));
-    }
-    if (rpc.result?.isError || data.status !== 'ok' || !Array.isArray(data.data)) {
-      throw fail('scraper.tech search failed: ' + (data.message ?? raw.slice(0, 200)));
-    }
-    return data.data as Row[];
-  }
-  throw fail('scraper.tech did not answer: ' + ((lastError as Error)?.message ?? String(lastError)), 'timeout');
+  // The request itself goes through the app's core (core/maps.ts), which asks once more on a 5xx or a dropped connection.
+  const data = await maps.call('search_maps', { query, limit: String(limit), country: 'my', lang: 'en' },
+    { key: config.key, baseUrl: config.baseUrl, fetchImpl, timeoutMs: CALL_TIMEOUT_MS });
+  if (!Array.isArray(data.data)) throw fail('scraper.tech search failed: ' + (data.message ?? JSON.stringify(data).slice(0, 200)));
+  return data.data as Row[];
 }
 
 /**

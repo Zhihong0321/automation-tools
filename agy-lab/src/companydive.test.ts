@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shortName, urlKey, Ledger, corpus, parseJson, stripThinking, Budget, BudgetSpent, budgetedCall, streamChat } from './companydive.ts';
+import { shortName, urlKey, Ledger, corpus, parseJson, stripThinking, Budget, BudgetSpent, budgetedCall } from './companydive.ts';
 
 test('shortName drops Malaysian and common company suffixes', () => {
   assert.equal(shortName('Eternalgy Sdn Bhd'), 'Eternalgy');
@@ -54,47 +54,6 @@ test('Budget refuses the call past the cap and does not count a quota refusal', 
   assert.equal(budget.used, 2);
   assert.equal(budget.credits, 4);
   await assert.rejects(budgetedCall(budget, 'search', { query: 'q' }, 'three', ok), BudgetSpent);
-});
-
-test('streamChat joins content deltas, drops reasoning, and sends no max_tokens', async () => {
-  process.env.CONTACT_LLM_URL = 'https://llm.test/v1';
-  process.env.CONTACT_LLM_KEY = 'k';
-  process.env.CONTACT_LLM_MODEL = 'deepseek-v4.1-flash-1017';
-  let sent: Record<string, unknown> = {};
-  const sse = [
-    'data: {"choices":[{"delta":{"reasoning_content":"thinking..."}}]}',
-    'data: {"choices":[{"delta":{"content":"{\\"ok\\""}}]}',
-    ': keep-alive',
-    'data: {"choices":[{"delta":{"content":": true}"}}]}',
-    'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":34}}',
-    'data: [DONE]',
-    '',
-  ].join('\n');
-  const fake = (async (_url: string, init: RequestInit) => {
-    sent = JSON.parse(String(init.body));
-    // Split mid-line to prove partial chunks are reassembled.
-    const bytes = new TextEncoder().encode(sse);
-    const body = new ReadableStream({ start(c) { c.enqueue(bytes.slice(0, 40)); c.enqueue(bytes.slice(40)); c.close(); } });
-    return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
-  }) as typeof fetch;
-  const usage = { tokensIn: 0, tokensOut: 0 };
-  assert.equal(await streamChat('hi', fake, usage), '{"ok": true}');
-  assert.deepEqual(usage, { tokensIn: 12, tokensOut: 34 });
-  assert.deepEqual(sent.stream_options, { include_usage: true });
-  assert.equal(sent.stream, true);
-  assert.equal('max_tokens' in sent, false);
-});
-
-test('a timeout of 0 tells Pi to wait for the answer', async () => {
-  const pi = await import('./pi.ts');
-  let seen = -1;
-  pi.setRunnerForTests(async (_prompt, opts) => { seen = opts.timeoutMs; return 'ok'; });
-  try {
-    assert.equal((await pi.ask('hi', { tools: false, timeoutMs: 0 })).answer, 'ok');
-    assert.equal(seen, 0);
-  } finally {
-    pi.setRunnerForTests(null);
-  }
 });
 
 test('toHit keeps the profile name and dates every job, current or former', async () => {

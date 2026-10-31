@@ -30,12 +30,9 @@
 
 import crypto from 'node:crypto';
 import type http from 'node:http';
-import * as brave from './brave.ts';
-import * as tavily from './tavily.ts';
-import * as extractLlm from './extract-llm.ts';
-import * as pi from './pi.ts';
+import { brave, llm, tavily } from './core/index.ts';
 import * as reportdb from './reportdb.ts';
-import { diveCalls, diveUsage, llmUsd, price, startCall, PRICES, type ApiCall } from './cost.ts';
+import { diveCalls, diveUsage, price, PRICES, type ApiCall } from './cost.ts';
 
 export type Source = {
   id: number;
@@ -137,102 +134,35 @@ export async function budgetedCall(
 /**
  * One LLM call. Tokens come from the provider's usage report; calls made before
  * 2026-10-30 have none. Since 2026-10-31 a failed attempt is kept too (ok false),
- * with its time and its cost in USD (null for a model with no per-token price).
+ * with its time, the lane that served it and its cost in USD (null for a model
+ * with no per-token price).
  */
-export type LlmUse = { step: string; engine: string; ms: number; promptChars: number; answerChars: number; tokensIn?: number; tokensOut?: number; at?: string; ok?: boolean; usd?: number | null; note?: string };
-
-/** What a provider says one call used, filled in by the call when it reports it. */
-export type TokenUse = { tokensIn: number; tokensOut: number };
+export type LlmUse = { step: string; engine: string; ms: number; promptChars: number; answerChars: number; tokensIn?: number; tokensOut?: number; at?: string; ok?: boolean; usd?: number | null; note?: string; provider?: string };
 
 /** Where a stage that could not finish says so; the dive carries on. */
 export type Warn = (msg: string) => void | Promise<void>;
 
 /**
- * One streamed chat call to the deepseek model contact research already uses
- * (CONTACT_LLM_*). Streamed, with no timeout and no max_tokens of ours: a model
- * that is still thinking keeps sending chunks, so nothing can cut a working call
- * off. (Node's fetch drops a connection only after five minutes of complete
- * silence, which is a dead socket, not a slow answer.) The reply is the content
- * deltas; reasoning deltas are read and dropped. The usage chunk at the end, when
- * the provider sends one, lands in `usage`.
- */
-export async function streamChat(prompt: string, fetchImpl: typeof fetch = fetch, usage?: TokenUse): Promise<string> {
-  const cfg = extractLlm.config();
-  if (!cfg) throw Object.assign(new Error('no extract model lane is saved on /workers'), { code: 'not_configured' });
-  const res = await fetchImpl(cfg.url + '/chat/completions', {
-    method: 'POST',
-    headers: { authorization: 'Bearer ' + cfg.key, 'content-type': 'application/json' },
-    body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], temperature: 0, stream: true, stream_options: { include_usage: true } }),
-  });
-  if (!res.ok || !res.body) throw new Error(`${cfg.model} answered HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const decoder = new TextDecoder();
-  let buffered = '';
-  let content = '';
-  for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
-    buffered += decoder.decode(chunk, { stream: true });
-    const lines = buffered.split('\n');
-    buffered = lines.pop() ?? '';
-    for (const line of lines) {
-      const data = line.trim().startsWith('data:') ? line.trim().slice(5).trim() : '';
-      if (!data || data === '[DONE]') continue;
-      try {
-        const event = JSON.parse(data);
-        content += event.choices?.[0]?.delta?.content ?? '';
-        if (usage && event.usage) { usage.tokensIn = Number(event.usage.prompt_tokens ?? 0); usage.tokensOut = Number(event.usage.completion_tokens ?? 0); }
-      } catch { /* a keep-alive or partial line, not content */ }
-    }
-  }
-  return content;
-}
-
-type Engine = { name: string; call: (prompt: string, usage: TokenUse) => Promise<string> };
-
-/**
- * The two models the hub has: deepseek (CONTACT_LLM_*) first, then Pi on MiniMax
- * (MINIMAX_API_KEY), the same pair contact research uses. Neither gets a timeout
- * or a token cap. Whichever is configured takes part.
- */
-function engines(): Engine[] {
-  const out: Engine[] = [];
-  const ds = extractLlm.config();
-  if (ds) out.push({ name: ds.model, call: (prompt, usage) => streamChat(prompt, fetch, usage) });
-  if (pi.config().apiKey) out.push({ name: `pi/${pi.config().model}`, call: async (prompt, usage) => (await pi.ask(prompt, { tools: false, timeoutMs: 0 }, usage)).answer });
-  return out;
-}
-
-/**
- * Each round tries every engine in turn, so a deepseek outage moves the step to
- * MiniMax instead of waiting. Between rounds the backoff rides out a blip on
- * both (about four minutes in all). If every round fails the stage gets the
- * error and falls back; the dive itself does not end here.
+ * One LLM call through the app's router (core/llm.ts): every deepseek lane on
+ * /workers, several at once, a lane that answers 429 rests while the call moves
+ * on, MiniMax only after every lane failed twice. No timeout and no token cap.
+ * If every round fails the stage gets the error and falls back; the dive itself
+ * does not end here. Every attempt lands in `uses`.
  */
 export async function ask(prompt: string, opts: { step: string; uses?: LlmUse[] }): Promise<string> {
-  const all = engines();
-  if (!all.length) throw new Error(`LLM failed at ${opts.step}: neither CONTACT_LLM_* (deepseek) nor MINIMAX_API_KEY (Pi) is set`);
-  const waits = [5_000, 15_000, 30_000, 60_000, 120_000];
-  const errors: string[] = [];
-  for (let round = 0; round <= waits.length; round++) {
-    for (const engine of all) {
-      const started = Date.now();
-      const usage: TokenUse = { tokensIn: 0, tokensOut: 0 };
-      const record = (answerChars: number, ok: boolean, note?: string) => opts.uses?.push({
-        step: opts.step, engine: engine.name, at: new Date(started).toISOString(), ms: Date.now() - started, promptChars: prompt.length, answerChars, ok,
-        // A failed attempt that reported no tokens was not billed; an answer with none is estimated when read (cost.ts diveCalls).
-        ...(usage.tokensIn || usage.tokensOut ? { ...usage, usd: llmUsd(engine.name, usage.tokensIn, usage.tokensOut) } : ok ? {} : { usd: 0 }),
-        ...(note ? { note } : {}) });
-      try {
-        const answer = stripThinking(await engine.call(prompt, usage));
-        if (!answer) throw new Error('empty answer');
-        record(answer.length, true);
-        return answer;
-      } catch (err) {
-        errors.push(`${engine.name}: ${(err as Error).message.slice(0, 200)}`);
-        record(0, false, (err as Error).message.slice(0, 200));
-      }
+  const log: ApiCall[] = [];
+  try {
+    return stripThinking((await llm.chat(prompt, { step: opts.step, log })).answer);
+  } finally {
+    for (const c of log) {
+      opts.uses?.push({
+        step: c.what, engine: c.model ?? 'unknown', provider: c.provider, at: c.at, ms: c.ms, ok: c.ok,
+        promptChars: prompt.length, answerChars: Number(c.note?.match(/(\d+) out$/)?.[1] ?? 0),
+        ...(c.tokensIn || c.tokensOut ? { tokensIn: c.tokensIn, tokensOut: c.tokensOut } : {}),
+        usd: c.usd, ...(c.ok ? {} : { note: c.note }),
+      });
     }
-    if (round < waits.length) await new Promise((r) => setTimeout(r, waits[round]));
   }
-  throw new Error(`LLM failed at ${opts.step}: ${errors.slice(-all.length).join(' | ')}`);
 }
 
 /** Some gateways leave the model's reasoning inline in <think> tags. */

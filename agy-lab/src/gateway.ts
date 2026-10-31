@@ -22,7 +22,7 @@
 // refused ChatGPT from the container and Meta AI was already region-blocked.
 import crypto from 'node:crypto';
 import type http from 'node:http';
-import * as pi from './pi.ts';
+import { llm, pi } from './core/index.ts';
 import * as queue from './queue.ts';
 import * as log from './logstore.ts';
 
@@ -231,8 +231,8 @@ async function engineAsk(
 ): Promise<AskResult> {
   // A missing key and a slow run are different problems with different fixes,
   // and the status code is the only part of this most clients will read.
-  const out = await pi
-    .ask(prompt, { timeoutMs: opts.timeoutMs ?? PI_TIMEOUT_MS, tools: true })
+  const out = await llm
+    .agent(prompt, { timeoutMs: opts.timeoutMs ?? PI_TIMEOUT_MS, tools: true, step: 'gateway' })
     .catch((err: unknown) => {
       const e = err as { code?: string; message?: string };
       if (e.code === 'not_configured') throw fail(503, e.message ?? 'Pi is not configured.', 'engine_unavailable');

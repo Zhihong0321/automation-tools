@@ -11,11 +11,10 @@
 //    whose path says contact, about, team or management.
 // 3. Pi extracts from those pages and the search snippets, as in v2.
 import * as cw from './contact-worker.ts';
-import * as tavily from './tavily.ts';
+import { tavily } from './core/index.ts';
 
 type FetchImpl = typeof fetch;
 
-const API = 'https://api.tavily.com';
 const SEARCH_RESULTS = 10;
 const RAW_PAGE_CHARS = 8_000;
 const MAX_SEARCH_PAGES = 8;
@@ -23,29 +22,9 @@ const MAP_LIMIT = 40;
 /** PAYG price per credit, for the report's cost line. */
 export const DOLLARS_PER_CREDIT = 0.008;
 
-function fail(message: string, code: string): Error {
-  return Object.assign(new Error(message), { code });
-}
-
-/** One Tavily call. Quota and rate-limit errors carry the codes tavily.releaseFor reads. */
+/** One Tavily call with the job's key, through the app's core (core/tavily.ts). */
 async function call<T>(endpoint: string, body: Record<string, unknown>, apiKey: string, fetchImpl: FetchImpl, timeoutMs = 45_000): Promise<T & { usage?: { credits?: number } }> {
-  let res: Response;
-  try {
-    res = await fetchImpl(`${API}/${endpoint}`, {
-      method: 'POST',
-      headers: { authorization: 'Bearer ' + apiKey, 'content-type': 'application/json' },
-      body: JSON.stringify({ ...body, include_usage: true }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (cause) {
-    const name = cause instanceof Error ? cause.name : '';
-    throw fail(name === 'TimeoutError' || name === 'AbortError' ? `tavily ${endpoint} timed out` : `upstream error: ${(cause as Error)?.message ?? cause}`, 'timeout');
-  }
-  const raw = await res.text();
-  if (res.status === 432 || res.status === 433) throw fail(`tavily quota exceeded (${res.status}): ${raw.slice(0, 200)}`, 'quota');
-  if (res.status === 429) throw fail(`429 rate_limit_error: tavily rate limit: ${raw.slice(0, 200)}`, 'rate_limit');
-  if (!res.ok) throw fail(`upstream error: tavily ${endpoint} answered ${res.status}: ${raw.slice(0, 200)}`, res.status === 403 ? 'unsupported' : 'timeout');
-  try { return JSON.parse(raw); } catch { throw fail(`tavily ${endpoint} answered non-JSON`, 'timeout'); }
+  return tavily.requestWithKey<T>(endpoint, body, apiKey, { fetchImpl, timeoutMs });
 }
 
 type RawResult = { url?: string; title?: string; content?: string; raw_content?: string | null; score?: number };

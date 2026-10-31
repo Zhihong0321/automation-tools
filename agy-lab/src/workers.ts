@@ -82,7 +82,7 @@ export function page(): string {
   var laneRow=function(l){
     var field=function(f,value,ph){return '<input data-f="'+f+'" value="'+esc(value)+'" placeholder="'+ph+'" spellcheck="false" autocomplete="off" style="width:100%'+(f==='key'||f==='url'?';font:12px ui-monospace,Consolas,monospace':'')+'">'};
     var state=!l.id?'<span class="small">not saved</span>':!l.enabled?'<span class="pill unknown">off</span>':l.restingUntil?'<span class="pill cooldown">resting</span><div class="small">until '+esc(new Date(l.restingUntil).toLocaleTimeString())+'</div>':'<span class="pill online">ready</span>';
-    return '<tr><td><input type="checkbox" data-f="enabled"'+(l.enabled!==false?' checked':'')+'></td><td><input type="checkbox" data-f="first"'+(l.first?' checked':'')+'></td><td>'+field('label',l.label||'','Vectide plan 2')+'</td><td>'+field('url',l.url||'','https://vectide.cn/v1')+'</td><td>'+field('model',l.model||'','deepseek-v4.1-flash-1017')+'</td><td>'+field('key',l.key||'','sk-...')+'</td><td>'+state+'</td><td><button data-remove="1">Remove</button></td></tr>';
+    return '<tr><td><input type="checkbox" data-f="enabled"'+(l.enabled!==false?' checked':'')+'></td><td><input type="checkbox" data-f="first"'+(l.first?' checked':'')+'></td><td>'+field('label',l.label||'','Vectide plan 2')+'</td><td>'+field('url',l.url||'','https://<provider>/v1')+'</td><td>'+field('model',l.model||'','deepseek-v4.1-flash-1017')+'</td><td>'+field('key',l.key||'','sk-...')+'</td><td>'+state+'</td><td><button data-remove="1">Remove</button></td></tr>';
   };
   var loadLanes=function(){
     if(!token())return;

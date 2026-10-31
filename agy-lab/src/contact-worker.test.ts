@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as jobs from './jobs.ts';
-import * as pi from './pi.ts';
+import * as pi from './core/pi.ts';
 import {
   JOB_TYPE,
   WORKER_NAME,
@@ -23,7 +23,7 @@ import {
   extractContactsPrompt as promptFor,
   pickGeneral,
 } from './contact-worker.ts';
-import * as exaApi from './exa.ts';
+import * as exaApi from './core/exa.ts';
 
 test('pi contact lanes register under the hub worker name', () => {
   assert.equal(JOB_TYPE, 'research.contact.pi');

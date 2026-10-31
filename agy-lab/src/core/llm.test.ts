@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ask, config, pool, resetForTests } from './extract-llm.ts';
+import { ask, chat, config, lanesFor, pool, resetForTests, restingUntilFor } from './llm.ts';
 
 const cfg = { url: 'https://llm.example/v1', key: 'k', model: 'deepseek-v4.1-flash-1017' };
 const reply = (status: number, body: unknown) => (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
@@ -118,4 +118,87 @@ test('a lane marked first takes every call; the others rotate behind it', async 
   // The first lane answered 429 and rests; the next calls rotate over the others.
   assert.equal(hits[0], 'p');
   assert.deepEqual(hits.slice(1).sort(), ['a', 'b']);
+});
+
+const okAnswer = (text: string) => new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: text } }], usage: { prompt_tokens: 3, completion_tokens: 1 } }));
+
+test('chat streams: content deltas joined, reasoning dropped, tokens read, no max_tokens sent', async () => {
+  resetForTests();
+  let sent: Record<string, unknown> = {};
+  const sse = [
+    'data: {"choices":[{"delta":{"reasoning_content":"thinking..."}}]}',
+    'data: {"choices":[{"delta":{"content":"{\\"ok\\""}}]}',
+    ': keep-alive',
+    'data: {"choices":[{"delta":{"content":": true}"}}]}',
+    'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":34}}',
+    'data: [DONE]',
+    '',
+  ].join('\n');
+  const fake = (async (_url: string, init: RequestInit) => {
+    sent = JSON.parse(String(init.body));
+    const bytes = new TextEncoder().encode(sse);
+    const body = new ReadableStream({ start(c) { c.enqueue(bytes.slice(0, 40)); c.enqueue(bytes.slice(40)); c.close(); } });
+    return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+  }) as typeof fetch;
+  const log: import('../cost.ts').ApiCall[] = [];
+  const out = await chat('hi', { step: 'triage', lanes: [{ ...cfg, label: 'Vectide coding plan' }], fetchImpl: fake, log, fallback: false });
+  assert.equal(out.answer, '{"ok": true}');
+  assert.deepEqual([out.tokensIn, out.tokensOut], [12, 34]);
+  assert.deepEqual(sent.stream_options, { include_usage: true });
+  assert.equal(sent.stream, true);
+  assert.equal('max_tokens' in sent, false);
+  assert.equal(log.length, 1);
+  assert.deepEqual([log[0].what, log[0].provider, log[0].model, log[0].tokensIn, log[0].ok], ['triage', 'Vectide coding plan', 'deepseek-v4.1-flash-1017', 12, true]);
+});
+
+test('a lane that answers 429 rests and the call moves to the next lane at once; every attempt is logged', async () => {
+  resetForTests();
+  const lanes = [
+    { url: 'https://v.example/v1', key: 'v', model: 'deepseek-v4.1-flash-1017', label: 'Vectide', first: true },
+    { url: 'https://h1.example/v1', key: 'h1', model: 'deepseek-ai/deepseek-v4.1-flash-1017', label: 'Hive 1' },
+  ];
+  const fetchImpl = (async (url: string) => url.startsWith('https://v.') ? new Response('{"error":"busy"}', { status: 429 }) : okAnswer('done')) as unknown as typeof fetch;
+  const log: import('../cost.ts').ApiCall[] = [];
+  const out = await chat('x', { step: 's', lanes, fetchImpl, log, fallback: false });
+  assert.equal(out.answer, 'done');
+  assert.equal(out.lane, 'Hive 1');
+  assert.deepEqual(log.map((c) => [c.provider, c.ok]), [['Vectide', false], ['Hive 1', true]]);
+  assert.ok(restingUntilFor('v'));
+  assert.equal(restingUntilFor('h1'), null);
+});
+
+test('lanes serve calls in parallel: a busy lane hands the next call to a free one', async () => {
+  resetForTests();
+  const lanes = ['a', 'b', 'c'].map((k) => ({ url: `https://${k}.example/v1`, key: k, model: 'deepseek-v4.1-flash-1017' }));
+  const served: string[] = [];
+  const fetchImpl = (async (url: string) => {
+    served.push(new URL(url).host[0]!);
+    await new Promise((r) => setTimeout(r, 20));
+    return okAnswer('ok');
+  }) as unknown as typeof fetch;
+  await Promise.all(Array.from({ length: 9 }, () => chat('x', { step: 's', lanes, fetchImpl, fallback: false })));
+  assert.deepEqual(['a', 'b', 'c'].map((k) => served.filter((s) => s === k).length), [3, 3, 3]);
+});
+
+test('only lanes serving the asked model are used', () => {
+  const lanes = [
+    { url: 'https://v.example/v1', key: 'v', model: 'deepseek-v4.1-flash-1017' },
+    { url: 'https://h.example/v1', key: 'h', model: 'deepseek-ai/deepseek-v4.1-flash-1017' },
+    { url: 'https://z.example/v1', key: 'z', model: 'gpt-6.1-sol' },
+  ];
+  assert.deepEqual(lanesFor('deepseek', lanes).map((l) => l.key), ['v', 'h']);
+  assert.deepEqual(lanesFor('deepseek-v4.1-flash-1017', lanes).map((l) => l.key), ['v', 'h']);
+  assert.deepEqual(lanesFor('gpt-6.1-sol', lanes).map((l) => l.key), ['z']);
+});
+
+test('a timeout of 0 tells Pi to wait for the answer', async () => {
+  const pi = await import('./pi.ts');
+  let seen = -1;
+  pi.setRunnerForTests(async (_prompt, opts) => { seen = opts.timeoutMs; return 'ok'; });
+  try {
+    assert.equal((await pi.ask('hi', { tools: false, timeoutMs: 0 })).answer, 'ok');
+    assert.equal(seen, 0);
+  } finally {
+    pi.setRunnerForTests(null);
+  }
 });

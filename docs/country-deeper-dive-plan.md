@@ -73,8 +73,9 @@ agy-lab/src/deeper-dive/
 - report wording
 
 ### What stays shared (one copy)
-- **Plumbing:** the LLM queue and 429 waits, Exa key rotation, the Maps/Brave/page fetchers, the vault, the runner and
-  the report frame.
+- **Plumbing:** the runner, the vault, the page fetcher and the report frame. LLM, Exa, Brave and Maps calls are not
+  lane plumbing at all: every country calls them through `agy-lab/src/core/` (the app-wide LLM router with every lane
+  on /workers, and the key pools; [core/README.md](../agy-lab/src/core/README.md)).
 - **Why:** a fix there (like the Vectide 429 queue) then reaches every country at once, instead of being copied N
   times.
 - **Rule of thumb:** a lane only moves into `shared/` when two countries are byte-identical, and the user decides that.

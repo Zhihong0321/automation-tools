@@ -33,6 +33,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { OUT, secret, type Ctx, type Finding } from '../lib.ts';
+import * as core from '../../core/index.ts';
 
 const MAPS_BUDGET = Number(process.env.E_MAPS_BUDGET ?? 10);
 const NEWEST_MAX_PAGES = Number(process.env.E_NEWEST_MAX_PAGES ?? 12); // for listings too big to pull whole
@@ -64,28 +65,12 @@ type Page = { listing: string; business_id: string; sort: string; cursor_in: str
 async function reviewsCall(ctx: Ctx, args: Record<string, string>): Promise<any> {
   ctx.meter.maps.calls++;
   ctx.meter.maps.byTool.reviews = (ctx.meter.maps.byTool.reviews ?? 0) + 1;
-  const base = (process.env.SCRAPER_TECH_BASE_URL ?? 'https://mcp.scraper.tech').replace(/\/+$/, '');
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const c = ctx.call('maps', `reviews ${Object.values(args).join(' ')}`);
-    try {
-      const res = await fetch(`${base}/${secret('SCRAPER_TECH_KEY')}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name: 'reviews', arguments: { country: 'my', ...args } } }),
-      });
-      if (res.status >= 500) { c.done({ ok: false, note: `HTTP ${res.status}` }); ctx.warn(`maps reviews HTTP ${res.status}`); continue; }
-      if (!res.ok) { c.done({ ok: false, note: `HTTP ${res.status}` }); ctx.warn(`maps reviews HTTP ${res.status}`); break; }
-      const rpc = await res.json() as any;
-      // A request scraper.tech answered is billed, error or not.
-      c.done({ ok: true });
-      const raw = rpc.result?.content?.[0]?.text ?? '';
-      const data = JSON.parse(raw);
-      if (rpc.result?.isError || !data?.data) { ctx.warn(`maps reviews: ${String(raw).slice(0, 200)}`); break; }
-      return data;
-    } catch (e) {
-      c.done({ ok: false, note: (e as Error).message.slice(0, 200) });
-      ctx.warn(`maps reviews failed: ${(e as Error).message}`);
-    }
+  try {
+    const data = await core.maps.call('reviews', { country: 'my', ...args }, { log: ctx.meter.calls, key: secret('SCRAPER_TECH_KEY') || undefined });
+    if (data?.data) return data;
+    ctx.warn(`maps reviews: ${JSON.stringify(data).slice(0, 200)}`);
+  } catch (e) {
+    ctx.warn(`maps reviews failed: ${(e as Error).message.slice(0, 200)}`);
   }
   ctx.meter.maps.failed++;
   return null;

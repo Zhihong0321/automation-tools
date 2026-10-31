@@ -7,8 +7,8 @@
 // email_marketing_draft, one per lead message answered.
 import type http from 'node:http';
 import * as db from './reportdb.ts';
-import * as llm from './extract-llm.ts';
-import * as sl from './smartlead.ts';
+import { llm } from './core/index.ts';
+import { smartlead as sl } from './core/index.ts';
 import { campaignRow, htmlToText, leads, pick, stripQuoted, textToHtml, threads, webhookEvent } from './email-marketing.ts';
 
 type Ctx = {
@@ -151,7 +151,7 @@ export function generate(email: string, campaignId: number | null, instruction: 
     let draft: string | null = null, error: string | null = null, model: string | null = null;
     try {
       // No cutoff of our own: the draft is worth waiting for, and the page shows it is writing.
-      const out = await llm.ask(buildPrompt({ company: company.name ?? lead.company_name, category: company.category, campaign: thread.campaign_name, messages, instruction }), { timeoutMs: 30 * 60_000 });
+      const out = await llm.ask(buildPrompt({ company: company.name ?? lead.company_name, category: company.category, campaign: thread.campaign_name, messages, instruction }), { timeoutMs: 30 * 60_000, step: 'email reply' });
       draft = cleanDraft(out.answer);
       model = out.model;
     } catch (err) {

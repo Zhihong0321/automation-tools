@@ -13,7 +13,7 @@
 //    are added to the page text, since a page's text often leaves them out.
 // 3. Pi extracts from those pages and the search snippets, as in v2.
 import * as cw from './contact-worker.ts';
-import * as exa from './exa.ts';
+import { exa } from './core/index.ts';
 
 type FetchImpl = typeof fetch;
 
@@ -21,11 +21,6 @@ const SEARCH_RESULTS = 10;
 const PAGE_CHARS = 8_000;
 const MAX_SEARCH_PAGES = 8;
 const HIGHLIGHT_QUERY = 'phone number, mobile, WhatsApp, email address, owner, director, manager, founder';
-
-/** An Exa error carries provider 'exa', so the worker can tell it from a Pi error and fall back to Tavily. */
-function fail(message: string, code: string): Error {
-  return Object.assign(new Error(message), { code, provider: 'exa' });
-}
 
 type ExaResult = {
   url?: string;
@@ -37,38 +32,14 @@ type ExaResult = {
 };
 type ExaAnswer = { results?: ExaResult[]; costDollars?: { total?: number }; statuses?: Array<{ id?: string; status?: string }> };
 
-/** One Exa call, counted against its key for the /auto-queue page. */
+/** One Exa call with the job's leased key, through the app's core (core/exa.ts), counted against the key for the /auto-queue page. */
 async function call(endpoint: string, body: Record<string, unknown>, apiKey: string, fetchImpl: FetchImpl, timeoutMs = 45_000): Promise<ExaAnswer> {
   try {
-    const answer = await callOnce(endpoint, body, apiKey, fetchImpl, timeoutMs);
-    exa.record(apiKey, { dollars: answer.costDollars?.total ?? 0 });
-    return answer;
+    return await exa.requestWithKey(endpoint, body, apiKey, { fetchImpl, timeoutMs }) as ExaAnswer;
   } catch (cause) {
-    exa.record(apiKey, { error: (cause as Error).message ?? String(cause) });
-    throw cause;
+    // An Exa error carries provider 'exa', so the worker can tell it from a model error and fall back to Tavily.
+    throw Object.assign(cause as Error, { provider: 'exa' });
   }
-}
-
-/** Quota and rate-limit errors carry the codes exa.releaseFor reads. */
-async function callOnce(endpoint: string, body: Record<string, unknown>, apiKey: string, fetchImpl: FetchImpl, timeoutMs: number): Promise<ExaAnswer> {
-  const target = exa.endpoint(apiKey, endpoint);
-  let res: Response;
-  try {
-    res = await fetchImpl(target.url, {
-      method: 'POST',
-      headers: target.headers,
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (cause) {
-    const name = cause instanceof Error ? cause.name : '';
-    throw fail(name === 'TimeoutError' || name === 'AbortError' ? `exa ${endpoint} timed out` : `upstream error: ${(cause as Error)?.message ?? cause}`, 'timeout');
-  }
-  const raw = await res.text();
-  if (res.status === 429) throw fail(`429 rate_limit_error: exa rate limit: ${raw.slice(0, 200)}`, 'rate_limit');
-  if (res.status === 401 || res.status === 402) throw fail(`exa key refused or out of credits (${res.status}): ${raw.slice(0, 200)}`, 'quota');
-  if (!res.ok) throw fail(`upstream error: exa ${endpoint} answered ${res.status}: ${raw.slice(0, 200)}`, 'timeout');
-  try { return JSON.parse(raw); } catch { throw fail(`exa ${endpoint} answered non-JSON`, 'timeout'); }
 }
 
 function clean(value: unknown, max: number): string {

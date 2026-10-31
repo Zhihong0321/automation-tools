@@ -9,12 +9,12 @@
 //   3 follow   LLM: names worth confirming, new angles -> Exa round 2
 //   4 people   LLM: one list, each person cited, lookalike companies rejected
 //
-// Exa goes through the shared key pool in exa.ts; a step spends at most
+// Exa goes through the shared key pool in core/exa.ts; a step spends at most
 // MAX_EXA_CALLS. Like the dive, nothing here has a timeout or a token cap, and a
 // stage that gets no usable answer falls back instead of ending the step. The
 // result lands in company_dive.result.people.
 
-import * as exa from './exa.ts';
+import { exa } from './core/index.ts';
 import * as reportdb from './reportdb.ts';
 import { PRICES } from './cost.ts';
 import { ask, askJson, type DiveRow, type DiveResult, type LlmUse, type Warn } from './companydive.ts';
@@ -57,58 +57,10 @@ type ExaHit = {
 
 // ---------------------------------------------------------------- Exa
 
-/**
- * One Exa /search through the shared pool. A spent or refused key rests and the
- * call moves to the next key. No timeout: a slow search still finishes.
- */
+/** One Exa /search through the app's core (core/exa.ts): the shared key pool, a spent or refused key rests and the call moves on. */
 export async function exaSearch(body: Record<string, unknown>, fetchImpl: typeof fetch = fetch): Promise<{ results: Array<Record<string, any>>; dollars: number }> {
-  await exa.refresh();
-  const tries = exa.pool.stats().length;
-  if (!tries) throw Object.assign(new Error('no Exa key is configured'), { code: 'not_installed' });
-  let lastErr = '';
-  for (let attempt = 0; attempt < tries; attempt++) {
-    if (!exa.available()) break;
-    const lease = await exa.pool.acquire();
-    let target: ReturnType<typeof exa.endpoint>;
-    try {
-      target = exa.endpoint(lease.secret, 'search');
-    } catch (cause) {
-      exa.record(lease.secret, { error: (cause as Error).message });
-      exa.releaseFor(lease, cause);
-      lastErr = (cause as Error).message;
-      continue;
-    }
-    let res: Response;
-    try {
-      res = await fetchImpl(target.url, {
-        method: 'POST',
-        headers: target.headers,
-        body: JSON.stringify(body),
-      });
-    } catch (cause) {
-      lease.release();
-      throw new Error(`exa unreachable: ${(cause as Error).message}`);
-    }
-    const raw = await res.text();
-    if (res.status === 429) {
-      exa.releaseFor(lease, { code: 'rate_limit' });
-      lastErr = 'rate limit';
-      continue;
-    }
-    if (res.status === 401 || res.status === 402 || res.status === 403 || (!res.ok && /credit|balance|billing|quota|payment/i.test(raw))) {
-      exa.record(lease.secret, { error: `refused ${res.status}` });
-      exa.releaseFor(lease, { code: 'quota' });
-      lastErr = `key refused (${res.status})`;
-      continue;
-    }
-    lease.release();
-    if (!res.ok) throw new Error(`exa answered ${res.status}: ${raw.slice(0, 200)}`);
-    const out = JSON.parse(raw) as { results?: Array<Record<string, any>>; costDollars?: { total?: number } };
-    const dollars = Number(out.costDollars?.total ?? 0);
-    exa.record(lease.secret, { dollars });
-    return { results: out.results ?? [], dollars };
-  }
-  throw Object.assign(new Error(`every Exa key is resting (${lastErr || 'no credit'})`), { code: 'quota' });
+  const out = await exa.request('search', body, { fetchImpl });
+  return { results: out.results ?? [], dollars: Number(out.costDollars?.total ?? 0) };
 }
 
 function clean(v: unknown, max: number): string {

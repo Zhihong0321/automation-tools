@@ -1,7 +1,8 @@
 # Tavily and Exa for contact research — reference notes
 
 Read from the official docs on 2026-10-24. The agy-lab pipelines built on these notes are
-[contact-tavily.ts](../agy-lab/src/contact-tavily.ts) and [contact-exa.ts](../agy-lab/src/contact-exa.ts).
+[contact-tavily.ts](../agy-lab/src/contact-tavily.ts) and [contact-exa.ts](../agy-lab/src/contact-exa.ts). Both call
+Tavily and Exa through [src/core/](../agy-lab/src/core/README.md), the app's one door to outside APIs.
 Benchmark results are at the end of this note.
 
 ## Tavily
@@ -71,7 +72,7 @@ Base `https://api.exa.ai`, header `x-api-key`. The docs moved to `exa.ai/docs`, 
 ### Contents (inline in `/search` under `contents`, or top level on `POST /contents`) ([ref](https://exa.ai/docs/contents/quickstart))
 - `text: {maxCharacters, verbosity, includeSections/excludeSections}`. Keep `footer`, because contact lines live there.
 - `highlights: {query, maxCharacters}` returns the passages that answer `query`. `numSentences` and `highlightsPerUrl` are deprecated.
-  [exa.ts](../agy-lab/src/exa.ts) still sends both.
+  [core/exa.ts](../agy-lab/src/core/exa.ts) still sends both.
 - `summary: {query, schema}` returns a JSON *string* and costs $0.001 per page.
 - `extras: {links}` returns the page's links, including `tel:`, `mailto:` and `wa.me` links.
 - `maxAgeHours` (0 means always fresh, -1 means cache only) replaces the deprecated `livecrawl`. `livecrawlTimeout` is in ms, default 10000.

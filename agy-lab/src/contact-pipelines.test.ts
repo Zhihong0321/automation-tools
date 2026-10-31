@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as pi from './pi.ts';
+import * as pi from './core/pi.ts';
 import { officialSite, pickSitePages } from './contact-worker.ts';
 import * as tavilyPipeline from './contact-tavily.ts';
 import * as exaPipeline from './contact-exa.ts';

@@ -19,10 +19,7 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import * as reportdb from './reportdb.ts';
-import * as brave from './brave.ts';
-import * as exa from './exa.ts';
-import * as extractLlm from './extract-llm.ts';
-import { configure, makeCtx } from './divedeeper/lib.ts';
+import { makeCtx } from './divedeeper/lib.ts';
 import { runLane, stageDive, type LaneResult } from './divedeeper/runner.ts';
 import { buildReport } from './divedeeper/report-html.ts';
 import { buildPreview, type Offer } from './divedeeper/preview-html.ts';
@@ -99,37 +96,8 @@ async function update(id: number, fields: Partial<Omit<Row, 'id' | 'created_at'>
 
 // ---------------------------------------------------------------- keys and the dive
 
-let configured = false;
-/** The lanes ask for keys by their vault names; on the hub they come from the hub's own sources. */
-function configureKeys(): void {
-  if (configured) return;
-  configured = true;
-  let exaKeys: string[] = [];
-  let exaNext = 0;
-  configure({
-    secret: (name) => {
-      if (name === 'VECTIDE_DEEPSEEK_KEY') return extractLlm.pool().find((c) => c.url.includes('vectide.cn'))?.key ?? process.env.CONTACT_LLM_KEY;
-      if (name === 'BRAVE_SEARCH_API_KEY') return brave.keys()[0];
-      if (name === 'BRAVE_SEARCH_API_KEY_2') return brave.keys()[1];
-      return undefined;
-    },
-    // Exa keys live in the hub's key pool and may sit behind the Exa proxy (us: keys).
-    exaSearch: async (body) => {
-      if (!exaKeys.length) exaKeys = await exa.loadKeys();
-      let last: Response | null = null;
-      for (let tried = 0; tried < exaKeys.length; tried++) {
-        const key = exaKeys[exaNext++ % exaKeys.length];
-        try {
-          const { url, headers } = exa.endpoint(key, 'search');
-          const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
-          if (res.ok || ![401, 402, 403, 429].includes(res.status)) return res;
-          last = res;
-        } catch { /* proxy not saved for a us: key: try the next key */ }
-      }
-      return last ?? new Response(JSON.stringify({ error: 'no usable Exa key' }), { status: 503 });
-    },
-  });
-}
+// Keys and LLM lanes are not picked here: every lane calls the app's core
+// (core/README.md), which uses the hub's lanes on /workers and its key pools.
 
 async function diveRow(diveId: number): Promise<any | null> {
   return (await reportdb.sql(`select * from company_dive where id = $1`, [diveId])).rows[0] ?? null;
@@ -167,7 +135,6 @@ async function execute(id: number): Promise<void> {
     await update(id, { stage, log, ...extra }).catch((err) => console.error(`[dive-deeper ${id}] log write failed`, err));
   };
   try {
-    configureKeys();
     if (!row.dive_id) throw new Error('no company-dive linked to this run');
 
     // 1. Wait for the company-dive (it runs in its own queue, one at a time).
@@ -299,7 +266,6 @@ const editing = new Set<number>();
 async function writePreviewNotes(dive: any): Promise<void> {
   editing.add(dive.id);
   try {
-    configureKeys();
     const ctx = makeCtx(String(dive.id), 'P', 'preview');
     const notes = await editPreview(dive, (p) => ctx.llm(p), ctx.parseJson, ctx.warn);
     await reportdb.sql(`insert into dive_preview (dive_id, notes, meter) values ($1, $2::jsonb, $3::jsonb) on conflict (dive_id) do update set notes = excluded.notes, meter = excluded.meter, created_at = now()`,
