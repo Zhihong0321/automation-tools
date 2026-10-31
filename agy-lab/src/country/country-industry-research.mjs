@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // From github.com/Zhihong0321/gmap-country-insdusty (d1f1fb1). The hub runs
 // this pipeline in country-research.ts; it adds the exports CITY_DATA,
-// buildRows and csvText (the same rows and CSV main() writes), nothing else.
+// buildRows and csvText (the same rows and CSV main() writes), and getPage for
+// list-step2.ts, nothing else.
 // Discover businesses on Maps, then collect explicitly published contact details.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -60,7 +61,7 @@ async function validateUrl(url) {
   if (!addresses.length || addresses.some(a=>!publicAddress(a.address))) throw new Error('website resolves to a non-public address');
   return u;
 }
-async function getPage(url) {
+export async function getPage(url) {
   let current=url;
   for (let i=0;i<4;i++) {
     await validateUrl(current);

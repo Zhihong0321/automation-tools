@@ -25,6 +25,7 @@ import * as mapsWorker from './maps-worker.ts';
 import * as gmapWorker from './gmap-worker.ts';
 import * as countryResearch from './country-research.ts';
 import * as searchList from './search-list.ts';
+import * as listStep2 from './list-step2.ts';
 import { searchListPage } from './search-list-page.ts';
 import * as contactKeys from './contact-keys.ts';
 import * as extractLlm from './extract-llm.ts';
@@ -374,6 +375,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // ---- search lists: a CSV of Maps searches, run to the end by the hub -------
   if (await searchList.handle(req, res, url, { json, readJson })) return;
 
+  // ---- list processing step 2: each found business's best contact method ----
+  if (await listStep2.handle(req, res, url, { json, readJson })) return;
+
   // ---- the Gmap Local Worker package, engine and sweep words ---------------
   if (p.startsWith('/api/gmap-worker/') && await gmapWorker.handle(req, res, url, { json }, 'operator')) return;
 
@@ -527,6 +531,7 @@ server.listen(PORT, '0.0.0.0', () => {
   mapsWorker.start();
   countryResearch.start();
   searchList.start();
+  listStep2.start();
   // Broker jobs live only in memory. Refill it from saved contact reports after
   // a restart, with no more concurrent jobs than the research lanes can run.
   setInterval(() => {
