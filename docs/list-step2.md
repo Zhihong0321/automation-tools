@@ -118,6 +118,13 @@ hub, works each one with the same `processLead` on the PC's own internet line,
 and sends each result back as soon as it is ready. With no job running it asks
 again every minute. Only outbound requests.
 
+Each slot takes its next lead from a small local queue as soon as it is free,
+and the queue is topped up while the slots still have work, so a slow page or a
+slow send holds up only its own slot. (Until 2026-10-31 the slots waited for the
+whole batch; one send that hung for 36 minutes left the other 11 slots idle.) A
+request to the hub that gets no answer in a minute is dropped and tried again,
+up to three times; a result that still cannot be sent is left to the lead's lease.
+
 - **Runs from the repo checkout** with the PC's Node 24 (`node worker.ts`), so
   it always runs the repo's current step-2 code. `Start Step 2 Worker.cmd`
   keeps it running and restarts it if it stops.
