@@ -8,9 +8,11 @@
 // so it shares the work whenever the PC is on and a job is running.
 //
 // It holds the Gmap worker key (an HMAC of LAB_TOKEN that reaches only the
-// worker routes), never LAB_TOKEN. Settings: %LOCALAPPDATA%\Step2Worker\worker.env
+// worker routes), never LAB_TOKEN. A machine that already holds LAB_TOKEN (the
+// Mac mini) may use it instead. Settings: %LOCALAPPDATA%\Step2Worker\worker.env on
+// Windows, ~/.step2-worker/worker.env elsewhere, or the file STEP2_WORKER_ENV names:
 //   LAB_URL=https://ee-auto.up.railway.app
-//   GMAP_WORKER_KEY=...
+//   GMAP_WORKER_KEY=...                (or LAB_TOKEN=...)
 //   WORKER_NAME=pc-<computer name>     (optional)
 //   CONCURRENCY=6                      (optional: leads worked at once)
 // A lead this PC took and never answered (it went offline) goes back to the
@@ -20,7 +22,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { processLead, DEFAULT_DEPS, WORKER_BATCH_MAX } from '../src/list-step2.ts';
 
-const DATA = path.join(process.env.LOCALAPPDATA ?? os.homedir(), 'Step2Worker');
+const DATA = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Step2Worker') : path.join(os.homedir(), '.step2-worker');
 const LOG = path.join(DATA, 'worker.log');
 const IDLE_MS = 60_000;
 fs.mkdirSync(DATA, { recursive: true });
@@ -47,7 +49,7 @@ function settings(): Record<string, string> {
 
 const env = settings();
 const LAB_URL = (env.LAB_URL ?? '').replace(/\/+$/, '');
-const KEY = env.GMAP_WORKER_KEY ?? '';
+const KEY = env.GMAP_WORKER_KEY || env.LAB_TOKEN || '';
 const WORKER = env.WORKER_NAME || 'pc-' + os.hostname().toLowerCase().replace(/[^a-z0-9.-]+/g, '-');
 const CONCURRENCY = Math.max(1, Math.min(20, Number(env.CONCURRENCY) || 6));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -80,7 +82,7 @@ async function work(lead: any): Promise<boolean> {
 
 async function main(): Promise<void> {
   if (!LAB_URL || !KEY) {
-    log(`no LAB_URL or GMAP_WORKER_KEY in ${path.join(DATA, 'worker.env')}; nothing to do`);
+    log(`no LAB_URL, or no GMAP_WORKER_KEY or LAB_TOKEN, in ${process.env.STEP2_WORKER_ENV ?? path.join(DATA, 'worker.env')}; nothing to do`);
     process.exit(2);
   }
   log(`Step 2 Worker ${WORKER}: ${CONCURRENCY} leads at a time, hub ${LAB_URL}`);

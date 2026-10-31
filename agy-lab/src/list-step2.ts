@@ -717,6 +717,8 @@ export async function browse(opts: { run?: string; status?: string; offset?: num
 export async function handle(req: http.IncomingMessage, res: http.ServerResponse, url: URL, { json, readJson }: Ctx): Promise<boolean> {
   const p = url.pathname;
   if (p !== '/api/list-step2' && !p.startsWith('/api/list-step2/')) return false;
+  // A worker holding LAB_TOKEN (the Mac mini) uses the same routes a PC's worker key reaches.
+  if (p.startsWith('/api/list-step2/worker/')) return handleWorker(req, res, url, { json, readJson });
   if (!db.configured()) return json(res, 503, { error: 'no report database configured' }), true;
   const method = req.method ?? 'GET';
   try {
