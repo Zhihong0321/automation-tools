@@ -20,7 +20,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { processLead, DEFAULT_DEPS, WORKER_BATCH_MAX } from '../src/list-step2.ts';
+import { makeReader, WORKER_BATCH_MAX, type Reader } from '../src/list-step2.ts';
 
 const DATA = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Step2Worker') : path.join(os.homedir(), '.step2-worker');
 const LOG = path.join(DATA, 'worker.log');
@@ -66,8 +66,8 @@ async function post(route: string, body: Record<string, unknown>): Promise<any> 
 }
 
 /** One lead, its answer sent back; a send that fails is tried twice more, then left to the lease. */
-async function work(lead: any): Promise<boolean> {
-  const result = await processLead(lead, DEFAULT_DEPS);
+async function work(lead: any, reader: Reader): Promise<boolean> {
+  const result = await reader.read(lead);
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       await post('/api/list-step2/worker/done', { worker: WORKER, job_id: lead.job_id, place_key: lead.place_key, result });
@@ -88,6 +88,8 @@ async function main(): Promise<void> {
   log(`Step 2 Worker ${WORKER}: ${CONCURRENCY} leads at a time, hub ${LAB_URL}`);
   let idle = false;
   let total = 0;
+  // One thread per slot reads the pages, so a freak page can stall only its thread, never this loop.
+  const readers = Array.from({ length: CONCURRENCY }, () => makeReader());
   for (;;) {
     let leads: any[];
     try {
@@ -107,10 +109,10 @@ async function main(): Promise<void> {
     const started = Date.now();
     let next = 0;
     let sent = 0;
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, leads.length) }, async () => {
+    await Promise.all(readers.slice(0, Math.min(CONCURRENCY, leads.length)).map(async (reader) => {
       while (next < leads.length) {
         const lead = leads[next++];
-        try { if (await work(lead)) sent++; }
+        try { if (await work(lead, reader)) sent++; }
         catch (err) { log(`${lead.business?.name ?? lead.place_key}: ${(err as Error).message}`); }
       }
     }));

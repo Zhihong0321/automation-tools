@@ -24,6 +24,7 @@
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import type http from 'node:http';
+import { Worker } from 'node:worker_threads';
 import { parsePhoneNumberFromString, getCountries, type CountryCode } from 'libphonenumber-js/max';
 import * as db from './reportdb.ts';
 import { pickForm, classify, type Field, type FormInfo } from './contact-form-delivery.ts';
@@ -80,7 +81,7 @@ const decode = (s: string): string => s
   .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
   .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
   .replace(/&nbsp;/gi, ' ').replace(/&quot;/gi, '"').replace(/&apos;/gi, "'").replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&amp;/gi, '&');
-const textOf = (html: string): string => decode(html.replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+const textOf = (html: string): string => decode(html.replace(/<[^<>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
 
 function attrs(inside: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -380,6 +381,50 @@ export async function processLead(lead: Lead, deps: Deps): Promise<LeadResult> {
 
 export const DEFAULT_DEPS: Deps = { fetchPage: getPage, resolveMx: (domain) => dns.resolveMx(domain) };
 
+/**
+ * A lead whose pages are still being read after this long is let go: its
+ * thread is stopped and the lead is worked without its website, from what
+ * step 1 stored. One freak page then costs two minutes, not the whole hub.
+ */
+const READ_STALL_MS = 120_000;
+
+export type Reader = { read: (lead: Lead) => Promise<LeadResult>; close: () => Promise<void> };
+
+/** One worker thread that reads leads one at a time, replaced when it stalls or dies. */
+export function makeReader(): Reader {
+  let thread: Worker | null = null;
+  const withoutSite = (lead: Lead, why: string) =>
+    processLead(lead, { ...DEFAULT_DEPS, fetchPage: async () => { throw new Error(why); } });
+  return {
+    async read(lead) {
+      const t = thread ??= new Worker(new URL('./list-step2-thread.ts', import.meta.url));
+      const answer = await new Promise<LeadResult | string>((resolve) => {
+        const done = (v: LeadResult | string) => {
+          clearTimeout(stall);
+          t.off('message', onMessage); t.off('error', onError); t.off('exit', onExit);
+          resolve(v);
+        };
+        const onMessage = (m: { result?: LeadResult; error?: string }) => done(m.result ?? 'the reader failed: ' + m.error);
+        const onError = (err: Error) => { thread = null; done('the reader failed: ' + err.message); };
+        const onExit = () => { thread = null; done('the reader stopped'); };
+        const stall = setTimeout(() => {
+          thread = null;
+          void t.terminate();
+          done(`reading the site took over ${READ_STALL_MS / 60_000} minutes; worked from step 1's findings`);
+        }, READ_STALL_MS);
+        t.on('message', onMessage); t.on('error', onError); t.on('exit', onExit);
+        t.postMessage(lead);
+      });
+      return typeof answer === 'string' ? withoutSite(lead, answer) : answer;
+    },
+    async close() {
+      const t = thread;
+      thread = null;
+      if (t) await t.terminate();
+    },
+  };
+}
+
 // ---- storage -----------------------------------------------------------------
 
 let migrated: Promise<void> | null = null;
@@ -554,6 +599,9 @@ export async function work(jobId: string, deps: Deps = DEFAULT_DEPS): Promise<vo
       .then(async (taken) => { const inputs = await leadInputs(taken); for (const t of taken) queue.push({ t, lead: inputs.get(t.run_id + '|' + t.place_key) }); })
       .finally(() => { refilling = null; }));
     await Promise.all(Array.from({ length: LEAD_CONCURRENCY }, async () => {
+      // Each loop reads its leads in its own thread, so a freak page never stalls this hub.
+      const reader = deps === DEFAULT_DEPS ? makeReader() : null;
+      try {
       while (alive) {
         if (!queue.length) await refill();
         const next = queue.shift();
@@ -564,13 +612,14 @@ export async function work(jobId: string, deps: Deps = DEFAULT_DEPS): Promise<vo
           await sleep(30_000);
           continue;
         }
-        try { await saveResult(next.t, next.lead ? await processLead(next.lead, deps) : null); }
+        try { await saveResult(next.t, next.lead ? await (reader ? reader.read(next.lead) : processLead(next.lead, deps)) : null); }
         catch (cause) {
           console.error(`[list-step2] job ${jobId} ${next.t.place_key}: ${(cause as Error).message}`);
           await db.sql(`update list_step2_lead set status = 'pending' where job_id = $1 and place_key = $2 and status = 'running'`, [jobId, next.t.place_key]).catch(() => {});
           await sleep(5_000);
         }
       }
+      } finally { await reader?.close(); }
     }));
     if (!alive) return;
     const left = (await db.sql<{ n: number }>(`select count(*)::int as n from list_step2_lead where job_id = $1 and status <> 'done'`, [jobId])).rows[0]!;

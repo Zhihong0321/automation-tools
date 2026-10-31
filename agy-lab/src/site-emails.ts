@@ -78,8 +78,9 @@ export function extractEmails(html: string): string[] {
   for (const m of text.matchAll(/email-protection#([0-9a-f]+)/gi)) add(decodeCfEmail(m[1]));
   // "sales [at] acme [dot] my" and "sales(at)acme.my"
   const plain = text
-    .replace(/\s*[[(]\s*at\s*[\])]\s*/gi, '@')
-    .replace(/\s*[[(]\s*dot\s*[\])]\s*/gi, '.');
+    // Bounded spaces: an unbounded \s* runs in quadratic time on a long blank run.
+    .replace(/\s{0,3}[[(]\s{0,3}at\s{0,3}[\])]\s{0,3}/gi, '@')
+    .replace(/\s{0,3}[[(]\s{0,3}dot\s{0,3}[\])]\s{0,3}/gi, '.');
   for (const m of plain.matchAll(/[a-z0-9][a-z0-9._%+-]{0,63}@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}/gi)) add(m[0]);
   return [...found];
 }

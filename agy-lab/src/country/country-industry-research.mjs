@@ -97,16 +97,18 @@ export function extractContacts(html, sourceUrl) {
   };
   for (const m of html.matchAll(/mailto:([^"'\s<>]+)/gi)) addEmail(m[1]);
   for (const m of html.matchAll(/(?:href|content)\s*=\s*["']tel:([^"']+)["']/gi)) addPhone(m[1]);
-  for (const m of html.matchAll(/<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>/gi)) {
+  // Repeats are bounded, and a tag stops at the next "<": unbounded ones run in quadratic time on freak pages.
+  for (const m of html.matchAll(/<a\b[^<>]{0,2000}?href\s*=\s*["']([^"'<>]{1,2000})["'][^<>]{0,2000}>/gi)) {
     try {const u=new URL(decode(m[1]),sourceUrl), host=u.hostname.toLowerCase().replace(/^www\./,'');
       if(host==='wa.me'||host==='api.whatsapp.com') addLink(u.href,'whatsapp');
       else if (['facebook.com','instagram.com','linkedin.com','youtube.com','tiktok.com'].some(d=>host===d||host.endsWith('.'+d))) addLink(u.href,'social');
     } catch {}
   }
-  const visible=decode(html.replace(/<script\b[\s\S]*?<\/script>|<style\b[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' '));
-  for (const m of visible.matchAll(/[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+/gi)) addEmail(m[0]);
-  for (const m of visible.matchAll(/(?:phone|tel(?:ephone)?|call|mobile|whatsapp|telefon|hubungi)\s*[:：-]?\s*(\+?\d[\d ()\-.\/]{5,23}\d)/gi)) addPhone(m[1]);
-  for (const m of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+  const visible=decode(html.replace(/<script\b[\s\S]{0,300000}?<\/script>|<style\b[\s\S]{0,300000}?<\/style>/gi,' ').replace(/<[^<>]+>/g,' '));
+  // Bounded parts: an unbounded local part runs in quadratic time on a long run of letters with no @.
+  for (const m of visible.matchAll(/[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8}/gi)) addEmail(m[0]);
+  for (const m of visible.matchAll(/(?:phone|tel(?:ephone)?|call|mobile|whatsapp|telefon|hubungi)\s{0,5}[:：-]?\s{0,5}(\+?\d[\d ()\-.\/]{5,23}\d)/gi)) addPhone(m[1]);
+  for (const m of html.matchAll(/<script\b[^<>]{0,500}type=["']application\/ld\+json["'][^<>]{0,500}>([\s\S]{0,300000}?)<\/script>/gi)) {
     try {
       const visit=x=>{if(!x||typeof x!=='object')return;if(Array.isArray(x)){x.forEach(visit);return;}
         const types=Array.isArray(x['@type'])?x['@type']:[x['@type']];
@@ -121,8 +123,8 @@ export function extractContacts(html, sourceUrl) {
 }
 function contactLinks(html,base) {
   const origin=new URL(base); const candidates=[];
-  for(const m of html.matchAll(/<a\b[^>]*href\s*=\s*["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
-    const label=decode(m[2].replace(/<[^>]*>/g,' '));
+  for(const m of html.matchAll(/<a\b[^<>]{0,2000}?href\s*=\s*["']([^"'#<>]{1,2000})["'][^<>]{0,2000}>([\s\S]{0,1000}?)<\/a>/gi)) {
+    const label=decode(m[2].replace(/<[^<>]*>/g,' '));
     if (!/contact|about|team|leadership|management|staff|people|hubungi|tentang/i.test(label+' '+m[1])) continue;
     try {const u=new URL(decode(m[1]),base); if(['http:','https:'].includes(u.protocol) && u.hostname.replace(/^www\./,'')===origin.hostname.replace(/^www\./,'')) {u.hash=''; candidates.push({url:u.href,priority:/contact|hubungi/i.test(label+' '+m[1]) ? 0 : /team|leadership|management|staff|people/i.test(label+' '+m[1]) ? 1 : 2});}} catch {}
   }
@@ -138,7 +140,7 @@ export async function researchWebsite(website, fetchPage=getPage) {
   for(const item of queue) {
     let page; try {page=typeof item==='string'?await fetchPage(item):item;} catch(e) {errors.push({url:item,error:e.message});continue;}
     pages.push(page.url);
-    if (/verify (?:that )?you are human|checking your browser before accessing|unusual traffic from your computer|captcha challenge/i.test(page.html.replace(/<[^>]*>/g,' '))) {blocked=true; errors.push({url:page.url,error:'verification challenge'}); break;}
+    if (/verify (?:that )?you are human|checking your browser before accessing|unusual traffic from your computer|captcha challenge/i.test(page.html.replace(/<[^<>]*>/g,' '))) {blocked=true; errors.push({url:page.url,error:'verification challenge'}); break;}
     const found=extractContacts(page.html,page.url);
     for(const e of found.emails) if(!emails.has(e.email)) emails.set(e.email,e);
     for(const p of found.phones) if(!phones.has(p.normalized)) phones.set(p.normalized,p);
