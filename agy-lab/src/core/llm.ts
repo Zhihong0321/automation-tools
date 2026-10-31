@@ -12,10 +12,12 @@
 // THE RULES, the same for every caller:
 // 1. A call asks for a model family (deepseek unless it says otherwise) and may
 //    use every enabled lane serving it.
-// 2. Lanes marked "use first" (a plan whose unused tokens expire) take every
-//    call they can; the other lanes take turns, one further along each call.
-// 3. A lane takes at most LLM_LANE_CONCURRENCY calls at once (3). A call goes to
-//    the first lane in its order with a free slot, so all lanes work in parallel.
+// 2. Lanes marked "use first" (a plan whose unused tokens expire, like the
+//    Vectide 5-hour coding plan) take every call, however many run at once;
+//    the other lanes only serve while it rests after a 429 or when it failed
+//    this call. They take turns, one further along each call.
+// 3. Any other lane takes at most LLM_LANE_CONCURRENCY calls at once (3). A call
+//    goes to the first lane in its order with a free slot.
 // 4. A 429 rests that lane (a minute; a "use first" lane 10s) and the call moves
 //    to the next lane at once. Any other failure (5xx, 400, empty answer, a
 //    dropped connection) also moves the call to the next lane.
@@ -192,10 +194,11 @@ export function rest(c: LlmConfig): void {
   restingUntil.set(c.key, Date.now() + (c.first ? FIRST_REST_MS : REST_MS));
 }
 
-/** The first lane in `list` with a free slot, waiting for one when every lane is full. */
+/** The first lane in `list` with a free slot (an awake "use first" lane always has one), waiting when every lane is full. */
 async function take(list: LlmConfig[]): Promise<LlmConfig> {
   for (;;) {
-    const c = list.find((l) => busyFor(l.key) < LANE_CONCURRENCY);
+    const now = Date.now();
+    const c = list.find((l) => (l.first && (restingUntil.get(l.key) ?? 0) <= now) || busyFor(l.key) < LANE_CONCURRENCY);
     if (c) {
       inFlight.set(c.key, busyFor(c.key) + 1);
       return c;

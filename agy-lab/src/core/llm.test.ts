@@ -180,6 +180,28 @@ test('lanes serve calls in parallel: a busy lane hands the next call to a free o
   assert.deepEqual(['a', 'b', 'c'].map((k) => served.filter((s) => s === k).length), [3, 3, 3]);
 });
 
+test('a use-first lane takes every parallel call; the others serve only once it answers 429', async () => {
+  resetForTests();
+  const lanes = [
+    { url: 'https://h.example/v1', key: 'h', model: 'deepseek-v4.1-flash-1017' },
+    { url: 'https://v.example/v1', key: 'v', model: 'deepseek-v4.1-flash-1017', first: true },
+  ];
+  const served: string[] = [];
+  let limited = false;
+  const fetchImpl = (async (url: string) => {
+    served.push(new URL(url).host[0]!);
+    if (limited && url.startsWith('https://v.')) return new Response('{}', { status: 429 });
+    await new Promise((r) => setTimeout(r, 20));
+    return okAnswer('ok');
+  }) as unknown as typeof fetch;
+  await Promise.all(Array.from({ length: 8 }, () => chat('x', { step: 's', lanes, fetchImpl, fallback: false })));
+  assert.deepEqual(served, Array(8).fill('v'));
+  served.length = 0;
+  limited = true;
+  await Promise.all(Array.from({ length: 4 }, () => chat('x', { step: 's', lanes, fetchImpl, fallback: false })));
+  assert.equal(served.filter((s) => s === 'h').length, 4);
+});
+
 test('only lanes serving the asked model are used', () => {
   const lanes = [
     { url: 'https://v.example/v1', key: 'v', model: 'deepseek-v4.1-flash-1017' },

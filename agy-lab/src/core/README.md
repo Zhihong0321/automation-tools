@@ -42,11 +42,12 @@ services we hold keys or pay for, and they are logged through the lane's
 1. **One pool.** A call asks for a model family (deepseek unless it says
    otherwise) and may use every enabled lane serving it: today the Vectide coding
    plan, the Vectide token plan and three Hive accounts.
-2. **Order.** Lanes marked "use first" take every call they can. The other
-   lanes take turns, starting one further along with each call.
-3. **Parallel.** A lane serves at most `LLM_LANE_CONCURRENCY` calls at once (3).
-   A call takes the first lane in its order with a free slot, so all lanes work
-   at the same time instead of queueing behind one.
+2. **Order.** Lanes marked "use first" (the Vectide 5-hour coding plan, whose
+   quota does not carry over) take every call, however many run at once. The
+   other lanes serve only while it rests after a 429, or when it failed that
+   call; they take turns, starting one further along with each call.
+3. **Parallel.** Any other lane serves at most `LLM_LANE_CONCURRENCY` calls at
+   once (3). A call takes the first lane in its order with a free slot.
 4. **429.** The lane rests (a minute; a "use first" lane 10s) and the call
    moves to the next lane at once. Any other failure (5xx, HTTP 400, an empty
    answer, a dropped connection) also moves it to the next lane.
