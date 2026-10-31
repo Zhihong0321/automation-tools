@@ -145,3 +145,9 @@ test('one lead: a Facebook page as the website is social media', async () => {
   assert.equal(r.form.status, 'not_own_site');
   assert.equal(r.best_contact_method, 'social-media');
 });
+
+test('a PC worker result that is not a step-2 result is refused before it reaches the database', async () => {
+  const { saveFromWorker } = await import('./list-step2.ts');
+  await assert.rejects(saveFromWorker('pc-test', 'a1e8dab86a1f', 'place:x', { best_contact_method: 'carrier-pigeon' }), /not a step-2 lead result/);
+  await assert.rejects(saveFromWorker('pc-test', 'a1e8dab86a1f', 'place:x', null), /not a step-2 lead result/);
+});

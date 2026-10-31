@@ -342,6 +342,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       if (p.startsWith('/api/gmap-worker/') && await gmapWorker.handle(req, res, url, { json }, 'worker')) return;
       if (gmapWorker.isJobRoute(method, p)
         && await jobs.handle(req, res, url, { json, readJson, scope: { types: gmapWorker.JOB_TYPES } })) return;
+      // The step-2 worker on a PC: take a batch of leads, send back each result (list-step2.ts).
+      if (p.startsWith('/api/list-step2/worker/') && await listStep2.handleWorker(req, res, url, { json, readJson })) return;
       return json(res, 403, { error: 'the Gmap worker key only reaches the worker routes' });
     }
   }

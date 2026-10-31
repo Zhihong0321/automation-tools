@@ -36,6 +36,10 @@ const LEAD_BATCH = 30;
 /** A lead taken this many times without finishing (a hub that died on it) is closed with an error. */
 const MAX_ATTEMPTS = 3;
 const LEASE_SECONDS = 120;
+/** How long a taken lead is its taker's before another may take it: the hub's are quick, a PC's batch may queue behind others. */
+const HUB_LEASE_SECONDS = 600;
+const WORKER_LEASE_SECONDS = 900;
+export const WORKER_BATCH_MAX = 50;
 const BEAT_MS = 30_000;
 const MAX_SAMPLE = 5_000;
 const OWNER = 'hub-' + crypto.randomBytes(4).toString('hex');
@@ -338,7 +342,7 @@ export async function processLead(lead: Lead, deps: Deps): Promise<LeadResult> {
   return { best_contact_method: bestContactMethod(result), ...result };
 }
 
-const DEFAULT_DEPS: Deps = { fetchPage: getPage, resolveMx: (domain) => dns.resolveMx(domain) };
+export const DEFAULT_DEPS: Deps = { fetchPage: getPage, resolveMx: (domain) => dns.resolveMx(domain) };
 
 // ---- storage -----------------------------------------------------------------
 
@@ -379,6 +383,9 @@ function migrate(): Promise<void> {
     await db.sql(`create index if not exists list_step2_lead_pending on list_step2_lead (job_id) where status = 'pending'`);
     await db.sql(`create index if not exists list_step2_lead_place_id on list_step2_lead (place_id)`);
     await db.sql(`create index if not exists list_step2_lead_run_place on list_step2_lead (run_id, place_key)`);
+    // Who has the lead (this hub, or a PC worker by name) and until when; after it is done, who did it.
+    await db.sql(`alter table list_step2_lead add column if not exists taken_by text`);
+    await db.sql(`alter table list_step2_lead add column if not exists taken_until timestamptz`);
   })().catch((err) => { migrated = null; throw err; });
   return migrated;
 }
@@ -438,7 +445,10 @@ export async function jobStatus(id: string): Promise<Record<string, unknown> | n
   const providers = Object.fromEntries((await db.sql<{ k: string; n: number }>(`
     select coalesce(e->>'mx_provider', e->>'mx_class') as k, count(*)::int as n
     from list_step2_lead, jsonb_array_elements(coalesce(emails, '[]'::jsonb)) e where job_id = $1 group by 1 order by 2 desc`, [id])).rows.map((r) => [r.k, r.n]));
-  return { ...job, leads: counts, bestContactMethod: await group('best_contact_method'), form: await group(`form->>'status'`), emailsByProvider: providers };
+  const doneBy = Object.fromEntries((await db.sql<{ k: string; n: number }>(`
+    select case when taken_by like 'hub-%' then 'hub' else coalesce(taken_by, 'hub') end as k, count(*)::int as n
+    from list_step2_lead where job_id = $1 and status = 'done' group by 1 order by 2 desc`, [id])).rows.map((r) => [r.k, r.n]));
+  return { ...job, leads: counts, doneBy, bestContactMethod: await group('best_contact_method'), form: await group(`form->>'status'`), emailsByProvider: providers };
 }
 
 async function listJobs(): Promise<Array<Record<string, unknown>>> {
@@ -447,39 +457,50 @@ async function listJobs(): Promise<Array<Record<string, unknown>>> {
   return (await Promise.all(ids.map((r) => jobStatus(r.id)))).filter((r): r is Record<string, unknown> => r !== null);
 }
 
-type Taken = { place_key: string; run_id: string };
+type Taken = { job_id: string; place_key: string; run_id: string };
 
-/** Up to `limit` pending leads, marked running so no other loop takes them too. */
-async function takeLeads(jobId: string, limit: number): Promise<Taken[]> {
+/**
+ * Up to `limit` leads of a job, marked running for `by` until its lease ends,
+ * so no other loop (this hub's or a PC's) takes them too. A lead whose taker
+ * went quiet past its lease is taken again; one taken too often is closed.
+ */
+async function takeLeads(jobId: string, limit: number, by: string, leaseSeconds: number): Promise<Taken[]> {
+  await db.sql(`update list_step2_lead set status = 'done', best_contact_method = 'no-viable-contact-method', error = 'not finished after ${MAX_ATTEMPTS} tries'
+    where job_id = $1 and status = 'running' and taken_until < now() and attempts >= $2`, [jobId, MAX_ATTEMPTS]);
   return (await db.sql<Taken>(`
-    update list_step2_lead set status = 'running', attempts = attempts + 1, updated_at = now()
+    update list_step2_lead set status = 'running', attempts = attempts + 1, taken_by = $3, taken_until = now() + make_interval(secs => $4), updated_at = now()
     where job_id = $1 and place_key in (
-      select place_key from list_step2_lead where job_id = $1 and status = 'pending' order by place_key limit $2 for update skip locked)
-    returning place_key, run_id`, [jobId, limit])).rows;
+      select place_key from list_step2_lead where job_id = $1 and (status = 'pending' or (status = 'running' and taken_until < now()))
+      order by place_key limit $2 for update skip locked)
+    returning job_id, place_key, run_id`, [jobId, limit, by, leaseSeconds])).rows;
 }
 
-async function doLead(jobId: string, t: Taken, deps: Deps): Promise<void> {
-  const place = (await db.sql<Lead>(`
-    select p.business, p.contact,
+/** The inputs of taken leads: the business, step 1's contact findings, and the country of its first search. */
+async function leadInputs(taken: Taken[]): Promise<Map<string, Lead>> {
+  if (!taken.length) return new Map();
+  const rows = (await db.sql<Lead & { run_id: string; place_key: string }>(`
+    select p.run_id, p.place_key, p.business, p.contact,
            (select s.country from search_list_search s where s.run_id = p.run_id and s.idx = p.searches[1]) as country
-    from search_list_place p where p.run_id = $1 and p.place_key = $2`, [t.run_id, t.place_key])).rows[0];
-  if (!place) {
+    from search_list_place p join unnest($1::text[], $2::text[]) as t(run_id, place_key) on p.run_id = t.run_id and p.place_key = t.place_key`,
+  [taken.map((t) => t.run_id), taken.map((t) => t.place_key)])).rows;
+  return new Map(rows.map((r) => [r.run_id + '|' + r.place_key, { business: r.business, contact: r.contact, country: r.country }]));
+}
+
+async function saveResult(t: Taken, r: LeadResult | null): Promise<void> {
+  if (!r) {
     await db.sql(`update list_step2_lead set status = 'done', best_contact_method = 'no-viable-contact-method', error = 'the business is gone from the search list', updated_at = now()
-      where job_id = $1 and place_key = $2`, [jobId, t.place_key]);
+      where job_id = $1 and place_key = $2`, [t.job_id, t.place_key]);
     return;
   }
-  const r = await processLead(place, deps);
   await db.sql(`update list_step2_lead set status = 'done', best_contact_method = $3, form = $4::jsonb, emails = $5::jsonb, phones = $6::jsonb, social = $7::jsonb,
-      error = null, updated_at = now() where job_id = $1 and place_key = $2`,
-    [jobId, t.place_key, r.best_contact_method, jsonParam(r.form), jsonParam(r.emails), jsonParam(r.phones), jsonParam(r.social)]);
+      error = null, updated_at = now() where job_id = $1 and place_key = $2 and status <> 'done'`,
+    [t.job_id, t.place_key, r.best_contact_method, jsonParam(r.form), jsonParam(r.emails), jsonParam(r.phones), jsonParam(r.social)]);
 }
 
-/** The whole job, leads side by side, while this hub holds its lease. */
+/** The whole job, leads side by side, while this hub holds its lease. PC workers take leads of the same job beside it. */
 export async function work(jobId: string, deps: Deps = DEFAULT_DEPS): Promise<void> {
-  // Leads taken by a hub that stopped are not being worked by anyone; one taken too often is closed.
-  await db.sql(`update list_step2_lead set status = 'done', best_contact_method = 'no-viable-contact-method', error = 'not finished after ${MAX_ATTEMPTS} tries'
-    where job_id = $1 and status = 'running' and attempts >= $2`, [jobId, MAX_ATTEMPTS]);
-  await db.sql(`update list_step2_lead set status = 'pending' where job_id = $1 and status = 'running'`, [jobId]);
+  // Leads an earlier hub took are not being worked by anyone; a PC's stay its own until its lease ends.
+  await db.sql(`update list_step2_lead set status = 'pending' where job_id = $1 and status = 'running' and (taken_by is null or taken_by like 'hub-%') and attempts < $2`, [jobId, MAX_ATTEMPTS]);
   let alive = true;
   const beat = setInterval(() => {
     db.sql(`update list_step2_job set lease_until = now() + make_interval(secs => $3), updated_at = now()
@@ -488,20 +509,28 @@ export async function work(jobId: string, deps: Deps = DEFAULT_DEPS): Promise<vo
       .catch((err: Error) => console.warn('[list-step2] lease: ' + err.message));
   }, BEAT_MS);
   beat.unref();
-  const queue: Taken[] = [];
+  const queue: Array<{ t: Taken; lead: Lead | undefined }> = [];
   try {
     console.log(`[list-step2] job ${jobId}: working`);
     let refilling: Promise<void> | null = null;
-    const refill = () => (refilling ??= takeLeads(jobId, LEAD_BATCH).then((rows) => { queue.push(...rows); }).finally(() => { refilling = null; }));
+    const refill = () => (refilling ??= takeLeads(jobId, LEAD_BATCH, OWNER, HUB_LEASE_SECONDS)
+      .then(async (taken) => { const inputs = await leadInputs(taken); for (const t of taken) queue.push({ t, lead: inputs.get(t.run_id + '|' + t.place_key) }); })
+      .finally(() => { refilling = null; }));
     await Promise.all(Array.from({ length: LEAD_CONCURRENCY }, async () => {
       while (alive) {
         if (!queue.length) await refill();
-        const t = queue.shift();
-        if (!t) return;
-        try { await doLead(jobId, t, deps); }
+        const next = queue.shift();
+        if (!next) {
+          // Nothing to take: done, unless a PC still holds leads that may come back.
+          const held = await db.sql(`select 1 from list_step2_lead where job_id = $1 and status = 'running' limit 1`, [jobId]);
+          if (!held.rowCount) return;
+          await sleep(30_000);
+          continue;
+        }
+        try { await saveResult(next.t, next.lead ? await processLead(next.lead, deps) : null); }
         catch (cause) {
-          console.error(`[list-step2] job ${jobId} ${t.place_key}: ${(cause as Error).message}`);
-          await db.sql(`update list_step2_lead set status = 'pending' where job_id = $1 and place_key = $2 and status = 'running'`, [jobId, t.place_key]).catch(() => {});
+          console.error(`[list-step2] job ${jobId} ${next.t.place_key}: ${(cause as Error).message}`);
+          await db.sql(`update list_step2_lead set status = 'pending' where job_id = $1 and place_key = $2 and status = 'running'`, [jobId, next.t.place_key]).catch(() => {});
           await sleep(5_000);
         }
       }
@@ -516,8 +545,70 @@ export async function work(jobId: string, deps: Deps = DEFAULT_DEPS): Promise<vo
     clearInterval(beat);
     // A pause leaves taken leads unworked; they go back to be taken again.
     if (queue.length) await db.sql(`update list_step2_lead set status = 'pending' where job_id = $1 and place_key = any($2::text[]) and status = 'running'`,
-      [jobId, queue.map((t) => t.place_key)]).catch(() => {});
+      [jobId, queue.map((q) => q.t.place_key)]).catch(() => {});
     await db.sql(`update list_step2_job set lease_owner = null, lease_until = null where id = $1 and lease_owner = $2`, [jobId, OWNER]).catch(() => {});
+  }
+}
+
+// ---- PC workers --------------------------------------------------------------
+//
+// A Windows PC runs step-2-worker/worker.ts: it takes a batch of leads here,
+// works them with the same processLead on its own internet line, and sends
+// each result back. It holds the Gmap worker key, never LAB_TOKEN. A PC that
+// goes offline leaves its leads running until their lease ends; then this hub
+// or another PC takes them again.
+
+/** Leads for a PC worker: from the oldest running job that has any. */
+export async function takeForWorker(worker: string, limit: number): Promise<Array<{ job_id: string; place_key: string } & Lead>> {
+  await migrate();
+  const jobs = (await db.sql<{ id: string }>(`select id from list_step2_job where status = 'running' order by created_at`)).rows;
+  for (const { id } of jobs) {
+    const taken = await takeLeads(id, limit, worker, WORKER_LEASE_SECONDS);
+    if (!taken.length) continue;
+    const inputs = await leadInputs(taken);
+    const out: Array<{ job_id: string; place_key: string } & Lead> = [];
+    for (const t of taken) {
+      const lead = inputs.get(t.run_id + '|' + t.place_key);
+      if (lead) out.push({ job_id: t.job_id, place_key: t.place_key, ...lead });
+      else await saveResult(t, null);
+    }
+    if (out.length) return out;
+  }
+  return [];
+}
+
+/** A PC worker's answer for one lead. Kept unless the lead is already done; the worker is recorded as the one who did it. */
+export async function saveFromWorker(worker: string, jobId: string, placeKey: string, raw: unknown): Promise<boolean> {
+  const r = raw as LeadResult;
+  if (!r || typeof r !== 'object' || !(METHODS as readonly string[]).includes(r.best_contact_method) || typeof r.form?.status !== 'string'
+    || !Array.isArray(r.emails) || !Array.isArray(r.phones) || !Array.isArray(r.social)) throw invalid('result is not a step-2 lead result');
+  const row = (await db.sql<{ run_id: string; status: string }>(`select run_id, status from list_step2_lead where job_id = $1 and place_key = $2`, [jobId, placeKey])).rows[0];
+  if (!row || row.status === 'done') return false;
+  await db.sql(`update list_step2_lead set taken_by = $3 where job_id = $1 and place_key = $2`, [jobId, placeKey, worker]);
+  await saveResult({ job_id: jobId, place_key: placeKey, run_id: row.run_id }, r);
+  return true;
+}
+
+/** The routes a PC worker's key reaches: take a batch, send back one result. */
+export async function handleWorker(req: http.IncomingMessage, res: http.ServerResponse, url: URL, { json, readJson }: Ctx): Promise<boolean> {
+  const p = url.pathname;
+  if (req.method !== 'POST' || (p !== '/api/list-step2/worker/take' && p !== '/api/list-step2/worker/done')) return false;
+  if (!db.configured()) return json(res, 503, { error: 'no report database configured' }), true;
+  try {
+    const body = await readJson(req);
+    const worker = String(body.worker ?? '').trim();
+    if (!/^[a-z0-9][a-z0-9._-]{1,62}$/i.test(worker) || /^hub-/i.test(worker)) throw invalid('send a worker name: letters, digits, dot, dash');
+    if (p.endsWith('/take')) {
+      const limit = Math.min(WORKER_BATCH_MAX, Math.max(1, Math.floor(Number(body.limit) || 10)));
+      return json(res, 200, { leads: await takeForWorker(worker, limit), leaseSeconds: WORKER_LEASE_SECONDS }), true;
+    }
+    const jobId = String(body.job_id ?? '');
+    const placeKey = String(body.place_key ?? '');
+    if (!/^[a-f0-9]{12}$/.test(jobId) || !placeKey) throw invalid('send {worker, job_id, place_key, result}');
+    return json(res, 200, { saved: await saveFromWorker(worker, jobId, placeKey, body.result) }), true;
+  } catch (cause) {
+    const err = cause as Error & { code?: string };
+    return json(res, err.code === 'bad_request' ? 400 : 500, { error: err.message }), true;
   }
 }
 
