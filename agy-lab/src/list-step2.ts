@@ -378,6 +378,7 @@ function migrate(): Promise<void> {
     `);
     await db.sql(`create index if not exists list_step2_lead_pending on list_step2_lead (job_id) where status = 'pending'`);
     await db.sql(`create index if not exists list_step2_lead_place_id on list_step2_lead (place_id)`);
+    await db.sql(`create index if not exists list_step2_lead_run_place on list_step2_lead (run_id, place_key)`);
   })().catch((err) => { migrated = null; throw err; });
   return migrated;
 }
@@ -566,6 +567,37 @@ export function csvLine(r: Row): string {
   return CSV_FIELDS.map((f) => cell(out[f])).join(',');
 }
 
+/** The filter for businesses no step-2 job has finished yet. */
+export const NOT_CHECKED = 'not-checked';
+const BROWSE_PAGE = 100;
+
+/**
+ * Every business of the search lists, with the contact status the latest
+ * finished step-2 job gave it, a page at a time, by name. `run` narrows to one
+ * list, `status` to one best_contact_method (or not-checked).
+ */
+export async function browse(opts: { run?: string; status?: string; offset?: number }): Promise<Record<string, unknown>> {
+  await migrate();
+  const params: unknown[] = [];
+  const run = opts.run ? `$${params.push(opts.run)}` : null;
+  const latest = `select distinct on (run_id, place_key) run_id, place_key, best_contact_method, form, emails, phones, social, updated_at
+    from list_step2_lead where status = 'done'${run ? ` and run_id = ${run}` : ''} order by run_id, place_key, updated_at desc`;
+  const from = `from search_list_place p left join (${latest}) l on l.run_id = p.run_id and l.place_key = p.place_key where ${run ? `p.run_id = ${run}` : 'true'}`;
+  const counts = Object.fromEntries((await db.sql<{ k: string; n: number }>(
+    `select coalesce(l.best_contact_method, '${NOT_CHECKED}') as k, count(*)::int as n ${from} group by 1`, params)).rows.map((r) => [r.k, r.n]));
+  const statusFilter = opts.status ? ` and coalesce(l.best_contact_method, '${NOT_CHECKED}') = $${params.push(opts.status)}` : '';
+  const offset = Math.max(0, Math.floor(opts.offset ?? 0));
+  const leads = (await db.sql(`
+    select p.run_id, p.place_key, p.business, l.best_contact_method, l.form, l.emails, l.phones, l.social, l.updated_at as checked_at,
+           (select array_agg(distinct s.industry) from search_list_search s where s.run_id = p.run_id and s.idx = any(p.searches)) as industries,
+           (select array_agg(distinct s.country) from search_list_search s where s.run_id = p.run_id and s.idx = any(p.searches)) as countries
+    ${from}${statusFilter}
+    order by lower(p.business->>'name'), p.place_key limit ${BROWSE_PAGE} offset ${offset}`, params)).rows;
+  const runs = (await db.sql(`select id, name from search_list_run order by created_at desc`)).rows;
+  const total = opts.status ? counts[opts.status] ?? 0 : Object.values(counts).reduce((a, n) => a + n, 0);
+  return { runs, counts, total, offset, pageSize: BROWSE_PAGE, leads };
+}
+
 /** /api/list-step2: create a job over a run (all, sample or chosen leads), read it, start, pause, its leads. All behind LAB_TOKEN. */
 export async function handle(req: http.IncomingMessage, res: http.ServerResponse, url: URL, { json, readJson }: Ctx): Promise<boolean> {
   const p = url.pathname;
@@ -587,6 +619,13 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
         return json(res, 201, await jobStatus(id)), true;
       }
       return false;
+    }
+    if (p === '/api/list-step2/browse' && method === 'GET') {
+      const run = url.searchParams.get('run') || undefined;
+      const status = url.searchParams.get('status') || undefined;
+      if (run && !/^[a-f0-9]{12}$/.test(run)) throw invalid('run is a search list id');
+      if (status && status !== NOT_CHECKED && !(METHODS as readonly string[]).includes(status)) throw invalid('unknown status');
+      return json(res, 200, await browse({ run, status, offset: Number(url.searchParams.get('offset')) || 0 })), true;
     }
     const m = /^\/api\/list-step2\/([a-f0-9]{12})(?:\/([a-z.]+))?$/.exec(p);
     if (!m) return false;

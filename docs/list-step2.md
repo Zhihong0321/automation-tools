@@ -87,6 +87,13 @@ unless it is created with `start: true`. All behind `LAB_TOKEN`.
 | `POST /api/list-step2/<job>/start`, `/pause` | |
 | `GET /api/list-step2/<job>/leads?limit=50&after=<place_key>` | the results as JSON, a page at a time |
 | `GET /api/list-step2/<job>/leads.csv` | the results as CSV |
+| `GET /api/list-step2/browse?run=&status=&offset=` | every business of the search lists with its latest contact status, 100 at a time by name |
+
+The operator page `/research-leads` shows that list: company, industry,
+country (from the searches that found it) and contact status, with a filter
+per status (`not-checked` for businesses no job has finished) and per search
+list. A row opens to its website, Maps link, form verdict, emails with their
+mail provider, typed phones and social links.
 
 A job takes only businesses whose step-1 website check is finished. Over a run
 that is still going, make a later job for the rest.
