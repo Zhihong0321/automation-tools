@@ -105,8 +105,44 @@ each active job's progress with a Pause button.
 A job takes only businesses whose step-1 website check is finished. Over a run
 that is still going, make a later job for the rest.
 
-Ten leads are worked at a time. A lead is a few page loads and a few DNS
-lookups, so a 79,000-business run takes most of a day.
+Ten leads are worked at a time on the hub. A lead is a few page loads and a
+few DNS lookups. The first full run did about 110 leads a minute on the hub
+alone, so 79,000 businesses take about 12 hours; a PC worker beside it (below)
+adds about 50 a minute.
+
+### A Windows PC shares the work: the Step 2 Worker
+
+`agy-lab/step2-worker/` turns a Windows PC into a second step-2 worker. While
+the PC is on and a step-2 job is running, it takes a batch of leads from the
+hub, works each one with the same `processLead` on the PC's own internet line,
+and sends each result back as soon as it is ready. With no job running it asks
+again every minute. Only outbound requests.
+
+- **Runs from the repo checkout** with the PC's Node 24 (`node worker.ts`), so
+  it always runs the repo's current step-2 code. `Start Step 2 Worker.cmd`
+  keeps it running and restarts it if it stops.
+- **Settings** in `%LOCALAPPDATA%\Step2Worker\worker.env`: `LAB_URL`,
+  `GMAP_WORKER_KEY` (the Gmap Local Worker's key, an HMAC of LAB_TOKEN that
+  reaches only the worker routes; the PC never holds LAB_TOKEN), and optional
+  `WORKER_NAME` (default `pc-<computer name>`) and `CONCURRENCY` (default 6).
+  The log is `worker.log` beside it.
+- **Autostart:** `Enable autostart.cmd` puts a shortcut in the Windows Startup
+  folder, so the worker starts minimised at every sign-in; `Disable
+  autostart.cmd` removes it.
+- **Leases:** every taken lead records who took it (`taken_by`: the hub's
+  `hub-…` or the PC's name) and until when (`taken_until`: 10 minutes for the
+  hub, 15 for a PC). The hub and any number of PCs take from the same running
+  job without overlap. A PC that goes offline leaves its leads until their lease
+  ends; then the hub or another PC takes them. A job is done when no lead is
+  pending or held.
+- **Routes** (worker key only): `POST /api/list-step2/worker/take
+  {worker, limit}` (up to 50 leads with their business, step-1 contacts and
+  country) and `POST /api/list-step2/worker/done {worker, job_id, place_key,
+  result}`. A job's status (`GET /api/list-step2/<job>`) has `doneBy`: leads
+  done per worker, the hub as `hub`.
+
+This PC (`pc-desktop-camhl16`) joined the first full run on 2026-10-31 at 06:17
+and did 12 leads every 5–15 seconds, about 50 a minute.
 
 ### Where the results are stored
 
@@ -129,9 +165,10 @@ Each finished lead is one saved row, so a redeploy or a pause loses only the
 leads in flight, and they are taken again. A lead taken three times without
 finishing (a hub that kept dying on it) is closed with an error and
 `no-viable-contact-method`. A website that does not load leaves what step 1
-stored: its emails and phones still count. The lease is the one search lists
-use: one hub works a job, and another takes it over two minutes after the
-first stops.
+stored: its emails and phones still count. The job lease is the one search
+lists use: one hub works a job, and another takes it over two minutes after
+the first stops. Each lead also has its own lease (see the Step 2 Worker), so
+a lead held by a PC that went offline comes back after 15 minutes.
 
 ## The first test: five leads (2026-10-31)
 
