@@ -1,6 +1,6 @@
 # Country industry research
 
-Latest update: 2026-10-31 (search lists added).
+Latest update: 2026-10-31 (search lists added; native-language list running).
 
 Give the hub a country and an industry ("Malaysia", "advertising agency"). It
 returns one CSV of every business Google Maps lists for that industry in that
@@ -228,6 +228,54 @@ on 2026-10-31, one row on each worker:
 - The PC's map starts centred on Kuala Lumpur; a search naming Sydney still
   lands in Sydney.
 - The trial's CSV is `outputs/search-list-trial/trial-3-searches.csv`.
+
+### The first full run, and why a native-language list followed
+
+`376382ba4ee4` finished on 2026-10-31 at 06:16 (Malaysia time). All 1,250
+searches finished, giving 79,017 businesses with 39,628 emails. The CSV is
+`outputs/search-list-1250/companies-all.csv`.
+
+The English keywords did badly wherever English is not the local business
+language. Average businesses per search: South Korea 15, Thailand 22, Japan
+36, Russia 38, Vietnam 45, Taiwan 45, Argentina 46. Against that: India 153,
+Singapore 114, Australia 109, United Kingdom 103. Japan gave only 1,576
+businesses across 50 searches. Google matches the words in a listing's own
+language, and "Tokyo Accounting firm Japan" misses most offices that call
+themselves 会計事務所.
+
+`outputs/gmaps-search-list/gmaps-search-list-native.csv` is the same list in
+the local language, built by `make-native-list.py` in the same folder. It has
+700 rows: 14 countries × 10 cities × 5 industries. Each keyword is the city,
+the industry and the country, all written as a local would type them, using
+the local trade term where one exists. Examples: `Steuerberater` in Germany,
+`Treuhandbüro` and `fiduciaire` in Switzerland, `estudio contable` in
+Argentina, `architecte d'intérieur` in France, `веб-студия` in Russia.
+Switzerland uses each city's own language: German, French for Geneva and
+Lausanne, Italian for Lugano. `country`, `city` and `industry` stay in
+English so both lists group the same way.
+
+| | Native language |
+|---|---|
+| Yes | Japan, South Korea, Taiwan, Thailand, Vietnam, Indonesia, Brazil, Argentina, Spain, France, Germany, Netherlands, Switzerland, Russia |
+| No: English is the business language | United Kingdom, United States, Canada, Australia, New Zealand, Ireland, Singapore, India, Philippines, Malaysia, United Arab Emirates |
+
+The native list is its own run, `3745f9ba2d50`, in the same tables. A
+business both lists found is one row in each run; a dedupe across runs
+matches on `place_id`.
+
+Trial on 2026-10-31, the same rows in English and in the local language:
+
+| Row | Worker | English | Local language |
+|---|---|---|---|
+| Tokyo, accounting firm | Windows PC | 75 | **192** (`東京 会計事務所 日本`) |
+| Bangkok, interior designer | Mac mini | 21 | **120** |
+| Seoul, web design company | Windows PC | 13 | **38** |
+
+Korean keywords do poorly on scraper.tech. `서울 홈페이지 제작 업체 대한민국`
+came back `status: failed` with no rows, and `서울 홈페이지 제작` gave 15.
+Google Maps holds few Korean listings; locals use Naver and Kakao. A Korean
+row scraper.tech fails is asked again, most likely of the PC or the mini. The
+full run started right after the trial.
 
 ## Storage and limits
 
