@@ -153,6 +153,9 @@ How it runs:
 3. **Website contacts.** The same plain-code step as country jobs, 12 websites
    at a time, running alongside the searches rather than after them.
 
+Step 2, the best contact method for each business (contact form, email
+hosting, mobile phone, social), is a separate job: see `list-step2.md`.
+
 ### Where the results are stored
 
 In the report database (Postgres on Railway), three tables:
