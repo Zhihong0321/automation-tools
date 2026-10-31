@@ -27,6 +27,7 @@ import * as countryResearch from './country-research.ts';
 import * as searchList from './search-list.ts';
 import * as listStep2 from './list-step2.ts';
 import { searchListPage } from './search-list-page.ts';
+import { researchLeadsPage } from './research-leads-page.ts';
 import * as contactKeys from './contact-keys.ts';
 import * as extractLlm from './extract-llm.ts';
 import * as companyDive from './companydive.ts';
@@ -248,6 +249,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (method === 'GET' && (p === '/search-lists' || p === '/search-lists/')) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
     return void res.end(searchListPage());
+  }
+
+  if (method === 'GET' && (p === '/research-leads' || p === '/research-leads/')) {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
+    return void res.end(researchLeadsPage());
   }
 
   if (method === 'GET' && (p === '/company-dive' || p === '/company-dive/')) {
