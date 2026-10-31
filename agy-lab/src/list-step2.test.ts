@@ -151,3 +151,14 @@ test('a PC worker result that is not a step-2 result is refused before it reache
   await assert.rejects(saveFromWorker('pc-test', 'a1e8dab86a1f', 'place:x', { best_contact_method: 'carrier-pigeon' }), /not a step-2 lead result/);
   await assert.rejects(saveFromWorker('pc-test', 'a1e8dab86a1f', 'place:x', null), /not a step-2 lead result/);
 });
+
+test('freak pages are read in linear time: a 300,000-digit run, 30,000 unclosed labels, an unclosed form', () => {
+  const started = Date.now();
+  formVerdict([
+    { url: 'a', html: '<form><textarea></textarea><input type="email">' + '7'.repeat(300_000) + '</form>' },
+    { url: 'b', html: '<form>' + '<label>x '.repeat(30_000) + '</form>' },
+    { url: 'c', html: '<form><input type="email">' + 'y'.repeat(1_000_000) },
+    { url: 'd', html: '<!--' + '<script>'.repeat(50_000) },
+  ]);
+  assert.ok(Date.now() - started < 3_000, `took ${Date.now() - started} ms`);
+});

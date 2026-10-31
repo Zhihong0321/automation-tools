@@ -31,7 +31,8 @@ import { cleanEmail, extractEmails, ownSiteUrl } from './site-emails.ts';
 // @ts-ignore: plain .mjs from the pipeline repo
 import { researchWebsite, getPage } from './country/country-industry-research.mjs';
 
-const LEAD_CONCURRENCY = 10;
+/** Leads the hub works at once; PC and Mac workers add their own beside it. */
+const LEAD_CONCURRENCY = 6;
 const LEAD_BATCH = 30;
 /** A lead taken this many times without finishing (a hub that died on it) is closed with an error. */
 const MAX_ATTEMPTS = 3;
@@ -89,24 +90,58 @@ function attrs(inside: string): Record<string, string> {
 
 const SKIP_TYPES = new Set(['hidden', 'submit', 'button', 'image', 'reset', 'file']);
 // The same markers contact-form-delivery.ts snapshot() looks for in the browser.
-const FORM_CAPTCHA = /class\s*=\s*["'][^"']*\b(g-recaptcha|h-captcha|cf-turnstile)\b|data-sitekey|<iframe[^>]+src\s*=\s*["'][^"']*(captcha|turnstile)|<img[^>]+src\s*=\s*["'][^"']*captcha|<input[^>]+name\s*=\s*["'][^"']*captcha/i;
-const FORM_QUIZ = /\d+\s*[+x×*-]\s*\d+\s*=|captcha|are you human|bukan robot/i;
+// Every repeat here is bounded: an unbounded one runs in quadratic time on a
+// freak page (a 200,000-digit run, thousands of unclosed tags), and such a page
+// froze the whole hub on 2026-10-31.
+const FORM_CAPTCHA = /\b(g-recaptcha|h-captcha|cf-turnstile)\b|data-sitekey|<iframe[^>]{0,500}src\s*=\s*["'][^"']{0,300}(captcha|turnstile)|<img[^>]{0,500}src\s*=\s*["'][^"']{0,300}captcha|<input[^>]{0,500}name\s*=\s*["'][^"']{0,100}captcha/i;
+const FORM_QUIZ = /(?<!\d)\d{1,3}\s{0,3}[+x×*-]\s{0,3}\d{1,3}\s{0,3}=|captcha|are you human|bukan robot/i;
+/** The part of a page the form check reads; contact forms sit well inside it. */
+const MAX_FORM_HTML = 1_500_000;
+
+/** The page without comments, scripts and styles, in one pass; an unclosed one hides the rest of the page. */
+function stripBlocks(html: string): string {
+  const open = /<!--|<(script|style)\b/gi;
+  let out = '';
+  let pos = 0;
+  for (let m = open.exec(html); m; m = open.exec(html)) {
+    out += html.slice(pos, m.index);
+    const close = m[1] ? new RegExp(`</${m[1]}\\s*>`, 'gi') : /-->/g;
+    close.lastIndex = open.lastIndex;
+    const c = close.exec(html);
+    if (!c) return out;
+    pos = open.lastIndex = c.index + c[0].length;
+  }
+  return out + html.slice(pos);
+}
+
+/** Each <tag ...>inner</tag> in order, in one pass; an unclosed one ends the search. */
+function* elements(html: string, tag: string): Generator<{ attrs: string; inner: string }> {
+  const open = new RegExp(`<${tag}\\b([^>]{0,2000})>`, 'gi');
+  const close = new RegExp(`</${tag}\\s*>`, 'gi');
+  for (let m = open.exec(html); m; m = open.exec(html)) {
+    close.lastIndex = open.lastIndex;
+    const c = close.exec(html);
+    if (!c) return;
+    yield { attrs: m[1]!, inner: html.slice(open.lastIndex, c.index) };
+    open.lastIndex = c.index + c[0].length;
+  }
+}
 
 /** The forms in a page's HTML, as contact-form-delivery.ts reads them in a browser. Forms drawn by script are not here. */
 export function formsInHtml(html: string): FormInfo[] {
-  const clean = html.replace(/<!--[\s\S]*?-->/g, '').replace(/<script\b[\s\S]*?<\/script>/gi, '').replace(/<style\b[\s\S]*?<\/style>/gi, '');
+  const clean = stripBlocks(html.slice(0, MAX_FORM_HTML));
   const forms: FormInfo[] = [];
-  for (const [n, m] of [...clean.matchAll(/<form\b[^>]*>([\s\S]*?)<\/form>/gi)].entries()) {
-    const body = m[1]!;
+  for (const [n, form] of [...elements(clean, 'form')].entries()) {
+    const body = form.inner;
     const id = `f${n}`;
     const labels = new Map<string, string>();
-    for (const l of body.matchAll(/<label\b([^>]*)>([\s\S]*?)<\/label>/gi)) {
-      const a = attrs(l[1]!);
-      if (a.for) labels.set(a.for, textOf(l[2]!));
+    for (const l of elements(body, 'label')) {
+      const a = attrs(l.attrs);
+      if (a.for) labels.set(a.for, textOf(l.inner));
     }
     const fields: Field[] = [];
     let submitText = '';
-    for (const f of body.matchAll(/<(input|textarea|select)\b([^>]*)>/gi)) {
+    for (const f of body.matchAll(/<(input|textarea|select)\b([^>]{0,2000})>/gi)) {
       const tag = f[1]!.toLowerCase();
       const a = attrs(f[2]!);
       const type = (a.type || (tag === 'input' ? 'text' : '')).toLowerCase();
@@ -119,15 +154,16 @@ export function formsInHtml(html: string): FormInfo[] {
       fields.push({ id: `${id}-${fields.length}`, tag, type, name: a.name || a.id || '', label,
         required: 'required' in a || a['aria-required'] === 'true' || /\*/.test(label) });
     }
-    submitText ||= textOf(/<button\b[^>]*>([\s\S]*?)<\/button>/i.exec(body)?.[1] ?? '');
+    submitText ||= textOf(/<button\b[^>]{0,1000}>([\s\S]{0,2000}?)<\/button>/i.exec(body)?.[1] ?? '');
     forms.push({ id, fields, submitText, captcha: FORM_CAPTCHA.test(body) ? 'a captcha on the form' : FORM_QUIZ.test(textOf(body)) ? 'a question that checks for robots' : null });
   }
   return forms;
 }
 
 /** A captcha anywhere on the page, as contact-form-delivery.ts snapshot() judges it. */
-export function pageCaptcha(html: string): string | null {
-  const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? '';
+export function pageCaptcha(full: string): string | null {
+  const html = full.slice(0, MAX_FORM_HTML);
+  const title = /<title[^>]{0,500}>([\s\S]{0,2000}?)<\/title>/i.exec(html)?.[1] ?? '';
   if (/just a moment|attention required|verify you are human/i.test(title)) return 'a Cloudflare check guards the page';
   if (/google\.com\/recaptcha|recaptcha\/api\.js|grecaptcha|g-recaptcha/i.test(html)) return 'reCAPTCHA';
   if (/hcaptcha\.com|h-captcha/i.test(html)) return 'hCaptcha';
