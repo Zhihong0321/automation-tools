@@ -462,15 +462,16 @@ type Taken = { job_id: string; place_key: string; run_id: string };
 /**
  * Up to `limit` leads of a job, marked running for `by` until its lease ends,
  * so no other loop (this hub's or a PC's) takes them too. A lead whose taker
- * went quiet past its lease is taken again; one taken too often is closed.
+ * went quiet past its lease is taken again (one taken before leases existed
+ * has none, and counts as ended); one taken too often is closed.
  */
 async function takeLeads(jobId: string, limit: number, by: string, leaseSeconds: number): Promise<Taken[]> {
   await db.sql(`update list_step2_lead set status = 'done', best_contact_method = 'no-viable-contact-method', error = 'not finished after ${MAX_ATTEMPTS} tries'
-    where job_id = $1 and status = 'running' and taken_until < now() and attempts >= $2`, [jobId, MAX_ATTEMPTS]);
+    where job_id = $1 and status = 'running' and coalesce(taken_until, '-infinity') < now() and attempts >= $2`, [jobId, MAX_ATTEMPTS]);
   return (await db.sql<Taken>(`
     update list_step2_lead set status = 'running', attempts = attempts + 1, taken_by = $3, taken_until = now() + make_interval(secs => $4), updated_at = now()
     where job_id = $1 and place_key in (
-      select place_key from list_step2_lead where job_id = $1 and (status = 'pending' or (status = 'running' and taken_until < now()))
+      select place_key from list_step2_lead where job_id = $1 and (status = 'pending' or (status = 'running' and coalesce(taken_until, '-infinity') < now()))
       order by place_key limit $2 for update skip locked)
     returning job_id, place_key, run_id`, [jobId, limit, by, leaseSeconds])).rows;
 }
