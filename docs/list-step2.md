@@ -144,6 +144,28 @@ again every minute. Only outbound requests.
 This PC (`pc-desktop-camhl16`) joined the first full run on 2026-10-31 at 06:17
 and did 12 leads every 5–15 seconds, about 50 a minute.
 
+### The Mac mini shares it too
+
+The Mac mini that runs the Maps scans runs the same `worker.ts` as a third worker,
+`mac-mini`. `worker.ts` is written for any OS, so nothing about it is Windows-only:
+on macOS it reads `~/.step2-worker/worker.env` and logs to `worker.log` beside it.
+
+- **It uses LAB_TOKEN, not a worker key.** The mini already holds LAB_TOKEN for the
+  Maps lanes, and LAB_TOKEN reaches the worker routes too, so there is no second
+  secret to mint or store. A PC that should never hold LAB_TOKEN still uses
+  `GMAP_WORKER_KEY`; `worker.ts` takes whichever of the two the env file has.
+- **Autostart:** the LaunchAgent `worker/com.eternalgy.step2worker.plist`, with
+  `RunAtLoad` and `KeepAlive`, so it starts at login and is restarted if it dies.
+  Install and stop lines are in `worker/README.md` under "The Step 2 Worker".
+- **Settings:** `LAB_URL`, `LAB_TOKEN`, `WORKER_NAME=mac-mini`, `CONCURRENCY=8`.
+- **Speed:** it joined the full run on 2026-10-31 at 06:39 UTC and settled at 16
+  leads every 6–12 seconds — **357 leads in 4 measured minutes, 89 a minute**, about
+  three fifths again as fast as the PC's ~50. Its first few batches ran at half that
+  while nothing was cached; judge it after a minute, not on batch one.
+
+Nothing about the hub changed to admit it: it takes leases from the same two routes
+as the PC, and a reboot of the mini just leaves its last batch to its 15-minute lease.
+
 ### Where the results are stored
 
 In the report database, beside `search_list_place`:

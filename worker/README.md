@@ -310,6 +310,65 @@ pmset -g | grep -E 'autorestart|^ sleep'
 Both must read what you set them to. `displaysleep` does not matter; only the machine
 sleeping does.
 
+## The Step 2 Worker — the mini also shares List processing
+
+Separate from the Maps lanes above, the mini runs a second worker that shares
+**step 2 of List processing** with the hub and the Windows PC. Step 2 re-reads each
+business's website for a contact form, collects emails, checks their MX records,
+types the phones and picks a `best_contact_method` — plain web requests and DNS
+only, no LLM and nothing paid, so it costs nothing to leave running. It submits
+nothing. See `docs/list-step2.md` for what step 2 does and how the leases work.
+
+It is `agy-lab/step2-worker/worker.ts`, the same file the Windows PC runs, run
+straight as TypeScript by Node 24. Nothing is built, so it always runs the
+checkout's current step-2 code — a `git pull` is the whole upgrade.
+
+```bash
+# 1. Deps, once (and after any package change)
+cd ~/automation-tools/agy-lab && npm install --omit=dev
+
+# 2. Settings. The mini already holds LAB_TOKEN, which reaches the worker routes,
+#    so it uses that rather than the PC's GMAP_WORKER_KEY. chmod 600, never the plist.
+mkdir -p ~/.step2-worker && chmod 700 ~/.step2-worker
+umask 077; cat > ~/.step2-worker/worker.env <<EOF
+LAB_URL=https://ee-auto.up.railway.app
+LAB_TOKEN=$(grep -m1 '^LAB_TOKEN=' ~/.gmap-worker.env | cut -d= -f2-)
+WORKER_NAME=mac-mini
+CONCURRENCY=8
+EOF
+
+# 3. Foreground FIRST, the same rule as the Maps worker. Ctrl-C after a batch or two.
+cd ~/automation-tools/agy-lab/step2-worker && node worker.ts
+```
+
+Keep it running, as a LaunchAgent:
+
+```bash
+sed -e "s|__HOME__|$HOME|g" -e "s|__NODE__|$(which node)|g" \
+    worker/com.eternalgy.step2worker.plist > ~/Library/LaunchAgents/com.eternalgy.step2worker.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.eternalgy.step2worker.plist
+tail -f ~/.step2-worker/worker.log
+```
+
+- **Stop it:** `launchctl bootout gui/$(id -u)/com.eternalgy.step2worker`.
+- **Start it again:** the `bootstrap` line above.
+- **After a Node change,** re-run the `sed` and `bootstrap` lines: the plist holds the
+  absolute Node path baked in at install, the same trap as the Maps plists. This one
+  was installed against nvm's `v24.13.1`.
+- **Logs:** `~/.step2-worker/worker.log` is the worker's own; `launchd.log` beside it
+  catches anything it dies before writing.
+
+An agent is right here only because this mini logs in automatically
+(`autoLoginUser` is set), so it comes back by itself after a reboot — the warning
+under "Keep it running" applies to this job too. If autologin is ever turned off,
+this needs the daemon treatment as well.
+
+**Measured on 2026-10-31,** at `CONCURRENCY=8`: 16 leads a batch, 6–12 s a batch
+once warm — **357 leads in 4 minutes, 89 a minute**, against the Windows PC's ~50.
+The first few batches after a start are about half speed, so read the rate off a
+minute of `worker.log`, not off batch one. The hub's `doneBy` counts it as
+`mac-mini`; 510 leads in its first five minutes.
+
 ## Reading the failure modes
 
 | What you see | What it is |
