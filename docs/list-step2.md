@@ -183,6 +183,21 @@ later; the Maps fields stay in `search_list_place`, joined on
 
 ### When something goes wrong
 
+**Freak pages.** On 2026-10-31 the hub froze twice: at 07:42 UTC, and again
+15 seconds after a restart. A page in flight sent a page-reading pattern into
+quadratic time on the main thread, so every pipeline on the hub stopped
+answering. Since then:
+
+- Each lead's pages are read in a worker thread (`list-step2-thread.ts`, via
+  `makeReader`), one per loop, on the hub and on the PC and Mac workers.
+- A lead still being read after 2 minutes is let go. Its thread is stopped,
+  and the lead is worked without its website, from what step 1 stored. Its
+  form detail says so.
+- The page-reading patterns in `list-step2.ts`, `site-emails.ts` and
+  `country/country-industry-research.mjs` are bounded or single-pass. A
+  300,000-character run of digits, spaces, letters, `<` or unclosed tags reads
+  in about 0.1 s. The test is "freak pages are read in linear time".
+
 Each finished lead is one saved row, so a redeploy or a pause loses only the
 leads in flight, and they are taken again. A lead taken three times without
 finishing (a hub that kept dying on it) is closed with an error and
