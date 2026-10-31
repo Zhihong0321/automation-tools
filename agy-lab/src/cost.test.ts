@@ -29,15 +29,15 @@ test('every call is kept one by one with its time, tokens and cost', () => {
 
 test('a deeper-dive meter with a call log is priced from the log, retries and failures included', () => {
   const calls = [
-    startCall('llm', 'a', { model: 'deepseek-a' }).done({ ok: false, note: 'HTTP 429' }),
-    startCall('llm', 'a', { model: 'deepseek-a' }).done({ ok: false, tokensIn: 50, tokensOut: 5, note: 'empty answer' }),
-    startCall('llm', 'a', { model: 'deepseek-a' }).done({ ok: true, tokensIn: 100, tokensOut: 20 }),
+    startCall('llm', 'a', { model: 'deepseek-v-a' }).done({ ok: false, note: 'HTTP 429' }),
+    startCall('llm', 'a', { model: 'deepseek-v-a' }).done({ ok: false, tokensIn: 50, tokensOut: 5, note: 'empty answer' }),
+    startCall('llm', 'a', { model: 'deepseek-v-a' }).done({ ok: true, tokensIn: 100, tokensOut: 20 }),
     startCall('exa', 'q').done({ ok: true, usd: 0.03 }),
     startCall('brave', 'q').done({ ok: true }),
     startCall('web', 'https://x').done({ ok: true }),
   ];
   const u = addMeter(emptyUsage(), { calls, llm: { calls: 99 } as any });
-  assert.deepEqual(u.llm['deepseek-a'], { calls: 2, tokensIn: 150, tokensOut: 25, estimated: false });
+  assert.deepEqual(u.llm['deepseek-v-a'], { calls: 2, tokensIn: 150, tokensOut: 25, estimated: false });
   assert.equal(u.failedCalls, 1);
   assert.equal(u.exaDollars, 0.03);
   assert.equal(u.braveCalls, 1);
@@ -78,12 +78,17 @@ test('a model with no price is counted and named, not guessed', () => {
 
 test('deeper-dive meters add up, old ones split tokens by calls', () => {
   const u = emptyUsage();
-  addMeter(u, { llm: { calls: 2, failed: 0, promptChars: 0, answerChars: 0, tokensIn: 100, tokensOut: 50, byModel: { 'deepseek-a': 2 }, byModelTokens: { 'deepseek-a': { in: 100, out: 50 } } },
+  addMeter(u, { llm: { calls: 2, failed: 0, promptChars: 0, answerChars: 0, tokensIn: 100, tokensOut: 50, byModel: { 'deepseek-v-a': 2 }, byModelTokens: { 'deepseek-v-a': { in: 100, out: 50 } } },
     maps: { calls: 3, failed: 0, byTool: {} }, exa: { calls: 2, failed: 0, results: 0, priced: 1, dollars: 0.02 }, brave: { calls: 1, failed: 0 }, http: { calls: 4, failed: 0 } });
-  addMeter(u, { llm: { calls: 4, tokensIn: 400, tokensOut: 0, byModel: { 'deepseek-a': 3, 'gpt-x': 1 } } as any });
-  assert.deepEqual(u.llm['deepseek-a'], { calls: 5, tokensIn: 400, tokensOut: 50, estimated: true });
+  addMeter(u, { llm: { calls: 4, tokensIn: 400, tokensOut: 0, byModel: { 'deepseek-v-a': 3, 'gpt-x': 1 } } as any });
+  assert.deepEqual(u.llm['deepseek-v-a'], { calls: 5, tokensIn: 400, tokensOut: 50, estimated: true });
   assert.deepEqual(u.llm['gpt-x'], { calls: 1, tokensIn: 100, tokensOut: 0, estimated: true });
   const cost = price(u);
   assert.ok(Math.abs(cost.lines.find((l) => l.item === 'Exa')!.usd! - (0.02 + PRICES.exaSearch)) < 1e-12);
   assert.deepEqual(cost.unpriced, ['gpt-x (1 call)']);
+});
+
+test('Hive deepseek has no price on record: counted and named, not priced at the Vectide rate', () => {
+  const cost = price(diveUsage({ llm: [{ step: 'x', engine: 'deepseek-ai/deepseek-v4.1-flash-1017', ms: 1, promptChars: 0, answerChars: 0, tokensIn: 10, tokensOut: 10 }] }));
+  assert.deepEqual(cost.unpriced, ['deepseek-ai/deepseek-v4.1-flash-1017 (1 call)']);
 });

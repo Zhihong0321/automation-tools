@@ -12,8 +12,9 @@ const CNY_PER_USD = 7.2;
 
 /** USD per million tokens, input and output alike, by model name. */
 const LLM_PER_M: Array<{ model: RegExp; usd: number }> = [
-  // Vectide 1B-token pack (VECTIDE_DEEPSEEK_KEY): CNY 100 for 1,000M tokens.
-  { model: /^deepseek/i, usd: 100 / 1000 / CNY_PER_USD },
+  // Vectide 1B-token pack (VECTIDE_DEEPSEEK_KEY): CNY 100 for 1,000M tokens. Vectide names the model
+  // deepseek-v...; Hive's "deepseek-ai/..." has no price on record, so it is listed unpriced, not guessed.
+  { model: /^deepseek-v/i, usd: 100 / 1000 / CNY_PER_USD },
 ];
 
 export const PRICES = {
