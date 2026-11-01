@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shortName, urlKey, Ledger, corpus, parseJson, stripThinking, Budget, BudgetSpent, budgetedCall } from './companydive.ts';
+import { shortName, urlKey, Ledger, corpus, parseJson, stripThinking, Budget, BudgetSpent, budgetedCall, diveRunning, setRunningForTests, LANE_HOLD_MS } from './companydive.ts';
 
 test('shortName drops Malaysian and common company suffixes', () => {
   assert.equal(shortName('Eternalgy Sdn Bhd'), 'Eternalgy');
@@ -110,4 +110,15 @@ test('reportPage embeds the data so a </script> in the log cannot end the tag', 
   assert.equal(html.includes('</script><b>x'), false);
   assert.match(html, /data-id="abcdefghijklmnopqrst"/);
   assert.match(reportPage(null, 'abcdefghijklmnopqrst'), /Report not found/);
+});
+
+test('a running dive pauses contact research for at most LANE_HOLD_MS, then lets it go on', () => {
+  const now = Date.now();
+  setRunningForTests(null);
+  assert.equal(diveRunning(now), false);
+  setRunningForTests(now - 5 * 60_000);
+  assert.equal(diveRunning(now), true);
+  setRunningForTests(now - LANE_HOLD_MS - 1);
+  assert.equal(diveRunning(now), false);
+  setRunningForTests(null);
 });

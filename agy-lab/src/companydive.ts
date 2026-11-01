@@ -867,12 +867,35 @@ async function execute(id: number): Promise<void> {
   }
 }
 
+/** When each running dive started; the contact worker reads it through diveRunning(). */
+const runningSince = new Map<number, number>();
+
 function pump(): void {
   while (active < CONCURRENCY && waiting.length) {
     const id = waiting.shift()!;
     active++;
-    execute(id).finally(() => { active--; pump(); });
+    runningSince.set(id, Date.now());
+    execute(id).finally(() => { active--; runningSince.delete(id); pump(); });
   }
+}
+
+/** A dive shares the deepseek lanes with contact research. One holding them longer than this no longer pauses it. */
+export const LANE_HOLD_MS = 30 * 60_000;
+
+/**
+ * True while a dive started in the last LANE_HOLD_MS is running: the contact
+ * worker takes no new job then, so the dive has the LLM lanes to itself. A dive
+ * that runs longer stops holding them; nothing is cut either way.
+ */
+export function diveRunning(now = Date.now()): boolean {
+  for (const started of runningSince.values()) if (now - started < LANE_HOLD_MS) return true;
+  return false;
+}
+
+/** Tests: mark a dive as running since `at`, or clear them all with null. */
+export function setRunningForTests(at: number | null): void {
+  runningSince.clear();
+  if (at !== null) runningSince.set(-1, at);
 }
 
 /** Dives live only in this process, so one still queued or running at boot was cut off by a restart. */

@@ -13,6 +13,7 @@
 // printed in text we handed it; a name is kept only as it is printed there.
 import * as db from './reportdb.ts';
 import * as jobs from './jobs.ts';
+import * as companyDive from './companydive.ts';
 import { llm as extractLlm, pi, search, tavily } from './core/index.ts';
 
 export const JOB_TYPE = 'research.contact.pi';
@@ -986,6 +987,11 @@ async function lane(name: string, env: NodeJS.ProcessEnv): Promise<void> {
       // No search key, or every one resting: leave jobs pending rather than take one and wait on it.
       if (!search.available()) {
         await new Promise((resolve) => setTimeout(resolve, 60_000));
+        continue;
+      }
+      // A company dive is running: take nothing new, so the dive has the LLM lanes (companydive.diveRunning).
+      if (companyDive.diveRunning()) {
+        await new Promise((resolve) => setTimeout(resolve, 10_000));
         continue;
       }
       const job = await jobs.take(name, { types: [JOB_TYPE], waitMs: 5_000 });
