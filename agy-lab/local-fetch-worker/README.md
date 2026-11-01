@@ -55,15 +55,32 @@ The vendor comparisons that claim Firecrawl ~95% vs Crawl4AI ~90% (and 88% vs
 72% on anti-bot pages) are all measured **from datacenter IPs**. Most of that gap
 is the ASN, not the renderer, and the ASN is the one thing this machine fixes.
 
-## `fit`, not `bm25`
+## `raw`, not `fit`, not `bm25`
 
 `/md` takes `f`: `fit` (its Readability pass), `raw` (the whole DOM), `bm25` and
-`llm`. The worker asks for **`fit`**, and falls back to `raw` only when `fit`
-returns under 200 characters — an over-eager filter looks exactly like an empty
-page to everything downstream, and that is the failure worth guarding.
+`llm`. The worker asks for **`raw`**.
 
-`bm25` is the obvious choice for "pages about this company" and it is a trap.
-Measured on the same three pages:
+`fit` was the first choice and it measured worse than what it replaced. On
+2026-11-02, 12 pages dives had read went through both this worker and Tavily
+`/extract` (advanced, markdown, exactly what dives bought before):
+
+| | Tavily | `fit` | `raw` |
+|---|---|---|---|
+| Tavily's words kept (11 pages) | 100% | ~67% (36–94%) | ~99% (98–100%) |
+| phones, emails, SSM numbers kept (78 in Tavily's text) | 78 | 33 | 78 |
+
+`fit` cuts footers and side panels as chrome, and that is where a company prints
+its registration number, phone and email: Eternalgy's own SSM numbers on its
+services pages, all of Samaiden's emails. `raw` is about Tavily's own size per
+page, so a dive gets what it got before.
+
+With `raw` and the error fix below, all 12 pages through this worker's
+`readPage` on the PC: 99% of Tavily's words (5,023 of 5,063), and every phone,
+email and SSM number Tavily's text had (the one regex "miss" was a timestamp in
+an image URL). No page came back as an error message.
+
+`bm25` is the obvious choice for "pages about this company" and it is the worst
+trap of the three. Measured on three pages on 2026-11-01:
 
 | page | `fit` | `raw` | `bm25` |
 |---|---|---|---|
@@ -74,6 +91,17 @@ Measured on the same three pages:
 It keeps ~3% of the page — and a registration number or a director's name lives
 in the part it throws away. It is a snippet generator, not a page reader. Do not
 reach for it again without re-measuring.
+
+Crawl4AI also reports a page its parser choked on **as the markdown**, with
+`success: true`: `Crawl4AI Error: This page is not fully supported...` (seen on
+newpages.com.my, whose HTML carries control characters Crawl4AI's HTML step
+refuses). `worker.ts` turns that into a failed page instead of passing the
+paragraph on as text. The Windows `crawl4ai_server.py` first retries such a page
+with the control characters stripped inside the browser, which read newpages at
+24,004 characters against Tavily's 24,585. Switching to the BeautifulSoup parser
+does not help (it fails the same way), and feeding the fetched HTML back as
+`raw:` garbles it. The Docker image on the mini has no such retry, so there that
+page is a failed page rather than a wrong one.
 
 One more wording trap: Crawl4AI answers **"URL blocked (SSRF protection)"** for a
 host that simply has no DNS record. Every such answer measured here was a dead
@@ -115,7 +143,7 @@ That must print `127.0.0.1:11235` and nothing else. And the token must be
 enforced — this has to answer `401`:
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:11235/md -H 'content-type: application/json' -d '{"url":"https://example.com","f":"fit"}'
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:11235/md -H 'content-type: application/json' -d '{"url":"https://example.com","f":"raw"}'
 ```
 
 **3. Settings.** `~/.local-fetch-worker/worker.env`, `chmod 600` — never in the

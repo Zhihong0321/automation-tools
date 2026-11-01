@@ -49,6 +49,28 @@ PAGE_TIMEOUT_MS = 40_000
 
 BLOCKED = 'URL blocked (SSRF protection)'
 
+# Crawl4AI's HTML step refuses a page whose text or attributes carry control
+# characters, and answers success with "Crawl4AI Error: ... All strings must be
+# XML compatible" AS the markdown (newpages.com.my does this). Both of its
+# parsers fail the same way, and feeding the fetched HTML back as raw: garbles
+# it. Stripping the characters inside the page and reading again works: that
+# page then came back at 24,005 characters, its SSM number and email included,
+# where Tavily read 24,585. Only run as a retry, so a normal page is read
+# exactly as before.
+CRAWL_ERROR = 'Crawl4AI Error:'
+CLEAN_PAGE = r'''
+const bad = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+const all = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
+const walk = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_COMMENT);
+const dead = [];
+for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+  if (n.nodeType === 8) dead.push(n);
+  else if (bad.test(n.nodeValue)) n.nodeValue = n.nodeValue.replace(all, ' ');
+}
+dead.forEach((n) => n.remove());
+for (const el of document.querySelectorAll('*')) for (const a of [...el.attributes]) if (bad.test(a.value)) el.setAttribute(a.name, a.value.replace(all, ' '));
+'''
+
 
 def public_host(url: str) -> None:
     """Raise unless every address the host resolves to is public."""
@@ -93,17 +115,29 @@ class Reader:
             crawler = await self.browser()
             self.busy += 1
             try:
-                generator = DefaultMarkdownGenerator() if f == 'raw' else DefaultMarkdownGenerator(content_filter=PruningContentFilterLXML())
-                result = await crawler.arun(url=url, config=CrawlerRunConfig(
-                    markdown_generator=generator, scraping_strategy=LXMLWebScrapingStrategy(),
-                    cache_mode=CacheMode.BYPASS, page_timeout=PAGE_TIMEOUT_MS, verbose=False))
+                result = await self.read(crawler, url, f)
+                if result.success and self.text(result, f).lstrip().startswith(CRAWL_ERROR):
+                    result = await self.read(crawler, url, f, CLEAN_PAGE)
             finally:
                 self.busy -= 1
                 self.served += 1
             if not result.success:
                 raise web.HTTPBadGateway(text=json_detail(result.error_message or 'the page could not be read'),
                                          content_type='application/json')
-            return result.markdown.raw_markdown if f == 'raw' else result.markdown.fit_markdown
+            return self.text(result, f)
+
+    @staticmethod
+    async def read(crawler: AsyncWebCrawler, url: str, f: str, js_code: str | None = None):
+        generator = DefaultMarkdownGenerator() if f == 'raw' else DefaultMarkdownGenerator(content_filter=PruningContentFilterLXML())
+        return await crawler.arun(url=url, config=CrawlerRunConfig(
+            markdown_generator=generator, scraping_strategy=LXMLWebScrapingStrategy(),
+            cache_mode=CacheMode.BYPASS, page_timeout=PAGE_TIMEOUT_MS, verbose=False, js_code=js_code))
+
+    @staticmethod
+    def text(result, f: str) -> str:
+        if not result.markdown:
+            return ''
+        return result.markdown.raw_markdown if f == 'raw' else result.markdown.fit_markdown
 
 
 def json_detail(detail: str) -> str:

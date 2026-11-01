@@ -43,8 +43,6 @@ const BEAT_MS = 30_000;
 const IDLE_MS = 15_000;
 /** One page. Past this the page is a failed_result, not a stuck job. */
 const PAGE_MS = 45_000;
-/** A read this short means the filter kept nothing worth having. */
-const MIN_CHARS = 200;
 /** What one page may contribute, so twenty pages cannot blow the hub's payload. */
 const MAX_PAGE_CHARS = 60_000;
 
@@ -98,23 +96,32 @@ export function plainError(detail: string): string {
 }
 
 /**
- * One page through Crawl4AI's /md.
+ * Crawl4AI hands back its own failure AS the markdown, with success true, when
+ * its parser chokes on a page (newpages.com.my: "Crawl4AI Error: This page is
+ * not fully supported. Error Message: All strings must be XML compatible...").
+ * Passed on, that paragraph reached a dive as the page's text.
+ */
+export function crawlError(markdown: string): string | null {
+  const m = /^\s*Crawl4AI Error:\s*(.*?)(?:\s+Possible reasons:|$)/s.exec(markdown);
+  return m ? 'crawl4ai could not parse the page: ' + m[1]!.replace(/\s+/g, ' ').slice(0, 200) : null;
+}
+
+/**
+ * One page through Crawl4AI's /md, as `raw`: the whole page as markdown,
+ * footer, contact block and side panels included.
  *
- * `fit` is its Readability pass: the page with nav, footer and cookie bars
- * stripped — the part we used to buy from Tavily. `raw` is the whole DOM as
- * markdown, and is the fallback only when `fit` keeps so little that the filter
- * has clearly misfired, because an over-eager filter looks exactly like an
- * empty page to everything downstream.
- *
- * NOT `bm25`, though it is the obvious choice for "pages about this company".
- * Measured on 2026-11-01 against the same three pages, bm25 kept 328, 475 and
- * 181 characters where `fit` kept 5957, 4889 and 1374 — it throws away ~97% of
- * the page, which is where a registration number or a director's name lives. It
- * is a search snippet generator, not a page reader. Do not reach for it again
- * without re-measuring.
+ * NOT `fit`, and NOT `bm25`. Both throw away the parts of a page that company
+ * research is for. Measured on 2026-11-02 against Tavily /extract (advanced,
+ * markdown, what dives bought before) on 12 pages dives had read: `fit` kept
+ * about 67% of Tavily's words and 33 of the 78 phones, emails and SSM numbers
+ * in Tavily's text, because its Readability pass cuts footers and side panels
+ * as chrome, and that is where a company prints its registration number and
+ * phone. `raw` kept about 99% of the words and all 78. bm25 is worse again: on
+ * 2026-11-01 it kept 328, 475 and 181 characters where fit kept 5957, 4889 and
+ * 1374. Do not swap the mode back without re-measuring against Tavily's text.
  */
 export async function readPage(url: string): Promise<Read> {
-  const ask = async (f: 'fit' | 'raw'): Promise<string> => {
+  const ask = async (f: 'raw'): Promise<string> => {
     const res = await fetch(C4AI + '/md', {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(C4AI_TOKEN ? { authorization: 'Bearer ' + C4AI_TOKEN } : {}) },
@@ -135,11 +142,9 @@ export async function readPage(url: string): Promise<Read> {
   };
 
   try {
-    let markdown = (await ask('fit')).trim();
-    if (markdown.length < MIN_CHARS) {
-      const raw = (await ask('raw')).trim();
-      if (raw.length > markdown.length) markdown = raw;
-    }
+    const markdown = (await ask('raw')).trim();
+    const failed = crawlError(markdown);
+    if (failed) return { url, error: failed };
     if (!markdown) return { url, error: 'the page had no readable text' };
     return { url, markdown: markdown.length > MAX_PAGE_CHARS ? markdown.slice(0, MAX_PAGE_CHARS) : markdown };
   } catch (err) {

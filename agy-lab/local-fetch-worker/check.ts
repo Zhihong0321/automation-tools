@@ -10,7 +10,7 @@
 //
 // The default list is deliberately mixed: two real company sites, one host with
 // no DNS record (which must come back as a clean error, not a crash) and one
-// page that is mostly chrome (which is where the fit→raw fallback earns itself).
+// page that is mostly chrome (raw keeps it all; a dive gets what Tavily gave it).
 import { readPage, plainError } from './worker.ts';
 
 const DEFAULT_URLS = [
