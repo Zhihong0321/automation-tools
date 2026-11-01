@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ask, chat, config, lanesFor, pool, resetForTests, restingUntilFor } from './llm.ts';
+import { ask, chat, config, lanesFor, pool, resetForTests, restingUntilFor, setLanesForTests } from './llm.ts';
 
 const cfg = { url: 'https://llm.example/v1', key: 'k', model: 'deepseek-v4.1-flash-1017' };
 const reply = (status: number, body: unknown) => (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
@@ -141,7 +141,8 @@ test('chat streams: content deltas joined, reasoning dropped, tokens read, no ma
     return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
   }) as typeof fetch;
   const log: import('../cost.ts').ApiCall[] = [];
-  const out = await chat('hi', { step: 'triage', lanes: [{ ...cfg, label: 'Vectide coding plan' }], fetchImpl: fake, log, fallback: false });
+  setLanesForTests([{ ...cfg, label: 'Vectide coding plan' }]);
+  const out = await chat('hi', { step: 'triage', fetchImpl: fake, log, fallback: false });
   assert.equal(out.answer, '{"ok": true}');
   assert.deepEqual([out.tokensIn, out.tokensOut], [12, 34]);
   assert.deepEqual(sent.stream_options, { include_usage: true });
@@ -158,8 +159,9 @@ test('a lane that answers 429 rests and the call moves to the next lane at once;
     { url: 'https://h1.example/v1', key: 'h1', model: 'deepseek-ai/deepseek-v4.1-flash-1017', label: 'Hive 1' },
   ];
   const fetchImpl = (async (url: string) => url.startsWith('https://v.') ? new Response('{"error":"busy"}', { status: 429 }) : okAnswer('done')) as unknown as typeof fetch;
+  setLanesForTests(lanes);
   const log: import('../cost.ts').ApiCall[] = [];
-  const out = await chat('x', { step: 's', lanes, fetchImpl, log, fallback: false });
+  const out = await chat('x', { step: 's', fetchImpl, log, fallback: false });
   assert.equal(out.answer, 'done');
   assert.equal(out.lane, 'Hive 1');
   assert.deepEqual(log.map((c) => [c.provider, c.ok]), [['Vectide', false], ['Hive 1', true]]);
@@ -176,7 +178,8 @@ test('lanes serve calls in parallel: a busy lane hands the next call to a free o
     await new Promise((r) => setTimeout(r, 20));
     return okAnswer('ok');
   }) as unknown as typeof fetch;
-  await Promise.all(Array.from({ length: 9 }, () => chat('x', { step: 's', lanes, fetchImpl, fallback: false })));
+  setLanesForTests(lanes);
+  await Promise.all(Array.from({ length: 9 }, () => chat('x', { step: 's', fetchImpl, fallback: false })));
   assert.deepEqual(['a', 'b', 'c'].map((k) => served.filter((s) => s === k).length), [3, 3, 3]);
 });
 
@@ -194,11 +197,12 @@ test('a use-first lane takes every parallel call; the others serve only once it 
     await new Promise((r) => setTimeout(r, 20));
     return okAnswer('ok');
   }) as unknown as typeof fetch;
-  await Promise.all(Array.from({ length: 8 }, () => chat('x', { step: 's', lanes, fetchImpl, fallback: false })));
+  setLanesForTests(lanes);
+  await Promise.all(Array.from({ length: 8 }, () => chat('x', { step: 's', fetchImpl, fallback: false })));
   assert.deepEqual(served, Array(8).fill('v'));
   served.length = 0;
   limited = true;
-  await Promise.all(Array.from({ length: 4 }, () => chat('x', { step: 's', lanes, fetchImpl, fallback: false })));
+  await Promise.all(Array.from({ length: 4 }, () => chat('x', { step: 's', fetchImpl, fallback: false })));
   assert.equal(served.filter((s) => s === 'h').length, 4);
 });
 

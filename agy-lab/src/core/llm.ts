@@ -34,6 +34,7 @@
 
 import * as db from '../reportdb.ts';
 import * as pi from './pi.ts';
+import * as vault from './vault.ts';
 import { startCall, type ApiCall } from '../cost.ts';
 
 type FetchImpl = typeof fetch;
@@ -69,7 +70,20 @@ function envPool(env: NodeJS.ProcessEnv): LlmConfig[] {
   for (const hiveKey of (env.CONTACT_LLM_HIVE_KEYS ?? '').split(',').map((k) => k.trim()).filter(Boolean)) {
     out.push({ url: hiveUrl, key: hiveKey, model: hiveModel });
   }
-  return out;
+  return out.length || env !== process.env ? out : vaultLanes();
+}
+
+/** A dev machine with no hub database and no CONTACT_LLM_*: the vault's deepseek and gpt keys. */
+function vaultLanes(): LlmConfig[] {
+  return [['VECTIDE_DEEPSEEK_KEY', 'deepseek-v4.1-flash-1017'], ['ZM_AI_FIXED_KEY', 'gpt-6.1-sol']].flatMap(([name, model]) => {
+    const c = vault.entry(name!);
+    return c?.secret && c.baseUrl ? [{ url: c.baseUrl.replace(/\/+$/, ''), key: c.secret, model: model!, label: `vault ${name}` }] : [];
+  });
+}
+
+/** True when a call can be answered: a lane, or MiniMax. */
+export function ready(env: NodeJS.ProcessEnv = process.env): boolean {
+  return pool(env).length > 0 || Boolean(pi.config(env).apiKey);
 }
 
 /** The first lane, or null when no lane is configured at all. */
@@ -153,7 +167,13 @@ export function busyFor(key: string): number {
 }
 
 /** Test hook: forget turns, rests and slots. */
+/** Tests: serve calls from these lanes as if saved on /workers; null clears them. */
+export function setLanesForTests(lanes: LlmConfig[] | null): void {
+  saved = lanes ?? [];
+}
+
 export function resetForTests(): void {
+  saved = [];
   turn = 0;
   restingUntil.clear();
   inFlight.clear();
@@ -330,8 +350,6 @@ export type ChatOpts = {
   log?: ApiCall[];
   /** MiniMax as the last resort; on unless false. */
   fallback?: boolean;
-  /** Lanes to use only when no saved lane serves the model (a local script reading the vault). */
-  lanes?: LlmConfig[];
   fetchImpl?: FetchImpl;
 };
 
@@ -349,8 +367,7 @@ export async function chat(prompt: string, opts: ChatOpts): Promise<ChatAnswer> 
   const minimaxOn = opts.fallback !== false && Boolean(pi.config().apiKey);
   const errors: string[] = [];
   for (let r = 0; r <= WAITS.length; r++) {
-    const saved = lanesFor(opts.model ?? 'deepseek');
-    const lanes = saved.length ? saved : lanesFor(opts.model ?? 'deepseek', opts.lanes ?? []);
+    const lanes = lanesFor(opts.model ?? 'deepseek');
     if (!lanes.length && !minimaxOn) throw fail('not_configured', `no lane serves ${opts.model ?? 'deepseek'}: add one on /workers`);
     if (lanes.length) {
       try {
@@ -389,18 +406,22 @@ async function minimax(prompt: string, opts: ChatOpts): Promise<Omit<ChatAnswer,
 }
 
 /**
- * One pass over the lanes and no MiniMax: for callers with their own retry and
- * cooldown (contact research, email replies). Throws the last lane's error,
- * code intact.
+ * One pass over the lanes: for callers with their own retry and cooldown
+ * (contact research, email replies). With no lane at all, MiniMax answers
+ * instead. Throws the last lane's error, code intact.
  */
 export async function ask(
   prompt: string,
-  opts: { timeoutMs?: number; maxTokens?: number; step?: string; log?: ApiCall[] } = {},
+  opts: { timeoutMs?: number; maxTokens?: number; step?: string; log?: ApiCall[]; thinking?: pi.ThinkingLevel } = {},
   cfg: LlmConfig | LlmConfig[] | null = pool(),
   fetchImpl: FetchImpl = fetch,
 ): Promise<{ answer: string; ms: number; model: string }> {
   const all = Array.isArray(cfg) ? cfg : cfg ? [cfg] : [];
-  if (!all.length) throw fail('not_configured', 'no LLM lane is saved on /workers (and CONTACT_LLM_* is not set)');
+  if (!all.length) {
+    const started = Date.now();
+    const out = await agent(prompt, { tools: false, step: opts.step, log: opts.log, ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}), ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}), ...(opts.thinking ? { thinking: opts.thinking } : {}) });
+    return { answer: out.answer, ms: Date.now() - started, model: `pi/${pi.config().model}` };
+  }
   const started = Date.now();
   const out = await round(opts.step ?? 'ask', toMessages(prompt), all, opts, fetchImpl, opts.log);
   return { answer: out.answer, ms: Date.now() - started, model: out.lane.model };

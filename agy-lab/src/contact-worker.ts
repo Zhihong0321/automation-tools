@@ -13,7 +13,7 @@
 // printed in text we handed it; a name is kept only as it is printed there.
 import * as db from './reportdb.ts';
 import * as jobs from './jobs.ts';
-import { exa, llm as extractLlm, pi, tavily } from './core/index.ts';
+import { llm as extractLlm, pi, search, tavily } from './core/index.ts';
 
 export const JOB_TYPE = 'research.contact.pi';
 export const WORKER_NAME = 'pi-contact';
@@ -319,32 +319,40 @@ export function toSources(target: Target, hits: tavily.SearchHit[], provider: Pr
   return sources;
 }
 
-/** The two general searches (name and address; name and "phone email contact") with one provider's key. */
+/**
+ * The two general searches (name and address; name and "phone email contact")
+ * through core/search.ts. `provider` is only a preference: core takes the keys,
+ * rests a spent one and moves to the other provider when one has no credit.
+ */
 export async function generalSearch(
   target: Target,
-  provider: Provider,
-  apiKey: string,
+  provider?: Provider,
   fetchImpl: FetchImpl = fetch,
   timeoutMs = 30_000,
 ): Promise<Searched> {
   const queries = generalQueries(target);
-  const lists = await Promise.all(queries.map((query) => provider === 'tavily'
-    ? tavily.searchWithKey(query, apiKey, { maxResults: 8, depth: 'advanced', timeoutMs, fetchImpl })
-    : exa.searchWithKey(query, apiKey, { numResults: 8, timeoutMs, fetchImpl })));
+  const first = provider ?? search.pickGeneral(search.available('tavily'), search.available('exa')) ?? 'tavily';
+  const answers = await Promise.all(queries.map((query) => search.web(query, { provider: first, maxResults: 8, depth: 'advanced', timeoutMs, fetchImpl })));
+  const seen = new Set<string>();
+  const sources = answers.flatMap((answer) => toSources(target, answer.hits, answer.provider)).filter((source) => {
+    const key = dedupeKey(source.url);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   return {
-    sources: toSources(target, lists.flat(), provider),
+    sources,
     queries,
-    log: queries.map((query, i) => ({ provider, purpose: 'general' as const, query, results: lists[i]!.length })),
+    log: queries.map((query, i) => ({ provider: answers[i]!.provider, purpose: 'general' as const, query, results: answers[i]!.hits.length })),
   };
 }
 
 export async function tavilySearch(
   target: Target,
-  apiKey: string,
   fetchImpl: FetchImpl = fetch,
   timeoutMs = 30_000,
 ): Promise<{ sources: Source[]; queries: string[] }> {
-  const { sources, queries } = await generalSearch(target, 'tavily', apiKey, fetchImpl, timeoutMs);
+  const { sources, queries } = await generalSearch(target, 'tavily', fetchImpl, timeoutMs);
   return { sources, queries };
 }
 
@@ -357,24 +365,22 @@ function linkedinQuery(target: Target): string {
  * LinkedIn profiles cannot be opened without signing in, but their search
  * snippet ("Tan Ah Kow - Managing Director - ABC Sdn Bhd") can be read.
  */
-async function exaLinkedin(target: Target, apiKey: string, fetchImpl: FetchImpl = fetch, timeoutMs = 30_000): Promise<Searched> {
+async function exaLinkedin(target: Target, fetchImpl: FetchImpl = fetch, timeoutMs = 30_000): Promise<Searched> {
   const query = linkedinQuery(target);
-  const hits = await exa.searchWithKey(query, apiKey, { numResults: 8, includeDomains: ['linkedin.com'], timeoutMs, fetchImpl });
+  const { hits } = await search.web(query, { provider: 'exa', only: true, maxResults: 8, includeDomains: ['linkedin.com'], timeoutMs, fetchImpl });
   const sources = toSources(target, hits, 'exa').map((source) => ({ ...source, kind: 'social' }));
   return { sources, queries: ['linkedin: ' + query], log: [{ provider: 'exa', purpose: 'linkedin', query, results: hits.length }] };
 }
 
-/** The LinkedIn search with one key; with no key, or when Exa fails, nothing, and the job goes on. */
+/** The LinkedIn search; with no Exa key, or when Exa fails, nothing, and the job goes on. */
 export async function linkedinSearch(
   target: Target,
-  apiKey: string,
   fetchImpl: FetchImpl = fetch,
   timeoutMs = 30_000,
 ): Promise<{ sources: Source[]; query: string }> {
   const query = linkedinQuery(target);
-  if (!apiKey) return { sources: [], query };
   try {
-    return { sources: (await exaLinkedin(target, apiKey, fetchImpl, timeoutMs)).sources, query };
+    return { sources: (await exaLinkedin(target, fetchImpl, timeoutMs)).sources, query };
   } catch (cause) {
     console.warn(`[contact] ${target.name}: LinkedIn search skipped: ${(cause as Error).message}`);
     return { sources: [], query };
@@ -383,37 +389,18 @@ export async function linkedinSearch(
 
 const NO_SEARCH: Searched = { sources: [], queries: [], log: [] };
 
-let generalTurn = 0;
+/** Alternate the general searches between the providers that have credits (core/search.ts). */
+export const pickGeneral = search.pickGeneral;
 
-/** Alternate the general searches between the providers that have credits, so the two can be compared. */
-export function pickGeneral(tavilyReady: boolean, exaReady: boolean): Provider | null {
-  if (tavilyReady && exaReady) return generalTurn++ % 2 === 0 ? 'tavily' : 'exa';
-  return tavilyReady ? 'tavily' : exaReady ? 'exa' : null;
-}
-
-/** Run one search on a key from the provider's pool, resting the key the way its error asks. */
-async function withKey<T>(provider: Provider, run: (key: string) => Promise<T>): Promise<T> {
-  const pool = provider === 'tavily' ? tavily.pool : exa.pool;
-  const lease = await pool.acquire();
-  try {
-    const out = await run(lease.secret);
-    lease.release();
-    return out;
-  } catch (cause) {
-    if (provider === 'tavily') tavily.releaseFor(lease, cause); else exa.releaseFor(lease, cause);
-    throw cause;
-  }
-}
-
-/** Both searches for one job: the general pair on one provider, LinkedIn on Exa when an Exa key has credits. */
+/** Both searches for one job: the general pair (core picks the keys), LinkedIn on Exa when an Exa key has credits. */
 async function searchAll(target: Target, provider: Provider): Promise<Searched> {
-  const linkedin = exa.available()
-    ? withKey('exa', (key) => exaLinkedin(target, key)).catch((cause: Error) => {
+  const linkedin = search.available('exa')
+    ? exaLinkedin(target).catch((cause: Error) => {
       console.warn(`[contact] ${target.name}: LinkedIn search skipped: ${cause.message}`);
       return NO_SEARCH;
     })
     : Promise.resolve(NO_SEARCH);
-  const general = await withKey(provider, (key) => generalSearch(target, provider, key));
+  const general = await generalSearch(target, provider);
   return combine(general, await linkedin);
 }
 
@@ -821,10 +808,8 @@ async function extractOnce(target: Target, pages: Page[], results: Source[], opt
   let answer: string;
   try {
     const prompt = extractContactsPrompt(target, pages, results);
-    // CONTACT_LLM_* names this step's own model; without it, Pi.
-    answer = extractLlm.config()
-      ? (await extractLlm.ask(prompt, { timeoutMs: opts.timeoutMs, maxTokens: EXTRACT_MAX_TOKENS, step: 'contact extract' })).answer
-      : (await extractLlm.agent(prompt, { ...opts, tools: false, maxTokens: EXTRACT_MAX_TOKENS, step: 'contact extract' })).answer;
+    // Core picks the model: the /workers lanes, or MiniMax when there is none.
+    answer = (await extractLlm.ask(prompt, { timeoutMs: opts.timeoutMs, maxTokens: EXTRACT_MAX_TOKENS, step: 'contact extract', thinking: opts.thinking })).answer;
   } catch (cause) {
     const code = (cause as { code?: string }).code;
     throw Object.assign(
@@ -865,27 +850,19 @@ async function extract(target: Target, pages: Page[], results: Source[], timeout
   }
 }
 
-/** Both steps for one company with a given Tavily key. Used directly by tests. */
-/** Both steps for one company with given keys. Used directly by tests and benchmarks. */
+/** Both steps for one company, searching through core (which holds the keys). Used directly by tests and benchmarks. */
 export async function research(raw: unknown, deps: {
   env?: NodeJS.ProcessEnv;
   fetchImpl?: FetchImpl;
   now?: Date;
-  tavilyKey?: string;
-  exaKey?: string;
   provider?: Provider;
 } = {}): Promise<Record<string, unknown>> {
   const target = targetFromPayload(raw);
-  const env = deps.env ?? process.env;
-  const config = resolveConfig(env);
-  const provider = deps.provider ?? 'tavily';
-  const exaKey = deps.exaKey ?? env.EXA_API_KEY?.trim() ?? '';
-  const generalKey = provider === 'exa' ? exaKey : deps.tavilyKey ?? (await tavily.loadKeys(env))[0] ?? '';
-  if (!generalKey) throw fail(`no ${provider} key is configured`, 'not_installed');
+  const config = resolveConfig(deps.env ?? process.env);
   const fetchImpl = deps.fetchImpl ?? fetch;
   const [general, linkedin] = await Promise.all([
-    generalSearch(target, provider, generalKey, fetchImpl),
-    exaKey ? exaLinkedin(target, exaKey, fetchImpl).catch(() => NO_SEARCH) : Promise.resolve(NO_SEARCH),
+    generalSearch(target, deps.provider ?? 'tavily', fetchImpl),
+    exaLinkedin(target, fetchImpl).catch(() => NO_SEARCH),
   ]);
   return finish(target, combine(general, linkedin), fetchImpl, config, deps.now);
 }
@@ -947,17 +924,17 @@ function errorText(cause: unknown): string {
  * limit, a search that does not answer), the job falls back to v2 on Tavily.
  */
 async function runJob(target: Target, payload: unknown, config: ContactConfig): Promise<Record<string, unknown>> {
-  if (exa.available()) {
+  if (search.available('exa')) {
     try {
       const exaPipeline = await import('./contact-exa.ts');
-      return await withKey('exa', (key) => exaPipeline.research(payload, { apiKey: key, timeoutMs: config.timeoutMs }));
+      return await exaPipeline.research(payload, { timeoutMs: config.timeoutMs });
     } catch (cause) {
-      // Only Exa itself failing (spent key, rate limit, down) moves the job to Tavily; a Pi error stands.
-      if ((cause as { provider?: string }).provider !== 'exa' || !tavily.available()) throw cause;
+      // Only Exa itself failing (every key spent, down) moves the job to Tavily; a Pi error stands.
+      if ((cause as { provider?: string }).provider !== 'exa' || !search.available('tavily')) throw cause;
       console.warn(`[contact] ${target.name}: Exa pipeline stopped (${(cause as Error).message.slice(0, 120)}); falling back to v2 on Tavily.`);
     }
   }
-  if (!tavily.available()) throw fail('every Tavily and Exa key is resting', 'quota');
+  if (!search.available('tavily')) throw fail('every Tavily and Exa key is resting', 'quota');
   return finish(target, await searchAll(target, 'tavily'), fetch, config);
 }
 
@@ -970,7 +947,7 @@ async function execute(name: string, job: jobs.Job, env: NodeJS.ProcessEnv): Pro
       jobs.finish(job.id, false, null, 'contact report was closed before this job could be claimed');
       return;
     }
-    await Promise.all([tavily.refresh(env), exa.refresh(env)]);
+    await search.refresh(env);
     const target = targetFromPayload(job.payload);
     const config = resolveConfig(env);
     const result = await runJob(target, job.payload, config);
@@ -1001,13 +978,13 @@ async function lane(name: string, env: NodeJS.ProcessEnv): Promise<void> {
   for (;;) {
     jobs.touch(name, '127.0.0.1', [JOB_TYPE]);
     try {
-      const [tavilyKeys, exaKeys] = await Promise.all([tavily.refresh(env), exa.refresh(env)]);
-      if ((!tavilyKeys.length && !exaKeys.length) || (!extractLlm.config(env) && !pi.config(env).apiKey)) {
+      await search.refresh(env);
+      if (!extractLlm.ready(env)) {
         await new Promise((resolve) => setTimeout(resolve, 3_000));
         continue;
       }
-      // Every search key is resting: leave jobs pending rather than take one and wait on it.
-      if (!tavily.available() && !exa.available()) {
+      // No search key, or every one resting: leave jobs pending rather than take one and wait on it.
+      if (!search.available()) {
         await new Promise((resolve) => setTimeout(resolve, 60_000));
         continue;
       }

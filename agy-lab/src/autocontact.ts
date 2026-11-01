@@ -1,7 +1,7 @@
 // Queues contact research for untouched leads while a matching worker is live.
 import * as jobs from './jobs.ts';
 import * as db from './reportdb.ts';
-import { exa, pi, tavily } from './core/index.ts';
+import { pi, search } from './core/index.ts';
 import { resolveConfig } from './contact-worker.ts';
 
 const INTERVAL_MS = 15_000;
@@ -69,7 +69,7 @@ let pausedForQuota = false;
 
 /** The pi worker searches with Tavily or Exa, so it has no work to give while every key of both rests. */
 function outOfCredits(): boolean {
-  const paused = contactResearchJobType() === 'research.contact.pi' && !(deps.tavilyAvailable ?? (() => tavily.available() || exa.available()))();
+  const paused = contactResearchJobType() === 'research.contact.pi' && !(deps.tavilyAvailable ?? (() => search.available()))();
   if (paused !== pausedForQuota) {
     console.log(paused ? '[auto-queue] paused: every Tavily and Exa key is resting' : '[auto-queue] resumed: a search key has credits again');
     pausedForQuota = paused;

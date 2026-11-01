@@ -40,3 +40,12 @@ test('files outside core/ import core/index.ts and no other core module', () => 
   });
   assert.deepEqual(offenders, []);
 });
+
+/** Key and lane handling only core/ may do: leasing, resting and counting a key, or handing core a key or lane. */
+const KEY_WORK = /\b(searchWithKey|requestWithKey|releaseFor|setKeysForTests|setLanesForTests)\(|\.pool\.(acquire|spend|setKeys)\(|\bvaultLanes\b/;
+
+test('no file outside core/ takes, rests or counts an API key, or hands core a key or lane', () => {
+  const offenders = sources(SRC).flatMap((file) => fs.readFileSync(file, 'utf8').split('\n')
+    .flatMap((line, i) => (KEY_WORK.test(line) ? [`${path.relative(SRC, file)}:${i + 1}: ${line.trim().slice(0, 120)}`] : [])));
+  assert.deepEqual(offenders, [], 'ask core for the search or the answer; core picks the key');
+});

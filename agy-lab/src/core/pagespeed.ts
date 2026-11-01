@@ -1,24 +1,26 @@
 // Google PageSpeed Insights, the one client for it (the dive-deeper speed lane).
 //
-// Auth: a Google service account, the whole JSON, which the caller passes in
-// (on /workers via core/secrets.ts; GOOGLE_PAGESPEED_SERVICE_ACCOUNT env or vault otherwise). A
+// Auth: a Google service account, the whole JSON, read here (on /workers via
+// core/secrets.ts; GOOGLE_PAGESPEED_SERVICE_ACCOUNT env or the vault otherwise). A
 // JWT signed with its key and scope "openid" buys an access token (the
 // cloud-platform scope is refused, and an x-goog-user-project header gives
 // 403). The token is kept until a minute before it expires. Free: every call is
 // logged at $0. A 429 or 5xx is asked again once after 10s.
 import crypto from 'node:crypto';
 import { startCall, type ApiCall } from '../cost.ts';
+import * as secrets from './secrets.ts';
 
 const API = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed';
 const b64url = (b: Buffer | string) => Buffer.from(b).toString('base64url');
 
 let cached: { token: string; until: number } | null = null;
 
-/** An access token for the service account, or '' with the reason passed to `warn`. */
-export async function token(serviceAccountJson: string, warn: (m: string) => void, log?: ApiCall[]): Promise<string> {
+/** An access token for the saved service account (core/secrets.ts), or '' with the reason passed to `warn`. */
+export async function token(warn: (m: string) => void, log?: ApiCall[]): Promise<string> {
   if (cached && Date.now() < cached.until) return cached.token;
+  await secrets.load();
   let sa: any;
-  try { sa = JSON.parse(serviceAccountJson); } catch { warn('GOOGLE_PAGESPEED_SERVICE_ACCOUNT is missing or not JSON'); return ''; }
+  try { sa = JSON.parse(secrets.get('pagespeed')); } catch { warn('GOOGLE_PAGESPEED_SERVICE_ACCOUNT is missing or not JSON'); return ''; }
   const c = startCall('web', 'Google token for PageSpeed', { provider: 'google' });
   try {
     const now = Math.floor(Date.now() / 1000);

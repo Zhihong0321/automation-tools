@@ -32,7 +32,7 @@
 // no `status: "ok"` field. This file carries its own caller and bumps ctx.meter.maps.
 import fs from 'node:fs';
 import path from 'node:path';
-import { OUT, secret, type Ctx, type Finding } from '../lib.ts';
+import { OUT, type Ctx, type Finding } from '../lib.ts';
 import * as core from '../../core/index.ts';
 
 const MAPS_BUDGET = Number(process.env.E_MAPS_BUDGET ?? 10);
@@ -66,7 +66,7 @@ async function reviewsCall(ctx: Ctx, args: Record<string, string>): Promise<any>
   ctx.meter.maps.calls++;
   ctx.meter.maps.byTool.reviews = (ctx.meter.maps.byTool.reviews ?? 0) + 1;
   try {
-    const data = await core.maps.call('reviews', { country: 'my', ...args }, { log: ctx.meter.calls, key: secret('SCRAPER_TECH_KEY') || undefined });
+    const data = await core.maps.call('reviews', { country: 'my', ...args }, { log: ctx.meter.calls });
     if (data?.data) return data;
     ctx.warn(`maps reviews: ${JSON.stringify(data).slice(0, 200)}`);
   } catch (e) {

@@ -36,19 +36,9 @@ const VAULT = process.env.VAULT_PATH ?? 'D:/Tools/my-vault/vault.json';
 const LAB = (process.env.LAB_URL ?? 'https://ee-auto.up.railway.app').replace(/\/+$/, '');
 export const DEFAULT_MODEL = process.env.DD_LLM_MODEL ?? 'deepseek-v4.1-flash-1017';
 
-/**
- * Every LLM, Maps, Exa and Brave call goes through the app's core (core/README.md):
- * on the hub, the LLM lanes saved on /workers and the hub's key pools. A run on
- * this machine has no hub database, so the core gets the vault's keys as the
- * fallback it uses only when it has none of its own.
- */
-function vaultLanes(): core.llm.LlmConfig[] {
-  return ['VECTIDE_DEEPSEEK_KEY', 'ZM_AI_FIXED_KEY'].flatMap((name) => {
-    const c = vault().find((v) => v.name === name);
-    const model = name === 'VECTIDE_DEEPSEEK_KEY' ? 'deepseek-v4.1-flash-1017' : 'gpt-6.1-sol';
-    return c?.secret && c.baseUrl ? [{ url: c.baseUrl.replace(/\/+$/, ''), key: c.secret, model, label: `vault ${name}` }] : [];
-  });
-}
+// Every LLM, Maps, Exa, Brave and PageSpeed call goes through the app's core
+// (core/README.md), which picks the keys and lanes: on the hub, those saved on
+// /workers; on this machine with no hub database, the vault (core/vault.ts).
 
 // Servers that leave their intermediate certificate out of the TLS handshake. Seen 2026-10-26:
 // cims.cidb.gov.my answers the hub (Railway, Southeast Asia) with only its leaf, signed by
@@ -169,7 +159,7 @@ export function makeCtx(diveId: string, section: string, lane: string) {
     meter.llm.byModel[model] = (meter.llm.byModel[model] ?? 0) + 1;
     meter.llm.promptChars += prompt.length + (opts.system?.length ?? 0);
     try {
-      const out = await core.llm.chat(prompt, { step: opts.label ?? lane, model, system: opts.system, temperature: opts.temperature, log: meter.calls, lanes: vaultLanes() });
+      const out = await core.llm.chat(prompt, { step: opts.label ?? lane, model, system: opts.system, temperature: opts.temperature, log: meter.calls });
       meter.llm.answerChars += out.answer.length;
       meter.llm.tokensIn += out.tokensIn;
       meter.llm.tokensOut += out.tokensOut;
@@ -189,7 +179,7 @@ export function makeCtx(diveId: string, section: string, lane: string) {
     meter.maps.calls++;
     meter.maps.byTool[tool] = (meter.maps.byTool[tool] ?? 0) + 1;
     try {
-      return await core.maps.call(tool, { country: 'my', ...args }, { log: meter.calls, key: secret('SCRAPER_TECH_KEY') || undefined });
+      return await core.maps.call(tool, { country: 'my', ...args }, { log: meter.calls });
     } catch (e) {
       warn(`maps ${tool}: ${(e as Error).message.slice(0, 200)}`);
       meter.maps.failed++;
@@ -211,7 +201,7 @@ export function makeCtx(diveId: string, section: string, lane: string) {
       ...(opts.text ? { contents: { text: typeof opts.text === 'number' ? { maxCharacters: opts.text } : true } } : {}),
     };
     try {
-      const out = await core.exa.request('search', body, { log: meter.calls, what: query, apiKey: secret('EXA_API_KEY') || undefined });
+      const out = await core.exa.request('search', body, { log: meter.calls, what: query });
       const results = out.results ?? [];
       meter.exa.results += results.length;
       if (out.costDollars?.total != null) { meter.exa.priced++; meter.exa.dollars += Number(out.costDollars.total); }
@@ -226,10 +216,8 @@ export function makeCtx(diveId: string, section: string, lane: string) {
   /** Brave web search (core/brave.ts); returns web.results (title, url, description, age...). */
   async function brave(query: string, opts: { count?: number; country?: string } = {}): Promise<any[]> {
     meter.brave.calls++;
-    const dbKeys = await core.brave.current();
-    const keys = dbKeys.length ? dbKeys : [secret('BRAVE_SEARCH_API_KEY'), secret('BRAVE_SEARCH_API_KEY_2')].filter(Boolean);
     try {
-      return await core.brave.searchRaw(query, { count: opts.count ?? 20, country: opts.country ?? 'MY', extraSnippets: false, log: meter.calls }, keys);
+      return await core.brave.searchRaw(query, { count: opts.count ?? 20, country: opts.country ?? 'MY', extraSnippets: false, log: meter.calls });
     } catch (e) {
       warn(`brave failed: ${(e as Error).message.slice(0, 200)}`);
       meter.brave.failed++;

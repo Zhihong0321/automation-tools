@@ -16,6 +16,7 @@
 import * as db from '../reportdb.ts';
 import { startCall, type ApiCall } from '../cost.ts';
 import { isProxy, noKeyRestMs, parseProxy, proxy, setProxy, usage, withProxy } from './proxy.ts';
+import * as vault from './vault.ts';
 
 const DIRECT_API = 'https://api.tavily.com';
 
@@ -233,7 +234,7 @@ export async function loadKeys(env: NodeJS.ProcessEnv = process.env): Promise<st
     if (!keys.length) keys = rows.filter((row) => row.secret.startsWith('tvly-')).map((row) => row.secret);
   } catch { /* database table created on migrate; caller without db uses env */ }
   if (!keys.length) {
-    keys = String(env.TAVILY_API_KEYS ?? env.TAVILY_API_KEY ?? '').split(/[,\n]/).map((k) => k.trim()).filter(Boolean);
+    keys = String(env.TAVILY_API_KEYS ?? env.TAVILY_API_KEY ?? vault.secret('TAVILY_API_KEY')).split(/[,\n]/).map((k) => k.trim()).filter(Boolean);
   }
   return keys;
 }
@@ -242,8 +243,23 @@ export async function loadKeys(env: NodeJS.ProcessEnv = process.env): Promise<st
 export async function refresh(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
   const keys = await loadKeys(env);
   pool.setKeys(withProxy(keys));
+  keysLoadedAt = Date.now();
   await refreshUsage();
   return keys;
+}
+
+/** Pool calls reload the keys at most this often; a job start or /workers save reloads them at once. */
+const KEYS_RELOAD_MS = 30_000;
+let keysLoadedAt = 0;
+
+async function ensureKeys(): Promise<void> {
+  if (Date.now() - keysLoadedAt > KEYS_RELOAD_MS) await refresh();
+}
+
+/** Tests: fill the pool with these keys and stop reloading it; null goes back to the saved keys. */
+export function setKeysForTests(keys: string[] | null): void {
+  pool.setKeys(keys ?? []);
+  keysLoadedAt = keys ? Infinity : 0;
 }
 
 function fail(message: string, code: string): Error {
@@ -306,8 +322,8 @@ async function searchOnce(
   const raw = await res.text();
   const noKey = noKeyRestMs(res, raw);
   if (noKey) throw Object.assign(fail(`US proxy has no usable Tavily key: ${raw.slice(0, 200)}`, 'quota'), { restMs: noKey, provider: 'tavily' });
-  if (res.status === 432 || res.status === 433 || (!res.ok && /usage_limit|quota|credit|plan limit/i.test(raw))) {
-    throw fail(`tavily monthly quota exceeded (${res.status}): ${raw.slice(0, 200)}`, 'quota');
+  if (res.status === 432 || res.status === 433 || res.status === 401 || (!res.ok && /usage_limit|quota|credit|plan limit/i.test(raw))) {
+    throw fail(`tavily monthly quota exceeded or key refused (${res.status}): ${raw.slice(0, 200)}`, 'quota');
   }
   if (res.status === 429) throw fail(`429 rate_limit_error: tavily rate limit: ${raw.slice(0, 200)}`, 'rate_limit');
   if (!res.ok) throw fail(`upstream error: tavily answered ${res.status}: ${raw.slice(0, 200)}`, 'timeout');
@@ -360,7 +376,7 @@ async function requestPool(
   opts: { timeoutMs?: number; fetchImpl?: FetchImpl },
 ): Promise<Record<string, any>> {
   const fetchImpl = opts.fetchImpl ?? fetch;
-  await refresh();
+  await ensureKeys();
   const tries = pool.stats().length;
   if (!tries) throw fail('no Tavily key is configured', 'not_installed');
   for (let attempt = 0; attempt < tries; attempt++) {
@@ -386,7 +402,7 @@ async function requestPool(
       lease.release(noKey);
       continue;
     }
-    if (res.status === 432 || res.status === 433) {
+    if (res.status === 432 || res.status === 433 || res.status === 401) {
       lease.release(0, true);
       continue;
     }
@@ -395,7 +411,7 @@ async function requestPool(
       continue;
     }
     lease.release();
-    if (!res.ok) throw fail(`tavily /${path} answered ${res.status}: ${raw.slice(0, 200)}`, 'failed');
+    if (!res.ok) throw fail(`tavily /${path} answered ${res.status}: ${raw.slice(0, 200)}`, res.status === 403 ? 'unsupported' : 'failed');
     const out = JSON.parse(raw) as Record<string, any>;
     pool.spend(lease.secret, Number(out.usage?.credits ?? 0));
     return out;
@@ -444,18 +460,24 @@ export async function requestWithKey<T = Record<string, any>>(
   return out;
 }
 
-/** One search through the shared pool. */
-export async function search(query: string, opts: { maxResults?: number; depth?: 'basic' | 'advanced'; timeoutMs?: number; log?: ApiCall[]; what?: string } = {}): Promise<SearchHit[]> {
-  await refresh();
-  if (!pool.stats().length) throw fail('no Tavily key is configured', 'not_installed');
-  if (!available()) throw fail('every Tavily key is out of credits until its quota resets', 'quota');
-  const lease = await pool.acquire();
-  try {
-    const hits = await searchWithKey(query, lease.secret, opts);
-    lease.release();
-    return hits;
-  } catch (cause) {
-    releaseFor(lease, cause);
-    throw cause;
+/** One search through the shared pool: a spent or rate-limited key rests and the search moves to the next. */
+export async function search(query: string, opts: { maxResults?: number; depth?: 'basic' | 'advanced'; timeoutMs?: number; fetchImpl?: FetchImpl; log?: ApiCall[]; what?: string } = {}): Promise<SearchHit[]> {
+  await ensureKeys();
+  const tries = pool.stats().length;
+  if (!tries) throw fail('no Tavily key is configured', 'not_installed');
+  let last: unknown = null;
+  for (let attempt = 0; attempt < tries && available(); attempt++) {
+    const lease = await pool.acquire();
+    try {
+      const hits = await searchWithKey(query, lease.secret, opts);
+      lease.release();
+      return hits;
+    } catch (cause) {
+      releaseFor(lease, cause);
+      const code = (cause as { code?: string }).code;
+      if (code !== 'quota' && code !== 'rate_limit') throw cause;
+      last = cause;
+    }
   }
+  throw last ?? fail('every Tavily key is out of credits until its quota resets', 'quota');
 }
