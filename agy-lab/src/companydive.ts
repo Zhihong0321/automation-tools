@@ -487,7 +487,8 @@ async function dive(company: string, country: string, progress: Progress, budget
   // A country pack (countries.ts) only adds: without one every line below is what it always was.
   const { pack, note: packNote } = countries.forCountry(country);
   const known = COUNTRY_CODES[country.trim().toLowerCase()];
-  const cc = pack?.search.brave_country ?? known;
+  // Brave refuses every query with a country it does not know (SG, TH, VN), so such a code is dropped.
+  const cc = countries.braveCountry(pack?.search.brave_country ?? known);
   const tavilyCountry = pack?.search.tavily_country ?? (known ? country.trim().toLowerCase() : undefined);
   const isWalled = (host: string) => WALLED.test(host) || countries.walled(pack, host);
   const ledger = new Ledger();

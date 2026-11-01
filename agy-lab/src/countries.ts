@@ -27,7 +27,20 @@ export const LANGUAGES: Record<string, string> = {
   ru: 'Russian', it: 'Italian',
 };
 
-export const NOTE_STEPS = ['triage', 'analyse', 'reflect', 'facts', 'write', 'people'] as const;
+/**
+ * The country codes Brave's search accepts (its 422 answer lists them, checked 2026-11-01).
+ * Any other code fails every Brave query, so it is dropped and the search runs worldwide.
+ * Not on it: Singapore, Thailand, Vietnam, Ireland, the UAE.
+ */
+export const BRAVE_COUNTRIES = new Set(['AR', 'AU', 'AT', 'BE', 'BR', 'CA', 'CL', 'DK', 'FI', 'FR', 'DE', 'GR', 'HK', 'IN', 'ID', 'IT',
+  'JP', 'KR', 'MY', 'MX', 'NL', 'NZ', 'NO', 'CN', 'PL', 'PT', 'PH', 'RU', 'SA', 'ZA', 'ES', 'SE', 'CH', 'TW', 'TR', 'GB', 'US']);
+
+/** The code to send Brave: `code` when Brave accepts it, else none. */
+export function braveCountry(code: string | undefined): string | undefined {
+  return code && BRAVE_COUNTRIES.has(code) ? code : undefined;
+}
+
+export const NOTE_STEPS =['triage', 'analyse', 'reflect', 'facts', 'write', 'people'] as const;
 export type NoteStep = typeof NOTE_STEPS[number];
 
 /** Labels the dive's own Brave queries use; a pack query may not take one. */
@@ -76,6 +89,7 @@ export function validate(raw: unknown, folder: string): string[] {
     const so = s as Record<string, unknown>;
     for (const k of Object.keys(so)) if (!SEARCH_KEYS.includes(k)) errs.push(`unknown field "search.${k}"`);
     for (const k of ['brave_country', 'exa_location']) if (so[k] !== undefined && (!isStr(so[k]) || !/^[A-Z]{2}$/.test(so[k] as string))) errs.push(`search.${k} must be two capital letters`);
+    if (isStr(so.brave_country) && /^[A-Z]{2}$/.test(so.brave_country) && !BRAVE_COUNTRIES.has(so.brave_country)) errs.push(`search.brave_country "${so.brave_country}" is not a country Brave accepts; leave it out (Brave then searches worldwide). Brave accepts: ${[...BRAVE_COUNTRIES].join(', ')}`);
     if (so.tavily_country !== undefined && (!isStr(so.tavily_country) || !/^[a-z][a-z ]{1,40}$/.test(so.tavily_country))) errs.push('search.tavily_country must be a lowercase country name, e.g. "singapore"');
   }
 

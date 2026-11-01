@@ -62,6 +62,15 @@ test('Malaysia: Exa people searches still ask for MY, and no host is newly walle
   assert.equal(countries.walled(MY, 'ctoscredit.com.my'), false);
 });
 
+test('Brave gets only a country code it accepts: MY stays, SG, TH and VN are dropped', () => {
+  assert.equal(countries.braveCountry('MY'), 'MY');
+  assert.equal(countries.braveCountry('KR'), 'KR');
+  for (const cc of ['SG', 'TH', 'VN']) assert.equal(countries.braveCountry(cc), undefined, cc);
+  assert.equal(countries.braveCountry(undefined), undefined);
+  const pack = { code: 'SG', country: 'Singapore', status: 'draft', names: ['singapore'], languages: ['en'], search: { brave_country: 'SG' } };
+  assert.match(countries.validate(pack, 'SG').join(' '), /not a country Brave accepts/);
+});
+
 test('a country with no pack gets nothing, and no log line', () => {
   assert.deepEqual(countries.pick(loaded, 'Atlantis', {}), { pack: null, note: '' });
 });
@@ -83,7 +92,7 @@ function tmpPacks(packs: Record<string, unknown>): string {
 
 const SG = {
   code: 'SG', country: 'Singapore', status: 'draft', names: ['singapore', 'sg'], languages: ['en', 'zh'],
-  search: { brave_country: 'SG', tavily_country: 'singapore', exa_location: 'SG' },
+  search: { tavily_country: 'singapore', exa_location: 'SG' },
   discover: [{ label: 'uen', query: '"{short}" UEN {country}', kind: 'web' }],
   walled: ['recordowl.com'],
   notes: { analyse: 'Look for the UEN.' },
