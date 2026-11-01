@@ -31,3 +31,17 @@ test('PROXY_NO_KEY on a Tavily search rests the proxy source for its retry-after
   assert.equal(err.code, 'quota');
   assert.equal(err.restMs, 60_000);
 });
+
+test('Tavily is never paid to read a page: extract and crawl are refused before any request', async () => {
+  tavily.setKeysForTests(['tvly-test']);
+  let requests = 0;
+  const spy = (async () => { requests++; return Response.json({ results: [], usage: { credits: 1 } }); }) as typeof fetch;
+  for (const path of ['extract', 'crawl']) {
+    const err = await tavily.request(path as 'search', { urls: ['https://example.com'] }, { fetchImpl: spy }).catch((e) => e);
+    assert.equal(err.code, 'unsupported', `/${path} is refused`);
+    assert.match(err.message, /fetch workers/);
+  }
+  assert.equal(requests, 0, 'no request left for Tavily');
+  await tavily.request('search', { query: 'x' }, { fetchImpl: spy });
+  assert.equal(requests, 1, 'search still goes to Tavily');
+});

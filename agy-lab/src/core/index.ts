@@ -5,7 +5,7 @@
 //
 //   llm        every LLM call: the deepseek lanes on /workers, MiniMax last (llm.chat, llm.ask, llm.agent)
 //   pi         MiniMax through the Pi agent SDK; called by llm, its config read by others
-//   tavily     Tavily search, extract, map, crawl over the key pool (gemini_contact_key)
+//   tavily     Tavily search and map over the key pool (gemini_contact_key); page reads go to pagefetch.ts
 //   exa        Exa search and contents over the key pool and the US proxy
 //   brave      Brave Search over the /workers Brave keys
 //   maps       scraper.tech Google Maps tools

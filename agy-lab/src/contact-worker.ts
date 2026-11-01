@@ -279,7 +279,8 @@ export function groundExtracted(extracted: Record<string, unknown>, pages: Page[
 export type Provider = 'tavily' | 'exa';
 /** One search as the report records it: who ran it, what was asked, how many pages came back. */
 export type SearchLog = {
-  provider: Provider;
+  /** `fetch-worker`: a page read on the Mac mini or a PC (pagefetch.ts), never billed. */
+  provider: Provider | 'fetch-worker';
   purpose: 'general' | 'linkedin' | 'people' | 'site' | 'extract';
   query: string;
   results: number;

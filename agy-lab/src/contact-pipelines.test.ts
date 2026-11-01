@@ -69,7 +69,7 @@ test('tel, mailto and WhatsApp links are kept, other links are not', () => {
   ]), ['tel:+6072243663', 'mailto:sales@kims.example', 'https://wa.me/60169629627']);
 });
 
-test('the Tavily pipeline reads pages through Tavily only and keeps the report shape', async () => {
+test('the Tavily pipeline searches on Tavily, reads the site on a fetch worker, and keeps the report shape', async () => {
   const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
   const fetchMock = (async (url: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body));
@@ -82,25 +82,32 @@ test('the Tavily pipeline reads pages through Tavily only and keeps the report s
       });
     }
     if (url.endsWith('/map')) return json({ results: ['https://www.kimsflorist.com.my/', 'https://www.kimsflorist.com.my/contact-us'], usage: { credits: 1 } });
-    if (url.endsWith('/extract')) {
-      return json({ results: [{ url: 'https://www.kimsflorist.com.my/contact-us', raw_content: 'Contact Valentina Kim, Owner\nHP 012-319 7772\nsales@kimsflorist.com.my' }], usage: { credits: 1 } });
-    }
     throw new Error('the pipeline fetched a page itself: ' + url);
   }) as typeof fetch;
+  // The site's pages come from a fetch worker (pagefetch.ts), never Tavily's /extract.
+  const read: string[][] = [];
+  const readPages = async (urls: string[]) => {
+    read.push(urls);
+    return { results: [{ url: 'https://www.kimsflorist.com.my/contact-us', raw_content: 'Contact Valentina Kim, Owner\nHP 012-319 7772\nsales@kimsflorist.com.my' }],
+      failed_results: [], usage: { credits: 0 }, worker: 'pc-test-fetch' };
+  };
   pi.setRunnerForTests(async () => JSON.stringify({
     people: [{ name: 'valentina kim', position: 'Owner', evidence_url: 'https://www.kimsflorist.com.my/contact-us' }],
     phones: [{ number: '012-319 7772', label: 'Valentina Kim mobile', evidence_url: 'https://www.kimsflorist.com.my/contact-us' }],
     emails: [{ email: 'sales@kimsflorist.com.my', label: 'Sales', evidence_url: 'https://www.kimsflorist.com.my/contact-us' }],
   }));
   try {
-    const result = await (tavilyApi.setKeysForTests(['tvly-test']), tavilyPipeline.research({ name: target.name, location: 'Johor Bahru' }, { fetchImpl: fetchMock, timeoutMs: 60_000 }));
+    const result = await (tavilyApi.setKeysForTests(['tvly-test']), tavilyPipeline.research({ name: target.name, location: 'Johor Bahru' }, { fetchImpl: fetchMock, timeoutMs: 60_000, readPages }));
     const people = result.decision_makers as Array<Record<string, unknown>>;
     assert.equal(people[0]!.name, 'Valentina Kim');
     assert.equal(people[0]!.found_by, 'tavily');
     assert.equal(people[0]!.direct_phone, '012-319 7772');
     const meta = result.research_meta as Record<string, unknown>;
     assert.equal(meta.official_site, 'https://www.kimsflorist.com.my/');
-    assert.deepEqual(meta.cost, { tavily_credits: 7, dollars: 0.056 });
+    assert.deepEqual(meta.cost, { tavily_credits: 6, dollars: 0.048 });
+    assert.equal(read.length, 1, 'the site is read in one worker batch');
+    assert.ok(read[0]!.includes('https://www.kimsflorist.com.my/contact-us'));
+    assert.ok(!calls.some((call) => call.url.endsWith('/extract')), 'Tavily is never asked to read a page');
     assert.ok(calls.every((call) => call.url.startsWith('https://api.tavily.com/')));
     assert.ok(calls.filter((call) => call.url.endsWith('/search')).every((call) => call.body.country === 'malaysia'));
   } finally {

@@ -1,4 +1,5 @@
-// Contact research on Tavily alone: Tavily finds the pages and Tavily reads them.
+// Contact research on Tavily: Tavily finds the pages, and the fetch workers
+// (pagefetch.ts: the Mac mini or a PC, Crawl4AI on a home line) read them.
 // Not wired to the job queue: it lost the 2026-10-24 benchmark to the Exa
 // pipeline and to v2 (fewer people). See docs/search-providers.md for the API notes behind it.
 //
@@ -7,13 +8,16 @@
 //    only. The first two ask for raw_content, which costs nothing extra, so the
 //    directory and Facebook pages arrive already read.
 // 2. The company's own site (the lead's website, or a hit whose host spells the
-//    name): Map lists its pages, and Extract reads the home page and the ones
-//    whose path says contact, about, team or management.
+//    name): Map lists its pages, and a fetch worker reads the home page and the
+//    ones whose path says contact, about, team or management. Never Tavily's
+//    Extract: core/tavily.ts refuses it since 2026-11-01.
 // 3. Pi extracts from those pages and the search snippets, as in v2.
 import * as cw from './contact-worker.ts';
 import { tavily } from './core/index.ts';
+import * as pagefetch from './pagefetch.ts';
 
 type FetchImpl = typeof fetch;
+type PageReader = typeof pagefetch.read;
 
 const SEARCH_RESULTS = 10;
 const RAW_PAGE_CHARS = 8_000;
@@ -23,7 +27,7 @@ const MAP_LIMIT = 40;
 export const DOLLARS_PER_CREDIT = 0.008;
 
 /** One Tavily call through the app's core (core/tavily.ts), which picks the key, rests a spent one and counts its credits. */
-async function call<T>(endpoint: 'search' | 'extract' | 'map', body: Record<string, unknown>, fetchImpl: FetchImpl, timeoutMs = 45_000): Promise<T & { usage?: { credits?: number } }> {
+async function call<T>(endpoint: 'search' | 'map', body: Record<string, unknown>, fetchImpl: FetchImpl, timeoutMs = 45_000): Promise<T & { usage?: { credits?: number } }> {
   return await tavily.request(endpoint, body, { fetchImpl, timeoutMs }) as T & { usage?: { credits?: number } };
 }
 
@@ -113,8 +117,8 @@ function dedupePages(pages: cw.Page[]): cw.Page[] {
 }
 
 
-/** Map the company's site, then Extract the home page and its contact, about and team pages. */
-async function readSite(site: string, fetchImpl: FetchImpl): Promise<{ pages: cw.Page[]; log: cw.SearchLog[]; credits: number }> {
+/** Map the company's site, then have a fetch worker read the home page and its contact, about and team pages. */
+async function readSite(site: string, fetchImpl: FetchImpl, readPages: PageReader): Promise<{ pages: cw.Page[]; log: cw.SearchLog[]; credits: number }> {
   const log: cw.SearchLog[] = [];
   let credits = 0;
   let mapped: string[] = [];
@@ -133,48 +137,39 @@ async function readSite(site: string, fetchImpl: FetchImpl): Promise<{ pages: cw
     if ((cause as { code?: string }).code === 'quota' || (cause as { code?: string }).code === 'rate_limit') throw cause;
   }
   const urls = cw.pickSitePages(site, mapped);
-  const extracted = await extract(urls, fetchImpl, 'basic');
-  credits += extracted.credits;
-  log.push({ provider: 'tavily', purpose: 'extract', query: `extract ${urls.length} page(s) of ${site}`, results: extracted.pages.length, credits: extracted.credits });
-  let pages = extracted.pages;
-  // Nothing read on basic: the site likely renders in JavaScript; advanced handles that.
-  if (!pages.length && urls.length) {
-    const retry = await extract(urls.slice(0, 3), fetchImpl, 'advanced');
-    credits += retry.credits;
-    log.push({ provider: 'tavily', purpose: 'extract', query: `extract advanced ${Math.min(3, urls.length)} page(s) of ${site}`, results: retry.pages.length, credits: retry.credits });
-    pages = retry.pages;
-  }
-  return { pages, log, credits };
+  const read = await readOnWorker(urls, readPages);
+  log.push({ provider: 'fetch-worker', purpose: 'extract', query: `read ${urls.length} page(s) of ${site}${read.worker ? ' on ' + read.worker : ''}${read.error ? ' (failed: ' + read.error.slice(0, 80) + ')' : ''}`, results: read.pages.length, credits: 0 });
+  return { pages: read.pages, log, credits };
 }
 
-async function extract(urls: string[], fetchImpl: FetchImpl, depth: 'basic' | 'advanced'): Promise<{ pages: cw.Page[]; credits: number }> {
-  if (!urls.length) return { pages: [], credits: 0 };
+/**
+ * The site's pages, read by a fetch worker for nothing. Crawl4AI renders
+ * JavaScript itself, so there is no basic-then-advanced retry as Tavily needed.
+ * A worker that is down or fails loses the site pages, not the company: the
+ * search pages still carry the research.
+ */
+async function readOnWorker(urls: string[], readPages: PageReader): Promise<{ pages: cw.Page[]; worker: string | null; error: string | null }> {
+  if (!urls.length) return { pages: [], worker: null, error: null };
   try {
-    const out = await call<{ results?: Array<{ url?: string; raw_content?: string }> }>('extract', {
-      urls, extract_depth: depth, format: 'text', timeout: depth === 'advanced' ? 30 : 15,
-    }, fetchImpl, 60_000);
-    const pages = (out.results ?? []).flatMap((row): cw.Page[] => {
+    const out = await readPages(urls);
+    const pages = out.results.flatMap((row): cw.Page[] => {
       const url = cw.publicUrl(row.url);
       const text = String(row.raw_content ?? '').trim();
       return url && text ? [{ url, text: text.slice(0, RAW_PAGE_CHARS) }] : [];
     });
-    // Extract bills a fraction (1 or 2 credits per 5 pages) that include_usage may round to 0.
-    const credits = out.usage?.credits || (pages.length ? Math.ceil(pages.length / 5) * (depth === 'advanced' ? 2 : 1) : 0);
-    return { pages, credits };
+    return { pages, worker: out.worker, error: null };
   } catch (cause) {
-    const code = (cause as { code?: string }).code;
-    if (code === 'quota' || code === 'rate_limit') throw cause;
-    return { pages: [], credits: 0 };
+    return { pages: [], worker: null, error: (cause as Error).message };
   }
 }
 
 /** One company through the Tavily pipeline with one key. Same result shape as contact-worker's research(). */
-export async function research(raw: unknown, deps: { fetchImpl?: FetchImpl; timeoutMs?: number }): Promise<Record<string, unknown>> {
+export async function research(raw: unknown, deps: { fetchImpl?: FetchImpl; timeoutMs?: number; readPages?: PageReader }): Promise<Record<string, unknown>> {
   const target = cw.targetFromPayload(raw);
   const fetchImpl = deps.fetchImpl ?? fetch;
   const found = await runSearches(target, fetchImpl);
   const site = cw.officialSite(target, found.searched.sources);
-  const siteRead = site ? await readSite(site, fetchImpl) : { pages: [], log: [], credits: 0 };
+  const siteRead = site ? await readSite(site, fetchImpl, deps.readPages ?? pagefetch.read) : { pages: [], log: [], credits: 0 };
   // Site pages first: they are the company's own words.
   const pages = dedupePages([...siteRead.pages, ...found.pages]);
   const searched: cw.Searched = { ...found.searched, log: [...found.searched.log, ...siteRead.log] };

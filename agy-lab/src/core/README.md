@@ -24,7 +24,7 @@ every feature at once, and a fix made here reaches all of them.
 |---|---|---|
 | `llm.ts` | every LLM call | the `llm_lane` table, edited on /workers (`/api/llm-lanes`); `CONTACT_LLM_*` only when the table is empty |
 | `pi.ts` | MiniMax through the Pi agent SDK (the last-resort engine, and the agent with web tools) | `secrets.ts` (kind `minimax`) |
-| `tavily.ts` | Tavily search, extract, map, crawl | `gemini_contact_key` (kind `tavily`), edited on /auto-queue |
+| `tavily.ts` | Tavily search and map (extract and crawl are refused: pages are read by the fetch workers, `../pagefetch.ts`) | `gemini_contact_key` (kind `tavily`), edited on /auto-queue |
 | `exa.ts` | Exa search and contents | `gemini_contact_key` (kind `exa`), plus the US proxy as one source (`proxy.ts`) |
 | `search.ts` | web search for pipelines: Tavily and Exa, turns between them, key rotation and provider fallback inside | the two pools above |
 | `proxy.ts` | the US proxy (G:\exa-api-proxy), which holds its own Exa and Tavily keys | `gemini_contact_key` (kind `exa_proxy`: url and token) |
