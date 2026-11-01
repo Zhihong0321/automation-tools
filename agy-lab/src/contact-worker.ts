@@ -13,6 +13,7 @@
 // printed in text we handed it; a name is kept only as it is printed there.
 import * as db from './reportdb.ts';
 import * as jobs from './jobs.ts';
+import * as pagefetch from './pagefetch.ts';
 import * as companyDive from './companydive.ts';
 import { llm as extractLlm, pi, search, tavily } from './core/index.ts';
 
@@ -541,18 +542,55 @@ export function collectPageUrls(target: Target, sources: Source[], now = new Dat
 }
 
 /**
- * Read the first pages that answer. A page that fails or has no text is skipped;
- * a search snippet stands in for a page that would not load, so a contact that
- * Tavily already saw is not lost to a slow site.
+ * Read the first pages that answer, best reader first.
+ *
+ * 1. The Mac mini (pagefetch.ts), in one batch. It reads from a residential
+ *    line, so it is served pages this container is refused outright, and
+ *    Crawl4AI renders the JS-only ones.
+ * 2. This container, for anything the mini did not return.
+ * 3. The search snippet, for a page neither could load, so a contact Tavily
+ *    already saw is not lost to a slow site.
+ *
+ * IT DOES FALL BACK, unlike a company dive, and the difference is deliberate.
+ * A dive's fallback was buying the page from Tavily, so falling back hid a dead
+ * mini behind a bill that looked normal. Here the fallback is this container
+ * fetching the page itself, for nothing — so taking it is strictly better than
+ * losing the contact, and step 2 is never worse than it was before the mini
+ * existed. A mini that is down says so in the log rather than in the invoice.
  */
-export async function readPages(urls: string[], sources: Source[], fetchImpl: FetchImpl = fetch): Promise<Page[]> {
+export async function readPages(
+  urls: string[],
+  sources: Source[],
+  fetchImpl: FetchImpl = fetch,
+  readLocal: typeof pagefetch.read = pagefetch.read,
+): Promise<Page[]> {
+  const wanted = urls.slice(0, MAX_PAGES_READ);
   const snippets = new Map(sources.map((source) => [dedupeKey(source.url), source.why]));
-  const pages = await Promise.all(urls.slice(0, MAX_PAGES_READ).map(async (url): Promise<Page | null> => {
+
+  const fromMini = new Map<string, string>();
+  if (wanted.length) {
+    try {
+      for (const page of (await readLocal(wanted)).results) {
+        const text = page.raw_content.trim();
+        // The mini's cap is far above this step's, so it is cut here, not there.
+        if (text) fromMini.set(dedupeKey(page.url), text.slice(0, PAGE_CHARS));
+      }
+    } catch (cause) {
+      // No fetch lane checked in, or the batch failed. Not fatal: step 2 reads
+      // them here instead, which is what it did before the mini existed.
+      console.warn(`[contact] the mini read no pages (${(cause as Error).message}); this container is reading them`);
+    }
+  }
+
+  const pages = await Promise.all(wanted.map(async (url): Promise<Page | null> => {
+    const key = dedupeKey(url);
+    const read = fromMini.get(key);
+    if (read) return { url, text: read };
     try {
       const text = await pi.fetchPageText(url, { timeoutMs: 15_000, maxChars: PAGE_CHARS, fetchImpl });
       if (text.trim()) return { url, text };
     } catch { /* fall through to the snippet */ }
-    const snippet = snippets.get(dedupeKey(url));
+    const snippet = snippets.get(key);
     return snippet ? { url, text: `[search snippet; the page itself did not load] ${snippet}` } : null;
   }));
   return pages.filter((page): page is Page => page !== null);

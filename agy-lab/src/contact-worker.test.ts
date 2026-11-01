@@ -10,6 +10,7 @@ import {
   extractContactsPrompt,
   laneName,
   preparePages,
+  readPages,
   research,
   resolveConfig,
   targetFromPayload,
@@ -442,4 +443,79 @@ test('an Exa key rests a day when Exa refuses it and a minute on a rate limit', 
   exaApi.releaseFor({ secret: 'exa-a', release: (ms = 0) => { cools.push(ms); } }, { code: 'quota' });
   exaApi.releaseFor({ secret: 'exa-a', release: (ms = 0) => { cools.push(ms); } }, { code: 'rate_limit' });
   assert.deepEqual(cools, [24 * 60 * 60_000, 60_000]);
+});
+
+// ---------------------------------------------------------------- readPages
+
+/** A page source, as a search would have produced it. */
+const src = (url: string, why: string) => ({ url, kind: 'page', why } as const);
+
+/** A fetchImpl standing in for this container's own reading. */
+function container(pages: Record<string, string>) {
+  const asked: string[] = [];
+  const impl = (async (url: string | URL) => {
+    const href = String(url);
+    asked.push(href);
+    const body = pages[href];
+    if (body === undefined) return new Response('nope', { status: 404 });
+    return new Response(`<html><body>${body}</body></html>`, { headers: { 'content-type': 'text/html' } });
+  }) as unknown as typeof fetch;
+  return { impl, asked };
+}
+
+/** The mini, answering in pagefetch's shape. */
+const mini = (pages: Record<string, string>) => async (urls: string[]) => ({
+  results: urls.filter((u) => pages[u] !== undefined).map((u) => ({ url: u, raw_content: pages[u]! })),
+  failed_results: urls.filter((u) => pages[u] === undefined).map((u) => ({ url: u, error: 'not read' })),
+  usage: { credits: 0 },
+  worker: 'mini-fetch-1',
+});
+
+test('a page the mini read is used, and this container is never asked for it', async () => {
+  const c = container({ 'https://a.example/': 'from the container' });
+  const pages = await readPages(['https://a.example/'], [], c.impl, mini({ 'https://a.example/': 'from the mini' }));
+  assert.deepEqual(pages, [{ url: 'https://a.example/', text: 'from the mini' }]);
+  assert.deepEqual(c.asked, [], 'the container did no fetching');
+});
+
+test('a page the mini could not read is read by this container instead', async () => {
+  const c = container({ 'https://b.example/': 'container read this' });
+  const pages = await readPages(['https://a.example/', 'https://b.example/'], [],
+    c.impl, mini({ 'https://a.example/': 'mini read this' }));
+  assert.deepEqual(pages.map((p) => p.text), ['mini read this', 'container read this']);
+  assert.deepEqual(c.asked, ['https://b.example/'], 'only the one the mini missed');
+});
+
+test('with no mini at all, step 2 still reads every page here', async () => {
+  const c = container({ 'https://a.example/': 'container read this' });
+  const down = async () => { throw Object.assign(new Error('no fetch.pages worker has checked in'), { code: 'not_installed' }); };
+  const pages = await readPages(['https://a.example/'], [], c.impl, down);
+  assert.deepEqual(pages, [{ url: 'https://a.example/', text: 'container read this' }]);
+});
+
+test('a page neither reader could load falls back to its search snippet', async () => {
+  const c = container({});
+  const pages = await readPages(['https://a.example/'], [src('https://a.example/', 'the snippet')],
+    c.impl, mini({}));
+  assert.equal(pages.length, 1);
+  assert.match(pages[0]!.text, /search snippet; the page itself did not load.*the snippet/);
+});
+
+test('a page nothing could read and that has no snippet is dropped', async () => {
+  const pages = await readPages(['https://a.example/'], [], container({}).impl, mini({}));
+  assert.deepEqual(pages, []);
+});
+
+test("the mini's page is cut to this step's own character cap", async () => {
+  const long = 'x'.repeat(50_000);
+  const pages = await readPages(['https://a.example/'], [], container({}).impl, mini({ 'https://a.example/': long }));
+  assert.ok(pages[0]!.text.length < long.length, 'it was cut');
+  assert.ok(pages[0]!.text.length <= 6_000, `6000 is this step's cap, got ${pages[0]!.text.length}`);
+});
+
+test('the mini is asked once for the batch, not once per page', async () => {
+  let calls = 0;
+  const reader = async (urls: string[]) => { calls++; return mini({})(urls); };
+  await readPages(['https://a.example/', 'https://b.example/', 'https://c.example/'], [], container({}).impl, reader);
+  assert.equal(calls, 1);
 });
