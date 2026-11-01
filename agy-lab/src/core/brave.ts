@@ -2,7 +2,7 @@
 // up to 20 results a call, so discovery costs no Tavily budget.
 //
 // BRAVE_API_KEYS holds one or more keys (comma or newline separated). Brave's
-// free tier allows about one query a second per key, so calls are spaced and a
+// plan allows about 50 queries a second (seen 2026-10-24), so calls are spaced 0.1 s and a
 // 429/402 moves on to the next key.
 
 import { startCall, type ApiCall } from '../cost.ts';
@@ -12,7 +12,7 @@ type FetchImpl = typeof fetch;
 export type BraveHit = { url: string; title: string; snippets: string[]; age?: string };
 
 const BASE = 'https://api.search.brave.com/res/v1';
-const SPACING_MS = 1_100;
+const SPACING_MS = 100;
 
 export function keys(env: NodeJS.ProcessEnv = process.env): string[] {
   return String(env.BRAVE_API_KEYS ?? env.BRAVE_SEARCH_API_KEY ?? '').split(/[,\n]/).map((k) => k.trim()).filter(Boolean);

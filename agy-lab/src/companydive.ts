@@ -1,12 +1,16 @@
 // One company deep dive, start to finish:
 //
-//   1 discover   Brave x8 (outside the Tavily budget) + Tavily search T1
+//   1 discover   Brave x8 at once (outside the Tavily budget) + Tavily search T1
 //   2 triage     LLM: who the company is, which URLs are really about it, what to read
 //   3 read       Tavily map T2 on the official site, LLM picks pages, extract T3 + T4
 //   4 analyse    LLM: cited facts, contradictions, gaps, the gap-filling searches
 //   5 fill gaps  Tavily search T5..T11
 //   6 reflect    LLM: new facts, what is still missing, up to 3 reserve calls
-//   7 write      LLM: the dossier, every claim cited to the source list
+//   7 write      LLM: the dossier, every claim cited to the source list; written after
+//                the research is saved, so the preview starts without waiting for it
+//
+// The people step (companydive-people.ts) runs beside 5 and 6, from the facts of 4.
+// Three dives run at once.
 //
 // Tavily never takes more than 15 calls (the Budget refuses the 16th), and one
 // is always left unspent. Every URL is read at most once: the ledger knows which
@@ -70,6 +74,8 @@ export type DiveResult = {
   brave?: ApiCall[];
   /** Stages that could not finish and fell back; empty on a clean run. */
   warnings: string[];
+  /** The people step (companydive-people.ts PeopleResult). */
+  people?: unknown;
 };
 
 export type Progress = (stage: string, msg: string) => void | Promise<void>;
@@ -439,19 +445,23 @@ Do not add a source list; it is shown separately.`;
 /** What a dive has spent so far; a failed dive's error carries it as `stats`. */
 export type DiveStats = { tavily: TavilyCall[]; llmCalls: number; braveCalls: number };
 
-export async function run(company: string, country: string, progress: Progress): Promise<{ result: DiveResult; dossier: string }> {
+/** Runs beside the research once the facts are in (the people step); its answer is saved as result.people. */
+export type Alongside = (identity: Identity, facts: Fact[]) => Promise<unknown>;
+type DiveOut = { result: DiveResult; writeDossier: () => Promise<string> };
+
+export async function run(company: string, country: string, progress: Progress, alongside?: Alongside): Promise<DiveOut> {
   const budget = new Budget();
   const uses: LlmUse[] = [];
   const counts = { brave: 0, braveLog: [] as ApiCall[] };
   try {
-    return await dive(company, country, progress, budget, uses, counts);
+    return await dive(company, country, progress, budget, uses, counts, alongside);
   } catch (err) {
     const stats: DiveStats = { tavily: budget.calls, llmCalls: uses.length, braveCalls: counts.brave };
     throw Object.assign(err as Error, { stats });
   }
 }
 
-async function dive(company: string, country: string, progress: Progress, budget: Budget, uses: LlmUse[], counts: { brave: number; braveLog: ApiCall[] }): Promise<{ result: DiveResult; dossier: string }> {
+async function dive(company: string, country: string, progress: Progress, budget: Budget, uses: LlmUse[], counts: { brave: number; braveLog: ApiCall[] }, alongside?: Alongside): Promise<DiveOut> {
   const short = shortName(company);
   const cc = COUNTRY_CODES[country.trim().toLowerCase()];
   const tavilyCountry = cc ? country.trim().toLowerCase() : undefined;
@@ -496,15 +506,15 @@ async function dive(company: string, country: string, progress: Progress, budget
     ['projects', `${q} project OR client OR award OR partnership`, 'web'],
     ['news', q, 'news'],
   ];
-  for (const [label, query, kind] of braveQueries) {
-    try {
-      const hits = await brave.search(query, { country: cc, kind, onCall: (c) => counts.braveLog.push({ ...c, what: `${label}: ${c.what}` }) });
-      counts.brave++;
-      for (const h of hits) ledger.add(h.url, h.title, h.snippets, `brave:${label}`);
-      await say('discover', `Brave ${label}: ${hits.length} results`);
-    } catch (err) {
-      await say('discover', `Brave ${label} failed: ${(err as Error).message}`);
-    }
+  // All eight at once; the results join the ledger in query order, so source ids stay stable.
+  const braveOut = await Promise.all(braveQueries.map(([label, query, kind]) =>
+    brave.search(query, { country: cc, kind, onCall: (c) => counts.braveLog.push({ ...c, what: `${label}: ${c.what}` }) })
+      .then((hits) => ({ label, hits, err: null }), (err: Error) => ({ label, hits: [], err }))));
+  for (const { label, hits, err } of braveOut) {
+    if (err) { await say('discover', `Brave ${label} failed: ${err.message}`); continue; }
+    counts.brave++;
+    for (const h of hits) ledger.add(h.url, h.title, h.snippets, `brave:${label}`);
+    await say('discover', `Brave ${label}: ${hits.length} results`);
   }
 
   let t1Answer = '';
@@ -585,6 +595,8 @@ async function dive(company: string, country: string, progress: Progress, budget
   gaps = Array.isArray(ana.gaps) ? ana.gaps.map(String) : gaps;
   const searches = (ana.searches ?? []).filter((s) => s && typeof s.query === 'string' && s.query.trim()).slice(0, maxSearches);
   await say('analyse', `${facts.length} facts, ${gaps.length} gaps, ${searches.length} searches planned`);
+  // The people step needs only the identity and these facts, so it runs beside the gap searches and reflection.
+  const people = alongside?.(identity, facts).catch(async (err: Error) => { await warn(`people: ${err.message}`); return undefined; });
 
   // 5. fill gaps ----------------------------------------------------------
   const before = new Set(ledger.sources.map((s) => s.id));
@@ -652,26 +664,34 @@ async function dive(company: string, country: string, progress: Progress, budget
     }
   }
 
+  if (people) await say('people', 'Waiting for the people step');
+  const peopleFound = await people;
+
   // 7. write --------------------------------------------------------------
-  const cited = new Set(facts.flatMap((f) => f.sources));
-  const sourceIndex = ledger.sources.filter((s) => cited.has(s.id)).map((s) => `[${s.id}] ${s.title || hostOf(s.url)} — ${s.url}`).join('\n');
-  await say('write', `Writing the dossier from ${facts.length} facts and ${cited.size} cited sources`);
-  let prompt = dossierPrompt(company, country, identity, facts, contradictions, gaps, sourceIndex);
-  // With no facts (analysis fell back), the dossier reads the material itself.
-  if (!facts.length) prompt += `\n\nNo facts were extracted, so write from this material instead, citing its [id]s:\n${corpus(relevantSources(), 100_000)}`;
-  let dossier: string;
-  try {
-    dossier = await ask(prompt, { step: 'dossier', uses });
-  } catch (err) {
-    // The writing failed, not the research: the collected facts are the output.
-    await warn(`dossier: ${(err as Error).message}; the facts are shown instead`);
-    const sections = TOPICS.map((t) => {
-      const rows = facts.filter((f) => f.topic === t);
-      if (!rows.length) return '';
-      return `## ${t.replace(/_/g, ' ')}\n` + rows.map((f) => `- ${f.fact} ${f.sources.map((n) => `[${n}]`).join('')}`).join('\n') + '\n';
-    });
-    dossier = `# ${identity.legal_name || company}\n\nThe dossier could not be written this run. These are the facts collected, with their sources.\n\n${sections.join('\n')}`;
-  }
+  // Only the paid report's appendix shows the write-up, so the caller saves the research first
+  // (the preview starts from it) and writes the dossier after.
+  const writeDossier = async (): Promise<string> => {
+    const cited = new Set(facts.flatMap((f) => f.sources));
+    const sourceIndex = ledger.sources.filter((s) => cited.has(s.id)).map((s) => `[${s.id}] ${s.title || hostOf(s.url)} — ${s.url}`).join('\n');
+    await say('write', `Writing the dossier from ${facts.length} facts and ${cited.size} cited sources`);
+    let prompt = dossierPrompt(company, country, identity, facts, contradictions, gaps, sourceIndex);
+    // With no facts (analysis fell back), the dossier reads the material itself.
+    if (!facts.length) prompt += `\n\nNo facts were extracted, so write from this material instead, citing its [id]s:\n${corpus(relevantSources(), 100_000)}`;
+    let dossier: string;
+    try {
+      dossier = await ask(prompt, { step: 'dossier', uses });
+    } catch (err) {
+      // The writing failed, not the research: the collected facts are the output.
+      await warn(`dossier: ${(err as Error).message}; the facts are shown instead`);
+      const sections = TOPICS.map((t) => {
+        const rows = facts.filter((f) => f.topic === t);
+        if (!rows.length) return '';
+        return `## ${t.replace(/_/g, ' ')}\n` + rows.map((f) => `- ${f.fact} ${f.sources.map((n) => `[${n}]`).join('')}`).join('\n') + '\n';
+      });
+      dossier = `# ${identity.legal_name || company}\n\nThe dossier could not be written this run. These are the facts collected, with their sources.\n\n${sections.join('\n')}`;
+    }
+    return stripThinking(dossier).replace(/^```(?:markdown)?\s*|\s*```$/g, '');
+  };
 
   const result: DiveResult = {
     identity,
@@ -684,9 +704,10 @@ async function dive(company: string, country: string, progress: Progress, budget
     braveCalls: counts.brave,
     brave: counts.braveLog,
     warnings,
+    ...(peopleFound ? { people: peopleFound } : {}),
   };
   await say('done', `Tavily ${budget.used}/${budget.max} calls, ${budget.credits} credits; Brave ${counts.brave}; LLM ${uses.length} calls`);
-  return { result, dossier: stripThinking(dossier).replace(/^```(?:markdown)?\s*|\s*```$/g, '') };
+  return { result, writeDossier };
 }
 
 // ---------------------------------------------------------------- storage
@@ -765,41 +786,54 @@ async function updateRow(id: number, fields: Partial<Omit<DiveRow, 'id' | 'creat
 
 const waiting: number[] = [];
 let active = 0;
-const CONCURRENCY = 1;
+// Three dives at once: a batch of leads gets its previews a third as late. The LLM router rests a lane that answers 429.
+const CONCURRENCY = 3;
+
+const finishedHooks: Array<(id: number) => void> = [];
+/** Called the moment a dive's research is saved, before its dossier is written; the preview writer starts here. */
+export function onFinished(fn: (id: number) => void): void {
+  finishedHooks.push(fn);
+}
 
 async function execute(id: number): Promise<void> {
   const row = (await reportdb.sql<DiveRow>(`select * from company_dive where id = $1`, [id])).rows[0];
   if (!row) return;
   const log: DiveRow['log'] = [];
   await updateRow(id, { status: 'running', stage: 'discover' });
+  // Once the research is saved the stage stays 'done'; the dossier only adds log lines.
+  let saved = false;
   const progress = async (stage: string, msg: string) => {
     log.push({ at: new Date().toISOString(), stage, msg });
     console.log(`[company-dive ${id}] ${stage}: ${msg}`);
-    await updateRow(id, { stage, log }).catch((err) => console.error(`[company-dive ${id}] log write failed`, err));
+    await updateRow(id, saved ? { log } : { stage, log }).catch((err) => console.error(`[company-dive ${id}] log write failed`, err));
   };
   try {
-    const { result, dossier } = await run(row.company, row.country, progress);
-    const withPeople = row.options?.people !== false;
+    // Loaded here, not at the top: companydive-people imports this module.
+    const people = row.options?.people !== false ? await import('./companydive-people.ts') : null;
+    const alongside: Alongside | undefined = people && (async (identity, facts) => {
+      const found = await people.findPeople({ ...row, result: { identity, facts } as DiveResult }, async () => {});
+      await progress('people', `People step ${found.status}: ${found.people.length} people linked`);
+      return found;
+    });
+    const { result, writeDossier } = await run(row.company, row.country, progress, alongside);
     // 'partial': it finished, but a stage fell back; result.warnings says which.
     const finalStatus = result.warnings.length ? 'partial' : 'done';
     await updateRow(id, {
-      status: withPeople ? 'running' : finalStatus, stage: withPeople ? 'people' : 'done', log, result, dossier,
+      status: finalStatus, stage: 'done', log, result,
       tavily_calls: result.tavily.length,
       tavily_credits: result.tavily.reduce((n, c) => n + c.credits, 0),
       brave_calls: result.braveCalls,
       llm_calls: result.llm.length,
-      ...(withPeople ? {} : { finished_at: new Date().toISOString() }),
+      finished_at: new Date().toISOString(),
     });
-    if (withPeople) {
-      await progress('people', 'Research saved; finding people linked to the company with Exa');
-      // Loaded here, not at the top: companydive-people imports this module.
-      const people = await import('./companydive-people.ts');
-      const saved = (await reportdb.sql<DiveRow>(`select * from company_dive where id = $1`, [id])).rows[0]!;
-      const found = await people.runFor(saved);
-      await progress('people', `People step ${found.status}: ${found.people.length} people linked`);
-      await updateRow(id, { status: finalStatus, stage: 'done', log, finished_at: new Date().toISOString() });
-    }
+    saved = true;
+    for (const fn of finishedHooks) { try { fn(id); } catch (err) { console.error(`[company-dive ${id}] finish hook failed`, err); } }
+    // The write-up's LLM call joins result.llm, so the result is saved again with it.
+    const dossier = await writeDossier();
+    await updateRow(id, { dossier, log, result, llm_calls: result.llm.length });
   } catch (err) {
+    // The research is saved and the preview has it; a dossier that could not be stored fails nothing.
+    if (saved) { console.error(`[company-dive ${id}] dossier save failed`, err); return; }
     const message = (err as Error).message;
     const stats = (err as { stats?: DiveStats }).stats;
     log.push({ at: new Date().toISOString(), stage: 'failed', msg: message });

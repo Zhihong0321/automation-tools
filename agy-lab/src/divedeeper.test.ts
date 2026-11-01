@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { enabled, handle, handlePage, handlePublic, previewAuto } from './divedeeper.ts';
 import { buildReport } from './divedeeper/report-html.ts';
 import { buildPreview } from './divedeeper/preview-html.ts';
+import { editPreview } from './divedeeper/preview-editor.ts';
 import { runLane } from './divedeeper/runner.ts';
 import { resolve } from './divedeeper/editor.ts';
 import { badPhone, normPhone, showPhone } from './divedeeper/sections/R-contacts.ts';
@@ -175,4 +176,13 @@ test('every report ends with the technology partner strip, one mark per partner'
     for (const p of PARTNERS) assert.ok(html.includes(`<span>${p.name}</span>`), p.name);
   }
   assert.deepEqual(PARTNERS.map((p) => p.name), ['Tavily', 'Brave Search', 'Exa', 'Google Maps', 'Google PageSpeed Insights', 'DeepSeek', 'OpenAI']);
+});
+
+test('the preview editor reads the research, not the dossier, so it can start before the dossier is written', async () => {
+  const dive = { company: 'Acme Sdn Bhd', dossier: 'DOSSIER-TEXT', result: { identity: { legal_name: 'Acme Sdn Bhd' }, facts: [{ fact: 'Acme makes widgets' }], contradictions: [], gaps: [] } };
+  let prompt = '';
+  const notes = await editPreview(dive, async (p) => { prompt = p; return '{"hook":"h","known":[],"warnings":[{"type":"missing","title":"No SSM number","detail":"d","risk":"r"}]}'; }, JSON.parse, () => {});
+  assert.ok(prompt.includes('Acme makes widgets'));
+  assert.ok(!prompt.includes('DOSSIER-TEXT'));
+  assert.equal(notes?.warnings?.length, 1);
 });

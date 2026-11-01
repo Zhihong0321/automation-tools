@@ -1,6 +1,7 @@
 // The preview's own editor: one LLM pass over the company-dive that writes what the landing page
 // needs to hook the owner. Run once per company-dive and cached (the hub keeps it in dive_preview,
-// this PC in out/preview-<id>.json).
+// this PC in out/preview-<id>.json). It reads the research only, not the dossier: the hub starts it
+// before the dossier is written, and every word it reads or writes is time the owner waits.
 //   hook      the opening line, about this company and nobody else
 //   known     what public sources already say about them, as short label/value pairs
 //   warnings  contradictions, missing information, outdated and wrong details, worst first
@@ -27,10 +28,9 @@ export async function editPreview(dive: any, llm: (prompt: string) => Promise<st
     `Company: ${JSON.stringify(id)}\n\nPeople named in public sources:\n${people || '(none)'}\n\nFacts from public sources:\n${clip(facts, 14000)}\n\n` +
     `Where sources disagree:\n${(r.contradictions ?? []).map((c: string) => `- ${c}`).join('\n') || '(none)'}\n\n` +
     `What sources do not show:\n${(r.gaps ?? []).map((g: string) => `- ${g}`).join('\n') || '(none)'}\n\n` +
-    `Research write-up (excerpt):\n${clip(String(dive?.dossier ?? ''), 9000)}\n\n` +
     `Return JSON only:\n{"hook": "one sentence to the owner, specific to them, at most 22 words; name a real number or detail",\n` +
     `"known": [{"label": "2-3 words, e.g. Founded, Leadership, Offices, Claimed projects, Registrations, Team size, Services, Awards", "value": "at most 14 words, the fact itself"}] (6 to 8, the things a customer or bank would learn first),\n` +
-    `"warnings": [{"type": "contradiction | missing | outdated | wrong", "title": "at most 11 words, plain, specific", "detail": "1-2 sentences with the actual values the sources give", "risk": "1 sentence: who notices this and what it can cost the business"}] (6 to 8, most damaging first, use at least three different types)}\n\n` +
+    `"warnings": [{"type": "contradiction | missing | outdated | wrong", "title": "at most 11 words, plain, specific", "detail": "1-2 sentences with the actual values the sources give", "risk": "1 sentence: who notices this and what it can cost the business"}] (5 or 6, most damaging first, use at least three different types)}\n\n` +
     `Types: contradiction = two sources give different values for the same thing; missing = something a buyer checks that no public source shows; ` +
     `outdated = a date, certificate, promotion or figure that has passed or no longer matches today; wrong = a source states something the stronger evidence shows is not so (e.g. a different legal form or address). ` +
     `Rules: use only the material above; never invent facts or numbers; do not accuse the company of dishonesty: say what the sources show; drop the [n] citation markers; British English; speak to the owner as "you". ` +
