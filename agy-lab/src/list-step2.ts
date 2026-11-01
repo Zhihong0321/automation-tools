@@ -29,6 +29,7 @@ import { parsePhoneNumberFromString, getCountries, type CountryCode } from 'libp
 import * as db from './reportdb.ts';
 import { pickForm, classify, type Field, type FormInfo } from './contact-form-delivery.ts';
 import { cleanEmail, extractEmails, ownSiteUrl } from './site-emails.ts';
+import * as companies from './company-uid.ts';
 // @ts-ignore: plain .mjs from the pipeline repo
 import { researchWebsite, getPage } from './country/country-industry-research.mjs';
 
@@ -778,6 +779,7 @@ const BROWSE_PAGE = 100;
  */
 export async function browse(opts: { run?: string; status?: string; offset?: number }): Promise<Record<string, unknown>> {
   await migrate();
+  await companies.ready();
   const params: unknown[] = [];
   const run = opts.run ? `$${params.push(opts.run)}` : null;
   const latest = `select distinct on (run_id, place_key) run_id, place_key, best_contact_method, form, emails, phones, social, updated_at
@@ -788,7 +790,7 @@ export async function browse(opts: { run?: string; status?: string; offset?: num
   const statusFilter = opts.status ? ` and coalesce(l.best_contact_method, '${NOT_CHECKED}') = $${params.push(opts.status)}` : '';
   const offset = Math.max(0, Math.floor(opts.offset ?? 0));
   const leads = (await db.sql(`
-    select p.run_id, p.place_key, p.business, l.best_contact_method, l.form, l.emails, l.phones, l.social, l.updated_at as checked_at,
+    select p.run_id, p.place_key, (select cp.uid from company_place cp where cp.place_key = p.place_key) as company_uid, p.business, l.best_contact_method, l.form, l.emails, l.phones, l.social, l.updated_at as checked_at,
            (select array_agg(distinct s.industry) from search_list_search s where s.run_id = p.run_id and s.idx = any(p.searches)) as industries,
            (select array_agg(distinct s.country) from search_list_search s where s.run_id = p.run_id and s.idx = any(p.searches)) as countries
     ${from}${statusFilter}

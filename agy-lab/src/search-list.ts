@@ -16,6 +16,7 @@ import crypto from 'node:crypto';
 import type http from 'node:http';
 import * as db from './reportdb.ts';
 import * as jobs from './jobs.ts';
+import * as companies from './company-uid.ts';
 // @ts-ignore: plain .mjs from the pipeline repo
 import { businessKey } from './country/gmap-industry.mjs';
 // @ts-ignore
@@ -278,6 +279,9 @@ async function savePlaces(runId: string, idx: number, businesses: Array<Record<s
       contact_status = case when search_list_place.contact_status = 'no_website' and excluded.business ? 'website'
         and not search_list_place.business ? 'website' then null else search_list_place.contact_status end,
       updated_at = now()`, [runId, idx, jsonParam(places)]);
+  // A UID a save cannot give now is given by the next start's backfill.
+  await companies.assign(places.map((p) => ({ place_key: p.key, website: p.business.website })))
+    .catch((err: Error) => console.error('[search-list] company UIDs: ' + err.message));
   return places.length;
 }
 
@@ -483,6 +487,9 @@ async function lane(): Promise<void> {
 export function start(): void {
   if (!db.configured()) return void console.warn('[search-list] no report database; search lists are off');
   void migrate().then(() => lane()).catch((err: Error) => console.error('[search-list] could not start: ' + err.message));
+  void companies.backfill()
+    .then((n) => { if (n) console.log(`[search-list] gave ${n} research leads a company UID`); })
+    .catch((err: Error) => console.error('[search-list] company UID backfill: ' + err.message));
   console.log(`[search-list] ${OWNER} runs search lists; Maps searches go to the gmap.scan queue`);
 }
 

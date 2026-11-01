@@ -188,6 +188,32 @@ email outreach can be planned by provider. `phones` is a list of
 later; the Maps fields stay in `search_list_place`, joined on
 `(run_id, place_key)`.
 
+### Company UIDs
+
+Every research lead carries a company UID (`co_` and 12 hex characters, e.g.
+`co_3f9a1c2b7d4e`), the same across every search run. It lives in
+`agy-lab/src/company-uid.ts`:
+
+| Table | One row per | Holds |
+|---|---|---|
+| `company` | company | `uid`, `domain` (the website host it is grouped by, or empty) |
+| `company_place` | Maps listing (`place_key`) | the listing's company `uid` |
+
+- **Grouped by website.** Listings whose website has the same host (`www.`
+  dropped) are one company, so a chain's branches and a business's duplicate
+  listings share a UID. A listing with no website, or only a page on a host
+  many businesses share (Facebook, Instagram, WhatsApp, link-in-bio pages,
+  Google, Shopee, Lazada, Grab and the like: `SHARED_HOSTS`), is a company of
+  its own.
+- **Stable.** The same place found by another run keeps its UID, and a listing
+  keeps the UID it was first given even if its website changes later.
+- **When it is given:** each search saves its businesses and gives the new ones
+  a UID; the hub's start gives every lead still without one a UID, 2,000 at a
+  time. A save that cannot give a UID leaves it to the next start.
+- **Where it shows:** the UID column on `/research-leads`, `company_uid` in
+  `GET /api/list-step2/browse`, and `GET /api/companies/<uid>` (LAB_TOKEN) for
+  one company and its listings in every run.
+
 ### When something goes wrong
 
 **Freak pages.** On 2026-10-31 the hub froze twice: at 07:42 UTC, and again
