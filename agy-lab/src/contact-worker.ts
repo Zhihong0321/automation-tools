@@ -1003,8 +1003,21 @@ async function lane(name: string, env: NodeJS.ProcessEnv): Promise<void> {
   }
 }
 
+/**
+ * Contact research is switched off on the hub (owner's order, 2026-11-01): the
+ * worker does not start and the auto-queue mints nothing. Turn it back on by
+ * returning false here. Off only in production, so the tests still run it.
+ */
+export function switchedOff(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.NODE_ENV === 'production';
+}
+
 /** CONTACT_LANES lanes (default 8), each one company at a time. */
 export function start(env: NodeJS.ProcessEnv = process.env): void {
+  if (switchedOff(env)) {
+    console.log('[contact] switched off: the contact research worker is not started');
+    return;
+  }
   const lanes = resolveConfig(env).lanes;
   for (let i = 0; i < lanes; i++) {
     const name = laneName(i);

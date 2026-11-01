@@ -2,7 +2,7 @@
 import * as jobs from './jobs.ts';
 import * as db from './reportdb.ts';
 import { pi, search } from './core/index.ts';
-import { resolveConfig } from './contact-worker.ts';
+import { resolveConfig, switchedOff } from './contact-worker.ts';
 
 const INTERVAL_MS = 15_000;
 
@@ -100,7 +100,8 @@ function noteHold(next: string | null): void {
 
 export async function tick(): Promise<number> {
   if (ticking) return 0;
-  const blocked = pausedByHand() ? 'paused (AUTO_CONTACT_PAUSED)'
+  const blocked = switchedOff() ? 'switched off (contact-worker.switchedOff)'
+    : pausedByHand() ? 'paused (AUTO_CONTACT_PAUSED)'
     : !workerLive() ? `no live worker claims ${contactResearchJobType()}`
     : outOfCredits() ? 'every Tavily and Exa key is resting'
     : null;
