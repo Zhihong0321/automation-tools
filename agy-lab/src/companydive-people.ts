@@ -17,6 +17,7 @@
 import { exa } from './core/index.ts';
 import * as reportdb from './reportdb.ts';
 import { PRICES } from './cost.ts';
+import * as countries from './countries.ts';
 import { ask, askJson, type DiveRow, type DiveResult, type LlmUse, type Warn } from './companydive.ts';
 
 export const MAX_EXA_CALLS = 20;
@@ -80,10 +81,11 @@ export function toHit(r: Record<string, any>): ExaHit {
   return { url: String(r.url ?? ''), title: clean(r.title, 160), name: clean(props.name, 100), location: clean(props.location, 80), jobs, text: clean(text, 1_500) };
 }
 
-function bodyFor(q: ExaQuery): Record<string, unknown> {
+/** `location` is the country pack's exa_location (countries.ts); without one, 'MY' as always. */
+export function bodyFor(q: ExaQuery, location = 'MY'): Record<string, unknown> {
   return q.kind === 'people'
-    ? { query: q.query, type: 'auto', category: 'people', numResults: 25, userLocation: 'MY', contents: { highlights: { maxCharacters: 600 } } }
-    : { query: q.query, type: 'auto', numResults: 10, userLocation: 'MY', contents: { highlights: { maxCharacters: 900 } } };
+    ? { query: q.query, type: 'auto', category: 'people', numResults: 25, userLocation: location, contents: { highlights: { maxCharacters: 600 } } }
+    : { query: q.query, type: 'auto', numResults: 10, userLocation: location, contents: { highlights: { maxCharacters: 900 } } };
 }
 
 // ---------------------------------------------------------------- prompts
@@ -164,6 +166,8 @@ export async function findPeople(row: DiveRow, save: (p: PeopleResult) => Promis
   const uses = out.llm;
   const hits: Array<ExaHit & { id: number }> = [];
   const seen = new Map<string, number>();
+  const { pack } = countries.forCountry(row.country);
+  const location = pack?.search.exa_location ?? 'MY';
 
   const runQueries = async (queries: ExaQuery[]) => {
     for (const q of queries) {
@@ -172,7 +176,7 @@ export async function findPeople(row: DiveRow, save: (p: PeopleResult) => Promis
       const started = Date.now();
       const at = new Date(started).toISOString();
       try {
-        const { results, dollars } = await exaSearch(bodyFor(q));
+        const { results, dollars } = await exaSearch(bodyFor(q, location));
         let added = 0;
         for (const r of results) {
           const hit = toHit(r);
@@ -199,7 +203,7 @@ export async function findPeople(row: DiveRow, save: (p: PeopleResult) => Promis
   try {
     // 1-2. plan and first round
     await say('Planning Exa searches from the saved dossier');
-    const plan = await askJson<{ queries?: unknown }>(planPrompt(row, 12), { step: 'people-plan', uses, warn }, { queries: fallbackQueries(row) });
+    const plan = await askJson<{ queries?: unknown }>(countries.withNotes(pack, 'people', planPrompt(row, 12)), { step: 'people-plan', uses, warn }, { queries: fallbackQueries(row) });
     const asked = new Set<string>();
     const first = cleanQueries(plan.queries, asked).slice(0, 12);
     for (const q of first) asked.add(q.query.toLowerCase());
@@ -208,7 +212,7 @@ export async function findPeople(row: DiveRow, save: (p: PeopleResult) => Promis
     // 3. follow-up round on what the first one turned up
     const left = MAX_EXA_CALLS - out.exa.length;
     if (left > 0 && hits.length) {
-      const follow = await askJson<{ queries?: unknown }>(followPrompt(row, hits, [...asked], Math.min(8, left)), { step: 'people-follow', uses, warn }, { queries: [] });
+      const follow = await askJson<{ queries?: unknown }>(countries.withNotes(pack, 'people', followPrompt(row, hits, [...asked], Math.min(8, left))), { step: 'people-follow', uses, warn }, { queries: [] });
       const second = cleanQueries(follow.queries, asked).slice(0, Math.min(8, left));
       for (const q of second) asked.add(q.query.toLowerCase());
       if (second.length) await runQueries(second);

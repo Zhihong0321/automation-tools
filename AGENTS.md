@@ -55,3 +55,14 @@ lane. `core-door.test.ts` fails the build when a file goes around it.
   Railway variables.
 - **Every request is logged** as an `ApiCall`: lane or key pool, model, tokens,
   USD, time, ok or failed.
+
+## Country packs: research only, inside one folder
+
+Company dive's per-country search instructions live in
+`agy-lab/src/countries/<CC>/` (`pack.json` and `research.md`; how it works:
+`agy-lab/src/countries/README.md`). Building or fixing a country's pack means
+editing files **only inside that country's folder**: no code, no tests, no
+README, no other country. Follow the `country-pack` skill
+(`.agents/skills/country-pack/SKILL.md`) and finish with
+`node scripts/check-country.ts <CC>` from `agy-lab/`. It fails when any other
+file changed.

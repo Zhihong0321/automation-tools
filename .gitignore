@@ -12,3 +12,6 @@ package-lock.json
 # local website email scrape output (has emails; never commit)
 agy-lab/scripts/site-emails-out/
 
+# local test dives (scripts/country-dive.ts); they name real people
+agy-lab/scripts/country-dive-out/
+

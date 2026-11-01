@@ -12,6 +12,10 @@
 // The people step (companydive-people.ts) runs beside 5 and 6, from the facts of 4.
 // Three dives run at once.
 //
+// A country pack (countries.ts, src/countries/<CC>/pack.json) can only add: country codes,
+// Brave queries in step 1, unreadable hosts, and instructions in the prompts. Without one
+// the dive is exactly as below.
+//
 // Tavily never takes more than 15 calls (the Budget refuses the 16th), and one
 // is always left unspent. Every URL is read at most once: the ledger knows which
 // pages already came back with text.
@@ -37,6 +41,7 @@ import type http from 'node:http';
 import { brave, llm, tavily } from './core/index.ts';
 import * as reportdb from './reportdb.ts';
 import { diveCalls, diveUsage, price, PRICES, type ApiCall } from './cost.ts';
+import * as countries from './countries.ts';
 
 export type Source = {
   id: number;
@@ -440,6 +445,22 @@ A 3–5 sentence summary at the top.
 Do not add a source list; it is shown separately.`;
 }
 
+/** Step 1's Brave queries: these eight always, then the country pack's extras (countries.ts) after them. */
+export function discoveryQueries(company: string, short: string, country: string, pack: countries.Pack | null): Array<[string, string, 'web' | 'news']> {
+  const q = `"${short}"`;
+  return [
+    ['exact', `"${company}"`, 'web'],
+    ['country', `${q} ${country}`, 'web'],
+    ['facebook', `${q} site:facebook.com`, 'web'],
+    ['linkedin', `${q} site:linkedin.com`, 'web'],
+    ['reviews', `${q} review OR complaint OR scam`, 'web'],
+    ['people', `${q} founder OR director OR CEO OR owner`, 'web'],
+    ['projects', `${q} project OR client OR award OR partnership`, 'web'],
+    ['news', q, 'news'],
+    ...countries.discoverQueries(pack, { company, short, country }),
+  ];
+}
+
 // ---------------------------------------------------------------- the dive
 
 /** What a dive has spent so far; a failed dive's error carries it as `stats`. */
@@ -463,8 +484,12 @@ export async function run(company: string, country: string, progress: Progress, 
 
 async function dive(company: string, country: string, progress: Progress, budget: Budget, uses: LlmUse[], counts: { brave: number; braveLog: ApiCall[] }, alongside?: Alongside): Promise<DiveOut> {
   const short = shortName(company);
-  const cc = COUNTRY_CODES[country.trim().toLowerCase()];
-  const tavilyCountry = cc ? country.trim().toLowerCase() : undefined;
+  // A country pack (countries.ts) only adds: without one every line below is what it always was.
+  const { pack, note: packNote } = countries.forCountry(country);
+  const known = COUNTRY_CODES[country.trim().toLowerCase()];
+  const cc = pack?.search.brave_country ?? known;
+  const tavilyCountry = pack?.search.tavily_country ?? (known ? country.trim().toLowerCase() : undefined);
+  const isWalled = (host: string) => WALLED.test(host) || countries.walled(pack, host);
   const ledger = new Ledger();
 
   const say = async (stage: string, msg: string) => { await progress(stage, msg); };
@@ -494,18 +519,9 @@ async function dive(company: string, country: string, progress: Progress, budget
   };
 
   // 1. discover -----------------------------------------------------------
+  if (packNote) await say('discover', packNote);
   await say('discover', `Brave sweep for "${company}" (short name "${short}")`);
-  const q = `"${short}"`;
-  const braveQueries: Array<[string, string, 'web' | 'news']> = [
-    ['exact', `"${company}"`, 'web'],
-    ['country', `${q} ${country}`, 'web'],
-    ['facebook', `${q} site:facebook.com`, 'web'],
-    ['linkedin', `${q} site:linkedin.com`, 'web'],
-    ['reviews', `${q} review OR complaint OR scam`, 'web'],
-    ['people', `${q} founder OR director OR CEO OR owner`, 'web'],
-    ['projects', `${q} project OR client OR award OR partnership`, 'web'],
-    ['news', q, 'news'],
-  ];
+  const braveQueries = discoveryQueries(company, short, country, pack);
   // All eight at once; the results join the ledger in query order, so source ids stay stable.
   const braveOut = await Promise.all(braveQueries.map(([label, query, kind]) =>
     brave.search(query, { country: cc, kind, onCall: (c) => counts.braveLog.push({ ...c, what: `${label}: ${c.what}` }) })
@@ -535,7 +551,7 @@ async function dive(company: string, country: string, progress: Progress, budget
   // 2. triage -------------------------------------------------------------
   await say('triage', `LLM triage of ${ledger.sources.length} URLs`);
   const tri = await askJson<{ identity?: Identity; relevant_ids?: unknown; map_domain?: string | null; extract_ids?: unknown; gaps?: string[] }>(
-    triagePrompt(company, country, ledger, t1Answer), { step: 'triage', uses, warn },
+    countries.withNotes(pack, 'triage', triagePrompt(company, country, ledger, t1Answer)), { step: 'triage', uses, warn },
     { relevant_ids: ledger.sources.map((s) => s.id), map_domain: null, extract_ids: [], gaps: [] });
   const identity: Identity = tri.identity ?? {};
   const relevant = new Set(ids(tri.relevant_ids, ledger));
@@ -543,7 +559,7 @@ async function dive(company: string, country: string, progress: Progress, budget
   const mapDomain = typeof tri.map_domain === 'string' && tri.map_domain.trim() ? hostOf('https://' + tri.map_domain.replace(/^https?:\/\//, '')) : '';
   const thirdParty = ids(tri.extract_ids, ledger)
     .map((id) => ledger.byId(id)!)
-    .filter((s) => s.contentKind === 'none' && !WALLED.test(hostOf(s.url)) && (!mapDomain || hostOf(s.url) !== mapDomain))
+    .filter((s) => s.contentKind === 'none' && !isWalled(hostOf(s.url)) && (!mapDomain || hostOf(s.url) !== mapDomain))
     .slice(0, 20);
   await say('triage', `${relevant.size} URLs are about the company; official site ${mapDomain || 'unknown'}; ${thirdParty.length} pages to read`);
 
@@ -588,7 +604,7 @@ async function dive(company: string, country: string, progress: Progress, budget
   const maxSearches = Math.max(0, Math.min(8, budget.left - 4));
   await say('analyse', `LLM analysis of ${relevantSources().length} sources`);
   const ana = await askJson<{ facts?: unknown; contradictions?: string[]; gaps?: string[]; searches?: Array<Record<string, any>> }>(
-    analysePrompt(company, country, identity, gaps, corpus(relevantSources(), 120_000), maxSearches), { step: 'analyse', uses, warn },
+    countries.withNotes(pack, 'analyse', analysePrompt(company, country, identity, gaps, corpus(relevantSources(), 120_000), maxSearches)), { step: 'analyse', uses, warn },
     { facts: [], contradictions: [], gaps, searches: gaps.slice(0, maxSearches).map((g) => ({ query: `"${company}" ${g}` })) });
   let facts = cleanFacts(ana.facts, ledger);
   const contradictions = Array.isArray(ana.contradictions) ? ana.contradictions.map(String) : [];
@@ -628,10 +644,10 @@ async function dive(company: string, country: string, progress: Progress, budget
 
   // 6. reflect ------------------------------------------------------------
   const reserve = Math.max(0, budget.left - 1);
-  const readable = relevantSources().filter((s) => s.contentKind === 'none' && !WALLED.test(hostOf(s.url)) && !s.failed).map((s) => s.id).join(', ');
+  const readable = relevantSources().filter((s) => s.contentKind === 'none' && !isWalled(hostOf(s.url)) && !s.failed).map((s) => s.id).join(', ');
   await say('reflect', `LLM reflection on ${fresh.length} new sources; ${reserve} reserve calls available`);
   const ref = await askJson<{ facts?: unknown; gaps?: string[]; next?: Array<Record<string, any>> }>(
-    reflectPrompt(company, identity, facts, gaps, corpus(fresh, 80_000) + '\n' + summaries.join('\n'), reserve, readable), { step: 'reflect', uses, warn },
+    countries.withNotes(pack, 'reflect', reflectPrompt(company, identity, facts, gaps, corpus(fresh, 80_000) + '\n' + summaries.join('\n'), reserve, readable)), { step: 'reflect', uses, warn },
     { facts: [], gaps, next: [] });
   facts = facts.concat(cleanFacts(ref.facts, ledger));
   gaps = Array.isArray(ref.gaps) ? ref.gaps.map(String) : gaps;
@@ -659,7 +675,7 @@ async function dive(company: string, country: string, progress: Progress, budget
     const reserveNew = ledger.sources.filter((s) => !beforeReserve.has(`${s.id}:${s.contentKind}`) && s.contentKind !== 'none');
     for (const s of reserveNew) relevant.add(s.id);
     if (reserveNew.length) {
-      const extra = await askJson<{ facts?: unknown }>(factsPrompt(company, facts, corpus(reserveNew, 80_000)), { step: 'reserve-facts', uses, warn }, { facts: [] });
+      const extra = await askJson<{ facts?: unknown }>(countries.withNotes(pack, 'facts', factsPrompt(company, facts, corpus(reserveNew, 80_000))), { step: 'reserve-facts', uses, warn }, { facts: [] });
       facts = facts.concat(cleanFacts(extra.facts, ledger));
     }
   }
@@ -674,7 +690,7 @@ async function dive(company: string, country: string, progress: Progress, budget
     const cited = new Set(facts.flatMap((f) => f.sources));
     const sourceIndex = ledger.sources.filter((s) => cited.has(s.id)).map((s) => `[${s.id}] ${s.title || hostOf(s.url)} — ${s.url}`).join('\n');
     await say('write', `Writing the dossier from ${facts.length} facts and ${cited.size} cited sources`);
-    let prompt = dossierPrompt(company, country, identity, facts, contradictions, gaps, sourceIndex);
+    let prompt = countries.withNotes(pack, 'write', dossierPrompt(company, country, identity, facts, contradictions, gaps, sourceIndex));
     // With no facts (analysis fell back), the dossier reads the material itself.
     if (!facts.length) prompt += `\n\nNo facts were extracted, so write from this material instead, citing its [id]s:\n${corpus(relevantSources(), 100_000)}`;
     let dossier: string;
