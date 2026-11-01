@@ -97,7 +97,8 @@ async function extract(fetchImpl: FetchImpl) {
 
 async function tavilyKeys() {
   await tavily.refresh();
-  const keys = tavily.pool.stats().map((k) => ({
+  // The US proxy is one source in the pool; its own report is shown apart, not summed with the hub's keys.
+  const keys = tavily.pool.stats().filter((k) => !exa.isProxy(k.secret)).map((k) => ({
     tail: k.tail,
     used: k.usedThisMonth,
     limit: k.monthlyLimit,
@@ -114,10 +115,24 @@ async function tavilyKeys() {
   const failed = keys.filter((k) => k.usageError);
   // A key whose quota cannot be read is not known to be fine.
   const level: Level = !keys.length ? 'unknown' : !usable ? 'bad' : failed.length && !known.length ? 'warn' : levelFor(left, total);
+  const proxy = await cached('tavily-proxy', tavilyProxy);
+  const proxyUsable = proxy?.reachable ? Number(proxy.usable ?? 0) : 0;
   return {
-    level, keys: keys.length, usable, creditsLeft: left, creditsTotal: total, keysRead: known.length,
-    readFailures: failed.length, readError: failed[0]?.usageError ?? null, perKey: keys,
+    level: !usable && proxyUsable ? 'warn' as Level : level, keys: keys.length, usable, creditsLeft: left, creditsTotal: total, keysRead: known.length,
+    readFailures: failed.length, readError: failed[0]?.usageError ?? null, perKey: keys, proxy,
   };
+}
+
+/** The US proxy's Tavily keys (GET /usage/tavily): how many, how many usable, credits spent and an estimate of what is left. */
+async function tavilyProxy() {
+  const saved = exa.proxy();
+  if (!saved) return null;
+  try {
+    const usage = await tavily.proxyUsage();
+    return { url: saved.url, reachable: true, creditAssumedCredits: usage?.creditAssumedCredits ?? null, ...(usage?.totals ?? {}) };
+  } catch (err) {
+    return { url: saved.url, reachable: false, error: (err as Error).message };
+  }
 }
 
 async function exaKeys() {
@@ -127,7 +142,7 @@ async function exaKeys() {
   const keys = exa.pool.stats().map((k) => {
     const s = spend.get(k.secret);
     return {
-      tail: k.tail,
+      tail: exa.isProxy(k.secret) ? 'US proxy' : k.tail,
       via: exa.via(k.secret),
       cooling: k.cooling,
       spentUsd: s ? Math.round(s.dollars * 1000) / 1000 : 0,

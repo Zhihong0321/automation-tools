@@ -6,6 +6,9 @@
 import * as db from '../reportdb.ts';
 import { startCall, type ApiCall } from '../cost.ts';
 import { createKeyPool, type Lease, type SearchHit } from './tavily.ts';
+import { isProxy, noKeyRestMs, parseProxy, proxy, setProxy, usage, withProxy } from './proxy.ts';
+
+export { PROXY_SOURCE, isProxy, parseProxy, proxy, setProxy, type ProxyConfig } from './proxy.ts';
 
 export const KEY_CONCURRENCY = 2;
 const OUT_OF_CREDIT_REST_MS = 24 * 60 * 60_000;
@@ -43,53 +46,31 @@ export async function flush(): Promise<void> {
   }
 }
 
-// Keys saved as "us:<key>" are called through the Exa proxy in US West
-// (G:\exa-api-proxy, Railway service exa-proxy), so Exa sees those calls from
-// the US, not from this server. They share the one pool with the direct keys.
-// The proxy's URL and token are one row of kind 'exa_proxy', saved as JSON
-// {url, token} through /api/contact-keys.
+// The US proxy (core/proxy.ts) is one more source in this pool, PROXY_SOURCE:
+// its calls carry only the proxy token, and the proxy picks among the Exa keys
+// it holds. A key saved as "us:<key>" is still sent through the proxy as that
+// key (x-api-key), which the proxy passes on as it is.
 export const PROXY_PREFIX = 'us:';
 const DIRECT_API = 'https://api.exa.ai';
 
-export type ProxyConfig = { url: string; token: string };
-let proxyConfig: ProxyConfig | null = null;
-
-export function parseProxy(saved: unknown): ProxyConfig | null {
-  let p: { url?: unknown; token?: unknown };
-  try { p = typeof saved === 'string' ? JSON.parse(saved) : (saved as typeof p); } catch { return null; }
-  const url = String(p?.url ?? '').trim().replace(/\/+$/, '');
-  const token = String(p?.token ?? '').trim();
-  return /^https?:\/\/\S+$/.test(url) && token ? { url, token } : null;
-}
-
-export function proxy(): ProxyConfig | null {
-  return proxyConfig;
-}
-
-export function setProxy(config: ProxyConfig | null): void {
-  proxyConfig = config;
-}
-
 export function via(secret: string): 'us' | 'direct' {
-  return secret.startsWith(PROXY_PREFIX) ? 'us' : 'direct';
+  return isProxy(secret) || secret.startsWith(PROXY_PREFIX) ? 'us' : 'direct';
 }
 
-/** Where one key's call goes, with its headers. A us: key with no proxy saved gets a 'quota' error, so only that key rests. */
+/** Where one key's call goes, with its headers. A proxy call with no proxy saved gets a 'quota' error, so only that source rests. */
 export function endpoint(secret: string, path: string): { url: string; headers: Record<string, string> } {
   if (via(secret) === 'direct') return { url: `${DIRECT_API}/${path}`, headers: { 'x-api-key': secret, 'content-type': 'application/json' } };
-  if (!proxyConfig) throw Object.assign(new Error('exa proxy is not saved: POST exaProxy {url, token} to /api/contact-keys'), { code: 'quota', provider: 'exa' });
+  const saved = proxy();
+  if (!saved) throw Object.assign(new Error('exa proxy is not saved: POST exaProxy {url, token} to /api/contact-keys'), { code: 'quota', provider: 'exa' });
   return {
-    url: `${proxyConfig.url}/${path}`,
-    headers: { 'x-api-key': secret.slice(PROXY_PREFIX.length), 'x-proxy-token': proxyConfig.token, 'content-type': 'application/json' },
+    url: `${saved.url}/${path}`,
+    headers: { ...(isProxy(secret) ? {} : { 'x-api-key': secret.slice(PROXY_PREFIX.length) }), 'x-proxy-token': saved.token, 'content-type': 'application/json' },
   };
 }
 
-/** What the proxy says about its keys (GET /usage): spend, estimated credit left, resting keys. */
+/** What the proxy says about the Exa keys it holds (GET /usage): spend, estimated credit left, resting keys. */
 export async function proxyUsage(fetchImpl: FetchImpl = fetch): Promise<Record<string, any> | null> {
-  if (!proxyConfig) return null;
-  const res = await fetchImpl(`${proxyConfig.url}/usage`, { headers: { 'x-proxy-token': proxyConfig.token }, signal: AbortSignal.timeout(10_000) });
-  if (!res.ok) throw new Error(`exa proxy /usage answered ${res.status}`);
-  return res.json();
+  return usage('exa', fetchImpl);
 }
 
 export async function loadKeys(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
@@ -97,7 +78,7 @@ export async function loadKeys(env: NodeJS.ProcessEnv = process.env): Promise<st
   try {
     const rows = await db.listGeminiContactKeys();
     keys = rows.filter((row) => row.kind === 'exa').map((row) => row.secret);
-    proxyConfig = parseProxy(rows.find((row) => row.kind === 'exa_proxy')?.secret ?? '');
+    setProxy(parseProxy(rows.find((row) => row.kind === 'exa_proxy')?.secret ?? ''));
   } catch { /* database table created on migrate; caller without db uses env */ }
   if (!keys.length) {
     keys = String(env.EXA_API_KEYS ?? env.EXA_API_KEY ?? '').split(/[,\n]/).map((k) => k.trim()).filter(Boolean);
@@ -105,10 +86,10 @@ export async function loadKeys(env: NodeJS.ProcessEnv = process.env): Promise<st
   return keys;
 }
 
-/** Reload the keys into the shared pool and return them. */
+/** Reload the keys into the shared pool, with the US proxy as one more source, and return the saved keys. */
 export async function refresh(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
   const keys = await loadKeys(env);
-  pool.setKeys(keys);
+  pool.setKeys(withProxy(keys));
   return keys;
 }
 
@@ -155,6 +136,8 @@ async function requestOnce(path: string, body: Record<string, unknown>, apiKey: 
     throw fail(name === 'TimeoutError' || name === 'AbortError' ? `exa ${path} timed out` : `upstream error: ${(cause as Error)?.message ?? cause}`, 'timeout');
   }
   const raw = await res.text();
+  const noKey = noKeyRestMs(res, raw);
+  if (noKey) throw Object.assign(fail(`US proxy has no usable Exa key: ${raw.slice(0, 200)}`, 'quota'), { restMs: noKey, provider: 'exa' });
   if (res.status === 429) throw fail(`429 rate_limit_error: exa rate limit: ${raw.slice(0, 200)}`, 'rate_limit');
   if (res.status === 401 || res.status === 402 || res.status === 403 || (!res.ok && /credit|balance|billing|quota|payment/i.test(raw))) {
     throw fail(`exa key refused or out of credits (${res.status}): ${raw.slice(0, 200)}`, 'quota');
@@ -209,8 +192,8 @@ export async function searchWithKey(query: string, apiKey: string, opts: SearchO
   return hits;
 }
 
-/** Rest the key the way the error asks: a day for a refused or spent key, a minute for a rate limit. */
+/** Rest the key the way the error asks: the proxy's retry-after, a day for a refused or spent key, a minute for a rate limit. */
 export function releaseFor(lease: Lease, cause: unknown): void {
-  const code = (cause as { code?: string } | null)?.code;
-  lease.release(code === 'quota' ? OUT_OF_CREDIT_REST_MS : code === 'rate_limit' ? RATE_LIMIT_REST_MS : 0);
+  const { code, restMs } = (cause as { code?: string; restMs?: number } | null) ?? {};
+  lease.release(restMs ?? (code === 'quota' ? OUT_OF_CREDIT_REST_MS : code === 'rate_limit' ? RATE_LIMIT_REST_MS : 0));
 }

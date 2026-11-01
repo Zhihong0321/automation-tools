@@ -8,8 +8,29 @@
 // /usage read shows credits again, which is how it wakes when Tavily resets the
 // month. When every key rests, slots() is 0, the contact lanes stop taking jobs
 // and the auto-queue stops creating them.
+//
+// The US proxy (core/proxy.ts) is one more source in this pool, PROXY_SOURCE:
+// it holds its own Tavily keys, so its calls carry only the proxy token. Its
+// "usage" is the proxy's GET /usage/tavily totals, and a PROXY_NO_KEY answer
+// rests it for the proxy's retry-after.
 import * as db from '../reportdb.ts';
 import { startCall, type ApiCall } from '../cost.ts';
+import { isProxy, noKeyRestMs, parseProxy, proxy, setProxy, usage, withProxy } from './proxy.ts';
+
+const DIRECT_API = 'https://api.tavily.com';
+
+/** Where one key's call goes, with its headers: Tavily itself, or the US proxy's /tavily path. */
+export function endpoint(secret: string, path: string): { url: string; headers: Record<string, string> } {
+  if (!isProxy(secret)) return { url: `${DIRECT_API}/${path}`, headers: { authorization: 'Bearer ' + secret, 'content-type': 'application/json' } };
+  const saved = proxy();
+  if (!saved) throw Object.assign(new Error('the US proxy is not saved: POST exaProxy {url, token} to /api/contact-keys'), { code: 'quota', provider: 'tavily' });
+  return { url: `${saved.url}/tavily/${path}`, headers: { 'x-proxy-token': saved.token, 'content-type': 'application/json' } };
+}
+
+/** The proxy's Tavily report (GET /usage/tavily): credits spent and left on the keys it holds. */
+export async function proxyUsage(fetchImpl: FetchImpl = fetch): Promise<Record<string, any> | null> {
+  return usage('tavily', fetchImpl);
+}
 
 export const KEY_CONCURRENCY = 2;
 /** One contact job is two advanced searches at two credits each. */
@@ -153,7 +174,15 @@ export function available(): boolean {
 
 /** Tavily's own usage for one key, as credits used against a limit. Null limit means unlimited. */
 export async function fetchUsage(apiKey: string, fetchImpl: FetchImpl = fetch): Promise<{ used: number; limit: number | null }> {
-  const res = await fetchImpl('https://api.tavily.com/usage', {
+  if (isProxy(apiKey)) {
+    // The proxy's keys together: no usable key reads as spent, so the source rests until one is.
+    const report = await proxyUsage(fetchImpl);
+    const t = report?.totals ?? {};
+    const limit = Number(t.keys ?? 0) * Number(report?.creditAssumedCredits ?? 1000);
+    const left = Number(t.usable ?? 0) > 0 ? Math.max(0, Number(t.estimatedLeftCredits ?? 0)) : 0;
+    return { used: Math.max(0, limit - left), limit };
+  }
+  const res = await fetchImpl(`${DIRECT_API}/usage`, {
     headers: { authorization: 'Bearer ' + apiKey },
     signal: AbortSignal.timeout(15_000),
   });
@@ -191,6 +220,7 @@ export function refreshUsage(fetchImpl: FetchImpl = fetch): Promise<void> {
 }
 
 function maskKey(secret: string): string {
+  if (isProxy(secret)) return 'US proxy';
   return secret.length <= 4 ? '••••' : `••••${secret.slice(-4)}`;
 }
 
@@ -199,6 +229,7 @@ export async function loadKeys(env: NodeJS.ProcessEnv = process.env): Promise<st
   try {
     const rows = await db.listGeminiContactKeys();
     keys = rows.filter((row) => row.kind === 'tavily').map((row) => row.secret);
+    setProxy(parseProxy(rows.find((row) => row.kind === 'exa_proxy')?.secret ?? ''));
     if (!keys.length) keys = rows.filter((row) => row.secret.startsWith('tvly-')).map((row) => row.secret);
   } catch { /* database table created on migrate; caller without db uses env */ }
   if (!keys.length) {
@@ -210,7 +241,7 @@ export async function loadKeys(env: NodeJS.ProcessEnv = process.env): Promise<st
 /** Reload the keys into the shared pool, refresh their quota, and return them. */
 export async function refresh(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
   const keys = await loadKeys(env);
-  pool.setKeys(keys);
+  pool.setKeys(withProxy(keys));
   await refreshUsage();
   return keys;
 }
@@ -232,7 +263,7 @@ export async function searchWithKey(
   apiKey: string,
   opts: { maxResults?: number; depth?: 'basic' | 'advanced'; timeoutMs?: number; fetchImpl?: FetchImpl; log?: ApiCall[]; what?: string } = {},
 ): Promise<SearchHit[]> {
-  const call = startCall('tavily', opts.what ?? `search: ${query}`, { provider: 'tavily' });
+  const call = startCall('tavily', opts.what ?? `search: ${query}`, { provider: isProxy(apiKey) ? 'tavily us proxy' : 'tavily' });
   try {
     const hits = await searchOnce(query, apiKey, opts);
     opts.log?.push(call.done({ ok: true, results: hits.length, credits: (opts.depth ?? 'advanced') === 'advanced' ? 2 : 1 }));
@@ -249,13 +280,13 @@ async function searchOnce(
   opts: { maxResults?: number; depth?: 'basic' | 'advanced'; timeoutMs?: number; fetchImpl?: FetchImpl },
 ): Promise<SearchHit[]> {
   const fetchImpl = opts.fetchImpl ?? fetch;
+  const target = endpoint(apiKey, 'search');
   let res: Response;
   try {
-    res = await fetchImpl('https://api.tavily.com/search', {
+    res = await fetchImpl(target.url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: target.headers,
       body: JSON.stringify({
-        api_key: apiKey,
         query,
         max_results: opts.maxResults ?? 8,
         search_depth: opts.depth ?? 'advanced',
@@ -273,6 +304,8 @@ async function searchOnce(
     );
   }
   const raw = await res.text();
+  const noKey = noKeyRestMs(res, raw);
+  if (noKey) throw Object.assign(fail(`US proxy has no usable Tavily key: ${raw.slice(0, 200)}`, 'quota'), { restMs: noKey, provider: 'tavily' });
   if (res.status === 432 || res.status === 433 || (!res.ok && /usage_limit|quota|credit|plan limit/i.test(raw))) {
     throw fail(`tavily monthly quota exceeded (${res.status}): ${raw.slice(0, 200)}`, 'quota');
   }
@@ -292,9 +325,10 @@ async function searchOnce(
   });
 }
 
-/** Release a lease the way the error asks: rest the key for quota, a minute off for a rate limit. */
+/** Release a lease the way the error asks: the proxy's retry-after, rest the key for quota, a minute off for a rate limit. */
 export function releaseFor(lease: Lease, cause: unknown): void {
-  const code = (cause as { code?: string } | null)?.code;
+  const { code, restMs } = (cause as { code?: string; restMs?: number } | null) ?? {};
+  if (restMs) return lease.release(restMs);
   lease.release(code === 'rate_limit' ? 60_000 : 0, code === 'quota');
 }
 
@@ -334,9 +368,10 @@ async function requestPool(
     const lease = await pool.acquire();
     let res: Response;
     try {
-      res = await fetchImpl(`https://api.tavily.com/${path}`, {
+      const target = endpoint(lease.secret, path);
+      res = await fetchImpl(target.url, {
         method: 'POST',
-        headers: { authorization: 'Bearer ' + lease.secret, 'content-type': 'application/json' },
+        headers: target.headers,
         body: JSON.stringify({ ...body, include_usage: true }),
         // No timeout unless the caller asks for one: a slow extract still finishes.
         ...(opts.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
@@ -346,6 +381,11 @@ async function requestPool(
       throw fail(`tavily /${path} unreachable: ${(cause as Error).message}`, 'timeout');
     }
     const raw = await res.text();
+    const noKey = noKeyRestMs(res, raw);
+    if (noKey) {
+      lease.release(noKey);
+      continue;
+    }
     if (res.status === 432 || res.status === 433) {
       lease.release(0, true);
       continue;
@@ -374,12 +414,13 @@ export async function requestWithKey<T = Record<string, any>>(
   apiKey: string,
   opts: { timeoutMs?: number; fetchImpl?: FetchImpl; log?: ApiCall[]; what?: string } = {},
 ): Promise<T & { usage?: { credits?: number } }> {
-  const call = startCall('tavily', opts.what ?? `${path}: ${String(body.query ?? body.url ?? '').slice(0, 200)}`, { provider: 'tavily' });
+  const call = startCall('tavily', opts.what ?? `${path}: ${String(body.query ?? body.url ?? '').slice(0, 200)}`, { provider: isProxy(apiKey) ? 'tavily us proxy' : 'tavily' });
   let res: Response;
   try {
-    res = await (opts.fetchImpl ?? fetch)(`https://api.tavily.com/${path}`, {
+    const target = endpoint(apiKey, path);
+    res = await (opts.fetchImpl ?? fetch)(target.url, {
       method: 'POST',
-      headers: { authorization: 'Bearer ' + apiKey, 'content-type': 'application/json' },
+      headers: target.headers,
       body: JSON.stringify({ ...body, include_usage: true }),
       ...(opts.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
     });
@@ -391,6 +432,8 @@ export async function requestWithKey<T = Record<string, any>>(
   }
   const raw = await res.text();
   const refuse = (message: string, code: string) => { opts.log?.push(call.done({ ok: false, note: message.slice(0, 200) })); return fail(message, code); };
+  const noKey = noKeyRestMs(res, raw);
+  if (noKey) throw Object.assign(refuse(`US proxy has no usable Tavily key: ${raw.slice(0, 200)}`, 'quota'), { restMs: noKey, provider: 'tavily' });
   if (res.status === 432 || res.status === 433) throw refuse(`tavily quota exceeded (${res.status}): ${raw.slice(0, 200)}`, 'quota');
   if (res.status === 429) throw refuse(`429 rate_limit_error: tavily rate limit: ${raw.slice(0, 200)}`, 'rate_limit');
   if (!res.ok) throw refuse(`upstream error: tavily ${path} answered ${res.status}: ${raw.slice(0, 200)}`, res.status === 403 ? 'unsupported' : 'timeout');
