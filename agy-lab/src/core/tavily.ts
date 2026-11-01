@@ -173,20 +173,20 @@ export async function fetchUsage(apiKey: string, fetchImpl: FetchImpl = fetch): 
 
 let usageRun: Promise<void> | null = null;
 
-/** Re-read /usage for keys whose number is older than ten minutes. A failed read keeps the old number. */
+/** Re-read /usage for keys whose number is older than ten minutes. A failed read keeps the old number.
+ *  All keys at once: read one by one, 19 keys whose reads time out held the first Tavily call after a
+ *  restart for almost four minutes (company-dive 17, 2026-11-01). */
 export function refreshUsage(fetchImpl: FetchImpl = fetch): Promise<void> {
-  usageRun ??= (async () => {
-    for (const key of pool.staleUsage(USAGE_REFRESH_MS)) {
-      try {
-        const { used, limit } = await fetchUsage(key, fetchImpl);
-        pool.setUsage(key, used, limit);
-      } catch (err) {
-        // Kept on the key and shown on /auto-queue; retried after USAGE_RETRY_MS.
-        const e = err as Error & { cause?: { code?: string } };
-        pool.usageFailed(key, `${e.name}: ${e.message}${e.cause?.code ? ' (' + e.cause.code + ')' : ''}`);
-      }
+  usageRun ??= Promise.all(pool.staleUsage(USAGE_REFRESH_MS).map(async (key) => {
+    try {
+      const { used, limit } = await fetchUsage(key, fetchImpl);
+      pool.setUsage(key, used, limit);
+    } catch (err) {
+      // Kept on the key and shown on /auto-queue; retried after USAGE_RETRY_MS.
+      const e = err as Error & { cause?: { code?: string } };
+      pool.usageFailed(key, `${e.name}: ${e.message}${e.cause?.code ? ' (' + e.cause.code + ')' : ''}`);
     }
-  })().finally(() => { usageRun = null; });
+  })).then(() => {}).finally(() => { usageRun = null; });
   return usageRun;
 }
 
