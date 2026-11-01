@@ -42,6 +42,7 @@ import { brave, llm, tavily } from './core/index.ts';
 import * as reportdb from './reportdb.ts';
 import { diveCalls, diveUsage, price, PRICES, type ApiCall } from './cost.ts';
 import * as countries from './countries.ts';
+import * as pagefetch from './pagefetch.ts';
 
 export type Source = {
   id: number;
@@ -101,7 +102,9 @@ const TOPICS = ['identity', 'ownership_people', 'products_services', 'projects_c
 
 export const MAX_TAVILY_CALLS = 15;
 
-export type TavilyCall = { n: number; at?: string; path: string; label: string; credits: number; ms: number; ok: boolean; usd?: number; note?: string };
+export type TavilyCall = { n: number; at?: string; path: string; label: string; credits: number; ms: number; ok: boolean; usd?: number; note?: string;
+  /** Who served it: 'tavily', or the name of the Mac mini fetch lane that read the pages. */
+  via?: string };
 
 /** Counts a dive's Tavily calls and refuses the one past the cap. A call no key accepted costs nothing and is not counted. */
 export class Budget {
@@ -116,6 +119,7 @@ export class Budget {
 export class BudgetSpent extends Error {}
 
 type TavilyRequest = typeof tavily.request;
+type PageReader = typeof pagefetch.read;
 
 export async function budgetedCall(
   budget: Budget,
@@ -123,20 +127,28 @@ export async function budgetedCall(
   body: Record<string, unknown>,
   label: string,
   request: TavilyRequest = tavily.request,
+  readPages: PageReader = pagefetch.read,
 ): Promise<Record<string, any>> {
   if (budget.left <= 0) throw new BudgetSpent(`Tavily budget of ${budget.max} calls is spent`);
   const started = Date.now();
   const at = new Date(started).toISOString();
+  const via = path === 'extract' ? 'macmini' : 'tavily';
   try {
-    const out = await request(path, body);
+    // Pages are read on the Mac mini since 2026-11-01 (pagefetch.ts): the same
+    // answer shape, for nothing, from an address websites actually serve.
+    // Search and map stay with Tavily — they are search, not page reads.
+    const out = path === 'extract'
+      ? await readPages((body.urls as string[]) ?? [])
+      : await request(path, body);
     const credits = Number(out.usage?.credits ?? 0);
-    budget.calls.push({ n: budget.used + 1, at, path, label, credits, ms: Date.now() - started, ok: true, usd: credits * PRICES.tavilyCredit });
+    budget.calls.push({ n: budget.used + 1, at, path, label, credits, ms: Date.now() - started, ok: true, usd: credits * PRICES.tavilyCredit,
+      via: path === 'extract' ? (out as pagefetch.ExtractAnswer).worker ?? via : via });
     return out;
   } catch (err) {
     const code = (err as { code?: string }).code;
-    // Refused before Tavily did any work: no budget spent.
+    // Refused before any work was done (no key, or no fetch lane): no budget spent.
     if (code !== 'quota' && code !== 'not_installed') {
-      budget.calls.push({ n: budget.used + 1, at, path, label, credits: 0, ms: Date.now() - started, ok: false, usd: 0, note: (err as Error).message.slice(0, 200) });
+      budget.calls.push({ n: budget.used + 1, at, path, label, credits: 0, ms: Date.now() - started, ok: false, usd: 0, note: (err as Error).message.slice(0, 200), via });
     }
     throw err;
   }
