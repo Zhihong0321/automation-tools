@@ -7,7 +7,7 @@
 //   pi         MiniMax through the Pi agent SDK; called by llm, its config read by others
 //   tavily     Tavily search, extract, map, crawl over the key pool (gemini_contact_key)
 //   exa        Exa search and contents over the key pool and the US proxy
-//   brave      Brave Search over BRAVE_API_KEYS
+//   brave      Brave Search over the /workers Brave keys
 //   maps       scraper.tech Google Maps tools
 //   pagespeed  Google PageSpeed Insights
 //   parallel   Parallel's FindAll entity search (person research)

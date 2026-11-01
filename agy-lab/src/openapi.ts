@@ -308,7 +308,7 @@ export const document = {
           '202': { description: 'Dive queued; report link ready', content: { 'application/json': { schema: { $ref: '#/components/schemas/CompanyDiveAccepted' } } } },
           '400': { $ref: '#/components/responses/BadRequest' },
           '401': { $ref: '#/components/responses/Unauthorized' },
-          '503': { description: 'No report database, or BRAVE_API_KEYS is not set', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          '503': { description: 'No report database, or no Brave keys', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
         },
       },
       get: {

@@ -225,7 +225,8 @@ export function makeCtx(diveId: string, section: string, lane: string) {
   /** Brave web search (core/brave.ts); returns web.results (title, url, description, age...). */
   async function brave(query: string, opts: { count?: number; country?: string } = {}): Promise<any[]> {
     meter.brave.calls++;
-    const keys = core.brave.keys().length ? core.brave.keys() : [secret('BRAVE_SEARCH_API_KEY'), secret('BRAVE_SEARCH_API_KEY_2')].filter(Boolean);
+    const dbKeys = await core.brave.current();
+    const keys = dbKeys.length ? dbKeys : [secret('BRAVE_SEARCH_API_KEY'), secret('BRAVE_SEARCH_API_KEY_2')].filter(Boolean);
     try {
       return await core.brave.searchRaw(query, { count: opts.count ?? 20, country: opts.country ?? 'MY', extraSnippets: false, log: meter.calls }, keys);
     } catch (e) {

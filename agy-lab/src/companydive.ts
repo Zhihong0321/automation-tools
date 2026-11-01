@@ -18,7 +18,7 @@
 //
 // Tavily goes through the shared key pool in tavily.ts, so dives and contact
 // research see the same quota. Every thinking step is the deepseek model contact
-// research uses (extract-llm.ts, CONTACT_LLM_*). Brave keys are BRAVE_API_KEYS.
+// research uses (extract-llm.ts, CONTACT_LLM_*). Brave keys are on /workers (core/brave.ts).
 // Dives run in this process, one at a time, and are kept in company_dive.
 //
 //   GET  /company-dive              the page
@@ -902,8 +902,8 @@ export async function handle(req: import('node:http').IncomingMessage, res: impo
       ctx.json(res, 400, { error: 'company is required' });
       return true;
     }
-    if (!brave.keys().length) {
-      ctx.json(res, 503, { error: 'BRAVE_API_KEYS is not set' });
+    if (!(await brave.current()).length) {
+      ctx.json(res, 503, { error: 'No Brave keys: add one on /workers' });
       return true;
     }
     const options = { people: body.people !== false };

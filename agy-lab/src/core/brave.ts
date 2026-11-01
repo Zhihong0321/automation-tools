@@ -1,10 +1,13 @@
 // Brave Search: the wide net. Snippets only, no page text, but its own index and
 // up to 20 results a call, so discovery costs no Tavily budget.
 //
-// BRAVE_API_KEYS holds one or more keys (comma or newline separated). Brave's
+// Keys live in the hub database (gemini_contact_key, kind 'brave', edited on
+// /workers); BRAVE_API_KEYS (comma or newline separated) only serves a hub whose
+// table has none. The list is reloaded at most once a minute. Brave's
 // plan allows about 50 queries a second (seen 2026-10-24), so calls are spaced 0.1 s and a
 // 429/402 moves on to the next key.
 
+import * as db from '../reportdb.ts';
 import { startCall, type ApiCall } from '../cost.ts';
 
 type FetchImpl = typeof fetch;
@@ -14,8 +17,29 @@ export type BraveHit = { url: string; title: string; snippets: string[]; age?: s
 const BASE = 'https://api.search.brave.com/res/v1';
 const SPACING_MS = 100;
 
+const RELOAD_MS = 60_000;
+let dbKeys: string[] = [];
+let loadedAt = 0;
+
+/** The keys last loaded from the database, else the BRAVE_API_KEYS variable. */
 export function keys(env: NodeJS.ProcessEnv = process.env): string[] {
+  if (dbKeys.length) return dbKeys;
   return String(env.BRAVE_API_KEYS ?? env.BRAVE_SEARCH_API_KEY ?? '').split(/[,\n]/).map((k) => k.trim()).filter(Boolean);
+}
+
+/** Reload the keys from the database and return the list calls will use. */
+export async function refresh(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
+  try {
+    const rows = await db.listGeminiContactKeys();
+    dbKeys = rows.filter((row) => row.kind === 'brave').map((row) => row.secret);
+  } catch { /* no database: env keys */ }
+  loadedAt = Date.now();
+  return keys(env);
+}
+
+/** The current keys, reloaded from the database when the last load is over a minute old. */
+export async function current(): Promise<string[]> {
+  return Date.now() - loadedAt > RELOAD_MS ? refresh() : keys();
 }
 
 let lastCall = 0;
@@ -39,7 +63,7 @@ function hits(rows: Array<Record<string, any>> | undefined): BraveHit[] {
 type SearchOpts = { country?: string; kind?: 'web' | 'news'; count?: number; extraSnippets?: boolean; what?: string; log?: ApiCall[]; onCall?: (c: ApiCall) => void };
 
 /** One Brave query. kind 'news' uses the news endpoint. Every request, a key that refused included, is logged. */
-export async function search(q: string, opts: SearchOpts = {}, allKeys: string[] = keys(), fetchImpl: FetchImpl = fetch): Promise<BraveHit[]> {
+export async function search(q: string, opts: SearchOpts = {}, allKeys?: string[], fetchImpl: FetchImpl = fetch): Promise<BraveHit[]> {
   return hits(await searchRaw(q, opts, allKeys, fetchImpl));
 }
 
@@ -47,10 +71,11 @@ export async function search(q: string, opts: SearchOpts = {}, allKeys: string[]
 export async function searchRaw(
   q: string,
   opts: SearchOpts = {},
-  allKeys: string[] = keys(),
+  keyList?: string[],
   fetchImpl: FetchImpl = fetch,
 ): Promise<Array<Record<string, any>>> {
-  if (!allKeys.length) throw new Error('BRAVE_API_KEYS is not set');
+  const allKeys = keyList ?? await current();
+  if (!allKeys.length) throw new Error('No Brave keys: add one on /workers');
   const kind = opts.kind ?? 'web';
   const params = new URLSearchParams({ q, count: String(opts.count ?? 20) });
   if (opts.country) params.set('country', opts.country);

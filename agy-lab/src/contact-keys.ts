@@ -1,8 +1,9 @@
 // GET/POST /api/contact-keys: the search keys contact research rotates through,
-// Tavily and Exa, each shown in full with its quota state. Behind LAB_TOKEN.
+// Tavily and Exa, each shown in full with its quota state, and the Brave keys
+// company and deeper dives search with. Behind LAB_TOKEN.
 // GET/POST /api/llm-lanes: the extract model lanes (extract-llm.ts), kept in llm_lane.
 import * as db from './reportdb.ts';
-import { exa, llm as extractLlm, tavily } from './core/index.ts';
+import { brave, exa, llm as extractLlm, tavily } from './core/index.ts';
 
 type Ctx = { json: (res: unknown, status: number, body: unknown) => void; readJson: (req: unknown) => Promise<Record<string, unknown>> };
 
@@ -38,9 +39,10 @@ export async function handleKeys(req: { method?: string }, res: unknown, url: UR
   if (url.pathname !== '/api/contact-keys' && url.pathname !== '/api/gemini-contact-keys') return false;
   const method = req.method ?? 'GET';
   if (method === 'GET') {
-    const [tavilyKeys, exaKeys] = await Promise.all([tavily.refresh(), exa.refresh()]);
+    const [tavilyKeys, exaKeys, braveKeys] = await Promise.all([tavily.refresh(), exa.refresh(), brave.refresh()]);
     ctx.json(res, 200, {
       tavilyKeys,
+      braveKeys,
       tavily: tavily.pool.stats(),
       exaKeys,
       exa: exa.pool.stats(),
@@ -54,6 +56,7 @@ export async function handleKeys(req: { method?: string }, res: unknown, url: UR
     const body = await ctx.readJson(req);
     if (Array.isArray(body.tavily)) await db.replaceGeminiContactKeys('tavily', body.tavily.map(String));
     if (Array.isArray(body.exa)) await db.replaceGeminiContactKeys('exa', body.exa.map(String));
+    if (Array.isArray(body.brave)) await db.replaceGeminiContactKeys('brave', body.brave.map(String));
     // The US proxy that "us:" Exa keys go through: {url, token}, or null to remove it.
     if (body.exaProxy !== undefined) {
       const proxy = body.exaProxy === null ? null : exa.parseProxy(body.exaProxy);
@@ -63,7 +66,7 @@ export async function handleKeys(req: { method?: string }, res: unknown, url: UR
       }
       await db.replaceGeminiContactKeys('exa_proxy', proxy ? [JSON.stringify(proxy)] : []);
     }
-    await Promise.all([tavily.refresh(), exa.refresh()]);
+    await Promise.all([tavily.refresh(), exa.refresh(), brave.refresh()]);
     ctx.json(res, 200, { ok: true, step1Slots: tavily.pool.slots(), exaSlots: exa.pool.slots() });
     return true;
   }
