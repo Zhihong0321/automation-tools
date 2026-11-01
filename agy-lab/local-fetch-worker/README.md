@@ -156,6 +156,47 @@ Stop either with `launchctl bootout gui/$(id -u)/com.eternalgy.localfetchworker`
 Re-run the `sed` and `bootstrap` lines after a `git pull` that changes the
 worker, or after any Node upgrade — `which node` is an nvm path and moves.
 
+## On a Windows PC
+
+A Windows PC runs the same `worker.ts`, against **Crawl4AI as a Python package**
+rather than the Docker image: no Docker Desktop, no WSL VM, which a PC already
+running the Gmap and step-2 workers has no RAM for. `crawl4ai_server.py` serves
+the image's `/md` and `/health` on `127.0.0.1`, built the way the image builds
+them (`fit` = `PruningContentFilterLXML`, `raw` = the DOM, LXML scraping), so
+the bridge cannot tell the two apart. It refuses a host that resolves to a
+private or loopback address with the image's own wording.
+
+The PC holds `GMAP_WORKER_KEY`, never `LAB_TOKEN`: the worker key's scope
+(`JOB_TYPES` in `../src/gmap-worker.ts`) includes `fetch.pages`.
+
+Everything goes in `%USERPROFILE%\.local-fetch-worker`, **not under AppData**:
+the Claude desktop app's shell sees a private copy of AppData, so a Chromium
+installed from there is not where a worker started at sign-in looks.
+
+```powershell
+$d = "$env:USERPROFILE\.local-fetch-worker"
+py -3.12 -m venv "$d\venv"
+& "$d\venv\Scripts\python.exe" -m pip install crawl4ai
+$env:PLAYWRIGHT_BROWSERS_PATH = "$d\ms-playwright"
+& "$d\venv\Scripts\python.exe" -m playwright install chromium
+```
+
+`worker.env` there: `LAB_URL`, `GMAP_WORKER_KEY` (from the Gmap worker's own
+`worker.env`), `CRAWL4AI_URL=http://127.0.0.1:11235`, `CRAWL4AI_TOKEN` (any
+random 64 hex), `WORKER_NAME`, and `LANES=1`, `PAGE_CONCURRENCY=3` on a PC with
+little free RAM. Then prove pages are read, and start it:
+
+```powershell
+node agy-lab\local-fetch-worker\check.ts
+powershell -NoProfile -ExecutionPolicy Bypass -File agy-lab\local-fetch-worker\start-windows.ps1 -Autostart on
+```
+
+`start-windows.ps1` keeps both processes up and restarts either one that stops.
+Without `-Autostart` it runs in the foreground. Measured on pc-desktop-camhl16
+(i5-13500H) on 2026-11-01: solarvest.my 7,808 characters, samaiden.com.my 4,921,
+maybank about-us 2,511; about 1.4 GB on disk with Chromium; 1–3 s a page once
+the browser is warm, 12 s for the first.
+
 ## When the mini is off
 
 The hub does **not** fall back to Tavily. That was chosen deliberately: a dive
