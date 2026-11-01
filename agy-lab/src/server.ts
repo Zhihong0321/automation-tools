@@ -335,8 +335,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (await emailMarketing.handleWebhook(req, res, url, { json, readJson })) return;
 
   // A Gmap Local Worker PC holds a key derived from LAB_TOKEN that reaches its
-  // own routes and nothing else: claiming, beating and answering gmap.scan, and
-  // fetching the sweep words and the engine. See gmap-worker.ts.
+  // own routes and nothing else: claiming, beating and answering gmap.scan and
+  // fetch.pages (gmapWorker.JOB_TYPES), and fetching the sweep words. See
+  // gmap-worker.ts.
   if (!authorized(req, url)) {
     const header = req.headers.authorization ?? '';
     if (header.startsWith('Bearer ') && gmapWorker.isWorkerKey(header.slice(7))) {

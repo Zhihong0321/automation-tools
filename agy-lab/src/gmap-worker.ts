@@ -6,7 +6,7 @@
 //
 // THE KEY. A worker PC must not hold LAB_TOKEN: that is a shell on this
 // container. It holds GMAP_WORKER_KEY, an HMAC of LAB_TOKEN, which server.ts
-// lets through to the claim, heartbeat and result routes (for gmap.scan only,
+// lets through to the claim, heartbeat and result routes (for JOB_TYPES only,
 // see jobs.ts `scope`) and to the strategy route below. Rotating LAB_TOKEN
 // rotates it; the PCs then need a fresh package.
 import http from 'node:http';
@@ -16,8 +16,12 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { AREA_MATCH_FLOOR, DEFAULT_MAX, FAMILIES, STREET_FORMS } from './maps-worker.ts';
 
-/** The only job types a worker key may claim or answer. */
-export const JOB_TYPES = ['gmap.scan'];
+/**
+ * The only job types a worker key may claim or answer. `fetch.pages` is the
+ * Local Fetch Worker (../local-fetch-worker) on the same PCs: page reads for a
+ * company dive, read on the PC's home line instead of bought from Tavily.
+ */
+export const JOB_TYPES = ['gmap.scan', 'fetch.pages'];
 export const PACKAGE_NAME = 'GmapWorker.zip';
 const DIR = path.resolve(import.meta.dirname, '../local-worker');
 const KEY_LABEL = 'gmap-local-worker-v1';

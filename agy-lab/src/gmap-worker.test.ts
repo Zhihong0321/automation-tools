@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type http from 'node:http';
 import zlib from 'node:zlib';
-import { isJobRoute, isWorkerKey, packageZip, strategy, workerKey, zip } from './gmap-worker.ts';
+import { isJobRoute, isWorkerKey, JOB_TYPES, packageZip, strategy, workerKey, zip } from './gmap-worker.ts';
 import { create, finish, handle, take } from './jobs.ts';
 
 const TOKEN = 'lab-secret-123456789';
@@ -87,7 +87,7 @@ async function scoped(method: string, path: string, body: Record<string, unknown
   await handle(req, res, new URL('http://lab' + path), {
     json: (_res, code, payload) => { status = code; sent = payload as Record<string, unknown>; },
     readJson: async () => body,
-    scope: { types: ['gmap.scan'] },
+    scope: { types: JOB_TYPES },
   });
   return { status, body: sent };
 }
@@ -112,6 +112,16 @@ test('a scoped key answers only the gmap.scan job its own worker holds', async (
   assert.equal((await take('pc-scope-2', { types: ['fb.company'], waitMs: 0 }))?.id, fb.id);
   assert.equal((await scoped('POST', `/api/jobs/${fb.id}/result`, { worker: 'pc-scope-2', ok: true })).status, 403);
   finish(fb.id, false, null, 'test');
+});
+
+test('a scoped key reads pages for a dive: it claims and answers fetch.pages', async () => {
+  const job = create('fetch.pages', { urls: ['https://example.com'] }, 60_000);
+  const got = await scoped('GET', '/api/jobs/next?worker=pc-fetch-1&types=fetch.pages&wait=0');
+  assert.equal((got.body?.job as { id?: string } | undefined)?.id, job.id);
+  const answered = await scoped('POST', `/api/jobs/${job.id}/result`,
+    { worker: 'pc-fetch-1', ok: true, result: { pages: [{ url: 'https://example.com', markdown: 'Example' }], failed: [] } });
+  assert.equal(answered.status, 200);
+  assert.equal(job.status, 'done');
 });
 
 test('a scoped result for a job the broker lost is a 404', async () => {
