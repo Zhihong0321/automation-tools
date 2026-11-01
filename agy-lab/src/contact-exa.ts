@@ -32,10 +32,10 @@ type ExaResult = {
 };
 type ExaAnswer = { results?: ExaResult[]; costDollars?: { total?: number }; statuses?: Array<{ id?: string; status?: string }> };
 
-/** One Exa call with the job's leased key, through the app's core (core/exa.ts), counted against the key for the /auto-queue page. */
-async function call(endpoint: string, body: Record<string, unknown>, apiKey: string, fetchImpl: FetchImpl, timeoutMs = 45_000): Promise<ExaAnswer> {
+/** One Exa call through the app's core (core/exa.ts), which picks the key, rests a spent one and tries the next. */
+async function call(endpoint: string, body: Record<string, unknown>, fetchImpl: FetchImpl, timeoutMs = 45_000): Promise<ExaAnswer> {
   try {
-    return await exa.requestWithKey(endpoint, body, apiKey, { fetchImpl, timeoutMs }) as ExaAnswer;
+    return await exa.request(endpoint, body, { fetchImpl, timeoutMs }) as ExaAnswer;
   } catch (cause) {
     // An Exa error carries provider 'exa', so the worker can tell it from a model error and fall back to Tavily.
     throw Object.assign(cause as Error, { provider: 'exa' });
@@ -112,10 +112,10 @@ function searches(target: cw.Target): Spec[] {
 
 type Found = { searched: cw.Searched; pages: cw.Page[]; dollars: number; companySites: string[] };
 
-async function runSearches(target: cw.Target, apiKey: string, fetchImpl: FetchImpl): Promise<Found> {
+async function runSearches(target: cw.Target, fetchImpl: FetchImpl): Promise<Found> {
   const specs = searches(target);
   const answers = await Promise.all(specs.map((spec) =>
-    call('search', { query: spec.query, ...spec.body }, apiKey, fetchImpl).catch((cause: Error) => {
+    call('search', { query: spec.query, ...spec.body }, fetchImpl).catch((cause: Error) => {
       // People and company searches are a bonus; the general search must answer.
       if (spec.purpose !== 'general') return { results: [], costDollars: { total: 0 }, failed: cause.message } as ExaAnswer;
       throw cause;
@@ -188,14 +188,14 @@ function pageOf(row: ExaResult & { extras?: { links?: string[] } }): cw.Page | n
  * team or management. Exa's own subpageTarget picked mailto: and wa.me links
  * over /contact and /about-us on the sites we tried, so the pick is ours.
  */
-async function readSite(site: string, apiKey: string, fetchImpl: FetchImpl): Promise<{ pages: cw.Page[]; log: cw.SearchLog[]; dollars: number }> {
+async function readSite(site: string, fetchImpl: FetchImpl): Promise<{ pages: cw.Page[]; log: cw.SearchLog[]; dollars: number }> {
   const log: cw.SearchLog[] = [];
   const pages: cw.Page[] = [];
   let dollars = 0;
   try {
     const home = await call('contents', {
       urls: [site], text: { maxCharacters: PAGE_CHARS }, extras: { links: 200 }, livecrawlTimeout: 15_000,
-    }, apiKey, fetchImpl, 60_000);
+    }, fetchImpl, 60_000);
     const row = (home.results ?? [])[0] as (ExaResult & { extras?: { links?: string[] } }) | undefined;
     const homePage = row ? pageOf(row) : null;
     if (homePage) pages.push(homePage);
@@ -204,7 +204,7 @@ async function readSite(site: string, apiKey: string, fetchImpl: FetchImpl): Pro
     log.push({ provider: 'exa', purpose: 'site', query: `contents ${site} with links`, results: links.length, dollars: home.costDollars?.total ?? 0 });
     const more = cw.pickSitePages(site, links).slice(1);
     if (more.length) {
-      const rest = await call('contents', { urls: more, text: { maxCharacters: PAGE_CHARS }, extras: { links: 200 }, livecrawlTimeout: 15_000 }, apiKey, fetchImpl, 60_000);
+      const rest = await call('contents', { urls: more, text: { maxCharacters: PAGE_CHARS }, extras: { links: 200 }, livecrawlTimeout: 15_000 }, fetchImpl, 60_000);
       for (const sub of rest.results ?? []) {
         const page = pageOf(sub as ExaResult & { extras?: { links?: string[] } });
         if (page) pages.push(page);
@@ -221,14 +221,14 @@ async function readSite(site: string, apiKey: string, fetchImpl: FetchImpl): Pro
 }
 
 /** One company through the Exa pipeline with one key. Same result shape as contact-worker's research(). */
-export async function research(raw: unknown, deps: { apiKey: string; fetchImpl?: FetchImpl; timeoutMs?: number }): Promise<Record<string, unknown>> {
+export async function research(raw: unknown, deps: { fetchImpl?: FetchImpl; timeoutMs?: number }): Promise<Record<string, unknown>> {
   const target = cw.targetFromPayload(raw);
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const found = await runSearches(target, deps.apiKey, fetchImpl);
+  const found = await runSearches(target, fetchImpl);
   // The lead's website, else a general hit whose host spells the name, else the company search's Malaysian hit.
   const site = cw.officialSite(target, found.searched.sources) || found.companySites.find((url) =>
     cw.officialSite({ ...target, website: '' }, [{ url, kind: 'other', why: '' }])) || '';
-  const siteRead = site ? await readSite(site, deps.apiKey, fetchImpl) : { pages: [], log: [], dollars: 0 };
+  const siteRead = site ? await readSite(site, fetchImpl) : { pages: [], log: [], dollars: 0 };
   const pages = dedupe([...siteRead.pages, ...found.pages], (p) => p.url);
   const searched: cw.Searched = { ...found.searched, log: [...found.searched.log, ...siteRead.log] };
   const pageFoundBy = new Map(pages.map((page) => [cw.dedupeKey(page.url), 'exa']));

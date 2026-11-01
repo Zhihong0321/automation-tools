@@ -7,6 +7,7 @@ import * as db from '../reportdb.ts';
 import { startCall, type ApiCall } from '../cost.ts';
 import { createKeyPool, type Lease, type SearchHit } from './tavily.ts';
 import { isProxy, noKeyRestMs, parseProxy, proxy, setProxy, usage, withProxy } from './proxy.ts';
+import * as vault from './vault.ts';
 
 export { PROXY_SOURCE, isProxy, parseProxy, proxy, setProxy, type ProxyConfig } from './proxy.ts';
 
@@ -81,7 +82,7 @@ export async function loadKeys(env: NodeJS.ProcessEnv = process.env): Promise<st
     setProxy(parseProxy(rows.find((row) => row.kind === 'exa_proxy')?.secret ?? ''));
   } catch { /* database table created on migrate; caller without db uses env */ }
   if (!keys.length) {
-    keys = String(env.EXA_API_KEYS ?? env.EXA_API_KEY ?? '').split(/[,\n]/).map((k) => k.trim()).filter(Boolean);
+    keys = String(env.EXA_API_KEYS ?? env.EXA_API_KEY ?? vault.secret('EXA_API_KEY')).split(/[,\n]/).map((k) => k.trim()).filter(Boolean);
   }
   return keys;
 }
@@ -90,7 +91,22 @@ export async function loadKeys(env: NodeJS.ProcessEnv = process.env): Promise<st
 export async function refresh(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
   const keys = await loadKeys(env);
   pool.setKeys(withProxy(keys));
+  keysLoadedAt = Date.now();
   return keys;
+}
+
+/** Pool calls reload the keys at most this often; a job start or /workers save reloads them at once. */
+const KEYS_RELOAD_MS = 30_000;
+let keysLoadedAt = 0;
+
+async function ensureKeys(): Promise<void> {
+  if (Date.now() - keysLoadedAt > KEYS_RELOAD_MS) await refresh();
+}
+
+/** Tests: fill the pool with these keys and stop reloading it; null goes back to the saved keys. */
+export function setKeysForTests(keys: string[] | null): void {
+  pool.setKeys(keys ?? []);
+  keysLoadedAt = keys ? Infinity : 0;
 }
 
 function fail(message: string, code: string): Error {
@@ -151,10 +167,9 @@ async function requestOnce(path: string, body: Record<string, unknown>, apiKey: 
  * the call moves to the next key. `apiKey` pins one key (a caller holding a
  * lease, or a local script with its own key when the pool is empty).
  */
-export async function request(path: string, body: Record<string, unknown>, opts: CallOpts & { apiKey?: string } = {}): Promise<Record<string, any>> {
-  await refresh();
+export async function request(path: string, body: Record<string, unknown>, opts: CallOpts = {}): Promise<Record<string, any>> {
+  await ensureKeys();
   const tries = pool.stats().length;
-  if (!tries && opts.apiKey) return requestWithKey(path, body, opts.apiKey, opts);
   if (!tries) throw fail('no Exa key is configured', 'not_installed');
   let lastErr = '';
   for (let attempt = 0; attempt < tries; attempt++) {
@@ -174,15 +189,28 @@ export async function request(path: string, body: Record<string, unknown>, opts:
   throw fail(`every Exa key is resting (${lastErr || 'no credit'})`, 'quota');
 }
 
-/** One Exa search with the given key, as Tavily-shaped hits: url, title, and the highlight sentences as content. */
-export async function searchWithKey(query: string, apiKey: string, opts: SearchOpts = {}): Promise<SearchHit[]> {
-  const body = await requestWithKey('search', {
+function searchBody(query: string, opts: SearchOpts): Record<string, unknown> {
+  return {
     query,
     numResults: opts.numResults ?? 8,
     type: 'auto',
     ...(opts.includeDomains ? { includeDomains: opts.includeDomains } : {}),
     contents: { highlights: { numSentences: 3, highlightsPerUrl: 2 } },
-  }, apiKey, { ...opts, timeoutMs: opts.timeoutMs ?? 30_000, what: opts.what ?? `search: ${query}` }) as { results?: Array<{ url?: string; title?: string; highlights?: string[] }> };
+  };
+}
+
+/** One Exa search through the shared pool, as Tavily-shaped hits; a spent or refused key rests and the search moves on. */
+export async function search(query: string, opts: SearchOpts = {}): Promise<SearchHit[]> {
+  return toHits(await request('search', searchBody(query, opts), { ...opts, timeoutMs: opts.timeoutMs ?? 30_000, what: opts.what ?? `search: ${query}` }));
+}
+
+/** One Exa search with the given key, as Tavily-shaped hits: url, title, and the highlight sentences as content. */
+export async function searchWithKey(query: string, apiKey: string, opts: SearchOpts = {}): Promise<SearchHit[]> {
+  return toHits(await requestWithKey('search', searchBody(query, opts), apiKey, { ...opts, timeoutMs: opts.timeoutMs ?? 30_000, what: opts.what ?? `search: ${query}` }));
+}
+
+function toHits(answer: Record<string, any>): SearchHit[] {
+  const body = answer as { results?: Array<{ url?: string; title?: string; highlights?: string[] }> };
   const clean = (v: unknown, max: number) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
   const hits = (body.results ?? []).flatMap((item): SearchHit[] => {
     const url = typeof item.url === 'string' ? item.url.trim() : '';

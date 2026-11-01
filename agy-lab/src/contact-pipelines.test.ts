@@ -4,6 +4,8 @@ import * as pi from './core/pi.ts';
 import { officialSite, pickSitePages } from './contact-worker.ts';
 import * as tavilyPipeline from './contact-tavily.ts';
 import * as exaPipeline from './contact-exa.ts';
+import * as tavilyApi from './core/tavily.ts';
+import * as exaApi from './core/exa.ts';
 
 const target = { name: "Kim's Florist & Floral Supplies", website: '', extraUrls: [], location: 'Johor Bahru' };
 
@@ -91,7 +93,7 @@ test('the Tavily pipeline reads pages through Tavily only and keeps the report s
     emails: [{ email: 'sales@kimsflorist.com.my', label: 'Sales', evidence_url: 'https://www.kimsflorist.com.my/contact-us' }],
   }));
   try {
-    const result = await tavilyPipeline.research({ name: target.name, location: 'Johor Bahru' }, { apiKey: 'tvly-test', fetchImpl: fetchMock, timeoutMs: 60_000 });
+    const result = await (tavilyApi.setKeysForTests(['tvly-test']), tavilyPipeline.research({ name: target.name, location: 'Johor Bahru' }, { fetchImpl: fetchMock, timeoutMs: 60_000 }));
     const people = result.decision_makers as Array<Record<string, unknown>>;
     assert.equal(people[0]!.name, 'Valentina Kim');
     assert.equal(people[0]!.found_by, 'tavily');

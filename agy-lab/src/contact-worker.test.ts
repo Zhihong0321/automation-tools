@@ -24,6 +24,16 @@ import {
   pickGeneral,
 } from './contact-worker.ts';
 import * as exaApi from './core/exa.ts';
+import * as tavilyApi from './core/tavily.ts';
+
+// Search keys come from core, as on the hub. Each search gets keys of its own,
+// so a key one test rests never carries into the next.
+let keyN = 0;
+function freshKeys(withExa = false): void {
+  keyN++;
+  tavilyApi.setKeysForTests([`tvly-test-${keyN}`]);
+  exaApi.setKeysForTests(withExa ? [`exa-test-${keyN}`] : []);
+}
 
 test('pi contact lanes register under the hub worker name', () => {
   assert.equal(JOB_TYPE, 'research.contact.pi');
@@ -97,11 +107,12 @@ test('research runs tavily find, reads the pages, then pi extracts with no tools
     return '{"people":[{"name":"Siti Aminah","position":"Owner","evidence_url":"https://acme-bakery.example/about"}],"phones":[{"number":"07-555 0101","label":"Siti Aminah mobile","evidence_url":"https://acme-bakery.example/contact"}],"emails":[{"email":"hello@acme-bakery.example","label":"General","evidence_url":"https://acme-bakery.example/contact"}]}';
   });
   try {
+    freshKeys();
     const result = await research({
       name: 'Acme Bakery',
       location: '12 Jalan Example, Johor Bahru',
       website: 'https://acme-bakery.example/contact',
-    }, { fetchImpl: fetchMock, tavilyKey: 'tvly-test-key' });
+    }, { fetchImpl: fetchMock });
 
     assert.equal(tavilyQueries.length, 2);
     assert.match(tavilyQueries[0]!, /Acme Bakery.*Johor Bahru/);
@@ -160,7 +171,7 @@ test('a key with no limit on its plan never rests', () => {
 test('tavily search handles rate limits and quota exceeded error', async () => {
   const fetch429: typeof fetch = async () => new Response('{"error":"usage_limit_reached"}', { status: 429 });
   await assert.rejects(
-    () => tavilySearch({ name: 'Acme', location: '', website: '', extraUrls: [] }, 'test-key', fetch429),
+    () => (freshKeys(), tavilySearch({ name: 'Acme', location: '', website: '', extraUrls: [] }, fetch429)),
     (err: unknown) => {
       assert.match(String(err), /quota/);
       assert.equal((err as { code?: string }).code, 'quota');
@@ -169,12 +180,12 @@ test('tavily search handles rate limits and quota exceeded error', async () => {
   );
   const fetchRate: typeof fetch = async () => new Response('{"detail":"too many requests"}', { status: 429 });
   await assert.rejects(
-    () => tavilySearch({ name: 'Acme', location: '', website: '', extraUrls: [] }, 'test-key', fetchRate),
+    () => (freshKeys(), tavilySearch({ name: 'Acme', location: '', website: '', extraUrls: [] }, fetchRate)),
     (err: unknown) => (err as { code?: string }).code === 'rate_limit',
   );
   const fetch432: typeof fetch = async () => new Response('{"detail":{"error":"This request exceeds your plan\'s set usage limit."}}', { status: 432 });
   await assert.rejects(
-    () => tavilySearch({ name: 'Acme', location: '', website: '', extraUrls: [] }, 'test-key', fetch432),
+    () => (freshKeys(), tavilySearch({ name: 'Acme', location: '', website: '', extraUrls: [] }, fetch432)),
     (err: unknown) => (err as { code?: string }).code === 'quota',
   );
 });
@@ -184,7 +195,7 @@ test('tavily search results that mention credit or quota are not a quota error',
     query: 'Acme',
     results: [{ url: 'https://www.ctoscredit.com.my/acme', title: 'Acme credit report', content: 'Import quota and credit terms for Acme Sdn Bhd' }],
   }), { status: 200 });
-  const out = await tavilySearch({ name: 'Acme', location: '', website: '', extraUrls: [] }, 'test-key', fetchOk);
+  const out = await (freshKeys(), tavilySearch({ name: 'Acme', location: '', website: '', extraUrls: [] }, fetchOk));
   assert.equal(out.sources.length, 1);
   assert.equal(out.sources[0]?.url, 'https://www.ctoscredit.com.my/acme');
 });
@@ -267,7 +278,7 @@ test('an extract that thinks past its output cap is retried once on fewer pages 
     return answerJson;
   });
   try {
-    const result = await research(payload, { fetchImpl: fetchMock, tavilyKey: 'tvly-test-key', env: { CONTACT_TIMEOUT_MS: '100000' } });
+    const result = await (freshKeys(), research(payload, { fetchImpl: fetchMock, env: { CONTACT_TIMEOUT_MS: '100000' } }));
     assert.equal(calls.length, 2);
     assert.equal(calls[0]!.opts.tools, false);
     assert.equal(calls[0]!.opts.maxTokens, 8192);
@@ -294,7 +305,7 @@ test('an extract that fails twice reports both, and a rate limit is not retried'
   });
   try {
     await assert.rejects(
-      () => research(payload, { fetchImpl: fetchMock, tavilyKey: 'tvly-test-key' }),
+      () => (freshKeys(), research(payload, { fetchImpl: fetchMock })),
       (err: unknown) => {
         assert.equal((err as { code?: string }).code, 'timeout');
         assert.match(String(err), /retry after: pi extract step failed/);
@@ -309,7 +320,7 @@ test('an extract that fails twice reports both, and a rate limit is not retried'
       throw Object.assign(new Error('MiniMax rate limit: 429'), { code: 'rate_limit' });
     });
     await assert.rejects(
-      () => research(payload, { fetchImpl: fetchMock, tavilyKey: 'tvly-test-key' }),
+      () => (freshKeys(), research(payload, { fetchImpl: fetchMock })),
       (err: unknown) => (err as { code?: string }).code === 'rate_limit',
     );
     assert.equal(calls, 1);
@@ -322,22 +333,22 @@ test('the LinkedIn search asks Exa for linkedin.com only and keeps title and sni
   let sent: Record<string, unknown> = {};
   const fetchMock: typeof fetch = async (url, init) => {
     assert.equal(String(url), 'https://api.exa.ai/search');
-    assert.equal((init?.headers as Record<string, string>)['x-api-key'], 'exa-key');
+    assert.match((init?.headers as Record<string, string>)['x-api-key'], /^exa-test-/);
     sent = JSON.parse(String(init?.body));
     return new Response(JSON.stringify({ results: [
       { url: 'https://my.linkedin.com/in/tan-ah-kow', title: 'Tan Ah Kow - Managing Director - Acme Sdn Bhd', highlights: ['Managing Director at Acme Sdn Bhd'] },
     ] }), { status: 200 });
   };
   const target = targetFromPayload({ name: 'Acme Sdn Bhd' });
-  const out = await linkedinSearch(target, 'exa-key', fetchMock);
+  const out = await (freshKeys(true), linkedinSearch(target, fetchMock));
   assert.deepEqual(sent.includeDomains, ['linkedin.com']);
   assert.match(String(sent.query), /^Acme Sdn Bhd director manager owner$/);
   assert.equal(out.sources[0]?.title, 'Tan Ah Kow - Managing Director - Acme Sdn Bhd');
   assert.equal(out.sources[0]?.kind, 'social');
   // No key or a failed call costs nothing and stops nothing.
-  assert.deepEqual((await linkedinSearch(target, '', fetchMock)).sources, []);
+  assert.deepEqual((await (freshKeys(), linkedinSearch(target, fetchMock))).sources, []);
   const down: typeof fetch = async () => new Response('busy', { status: 503 });
-  assert.deepEqual((await linkedinSearch(target, 'exa-key', down)).sources, []);
+  assert.deepEqual((await (freshKeys(true), linkedinSearch(target, down))).sources, []);
 });
 
 test('the prompt hands Pi the search snippets beside the pages', () => {
@@ -407,7 +418,7 @@ test('an Exa job records who searched and which provider found each contact', as
   };
   pi.setRunnerForTests(async () => '{"people":[{"name":"Siti Aminah","position":"Owner","evidence_url":"https://my.linkedin.com/in/siti"}],"phones":[{"number":"07-555 0101","label":"office","evidence_url":"https://acme-bakery.example/about"}],"emails":[]}');
   try {
-    const result = await research({ name: 'Acme Bakery', location: 'Johor Bahru' }, { fetchImpl: fetchMock, provider: 'exa', exaKey: 'exa-key' });
+    const result = await (freshKeys(true), research({ name: 'Acme Bakery', location: 'Johor Bahru' }, { fetchImpl: fetchMock, provider: 'exa' }));
     assert.equal(exaBodies.length, 3, 'two general searches and one LinkedIn search');
     const meta = result.research_meta as Record<string, unknown>;
     assert.equal(meta.general_provider, 'exa');

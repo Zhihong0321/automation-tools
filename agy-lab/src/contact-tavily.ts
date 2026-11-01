@@ -22,9 +22,9 @@ const MAP_LIMIT = 40;
 /** PAYG price per credit, for the report's cost line. */
 export const DOLLARS_PER_CREDIT = 0.008;
 
-/** One Tavily call with the job's key, through the app's core (core/tavily.ts). */
-async function call<T>(endpoint: string, body: Record<string, unknown>, apiKey: string, fetchImpl: FetchImpl, timeoutMs = 45_000): Promise<T & { usage?: { credits?: number } }> {
-  return tavily.requestWithKey<T>(endpoint, body, apiKey, { fetchImpl, timeoutMs });
+/** One Tavily call through the app's core (core/tavily.ts), which picks the key, rests a spent one and counts its credits. */
+async function call<T>(endpoint: 'search' | 'extract' | 'map', body: Record<string, unknown>, fetchImpl: FetchImpl, timeoutMs = 45_000): Promise<T & { usage?: { credits?: number } }> {
+  return await tavily.request(endpoint, body, { fetchImpl, timeoutMs }) as T & { usage?: { credits?: number } };
 }
 
 type RawResult = { url?: string; title?: string; content?: string; raw_content?: string | null; score?: number };
@@ -56,10 +56,10 @@ function searches(target: cw.Target): SearchSpec[] {
 
 type Found = { searched: cw.Searched; pages: cw.Page[]; credits: number };
 
-async function runSearches(target: cw.Target, apiKey: string, fetchImpl: FetchImpl): Promise<Found> {
+async function runSearches(target: cw.Target, fetchImpl: FetchImpl): Promise<Found> {
   const specs = searches(target);
   const answers = await Promise.all(specs.map((spec) =>
-    call<{ results?: RawResult[] }>('search', { query: spec.query, ...spec.body }, apiKey, fetchImpl)
+    call<{ results?: RawResult[] }>('search', { query: spec.query, ...spec.body }, fetchImpl)
       .catch((cause: Error) => {
         // LinkedIn is a bonus; the two general searches must answer.
         if (spec.purpose === 'linkedin') return { results: [] as RawResult[], usage: { credits: 0 } };
@@ -74,7 +74,6 @@ async function runSearches(target: cw.Target, apiKey: string, fetchImpl: FetchIm
     const results = answer.results ?? [];
     const spent = answer.usage?.credits ?? (spec.body.search_depth === 'advanced' ? 2 : 1);
     credits += spent;
-    tavily.pool.spend(apiKey, spent);
     log.push({ provider: 'tavily', purpose: spec.purpose, query: spec.query, results: results.length, credits: spent });
     const hits = results.map((row) => ({ url: String(row.url ?? ''), title: clean(row.title, 200), content: clean(row.content, 600) }));
     const found = cw.toSources(target, hits, 'tavily');
@@ -115,7 +114,7 @@ function dedupePages(pages: cw.Page[]): cw.Page[] {
 
 
 /** Map the company's site, then Extract the home page and its contact, about and team pages. */
-async function readSite(site: string, apiKey: string, fetchImpl: FetchImpl): Promise<{ pages: cw.Page[]; log: cw.SearchLog[]; credits: number }> {
+async function readSite(site: string, fetchImpl: FetchImpl): Promise<{ pages: cw.Page[]; log: cw.SearchLog[]; credits: number }> {
   const log: cw.SearchLog[] = [];
   let credits = 0;
   let mapped: string[] = [];
@@ -124,7 +123,7 @@ async function readSite(site: string, apiKey: string, fetchImpl: FetchImpl): Pro
     const map = await call<{ results?: string[] }>('map', {
       url: site, max_depth: 2, max_breadth: 30, limit: MAP_LIMIT, allow_external: false,
       select_domains: [`^(www\\.)?${host}$`], timeout: 30,
-    }, apiKey, fetchImpl);
+    }, fetchImpl);
     mapped = Array.isArray(map.results) ? map.results.filter((url) => typeof url === 'string') : [];
     const spent = map.usage?.credits ?? Math.ceil(mapped.length / 10);
     credits += spent;
@@ -134,27 +133,26 @@ async function readSite(site: string, apiKey: string, fetchImpl: FetchImpl): Pro
     if ((cause as { code?: string }).code === 'quota' || (cause as { code?: string }).code === 'rate_limit') throw cause;
   }
   const urls = cw.pickSitePages(site, mapped);
-  const extracted = await extract(urls, apiKey, fetchImpl, 'basic');
+  const extracted = await extract(urls, fetchImpl, 'basic');
   credits += extracted.credits;
   log.push({ provider: 'tavily', purpose: 'extract', query: `extract ${urls.length} page(s) of ${site}`, results: extracted.pages.length, credits: extracted.credits });
   let pages = extracted.pages;
   // Nothing read on basic: the site likely renders in JavaScript; advanced handles that.
   if (!pages.length && urls.length) {
-    const retry = await extract(urls.slice(0, 3), apiKey, fetchImpl, 'advanced');
+    const retry = await extract(urls.slice(0, 3), fetchImpl, 'advanced');
     credits += retry.credits;
     log.push({ provider: 'tavily', purpose: 'extract', query: `extract advanced ${Math.min(3, urls.length)} page(s) of ${site}`, results: retry.pages.length, credits: retry.credits });
     pages = retry.pages;
   }
-  tavily.pool.spend(apiKey, credits);
   return { pages, log, credits };
 }
 
-async function extract(urls: string[], apiKey: string, fetchImpl: FetchImpl, depth: 'basic' | 'advanced'): Promise<{ pages: cw.Page[]; credits: number }> {
+async function extract(urls: string[], fetchImpl: FetchImpl, depth: 'basic' | 'advanced'): Promise<{ pages: cw.Page[]; credits: number }> {
   if (!urls.length) return { pages: [], credits: 0 };
   try {
     const out = await call<{ results?: Array<{ url?: string; raw_content?: string }> }>('extract', {
       urls, extract_depth: depth, format: 'text', timeout: depth === 'advanced' ? 30 : 15,
-    }, apiKey, fetchImpl, 60_000);
+    }, fetchImpl, 60_000);
     const pages = (out.results ?? []).flatMap((row): cw.Page[] => {
       const url = cw.publicUrl(row.url);
       const text = String(row.raw_content ?? '').trim();
@@ -171,12 +169,12 @@ async function extract(urls: string[], apiKey: string, fetchImpl: FetchImpl, dep
 }
 
 /** One company through the Tavily pipeline with one key. Same result shape as contact-worker's research(). */
-export async function research(raw: unknown, deps: { apiKey: string; fetchImpl?: FetchImpl; timeoutMs?: number }): Promise<Record<string, unknown>> {
+export async function research(raw: unknown, deps: { fetchImpl?: FetchImpl; timeoutMs?: number }): Promise<Record<string, unknown>> {
   const target = cw.targetFromPayload(raw);
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const found = await runSearches(target, deps.apiKey, fetchImpl);
+  const found = await runSearches(target, fetchImpl);
   const site = cw.officialSite(target, found.searched.sources);
-  const siteRead = site ? await readSite(site, deps.apiKey, fetchImpl) : { pages: [], log: [], credits: 0 };
+  const siteRead = site ? await readSite(site, fetchImpl) : { pages: [], log: [], credits: 0 };
   // Site pages first: they are the company's own words.
   const pages = dedupePages([...siteRead.pages, ...found.pages]);
   const searched: cw.Searched = { ...found.searched, log: [...found.searched.log, ...siteRead.log] };

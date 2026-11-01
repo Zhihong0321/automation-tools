@@ -9,6 +9,7 @@
 
 import * as db from '../reportdb.ts';
 import { startCall, type ApiCall } from '../cost.ts';
+import * as vault from './vault.ts';
 
 type FetchImpl = typeof fetch;
 
@@ -24,7 +25,8 @@ let loadedAt = 0;
 /** The keys last loaded from the database, else the BRAVE_API_KEYS variable. */
 export function keys(env: NodeJS.ProcessEnv = process.env): string[] {
   if (dbKeys.length) return dbKeys;
-  return String(env.BRAVE_API_KEYS ?? env.BRAVE_SEARCH_API_KEY ?? '').split(/[,\n]/).map((k) => k.trim()).filter(Boolean);
+  const local = [vault.secret('BRAVE_SEARCH_API_KEY'), vault.secret('BRAVE_SEARCH_API_KEY_2')].filter(Boolean).join(',');
+  return String(env.BRAVE_API_KEYS ?? env.BRAVE_SEARCH_API_KEY ?? local).split(/[,\n]/).map((k) => k.trim()).filter(Boolean);
 }
 
 /** Reload the keys from the database and return the list calls will use. */

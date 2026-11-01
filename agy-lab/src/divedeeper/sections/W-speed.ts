@@ -13,11 +13,11 @@
 // No LLM. No kill gates: a call that fails is retried once, then warned, and the other pages still
 // report. A call takes 15-60 s, so every page and device runs at once.
 import { pagespeed, type ApiCall } from '../../core/index.ts';
-import { nameOf, secret, type Ctx, type Finding } from '../lib.ts';
+import { nameOf, type Ctx, type Finding } from '../lib.ts';
 
 /** A Google access token from the service account (core/pagespeed.ts); '' on failure. */
 export async function pagespeedToken(warn: (m: string) => void, log?: ApiCall[]): Promise<string> {
-  return pagespeed.token(secret('GOOGLE_PAGESPEED_SERVICE_ACCOUNT'), warn, log);
+  return pagespeed.token(warn, log);
 }
 
 export type Psi = {
