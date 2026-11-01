@@ -11,7 +11,7 @@
 // Provider reads are cached for five minutes, so a page refreshing every minute
 // does not spend anyone's rate limit.
 import * as db from './reportdb.ts';
-import { exa, llm as extractLlm, pi, tavily } from './core/index.ts';
+import { exa, llm as extractLlm, pi, secrets, tavily } from './core/index.ts';
 import * as autoScan from './autoscan.ts';
 
 type FetchImpl = typeof fetch;
@@ -55,7 +55,7 @@ export function parseMinimax(body: unknown): Array<{ model: string; intervalLeft
 
 async function minimax(fetchImpl: FetchImpl) {
   const key = pi.config().apiKey;
-  if (!key) return { level: 'unknown' as Level, configured: false, note: 'MINIMAX_API_KEY is not set' };
+  if (!key) return { level: 'unknown' as Level, configured: false, note: 'No MiniMax key on /workers' };
   try {
     const windows = await cached('minimax', async () => {
       return parseMinimax(await pi.remains(fetchImpl));
@@ -172,7 +172,7 @@ async function scraperTech() {
   const left = Math.max(0, plan - used);
   const now = new Date();
   const resetsAt = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString();
-  return { level: levelFor(left, plan), plan, used, hub, finder, left, autoScanBudget: budget, resetsAt, configured: Boolean(process.env.SCRAPER_TECH_KEY?.trim()) };
+  return { level: levelFor(left, plan), plan, used, hub, finder, left, autoScanBudget: budget, resetsAt, configured: Boolean(secrets.get('scraper_tech')) };
 }
 
 const settle = async <T>(name: string, run: () => Promise<T>): Promise<T | { level: Level; error: string }> => {

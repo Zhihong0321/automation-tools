@@ -1,15 +1,17 @@
 // Smartlead (cold email) API client: campaigns, sequences, leads, master inbox.
 //
-// Key: SMARTLEAD_API_KEY (Railway env; vault entry of the same name). Smartlead takes
+// Key: on /workers (core/secrets.ts; SMARTLEAD_API_KEY only when none is saved). Smartlead takes
 // it as an ?api_key= query parameter, so it is added here and never logged.
 //
 // Smartlead allows 10 requests per 2 seconds per key. Every call goes through one
 // queue spaced 220 ms apart, and a 429 waits and goes again instead of failing.
+import * as secrets from './secrets.ts';
+
 const BASE = (process.env.SMARTLEAD_BASE_URL ?? 'https://server.smartlead.ai/api/v1').replace(/\/+$/, '');
 const GAP_MS = 220;
 
 export function configured(): boolean {
-  return Boolean(process.env.SMARTLEAD_API_KEY?.trim());
+  return Boolean(secrets.get('smartlead'));
 }
 
 export class SmartleadError extends Error {
@@ -35,8 +37,9 @@ function paced<T>(task: () => Promise<T>): Promise<T> {
 }
 
 export async function call<T = any>(method: string, path: string, body?: unknown): Promise<T> {
-  if (!configured()) throw new SmartleadError(503, 'SMARTLEAD_API_KEY is not set');
-  const url = BASE + path + (path.includes('?') ? '&' : '?') + 'api_key=' + encodeURIComponent(process.env.SMARTLEAD_API_KEY!.trim());
+  await secrets.load();
+  if (!configured()) throw new SmartleadError(503, 'No Smartlead key: add one on /workers');
+  const url = BASE + path + (path.includes('?') ? '&' : '?') + 'api_key=' + encodeURIComponent(secrets.get('smartlead'));
   for (let attempt = 0; ; attempt++) {
     const res = await paced(() => fetch(url, {
       method,

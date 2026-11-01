@@ -351,5 +351,5 @@ async function lane(name: string, env: NodeJS.ProcessEnv): Promise<void> {
 export function start(env: NodeJS.ProcessEnv = process.env): void {
   const lanes = resolveConfig(env).lanes;
   for (let i = 0; i < lanes; i++) void lane(laneName(i), env);
-  console.log(`[maps] worker ${WORKER_NAME} claiming ${JOB_TYPE} on ${lanes} lane(s)` + (resolveConfig(env).key ? '' : ' (idle: SCRAPER_TECH_KEY is not set)'));
+  console.log(`[maps] worker ${WORKER_NAME} claiming ${JOB_TYPE} on ${lanes} lane(s)` + (resolveConfig(env).key ? '' : ' (idle: no scraper.tech key on /workers)'));
 }

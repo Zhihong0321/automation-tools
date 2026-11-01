@@ -12,6 +12,8 @@
 //   pagespeed  Google PageSpeed Insights
 //   parallel   Parallel's FindAll entity search (person research)
 //   smartlead  Smartlead, the cold-email platform (campaigns, leads, replies)
+//   secrets    the keys of the one-key providers above (MiniMax, Maps, Parallel,
+//              Smartlead, PageSpeed), kept in the hub database
 //
 // Each call takes an optional `log` (an ApiCall[]) and pushes one record per
 // request: when, what for, lane or key pool, model, tokens or credits, time,
@@ -25,4 +27,5 @@ export * as maps from './maps.ts';
 export * as pagespeed from './pagespeed.ts';
 export * as parallel from './parallel.ts';
 export * as smartlead from './smartlead.ts';
+export * as secrets from './secrets.ts';
 export { startCall, type ApiCall, type ApiName } from '../cost.ts';

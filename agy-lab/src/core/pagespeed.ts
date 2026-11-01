@@ -1,7 +1,7 @@
 // Google PageSpeed Insights, the one client for it (the dive-deeper speed lane).
 //
 // Auth: a Google service account, the whole JSON, which the caller passes in
-// (GOOGLE_PAGESPEED_SERVICE_ACCOUNT: env on the hub, vault on a dev machine). A
+// (on /workers via core/secrets.ts; GOOGLE_PAGESPEED_SERVICE_ACCOUNT env or vault otherwise). A
 // JWT signed with its key and scope "openid" buys an access token (the
 // cloud-platform scope is refused, and an x-goog-user-project header gives
 // 403). The token is kept until a minute before it expires. Free: every call is

@@ -20,6 +20,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import * as tavily from './tavily.ts';
+import * as secrets from './secrets.ts';
 
 export const PROVIDER = 'minimax';
 export const DEFAULT_MODEL = 'MiniMax-M3.1-Flash-Preview';
@@ -29,7 +30,8 @@ export function config(env: NodeJS.ProcessEnv = process.env) {
     model: env.PI_MODEL?.trim() || DEFAULT_MODEL,
     // MiniMax-M3.1 refuses thinking "off" ("requires adaptive thinking").
     thinking: (env.PI_THINKING?.trim() || 'low') as ThinkingLevel,
-    apiKey: env.MINIMAX_API_KEY?.trim() ?? '',
+    // On /workers (core/secrets.ts); MINIMAX_API_KEY only when the hub has none saved.
+    apiKey: secrets.get('minimax', env),
     // Contact research takes CONTACT_LANES (3) of these; the rest stay free for
     // report rounds and translation, so a report never queues behind the backlog.
     maxConcurrent: Math.max(1, Number(env.PI_MAX_CONCURRENT ?? 6) || 6),
@@ -217,8 +219,9 @@ function loader(tools: boolean): ResourceLoader {
 type Runner = (prompt: string, opts: Required<AskOptions>, usage?: RunUsage) => Promise<string>;
 
 async function runSdk(prompt: string, opts: Required<AskOptions>, usage?: RunUsage): Promise<string> {
+  await secrets.load();
   const cfg = config();
-  if (!cfg.apiKey) throw fail('not_configured', 'MINIMAX_API_KEY is not set, so the Pi worker cannot run.');
+  if (!cfg.apiKey) throw fail('not_configured', 'No MiniMax key (add one on /workers), so the Pi worker cannot run.');
   const rt = await modelRuntime(cfg.apiKey);
   const known = rt.getModel(PROVIDER, cfg.model);
   const base = known ?? rt.getModel(PROVIDER, 'MiniMax-M3');
@@ -337,8 +340,9 @@ const REMAINS_URL = 'https://api.minimax.io/v1/api/openplatform/coding_plan/rema
 
 /** The Token Plan's usage windows, from MiniMax itself (the key health page). */
 export async function remains(fetchImpl: typeof fetch = fetch): Promise<unknown> {
+  await secrets.load();
   const key = config().apiKey;
-  if (!key) throw fail('not_configured', 'MINIMAX_API_KEY is not set');
+  if (!key) throw fail('not_configured', 'No MiniMax key: add one on /workers');
   const res = await fetchImpl(REMAINS_URL, { headers: { authorization: 'Bearer ' + key }, signal: AbortSignal.timeout(15_000) });
   if (!res.ok) throw new Error(`MiniMax answered HTTP ${res.status}`);
   return res.json();

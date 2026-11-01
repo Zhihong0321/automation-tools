@@ -105,8 +105,9 @@ function vault(): Cred[] {
   return vaultCache!;
 }
 
+/** A key: the hub database's (core/secrets.ts) first, then env, the hook and the vault. */
 export function secret(name: string): string {
-  return (process.env[name] ?? hooks.secret?.(name) ?? vault().find((c) => c.name === name)?.secret ?? '').trim();
+  return (core.secrets.fromDbByEnvName(name) || (process.env[name] ?? hooks.secret?.(name) ?? vault().find((c) => c.name === name)?.secret ?? '')).trim();
 }
 
 export type Finding = {

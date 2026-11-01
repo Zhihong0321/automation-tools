@@ -1,7 +1,7 @@
 // Queues contact research for untouched leads while a matching worker is live.
 import * as jobs from './jobs.ts';
 import * as db from './reportdb.ts';
-import { exa, tavily } from './core/index.ts';
+import { exa, pi, tavily } from './core/index.ts';
 import { resolveConfig } from './contact-worker.ts';
 
 const INTERVAL_MS = 15_000;
@@ -28,7 +28,7 @@ function modelName(): string {
 export function contactResearchJobType(): string {
   const name = modelName();
   if (
-    process.env.MINIMAX_API_KEY?.trim() ||
+    pi.config().apiKey ||
     process.env.TAVILY_API_KEY?.trim() ||
     process.env.TAVILY_API_KEYS?.trim() ||
     /^(pi|minimax|tavily|gemini|gamini|agy|chatgpt|openai|gpt|o[134])/.test(name)

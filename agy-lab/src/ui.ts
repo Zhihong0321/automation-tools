@@ -135,7 +135,7 @@ async function refresh() {
   $('authState').textContent = 'token ok';
   const p = body.pi || {};
   const rows = [
-    ['Pi worker', p.configured ? 'ready - ' + p.provider + '/' + p.model : 'NOT CONFIGURED - set MINIMAX_API_KEY'],
+    ['Pi worker', p.configured ? 'ready - ' + p.provider + '/' + p.model : 'NOT CONFIGURED - add a MiniMax key on /workers'],
     ['Pi calls', (p.inFlight || 0) + ' running, ' + (p.waiting || 0) + ' waiting, max ' + (p.max || '?')],
     ['HOME', body.home],
     ['memory', body.memory

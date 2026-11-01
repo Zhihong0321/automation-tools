@@ -1,9 +1,10 @@
 // GET/POST /api/contact-keys: the search keys contact research rotates through,
 // Tavily and Exa, each shown in full with its quota state, and the Brave keys
-// company and deeper dives search with. Behind LAB_TOKEN.
+// company and deeper dives search with, and the one-key providers' keys (secrets:
+// MiniMax, scraper.tech, Parallel, Smartlead, PageSpeed). Behind LAB_TOKEN.
 // GET/POST /api/llm-lanes: the extract model lanes (extract-llm.ts), kept in llm_lane.
 import * as db from './reportdb.ts';
-import { brave, exa, llm as extractLlm, tavily } from './core/index.ts';
+import { brave, exa, llm as extractLlm, secrets, tavily } from './core/index.ts';
 
 type Ctx = { json: (res: unknown, status: number, body: unknown) => void; readJson: (req: unknown) => Promise<Record<string, unknown>> };
 
@@ -39,10 +40,14 @@ export async function handleKeys(req: { method?: string }, res: unknown, url: UR
   if (url.pathname !== '/api/contact-keys' && url.pathname !== '/api/gemini-contact-keys') return false;
   const method = req.method ?? 'GET';
   if (method === 'GET') {
-    const [tavilyKeys, exaKeys, braveKeys] = await Promise.all([tavily.refresh(), exa.refresh(), brave.refresh()]);
+    const [tavilyKeys, exaKeys, braveKeys] = await Promise.all([tavily.refresh(), exa.refresh(), brave.refresh(), secrets.refresh()]);
+    const kinds = Object.keys(secrets.KINDS) as secrets.Kind[];
     ctx.json(res, 200, {
       tavilyKeys,
       braveKeys,
+      // Each one-key provider's saved key, and whether calls fall back to its Railway variable.
+      secrets: Object.fromEntries(kinds.map((k) => [k, secrets.fromDb(k)])),
+      secretsFromEnv: kinds.filter((k) => !secrets.fromDb(k) && secrets.get(k)),
       tavily: tavily.pool.stats(),
       exaKeys,
       exa: exa.pool.stats(),
@@ -57,6 +62,12 @@ export async function handleKeys(req: { method?: string }, res: unknown, url: UR
     if (Array.isArray(body.tavily)) await db.replaceGeminiContactKeys('tavily', body.tavily.map(String));
     if (Array.isArray(body.exa)) await db.replaceGeminiContactKeys('exa', body.exa.map(String));
     if (Array.isArray(body.brave)) await db.replaceGeminiContactKeys('brave', body.brave.map(String));
+    // {secrets: {minimax: '...'}}: one key per kind, kept whole (the PageSpeed one is JSON); '' removes it.
+    if (body.secrets && typeof body.secrets === 'object') {
+      for (const [kind, value] of Object.entries(body.secrets as Record<string, unknown>)) {
+        if (kind in secrets.KINDS && typeof value === 'string') await db.replaceGeminiContactKeys(kind as secrets.Kind, value.trim() ? [value] : []);
+      }
+    }
     // The US proxy that "us:" Exa keys go through: {url, token}, or null to remove it.
     if (body.exaProxy !== undefined) {
       const proxy = body.exaProxy === null ? null : exa.parseProxy(body.exaProxy);
@@ -66,7 +77,7 @@ export async function handleKeys(req: { method?: string }, res: unknown, url: UR
       }
       await db.replaceGeminiContactKeys('exa_proxy', proxy ? [JSON.stringify(proxy)] : []);
     }
-    await Promise.all([tavily.refresh(), exa.refresh(), brave.refresh()]);
+    await Promise.all([tavily.refresh(), exa.refresh(), brave.refresh(), secrets.refresh()]);
     ctx.json(res, 200, { ok: true, step1Slots: tavily.pool.slots(), exaSlots: exa.pool.slots() });
     return true;
   }

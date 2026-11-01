@@ -17,6 +17,7 @@ import { searchParallelPeople } from './parallel-contact.ts';
 import * as autoContact from './autocontact.ts';
 import * as contactWorker from './contact-worker.ts';
 import * as autoScan from './autoscan.ts';
+import { secrets } from './core/index.ts';
 export { normalizePhoneNumber };
 
 export interface Ctx {
@@ -2794,7 +2795,7 @@ export async function handlePublic(req: http.IncomingMessage, res: http.ServerRe
   // Start contact research from the shared report page.
   if ((req.method ?? 'GET') === 'POST' && (contactResearchMatch || parallelContactMatch)) {
     if (!db.configured()) return sendJson(res, 503, { error: 'reports are not configured' }), true;
-    if (parallelContactMatch && !process.env.PARALLEL_API_KEY?.trim()) return sendJson(res, 503, { error: 'PARALLEL_API_KEY is not configured' }), true;
+    if (parallelContactMatch && !(await secrets.load(), secrets.get('parallel'))) return sendJson(res, 503, { error: 'No Parallel key: add one on /workers' }), true;
     const parent = await db.getReport((contactResearchMatch || parallelContactMatch)![1]!);
     if (!parent || parent.report_type !== 'business_search') {
       return sendJson(res, 404, { error: 'report not found' }), true;
@@ -4385,8 +4386,8 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
   }
 
   if (method === 'POST' && (p === '/api/contact-research' || p === '/api/parallel-contact-research')) {
-    if (p === '/api/parallel-contact-research' && !process.env.PARALLEL_API_KEY?.trim()) {
-      ctx.json(res, 503, { error: 'PARALLEL_API_KEY is not configured' });
+    if (p === '/api/parallel-contact-research' && !(await secrets.load(), secrets.get('parallel'))) {
+      ctx.json(res, 503, { error: 'No Parallel key: add one on /workers' });
       return true;
     }
     const body = await ctx.readJson(req);

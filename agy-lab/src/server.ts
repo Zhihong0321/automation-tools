@@ -11,7 +11,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { exec } from 'node:child_process';
-import { llm as extractLlm, pi } from './core/index.ts';
+import { llm as extractLlm, pi, secrets } from './core/index.ts';
 import * as gateway from './gateway.ts';
 import * as jobs from './jobs.ts';
 import * as queue from './queue.ts';
@@ -506,12 +506,13 @@ function reapAbandonedRuns(staleMinutes: number): void {
 }
 
 server.listen(PORT, '0.0.0.0', () => {
+  void secrets.refresh();
   void reportdb.requeueInterruptedCloudContactReports()
     .then((count) => { if (count) console.log(`[contact] requeued ${count} interrupted cloud report(s) onto the normal queue`); })
     .catch((error) => console.error('[contact] could not requeue interrupted cloud reports: ' + String(error)));
   console.log('agy-lab listening on :' + PORT);
   console.log('  HOME     ' + HOME);
-  console.log('  pi       ' + (pi.config().apiKey ? pi.PROVIDER + '/' + pi.config().model : 'NOT CONFIGURED - set MINIMAX_API_KEY'));
+  console.log('  pi       ' + (pi.config().apiKey ? pi.PROVIDER + '/' + pi.config().model : 'NOT CONFIGURED - add a MiniMax key on /workers'));
   console.log('  reports  ' + (process.env.DATABASE_URL?.trim() ? 'direct Postgres' : reportdb.configured() ? 'pg-proxy fallback (token can expire)' : 'NOT CONFIGURED'));
   // Age 0 at boot: this process owns no run yet, so anything non-terminal was
   // stranded by the restart that just happened.
