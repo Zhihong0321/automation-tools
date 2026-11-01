@@ -748,6 +748,16 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     // A scoped key answers only a job of its own types that this worker holds. A
     // job this broker no longer has (a redeploy mid-scan) is a plain 404, and
     // never reaches the contact-report recovery below.
+    // A finished scan for a job the broker lost or already settled (a restart
+    // mid-scan, or the report's wait ran out) still goes to the report it was for.
+    const latePublicId = ctx.scope && body.ok !== false ? str(body.reportPublicId).trim() : '';
+    if (latePublicId && (!current || ctx.scope!.types.includes(current.type) && (current.status === 'done' || current.status === 'failed'))) {
+      const intel = await import('./intel.ts');
+      const late = await intel.acceptLateBusinessScan(latePublicId, result[1]!, worker,
+        body.result && typeof body.result === 'object' ? body.result as Record<string, unknown> : {});
+      json(res, late.status, late.body);
+      return true;
+    }
     if (ctx.scope && !current) {
       json(res, 404, { error: 'no such job — it was evicted, or the service restarted while it ran', id: result[1] });
       return true;

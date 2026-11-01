@@ -121,26 +121,49 @@ $Invariant = [Globalization.CultureInfo]::InvariantCulture
 
 # --------------------------------------------------------------------- hub
 
-function Invoke-Hub([string]$Method, [string]$Path, $Body = $null, [int]$TimeoutSec = 60) {
-  $params = @{
-    Uri = $Lab + $Path; Method = $Method; UseBasicParsing = $true; TimeoutSec = $TimeoutSec
-    Headers = @{ authorization = 'Bearer ' + $Key }
+# Every request goes through here. On 5.1, Invoke-WebRequest's -TimeoutSec does
+# not cover reading the body, so a line that stalls mid-answer held a scan for
+# 175 minutes on 2026-11-01, far past its 20-minute lease. ReadWriteTimeout
+# bounds every read. Any HTTP status comes back as {status, body}; only a
+# request that got no answer at all throws.
+function Invoke-Http([string]$Method, [string]$Uri, [hashtable]$Headers = @{}, [byte[]]$Body = $null, [int]$TimeoutSec = 60) {
+  $req = [Net.HttpWebRequest]::Create($Uri)
+  $req.Method = $Method
+  $req.Timeout = $TimeoutSec * 1000
+  $req.ReadWriteTimeout = $TimeoutSec * 1000
+  $req.AutomaticDecompression = [Net.DecompressionMethods]'GZip, Deflate'
+  foreach ($name in $Headers.Keys) {
+    if ($name -eq 'user-agent') { $req.UserAgent = $Headers[$name] } else { $req.Headers[$name] = $Headers[$name] }
   }
-  if ($null -ne $Body) {
-    $params.Body = [Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 8 -Compress))
-    $params.ContentType = 'application/json; charset=utf-8'
+  $resp = $null
+  try {
+    if ($null -ne $Body) {
+      $req.ContentType = 'application/json; charset=utf-8'
+      $req.ContentLength = $Body.Length
+      $out = $req.GetRequestStream()
+      try { $out.Write($Body, 0, $Body.Length) } finally { $out.Close() }
+    }
+    $resp = $req.GetResponse()
+  } catch {
+    # PowerShell wraps the WebException; an HTTP error status still carries a response.
+    $e = $_.Exception
+    while ($e -and $e -isnot [Net.WebException]) { $e = $e.InnerException }
+    if (-not $e) { throw }
+    if (-not $e.Response) { throw $e }
+    $resp = $e.Response
   }
   try {
-    $r = Invoke-WebRequest @params
-    return @{ status = [int]$r.StatusCode; body = [string]$r.Content }
-  } catch [Net.WebException] {
-    $resp = $_.Exception.Response
-    if (-not $resp) { throw }
-    # 5.1 has usually read the body already and keeps it in ErrorDetails.
-    $text = if ($_.ErrorDetails) { [string]$_.ErrorDetails.Message } else { '' }
-    if (-not $text) { try { $text = (New-Object IO.StreamReader($resp.GetResponseStream())).ReadToEnd() } catch { } }
-    return @{ status = [int]$resp.StatusCode; body = $text }
-  }
+    $buffer = New-Object IO.MemoryStream
+    $resp.GetResponseStream().CopyTo($buffer)
+    return @{ status = [int]$resp.StatusCode; body = [Text.Encoding]::UTF8.GetString($buffer.ToArray()) }
+  } finally { $resp.Close() }
+}
+
+function Invoke-Hub([string]$Method, [string]$Path, $Body = $null, [int]$TimeoutSec = 60) {
+  # Assigned, not taken from an `if`: PowerShell would unroll the array.
+  $bytes = $null
+  if ($null -ne $Body) { $bytes = [Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 8 -Compress)) }
+  return Invoke-Http $Method ($Lab + $Path) @{ authorization = 'Bearer ' + $Key } $bytes $TimeoutSec
 }
 
 $script:JobId = $null
@@ -182,14 +205,10 @@ function Get-ListPage([string]$Query, [double]$Lat, [double]$Lon, [int]$Offset) 
   $url = 'https://www.google.com/search?tbm=map&authuser=0&hl=en&gl=my&q=' + [uri]::EscapeDataString($Query) +
     '&pb=' + [uri]::EscapeDataString((Get-Pb $Lat $Lon $Offset))
   $script:Requests++
-  try {
-    $r = Invoke-WebRequest -UseBasicParsing -Uri $url -UserAgent $UserAgent -Headers @{ 'accept-language' = 'en' } -TimeoutSec 30
-  } catch [Net.WebException] {
-    $code = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
-    if ($code -eq 429 -or $code -eq 403) { $script:Blocked = "Google refused this line (HTTP $code)"; return @() }
-    throw
-  }
-  $text = [Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray())
+  $r = Invoke-Http 'GET' $url @{ 'user-agent' = $UserAgent; 'accept-language' = 'en' } $null 30
+  if ($r.status -eq 429 -or $r.status -eq 403) { $script:Blocked = "Google refused this line (HTTP $($r.status))"; return @() }
+  if ($r.status -ne 200) { throw "Google answered HTTP $($r.status)" }
+  $text = $r.body
   if ($text -match 'unusual traffic|/sorry/index|recaptcha') { $script:Blocked = 'Google asked this line for a captcha'; return @() }
   $data = $Json.DeserializeObject($text.Substring($text.IndexOf("`n") + 1))
   $items = At $data @(0, 1)
@@ -374,9 +393,11 @@ function Invoke-Scan($Job, $Strategy) {
 }
 
 # Post a result, retrying the hub for a few minutes. If it never takes it, keep
-# a copy on disk rather than lose the scan.
-function Send-Result([string]$Id, [bool]$Ok, $Result, [string]$ErrorText, [int]$RetryAfterMs = 0) {
+# a copy on disk rather than lose the scan. The report id rides along: when a hub
+# restart has lost the job, the hub saves the scan into that report instead.
+function Send-Result([string]$Id, [string]$ReportId, [bool]$Ok, $Result, [string]$ErrorText, [int]$RetryAfterMs = 0) {
   $body = @{ worker = $Name; ok = $Ok; result = $Result; error = $(if ($ErrorText) { $ErrorText } else { $null }) }
+  if ($ReportId) { $body.reportPublicId = $ReportId }
   # Tells the hub to stop handing this worker jobs while Google rests it.
   if ($RetryAfterMs) { $body.retryAfterMs = $RetryAfterMs }
   foreach ($wait in 0, 10, 30, 60, 120) {
@@ -385,7 +406,7 @@ function Send-Result([string]$Id, [bool]$Ok, $Result, [string]$ErrorText, [int]$
       $r = Invoke-Hub 'POST' "/api/jobs/$Id/result" $body 120
       if ($r.status -eq 200) { return }
       Log "  the hub answered HTTP $($r.status) to the result: $($r.body)"
-      if ($r.status -in 400, 403, 404) { break }
+      if ($r.status -in 400, 403, 404, 409) { break }
     } catch { Log "  could not post the result: $($_.Exception.Message)" }
   }
   $dir = Join-Path $Data 'unsaved'
@@ -394,12 +415,38 @@ function Send-Result([string]$Id, [bool]$Ok, $Result, [string]$ErrorText, [int]$
   Log "  result kept at $dir\$Id.json"
 }
 
+# Offer the hub every kept scan that names its report, once per start: one kept
+# while the hub was down is saved when it is back. A scan the hub takes moves to
+# unsaved\sent; one it refuses stays, with the reason in the log.
+$script:Offered = @{}
+function Send-Unsaved {
+  $dir = Join-Path $Data 'unsaved'
+  if (-not (Test-Path $dir)) { return }
+  foreach ($file in Get-ChildItem $dir -Filter '*.json' -File) {
+    if ($script:Offered.ContainsKey($file.Name)) { continue }
+    $script:Offered[$file.Name] = $true
+    try {
+      $text = [IO.File]::ReadAllText($file.FullName)
+      if ($text -notmatch '"reportPublicId"') { continue }
+      $bytes = [Text.Encoding]::UTF8.GetBytes($text)
+      $r = Invoke-Http 'POST' "$Lab/api/jobs/$($file.BaseName)/result" @{ authorization = 'Bearer ' + $Key } $bytes 120
+      if ($r.status -eq 200) {
+        $sent = Join-Path $dir 'sent'
+        New-Item -ItemType Directory -Force $sent | Out-Null
+        Move-Item $file.FullName (Join-Path $sent $file.Name) -Force
+        Log "kept result $($file.BaseName) saved by the hub"
+      } else { Log "kept result $($file.BaseName): the hub answered HTTP $($r.status): $($r.body)" }
+    } catch { Log "kept result $($file.BaseName) not sent: $($_.Exception.Message)" }
+  }
+}
+
 # --------------------------------------------------------------------- main
 
 Log "Gmap Local Worker '$Name' -> $Lab (Google Maps list pages, $PaceMs ms apart)"
 $backoff = 5
 while ($true) {
   try {
+    Send-Unsaved
     $r = Invoke-Hub 'GET' ("/api/jobs/next?worker=$([uri]::EscapeDataString($Name))&types=$Types&wait=25") $null 45
     if ($r.status -eq 204) { $backoff = 5; continue }
     if ($r.status -eq 401 -or $r.status -eq 403) {
@@ -420,11 +467,11 @@ while ($true) {
       $result = Invoke-Scan $job ($sr.body | ConvertFrom-Json)
       if ($result.stoppedEarly) { $rest = $BlockedRestSec; Log "  stopped early: $($result.stoppedEarly)" }
       Log "job $($job.id): $($result.found) businesses from $($result.googleRequests) Google requests in $([Math]::Round($result.tookMs / 60000, 1)) min"
-      Send-Result $job.id $true $result '' ($rest * 1000)
+      Send-Result $job.id ([string]$job.payload.reportPublicId) $true $result '' ($rest * 1000)
     } catch {
       if ($script:Blocked) { $rest = $BlockedRestSec }
       Log "job $($job.id) failed: $($_.Exception.Message)"
-      Send-Result $job.id $false $null ([string]$_.Exception.Message) ($rest * 1000)
+      Send-Result $job.id ([string]$job.payload.reportPublicId) $false $null ([string]$_.Exception.Message) ($rest * 1000)
     } finally {
       Stay-Awake $false
       $script:JobId = $null

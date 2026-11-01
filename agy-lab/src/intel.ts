@@ -1794,6 +1794,62 @@ async function runBusinessSearch(publicId: string, reportId: string, request: Re
   }
 }
 
+/**
+ * Save a captured business list into its report and complete the report. The
+ * repair route and a late worker result both finish a report this way.
+ */
+async function completeFromSnapshot(publicId: string, snapshot: Record<string, unknown>, worker?: string) {
+  const companies = rows(snapshot.companies);
+  const saved = await db.persistBusinessScan(publicId, object(snapshot.search), companies, worker);
+  const durable = await db.searchResult(saved.reportId);
+  const expected = new Set(companies.filter((c) => str(c.name).trim()).map(db.scanPlaceKey)).size;
+  if (!durable || durable.companies.length < expected) throw new Error(`verification found ${durable?.companies.length ?? 0} of ${expected} businesses`);
+  const result = { ...snapshot, search: durable.report, companies: durable.companies, scan_metadata: { ...object(snapshot.scan_metadata), recovered: true, recovery_error: null } };
+  const updated = await db.updateReport(publicId, { status: 'completed', searchReportId: saved.reportId, result, error: null, completed: true });
+  return { updated, saved };
+}
+
+/**
+ * A gmap.scan result that came back after the broker lost its job. A Gmap Local
+ * Worker scan runs up to 20 minutes, and a hub restart in that window empties
+ * the job table and marks the report abandoned: the PC's answer then had nowhere
+ * to go, and on 2026-11-01 twelve finished scans were thrown away like that. The
+ * worker names the report it scanned for, so while that report has no finished
+ * list, the scan completes it.
+ */
+export async function acceptLateBusinessScan(publicId: string, jobId: string, worker: string, scan: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> {
+  const report = await db.getReport(publicId);
+  if (!report || report.report_type !== 'business_search') return { status: 404, body: { error: 'no business list report ' + publicId } };
+  if (report.status === 'completed') return { status: 409, body: { error: 'report ' + publicId + ' already has its list' } };
+  if (active.has(publicId)) return { status: 409, body: { error: 'report ' + publicId + ' is running again with a newer job' } };
+  if (!Array.isArray(scan.businesses)) return { status: 400, body: { error: 'the result has no businesses array' } };
+  active.add(publicId);
+  try {
+    const search = { ...scan };
+    delete search.businesses;
+    const snapshot = { search, companies: rows(scan.businesses), scan_metadata: {
+      late_result: true, job_id: jobId, worker, capped: scan.capped,
+      took_ms: typeof scan.tookMs === 'number' ? scan.tookMs : null,
+    } };
+    await db.updateReport(publicId, { status: 'partial', result: snapshot, error: 'Late worker result loaded; database save in progress', jobId });
+    const { saved } = await completeFromSnapshot(publicId, snapshot, worker);
+    await db.logEvent({ reportId: report.id, publicId, jobId, stage: 'business_search', event: 'business_search.late_result_saved', detail: { worker, companies: saved.companies, linked: saved.linked } });
+    const place = str(object(report.request).place).trim();
+    void db.applyLeadBlacklist()
+      .catch((e: Error) => console.warn('[blacklist] could not check new leads: ' + e.message))
+      .then(() => db.assignScanLeadsToTamanOwner(publicId, place))
+      .catch((e: Error) => console.warn(`[territories] could not assign new leads from ${place} to the taman's telemarketer: ${e.message}`));
+    return { status: 200, body: { saved: true, reportPublicId: publicId, companies: saved.companies, linked: saved.linked } };
+  } catch (err) {
+    const detail = (err as Error).message ?? String(err);
+    console.error(`[business_search.late_result_failed] report=${publicId} job=${jobId}: ${detail}`);
+    await db.updateReport(publicId, { status: 'partial', error: `Late worker result could not be saved: ${detail}` }).catch(() => {});
+    return { status: 500, body: { error: detail } };
+  } finally {
+    active.delete(publicId);
+  }
+}
+
 type PersonResearchLaunch = {
   sourceReportId: string;
   company: Record<string, unknown>;
@@ -4230,13 +4286,7 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
         await db.updateReport(publicId, { status: 'partial', result: snapshot, error: 'Worker recovery copy loaded; database repair in progress' });
         await db.logEvent({ reportId: report.id, publicId, jobId: report.job_id, stage: 'business_search', event: 'business_search.snapshot_restored', detail: { companies: rows(snapshot.companies).length } });
       }
-      const companies = rows(snapshot.companies);
-      const saved = await db.persistBusinessScan(publicId, object(snapshot.search), companies);
-      const durable = await db.searchResult(saved.reportId);
-      const expected = new Set(companies.filter((c) => str(c.name).trim()).map(db.scanPlaceKey)).size;
-      if (!durable || durable.companies.length < expected) throw new Error(`verification found ${durable?.companies.length ?? 0} of ${expected} businesses`);
-      const result = { ...snapshot, search: durable.report, companies: durable.companies, scan_metadata: { ...object(snapshot.scan_metadata), recovered: true, recovery_error: null } };
-      const updated = await db.updateReport(publicId, { status: 'completed', searchReportId: saved.reportId, result, error: null, completed: true });
+      const { updated, saved } = await completeFromSnapshot(publicId, snapshot);
       await db.logEvent({ reportId: report.id, publicId, jobId: report.job_id, stage: 'business_search', event: 'business_search.repair_completed', detail: { companies: saved.companies, linked: saved.linked } });
       ctx.json(res, 200, { report: envelope(req, updated), saved });
     } catch (err) {
