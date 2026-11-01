@@ -228,3 +228,42 @@ test('a timeout of 0 tells Pi to wait for the answer', async () => {
     pi.setRunnerForTests(null);
   }
 });
+
+// A stream the test drives: chunks on a schedule, then silence or the end, and it stops when the router aborts.
+const sse = (delta: string) => `data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`;
+const drip = (chunks: string[], everyMs: number, thenSilent: boolean) => (async (_url: string, init: RequestInit) => {
+  const bytes = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    async start(ctrl) {
+      init.signal?.addEventListener('abort', () => ctrl.error(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+      for (const c of chunks) {
+        await new Promise((r) => setTimeout(r, everyMs));
+        if (init.signal?.aborted) return;
+        ctrl.enqueue(bytes.encode(c));
+      }
+      if (!thenSilent) ctrl.close();
+    },
+  });
+  return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+}) as unknown as typeof fetch;
+
+test('a lane that goes silent is dropped and the next lane answers', async () => {
+  resetForTests();
+  const stall = drip([sse('half an ans')], 10, true);
+  const good = drip([sse('the answer')], 10, false);
+  const fetchImpl = (async (url: string, init: RequestInit) => ((init.headers as Record<string, string>).authorization === 'Bearer stall' ? stall : good)(url, init)) as unknown as typeof fetch;
+  const log: Parameters<typeof ask>[1]['log'] = [];
+  const out = await ask('x', { silenceMs: 80, log }, [{ ...cfg, key: 'stall' }, { ...cfg, key: 'good' }], fetchImpl);
+  assert.equal(out.answer, 'the answer');
+  assert.equal(log!.length, 2);
+  assert.equal(log![0].ok, false);
+  assert.match(String(log![0].note), /sent nothing for 0s; moved to the next lane/);
+});
+
+test('a slow answer that keeps streaming is never cut, however long it runs in total', async () => {
+  resetForTests();
+  // 12 chunks 40ms apart: ~480ms in total, six times the 80ms silence gate.
+  const chunks = Array.from({ length: 12 }, (_, i) => sse(`${i} `));
+  const out = await ask('x', { silenceMs: 80 }, cfg, drip(chunks, 40, false));
+  assert.equal(out.answer, Array.from({ length: 12 }, (_, i) => i).join(' '));
+});

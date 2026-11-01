@@ -26,6 +26,8 @@
 //    twice, never instead of a lane that would answer.
 // 6. No timeout and no max_tokens of ours unless the caller passes one: answers
 //    stream, so a model that is still thinking keeps the connection alive.
+//    The one exception is silence: a lane that sends not one byte for 5 minutes
+//    (SILENCE_MS) has stalled, and the call moves to the next lane (rule 4).
 // 7. Every attempt is one ApiCall in the caller's log: lane, model, tokens, USD,
 //    time, ok or failed, so a run shows which lane served each call.
 //
@@ -50,6 +52,12 @@ const LANE_CONCURRENCY = Math.max(1, Number(process.env.LLM_LANE_CONCURRENCY ?? 
 const WAITS = [5_000, 15_000, 30_000, 60_000, 120_000];
 /** MiniMax joins from this round on (0-based): every lane has failed twice by then. */
 const MINIMAX_FROM_ROUND = 1;
+/**
+ * A lane silent this long (not one byte) is stalled. Measured on the hub
+ * 2026-11-01: the slowest healthy call ever took 272s from start to finish, and
+ * this is silence, not total time, so a call that keeps streaming never hits it.
+ */
+const SILENCE_MS = Math.max(60_000, Number(process.env.LLM_SILENCE_MS ?? 300_000) || 300_000);
 
 let saved: LlmConfig[] = [];
 
@@ -237,15 +245,37 @@ function give(c: LlmConfig): void {
 // ---------------------------------------------------------------- one request to one lane
 
 type Message = { role: 'system' | 'user'; content: string };
-type CallOpts = { temperature?: number; maxTokens?: number; timeoutMs?: number };
+type CallOpts = { temperature?: number; maxTokens?: number; timeoutMs?: number; silenceMs?: number };
 type Answer = { answer: string; tokensIn: number; tokensOut: number };
 
 /**
  * One chat request, streamed: the reply is the content deltas, reasoning deltas
  * are dropped, and the usage chunk at the end gives the tokens. A server that
  * ignores stream and answers one JSON body is read the same way.
+ *
+ * The one gate: a lane that sends nothing at all for SILENCE_MS is dropped and
+ * the call moves to the next lane. Every byte (reasoning included) resets it,
+ * so a long answer that keeps streaming is never cut, however long it runs.
  */
 async function request(c: LlmConfig, messages: Message[], opts: CallOpts, fetchImpl: FetchImpl, out: { tokensIn: number; tokensOut: number }): Promise<string> {
+  const silenceMs = opts.silenceMs ?? SILENCE_MS;
+  const silent = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const heard = () => { clearTimeout(timer); timer = setTimeout(() => silent.abort(), silenceMs); };
+  const signal = opts.timeoutMs ? AbortSignal.any([silent.signal, AbortSignal.timeout(opts.timeoutMs)]) : silent.signal;
+  const stalled = () => fail('timeout', `${c.model} sent nothing for ${Math.round(silenceMs / 1000)}s; moved to the next lane`);
+  heard();
+  try {
+    return await streamed(c, messages, opts, fetchImpl, out, signal, heard, stalled, () => silent.signal.aborted);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function streamed(
+  c: LlmConfig, messages: Message[], opts: CallOpts, fetchImpl: FetchImpl, out: { tokensIn: number; tokensOut: number },
+  signal: AbortSignal, heard: () => void, stalled: () => Error, wentSilent: () => boolean,
+): Promise<string> {
   let res: Response;
   try {
     res = await fetchImpl(c.url + '/chat/completions', {
@@ -259,17 +289,30 @@ async function request(c: LlmConfig, messages: Message[], opts: CallOpts, fetchI
         stream_options: { include_usage: true },
         ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
       }),
-      ...(opts.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
+      signal,
     });
   } catch (cause) {
+    if (wentSilent()) throw stalled();
     const name = (cause as Error).name;
     if (name === 'TimeoutError' || name === 'AbortError') throw fail('timeout', `${c.model} gave no answer within ${Math.round((opts.timeoutMs ?? 0) / 1000)}s`);
     throw fail('failed', `${c.model} unreachable: ${(cause as Error).message}`);
   }
-  let raw: string;
+  heard();
+  let raw = '';
   try {
-    raw = await res.text();
+    if (res.body) {
+      const reader = res.body.getReader();
+      const text = new TextDecoder();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        heard();
+        raw += text.decode(value, { stream: true });
+      }
+      raw += text.decode();
+    }
   } catch (cause) {
+    if (wentSilent()) throw stalled();
     const name = (cause as Error).name;
     throw fail(name === 'TimeoutError' || name === 'AbortError' ? 'timeout' : 'failed', `${c.model} answer cut off: ${(cause as Error).message}`);
   }
@@ -346,6 +389,8 @@ export type ChatOpts = {
   /** Only callers that already capped tokens pass these; the router adds none. */
   maxTokens?: number;
   timeoutMs?: number;
+  /** Tests only: how long a silent lane is waited on (SILENCE_MS otherwise). */
+  silenceMs?: number;
   /** Every attempt is pushed here as an ApiCall. */
   log?: ApiCall[];
   /** MiniMax as the last resort; on unless false. */
@@ -412,7 +457,7 @@ async function minimax(prompt: string, opts: ChatOpts): Promise<Omit<ChatAnswer,
  */
 export async function ask(
   prompt: string,
-  opts: { timeoutMs?: number; maxTokens?: number; step?: string; log?: ApiCall[]; thinking?: pi.ThinkingLevel } = {},
+  opts: { timeoutMs?: number; maxTokens?: number; silenceMs?: number; step?: string; log?: ApiCall[]; thinking?: pi.ThinkingLevel } = {},
   cfg: LlmConfig | LlmConfig[] | null = pool(),
   fetchImpl: FetchImpl = fetch,
 ): Promise<{ answer: string; ms: number; model: string }> {
