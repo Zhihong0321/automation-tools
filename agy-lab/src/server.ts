@@ -356,8 +356,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         && await jobs.handle(req, res, url, { json, readJson, scope: { types: gmapWorker.JOB_TYPES } })) return;
       // The step-2 worker on a PC: take a batch of leads, send back each result (list-step2.ts).
       if (p.startsWith('/api/list-step2/worker/') && await listStep2.handleWorker(req, res, url, { json, readJson })) return;
-      // The same worker checks Malaysian lead websites for an open contact form (form-autopilot.ts).
-      if (p.startsWith('/api/form-scan/worker/') && await formAutopilot.handleWorker(req, res, url, { json, readJson })) return;
+      // The same worker checks Malaysian lead websites for an open contact form, and sends the forms (form-autopilot.ts).
+      if ((p.startsWith('/api/form-scan/worker/') || p.startsWith('/api/form-send/worker/')) && await formAutopilot.handleWorker(req, res, url, { json, readJson })) return;
       return json(res, 403, { error: 'the Gmap worker key only reaches the worker routes' });
     }
   }

@@ -315,7 +315,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 <div class="btns" style="margin-top:14px"><button class="primary grow" id="fpSave">Save</button><button class="grow" id="fpTest">Test one, no send</button></div>
 <div id="fpOut"></div>
 <div class="list" id="fpRows" style="margin-top:8px"></div>
-<p class="hint">Each weekday from 08:00 to 15:00 (Kuala Lumpur) it takes the same commercial and industrial companies as the autopilot above, by their website instead of an email. A PC running the Step 2 Worker checks each site for a contact form with no captcha (Railway reads no site), and the hub sends the first email of the chosen template through it, with the name, company, mobile and email above. Answers come to that email. Each company is tried once, never sent twice, and not emailed after a form send.</p>
+<p class="hint">Each weekday from 08:00 to 15:00 (Kuala Lumpur) it takes the same commercial and industrial companies as the autopilot above, by their website instead of an email. A PC running the Step 2 Worker checks each site for a contact form with no captcha (Railway reads no site), and the PC sends the first email of the chosen template through it, with the name, company, mobile and email above. Answers come to that email. Every send is logged in the hub: the company, the exact message, when, and the outcome. Each company is tried once, never sent twice, and not emailed after a form send.</p>
 </div></details>
 </div>
 </div>
@@ -675,17 +675,26 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       $('fpOn').checked=s.enabled;$('fpPerDay').value=s.per_day;
       $('fpTpl').innerHTML='<option value="">Choose the template…</option>'+(r.templates||[]).map(function(t){return '<option value="'+t.id+'">'+esc(t.name)+'</option>'}).join('');$('fpTpl').value=String(s.template_id||'');
       $('fpName').value=s.sender.name;$('fpCompany').value=s.sender.company;$('fpPhone').value=s.sender.phone;$('fpEmail').value=s.sender.email;
-      $('fpState').textContent=(s.enabled?'On. Sent today: '+r.sent_today+' of '+s.per_day+(r.in_window?'.':'; next in the weekday window (08:00 to 15:00 KL).'):'Off. No form is sent until you switch it on.')+
-        (checked?' '+num(checked)+' forms tried: '+num((c.sent||0)+(c.submitted_unconfirmed||0))+' sent, '+num(c.captcha||0)+' behind a captcha.':'')+(r.last&&r.last.reason?' Last check: '+r.last.reason:'');
-      var lv=r.live;
-      $('fpNow').disabled=!!lv;$('fpNow').textContent=lv?'Sending…':'Send now';
-      if(lv)$('fpState').textContent='Sending now: '+lv.sent+' of '+lv.target+' sent, '+lv.tried+' forms tried. About half a minute per form. '+$('fpState').textContent;
-      clearTimeout(S.fpTimer);if(lv)S.fpTimer=setTimeout(loadForms,15000);
+      var run=r.run,pc=(r.senders||[]).filter(function(x){return Date.now()-new Date(x.seen_at).getTime()<180000})[0];
+      $('fpState').textContent=(run?'Sending now: '+run.sent+' of '+run.goal+' sent, '+run.tried+' tried, '+run.sending+' being filled on the PC. About half a minute a form. ':'')+
+        (s.enabled?'Switch on: up to '+s.per_day+' a weekday, 08:00 to 15:00 KL. ':'Switch off. ')+'Sent today: '+r.sent_today+'.'+
+        (checked?' '+num(checked)+' forms tried in all: '+num((c.sent||0)+(c.submitted_unconfirmed||0))+' sent.':'')+
+        (pc?' Sending PC: '+pc.name+', online.':' No sending PC online: forms go out while a PC runs the Step 2 Worker.')+(r.problem?' Problem: '+r.problem:'');
+      $('fpNow').textContent=run?'Stop sending':'Send now';$('fpNow').dataset.stop=run?'1':'';$('fpNow').disabled=false;
+      clearTimeout(S.fpTimer);if(run)S.fpTimer=setTimeout(loadForms,15000);
       var sa=(r.scan&&r.scan.all)||{},st=(r.scan&&r.scan.target)||{},total=0,left=0;
       Object.keys(sa).forEach(function(k){total+=sa[k];if(k==='not_checked'||k==='taken')left+=sa[k]});
       $('fpState').textContent+=' Websites checked by the PC: '+num(total-left)+' of '+num(total)+'. Open forms: '+num(sa.bot_can_submit||0)+', of them '+num(st.bot_can_submit||0)+' target companies.';
-      $('fpRows').innerHTML=(r.recent||[]).map(function(x){var k=x.sent_at?'ok':x.status==='captcha'?'warn':x.status==='failed'?'bad':'blue';return '<div class="rowl"><div class="grow"><div class="rt">'+esc(x.company_name)+'</div><div class="rs">'+esc(x.form_url||x.website)+'</div><div class="rs">'+esc(x.detail)+'</div></div><div class="rr"><span class="chip '+k+'">'+esc(String(x.status).replace(/_/g,' '))+'</span><div>'+(x.checked_at?ago(x.checked_at)+' ago':'')+'</div></div></div>'}).join('');
+      $('fpRows').innerHTML=(r.recent||[]).map(sendRow).join('');
     }).catch(fail);
+  }
+  // One logged send: company, form, outcome, when, which PC, and the exact subject and message.
+  function sendRow(x){
+    var k=x.sent_at?'ok':x.status==='captcha'?'warn':/failed|interrupted/.test(x.status)?'bad':'blue';
+    var when=x.sent_at||x.checked_at;
+    return '<div class="rowl"><div class="grow"><div class="rt">'+esc(x.company_name)+'</div><div class="rs">'+esc(x.form_url||x.website)+'</div>'+(x.detail?'<div class="rs">'+esc(x.detail)+'</div>':'')+
+      (x.message?'<details><summary class="rs">Message sent'+(x.taken_by?' by '+esc(x.taken_by):'')+(when?', '+esc(new Date(when).toLocaleString())+'':'')+'</summary><div class="rs" style="white-space:pre-wrap;margin-top:6px"><b>'+esc(x.subject)+'</b>'+String.fromCharCode(10,10)+esc(x.message)+'</div></details>':'')+
+      '</div><div class="rr"><span class="chip '+k+'">'+esc(String(x.status).replace(/_/g,' '))+'</span><div>'+(when?ago(when)+' ago':'')+'</div></div></div>';
   }
   function fpSave(){
     var b={enabled:$('fpOn').checked,per_day:Number($('fpPerDay').value),template_id:Number($('fpTpl').value)||null,sender:{name:$('fpName').value,company:$('fpCompany').value,phone:$('fpPhone').value,email:$('fpEmail').value}};
@@ -694,13 +703,17 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
     api('/api/email-marketing/form-autopilot',{method:'POST',body:b}).then(function(){show('info',b.enabled?'Contact forms are on.':'Saved. Contact forms are off.');return loadForms()}).catch(function(e){fail(e);loadForms()});
   }
   $('fpNow').onclick=function(){
+    if($('fpNow').dataset.stop){
+      if(!confirm('Stop sending? Forms a PC is filling right now still finish.'))return;
+      return api('/api/email-marketing/form-autopilot/run/stop',{method:'POST',body:{}}).then(function(){show('info','Stopped.');return loadForms()}).catch(fail);
+    }
     var n=Math.round(Number($('fpNowN').value));if(!(n>=1&&n<=500))return show('error','Send 1 to 500 at a time.');
     if(!$('fpTpl').value)return show('error','Choose the template for contact forms first.');
     if(!confirm('Send "'+$('fpTpl').selectedOptions[0].textContent+'" through '+n+' company contact forms now, as '+$('fpName').value+'?'))return;
     $('fpNow').disabled=true;
     api('/api/email-marketing/form-autopilot',{method:'POST',body:{template_id:Number($('fpTpl').value),sender:{name:$('fpName').value,company:$('fpCompany').value,phone:$('fpPhone').value,email:$('fpEmail').value}}})
       .then(function(){return api('/api/email-marketing/form-autopilot/run',{method:'POST',body:{count:n}})})
-      .then(function(r){show(r.started?'info':'error',r.started?'Sending '+n+' now. The card shows each one as it goes.':r.reason);return loadForms()})
+      .then(function(){show('info','Sending '+n+' now from the PC. The card shows each one as it goes.');return loadForms()})
       .catch(function(e){fail(e);loadForms()});
   };
   $('fpSave').onclick=fpSave;
@@ -724,7 +737,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       $('siteRows').innerHTML=r.rows.length?r.rows.map(function(x){
         var st=x.sent_at?['ok','sent']:x.send_status?[x.send_status==='captcha'?'warn':'bad',x.send_status]:x.form==='captcha'?['warn','captcha']:['blue','waiting'];
         var link=x.form_url||x.website;
-        return '<div class="rowl"><div class="grow"><div class="rt">'+esc(x.company_name)+'</div><div class="rs">'+esc(x.category||'')+'</div><div class="rs"><a href="'+esc(link)+'" target="_blank" rel="noopener">'+esc(String(link).replace(/^https?:\/\/(www\.)?/,''))+'</a></div>'+(x.send_detail||x.form==='captcha'?'<div class="rs">'+esc(x.send_detail||x.form_detail)+'</div>':'')+'</div><div class="rr"><span class="chip '+st[0]+'">'+esc(String(st[1]).replace(/_/g,' '))+'</span><div>'+((x.tried_at)?ago(x.tried_at)+' ago':'')+'</div></div></div>';
+        return '<div class="rowl"><div class="grow"><div class="rt">'+esc(x.company_name)+'</div><div class="rs">'+esc(x.category||'')+'</div><div class="rs"><a href="'+esc(link)+'" target="_blank" rel="noopener">'+esc(String(link).replace(/^https?:\/\/(www\.)?/,''))+'</a></div>'+(x.send_detail||x.form==='captcha'?'<div class="rs">'+esc(x.send_detail||x.form_detail)+'</div>':'')+(x.message?'<details><summary class="rs">Message sent'+(x.taken_by?' by '+esc(x.taken_by):'')+(x.sent_at||x.tried_at?', '+esc(new Date(x.sent_at||x.tried_at).toLocaleString()):'')+'</summary><div class="rs" style="white-space:pre-wrap;margin-top:6px"><b>'+esc(x.subject)+'</b>\n\n'+esc(x.message)+'</div></details>':'')+'</div><div class="rr"><span class="chip '+st[0]+'">'+esc(String(st[1]).replace(/_/g,' '))+'</span><div>'+((x.tried_at)?ago(x.tried_at)+' ago':'')+'</div></div></div>';
       }).join(''):'<div class="empty">No website here yet.</div>';
       var from=r.total?r.offset+1:0,to=Math.min(r.offset+r.page_size,r.total);
       $('sitePage').textContent=num(from)+'–'+num(to)+' of '+num(r.total);

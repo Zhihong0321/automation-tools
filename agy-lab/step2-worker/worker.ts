@@ -8,7 +8,8 @@
 // holds up the others. Only outbound requests. When no step-2 job is running it
 // checks Malaysian lead websites for an open contact form instead (form-autopilot.ts:
 // the same processLead, only its form verdict sent back), so Railway reads no site.
-// With neither, it asks again every minute.
+// With neither, it asks again every minute. Beside that it sends contact forms with this
+// PC's Chrome when the hub has some to send (sendForms); the hub keeps the log of each.
 //
 // It holds the Gmap worker key (an HMAC of LAB_TOKEN that reaches only the
 // worker routes), never LAB_TOKEN. A machine that already holds LAB_TOKEN (the
@@ -24,6 +25,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { makeReader, WORKER_BATCH_MAX, type Reader } from '../src/list-step2.ts';
+import { deliver } from '../src/contact-form-delivery.ts';
 
 const DATA = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Step2Worker') : path.join(os.homedir(), '.step2-worker');
 const LOG = path.join(DATA, 'worker.log');
@@ -129,12 +131,36 @@ async function nextLead(): Promise<any> {
   }
 }
 
+/**
+ * Contact-form sending, one form at a time with this PC's browser. The hub hands out a form only
+ * when "Send now" or the switch wants one, with the exact subject, message and sender it logged;
+ * the outcome, the boxes filled and a screenshot go back to the hub, which keeps the record.
+ */
+async function sendForms(): Promise<void> {
+  for (;;) {
+    let forms: any[] = [];
+    try { forms = (await post('/api/form-send/worker/take', { worker: WORKER, limit: 1 })).forms ?? []; }
+    catch (err) { log('could not ask the hub for forms to send: ' + (err as Error).message); }
+    if (!forms.length) { await sleep(20_000); continue; }
+    for (const f of forms) {
+      const result = await deliver({ lead: { company_name: f.company_name, website: f.website }, sender: f.sender, subject: f.subject, message: f.body });
+      log(`form ${f.company_name}: ${result.status} (${result.detail})`);
+      const { status, detail, form_url, filled, screenshot } = result;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try { await post('/api/form-send/worker/done', { worker: WORKER, company_id: f.company_id, result: { status, detail, form_url, filled, screenshot } }); break; }
+        catch (err) { log(`could not report the form for ${f.company_name}: ${(err as Error).message}`); await sleep(10_000 * attempt); }
+      }
+    }
+  }
+}
+
 async function main(): Promise<void> {
   if (!LAB_URL || !KEY) {
     log(`no LAB_URL, or no GMAP_WORKER_KEY or LAB_TOKEN, in ${process.env.STEP2_WORKER_ENV ?? path.join(DATA, 'worker.env')}; nothing to do`);
     process.exit(2);
   }
-  log(`Step 2 Worker ${WORKER}: ${CONCURRENCY} leads at a time, hub ${LAB_URL}`);
+  log(`Step 2 Worker ${WORKER}: ${CONCURRENCY} leads at a time, hub ${LAB_URL}; sends contact forms with this PC's browser`);
+  void sendForms();
   let total = 0;
   let recent = 0;
   let since = Date.now();

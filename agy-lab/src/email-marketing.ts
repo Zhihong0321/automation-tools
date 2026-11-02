@@ -355,38 +355,6 @@ const autopilotDeps = (): autopilot.Deps<MarketingLead> => ({
   start: (id) => sl.setStatus(id, 'START'),
 });
 
-/** The contact-form autopilot sends the first step of the template chosen for forms, from the fixed form sender. Read once per run. */
-const formDeps = (): formAutopilot.Deps => {
-  type Loaded = Omit<formAutopilot.Message, 'subject' | 'body'> & { subject: string; body: string; profile: templates.Sender };
-  let loaded: Promise<Loaded | string> | null = null;
-  const load = async (): Promise<Loaded | string> => {
-    const settings = await formAutopilot.getSettings();
-    if (!settings.template_id) return 'Choose the template for contact forms first.';
-    const [list, saved] = await Promise.all([templates.list(), templates.getSender()]);
-    const tpl = list.find((t) => t.id === settings.template_id);
-    const first = tpl?.steps[0];
-    if (!tpl) return 'The template chosen for contact forms was deleted. Choose another.';
-    if (!first?.body.trim()) return `The template "${tpl.name}" has no email yet.`;
-    const s = settings.sender;
-    // The form sender's name and mobile stand in for the email sender's in {{sender_name}} and {{sender_phone}}.
-    const profile = { ...saved, sender_name: s.name, sender_phone: s.phone };
-    return {
-      template_id: tpl.id, template_name: tpl.name, subject: first.subject, body: first.body, profile,
-      sender: { name: s.name, email: s.email, phone: s.phone, company: s.company, website: 'https://eternalgy.me' },
-    };
-  };
-  return {
-    message: async (lead) => {
-      const m = await (loaded ??= load().catch((err: Error) => 'Reading the template failed: ' + err.message));
-      if (typeof m === 'string') return m;
-      const { profile, ...rest } = m;
-      const fields = { company_name: lead.company_name, category: lead.category ?? '' };
-      return { ...rest, subject: templates.render(m.subject, profile, fields), body: templates.render(m.body, profile, fields) };
-    },
-    deliver,
-  };
-};
-
 export function start(): void {
   // Mail hosts of new lead emails; a run with nothing new to look up ends at once.
   const hostTick = () => { if (db.configured()) mailHosts.startRun(); };
@@ -396,10 +364,6 @@ export function start(): void {
   const autoTick = () => void autopilot.tick(autopilotDeps()).catch((err: Error) => console.warn('[email-autopilot] ' + err.message));
   setTimeout(autoTick, 90_000);
   setInterval(autoTick, 10 * 60_000);
-  // The contact-form autopilot: off until switched on; then each weekday it sends until the day's number is reached.
-  const formTick = () => void formAutopilot.tick(formDeps()).catch((err: Error) => console.warn('[form-autopilot] ' + err.message));
-  setTimeout(formTick, 150_000);
-  setInterval(formTick, 10 * 60_000);
   if (!sl.configured() || !webhookUrl()) return;
   const tick = () => void syncWebhooks()
     .then((s) => { if (s.errors.length) console.warn('[email-marketing] webhook sync: ' + s.errors.join('; ')); })
@@ -623,13 +587,17 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       if (method === 'POST' && p === '/api/email-marketing/form-autopilot/test') {
         const id = String((await ctx.readJson(req)).company_id ?? '');
         if (id && !/^\d+$/.test(id)) return send(400, { error: 'company_id is a number' });
-        return send(200, await formAutopilot.test(formDeps(), id || undefined));
+        return send(200, await formAutopilot.test(deliver, id || undefined));
       }
-      // Send now: {count} forms, outside the window and with the switch off too; runs in the background.
+      // Send now: {count} forms, outside the window and with the switch off too. The PCs send them.
       if (method === 'POST' && p === '/api/email-marketing/form-autopilot/run') {
         const count = Math.round(Number((await ctx.readJson(req)).count));
         if (!(count >= 1 && count <= 500)) return send(400, { error: 'count is 1 to 500' });
-        return send(202, formAutopilot.startNow(formDeps(), count));
+        return send(202, { run: await formAutopilot.startRun(count) });
+      }
+      if (method === 'POST' && p === '/api/email-marketing/form-autopilot/run/stop') {
+        await formAutopilot.stopRun();
+        return send(200, { stopped: true });
       }
       // The websites the PC checked, for the Contact forms list.
       if (method === 'GET' && p === '/api/email-marketing/form-autopilot/sites') {
