@@ -55,6 +55,12 @@ test('the page links out and calls only its own API', () => {
   assert.doesNotMatch(html, /api_key=|server\.smartlead\.ai/i);
 });
 
+test('with nothing waiting, the replies card and the empty list lead to the conversations', () => {
+  const html = page();
+  assert.match(html, /setAttribute\('href',rw\|\|!rt\?'#replies':'#chats'\)/);
+  assert.match(html, /See all conversations/);
+});
+
 test('a webhook call reads either field naming and keeps the reply text', () => {
   const a = webhookEvent({
     event_type: 'EMAIL_REPLY', campaign_id: 7, campaign_name: 'Solar Q4', sl_lead_email: 'Boss@Acme.com',

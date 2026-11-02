@@ -212,7 +212,11 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
     return api('/api/email-marketing/dashboard').then(function(d){
       var L=d.leads,G=d.sending;
       setBadge(d.replies.waiting);
-      $('waitN').textContent=num(d.replies.waiting);$('waitSub').textContent=num(d.replies.total)+' conversations in all'+(d.model?' · drafts by '+d.model:'');
+      var rw=d.replies.waiting,rt=d.replies.total;
+      $('waitN').textContent=num(rw);
+      // Nothing waiting but conversations exist: the card opens them, not the empty waiting list.
+      $('waitCard').setAttribute('href',rw||!rt?'#replies':'#chats');
+      $('waitSub').textContent=(rw?num(rt)+' conversation'+(rt===1?'':'s')+' in all':rt?'All answered. Tap to open the '+(rt===1?'conversation':num(rt)+' conversations')+'.':'No lead has replied yet.')+(d.model?' · drafts by '+d.model:'');
       $('leadTiles').innerHTML=tile('Lead emails',num(L.emails),num(L.companies)+' companies')+tile('In a campaign',num(L.in_campaign))+tile('Not yet emailed',num(L.not_yet))+tile('Replied',num(G.replied));
       $('sendTiles').innerHTML=tile('Sent',num(G.sent),num(G.sent_today)+' today of '+num(G.daily_capacity)+' a day')+tile('Opened',num(G.opened),pct(G.open_rate))+tile('Replied',num(G.replied),pct(G.reply_rate))+tile('Interested',num(G.interested))+
         tile('Bounced',num(G.bounced),pct(G.bounce_rate))+tile('Unsubscribed',num(G.unsubscribed))+tile('Campaigns',num(G.campaigns),num(G.active)+' sending')+tile('Mailboxes',num(G.mailboxes));
@@ -307,7 +311,7 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
     return '<span class="pill warn">waiting</span>';
   }
   function itemHtml(c){return '<a class="item" href="'+replyHref(c)+'"><div class="top"><span class="who">'+esc(c.company||c.email)+'</span><span class="when">'+ago(c.replied_at)+'</span></div><div class="sub">'+esc(c.email)+' · '+esc(c.campaign_name||'')+'</div><div class="pre">'+esc(c.preview||'')+'</div><div style="margin-top:4px">'+draftPill(c)+'</div></a>'}
-  function renderQueue(){$('repList').innerHTML=S.queue.length?S.queue.map(itemHtml).join(''):'<div class="empty">Nothing waiting. Every reply has an answer.</div>'}
+  function renderQueue(){$('repList').innerHTML=S.queue.length?S.queue.map(itemHtml).join(''):'<div class="empty">Nothing waiting. Every reply has an answer.<br><a href="#chats">See all conversations →</a></div>'}
   function renderChats(){
     var q=$('chatSearch').value.trim().toLowerCase();
     var rows=S.convos.filter(function(c){return !q||(c.email+' '+(c.company||'')).toLowerCase().indexOf(q)>=0});
