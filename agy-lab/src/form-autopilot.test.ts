@@ -16,6 +16,9 @@ test('a form lead is the email target without the email: category and a real com
   assert.equal(isTargetCompany({ category: 'Plastic fabrication company', company_name: 'Sin Hup Plastic Sdn Bhd' }), true);
   assert.equal(isTargetCompany({ category: 'Cafe', company_name: 'Kopi Kita' }), false);
   assert.equal(isTargetCompany({ category: 'Manufacturer', company_name: 'Jalan Perindustrian 3, 81400' }), false);
+  // A solar installer is a competitor, whatever its category says.
+  assert.equal(isTargetCompany({ category: 'Electrical contractor', company_name: 'solar fusion sdn bhd' }), false);
+  assert.equal(isTargetCompany({ category: 'Solar energy equipment supplier', company_name: 'Bright Energy Sdn Bhd' }), false);
   // isTarget is still isTargetCompany plus a company email.
   assert.equal(isTarget({ email: 'boss@gmail.com', category: 'Manufacturer', company_name: 'Acme Metal Works' }), false);
   assert.equal(isTarget({ email: 'sales@acme.my', category: 'Manufacturer', company_name: 'Acme Metal Works' }), true);

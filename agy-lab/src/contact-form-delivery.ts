@@ -317,8 +317,16 @@ async function deliverNow(input: DeliverInput): Promise<DeliverResult> {
             const checked = await el.evaluate((e: HTMLInputElement) => e.checked);
             if (!checked) await el.evaluate((e: HTMLInputElement) => (e.closest('label') as HTMLElement ?? e).click());
           } else {
-            await el.click({ clickCount: 3 }).catch(() => el.focus());
-            await el.type(step.value, { delay: 15 });
+            // The value goes on this box itself, never through the keyboard: a chat widget that
+            // takes focus while typing would get the keys, and each line break would send there.
+            await el.evaluate((e: HTMLInputElement | HTMLTextAreaElement, value: string) => {
+              e.focus();
+              const proto = e.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+              Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(e, value);
+              e.dispatchEvent(new Event('input', { bubbles: true }));
+              e.dispatchEvent(new Event('change', { bubbles: true }));
+              e.blur();
+            }, step.value);
           }
           out.filled.push({ field: step.field, as: step.as });
         } catch (err) { out.filled.push({ field: step.field, as: `${step.as} (could not fill: ${(err as Error).message.slice(0, 80)})` }); }

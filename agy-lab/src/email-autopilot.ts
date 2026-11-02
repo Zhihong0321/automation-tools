@@ -80,10 +80,13 @@ export function isTarget(r: { email: string; category?: string | null; company_n
   return isTargetCompany(r) && !FREE_MAIL.test(r.email);
 }
 
-/** The company half of isTarget: the category, and a name that reads as a company. The contact-form autopilot uses it alone. */
+/** Solar installers and other renewable-energy firms: competitors, never sent the pitch. */
+const SOLAR = /solar|photovoltaic|\bpv\b|renewable|green energy|tenaga suria/i;
+
+/** The company half of isTarget: the category, a name that reads as a company, and not a solar firm. The contact-form autopilot uses it alone. */
 export function isTargetCompany(r: { category?: string | null; company_name?: string | null }): boolean {
   const name = String(r.company_name ?? '').trim();
-  return TARGET_CATEGORY.test(r.category ?? '')
+  return TARGET_CATEGORY.test(r.category ?? '') && !SOLAR.test(`${r.category ?? ''} ${name}`)
     && /[a-z]{3}/i.test(name) && name.length <= 60 && !/^\d|\bjalan\b|,\s*\d{5}\b/i.test(name);
 }
 
