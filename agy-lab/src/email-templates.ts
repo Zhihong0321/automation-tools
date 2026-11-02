@@ -22,7 +22,7 @@ export const DEFAULT_SENDER: Sender = {
   sender_name: '',
   sender_title: '',
   sender_phone: '+60 11-2100 0099',
-  sender_footer: 'Eternalgy Sdn Bhd (1523087-A), 21-01 Jalan Mutiara Emas 10/19, Taman Mount Austin, 81100 Johor Bahru. Not relevant? Reply "stop" and we won\'t write again.',
+  sender_footer: 'Eternalgy Sdn Bhd (1523087-A), 01-23, Jalan Mutiara Emas 10/19, Taman Mount Austin, 81100 Johor Bahru. Not relevant? Reply "stop" and we won\'t write again.',
 };
 
 const FIELD = /\{\{\s*([a-z_]+)\s*\}\}/gi;
