@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A SECOND Maps worker on this machine, serving the company-diver lab while the
+  other com.eternalgy.gmapworker* jobs keep serving ee-auto. Install it with the
+  sed line in README.md — launchd does not expand ~, so __HOME__ and __NODE__
+  must be real paths before this file is loaded.
+
+  It runs the SAME macmini.mjs as the other lanes, from this checkout. What makes
+  it the diver's is WORKER_ENV_FILE below: ~/.gmap-worker-diver.env names the
+  other lab's URL and a key scoped to gmap.scan and fetch.pages. LAB_URL is read
+  once at startup, so serving two labs is two processes, not one with two URLs.
+
+  No LAB_TOKEN here. A plist is world-readable; the key is in that env file,
+  chmod 600.
+
+  KeepAlive and ThrottleInterval for the same reasons as the lab's own plist:
+  this is meant to be running every second of every day, and the only correct
+  response to it not running is to start it again.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.eternalgy.gmapworker.diver</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__HOME__/automation-tools/worker/macmini.mjs</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__HOME__/automation-tools</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/gmap-worker-diver.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/gmap-worker-diver.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__NODE_DIR__:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>WORKER_ENV_FILE</key>
+    <string>__HOME__/.gmap-worker-diver.env</string>
+  </dict>
+</dict>
+</plist>

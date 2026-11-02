@@ -28,6 +28,7 @@ router that has to keep working at 2am.
 | `check.ts` | reads real pages through the worker's own `readPage`; proves the mini works without touching the hub |
 | `com.eternalgy.colima.plist` | keeps the Colima VM up |
 | `com.eternalgy.localfetchworker.plist` | keeps the worker up |
+| `com.eternalgy.localfetchworker.diver.plist` | keeps a second worker up, serving the company-diver lab |
 | `../src/pagefetch.ts` | the hub side: creates the job and awaits it |
 
 The actual fetching and cleaning is [Crawl4AI](https://github.com/unclecode/crawl4ai)
@@ -224,6 +225,44 @@ Without `-Autostart` it runs in the foreground. Measured on pc-desktop-camhl16
 (i5-13500H) on 2026-11-01: solarvest.my 7,808 characters, samaiden.com.my 4,921,
 maybank about-us 2,511; about 1.4 GB on disk with Chromium; 1–3 s a page once
 the browser is warm, 12 s for the first.
+
+## A second lab, one crawler
+
+The mini also reads pages for the `company-diver` lab, with a second poller
+beside the one above. They share this machine's single Crawl4AI container on
+purpose: a second container would double the RAM and the browser count to serve
+the same number of pages, and the pages are not the bottleneck.
+
+```bash
+# Settings: the old file's crawler lines, the new lab's URL, the SCOPED key.
+# LAB_TOKEN must NOT survive into the copy. worker.ts reads
+# LAB_TOKEN || GMAP_WORKER_KEY, so a leftover LAB_TOKEN would send the OTHER
+# lab's admin token to this one on every poll.
+umask 077
+sed '/^LAB_URL=/d;/^LAB_TOKEN=/d;/^WORKER_NAME=/d' \
+    ~/.local-fetch-worker/worker.env > ~/.local-fetch-worker-diver.env
+cat >> ~/.local-fetch-worker-diver.env <<SETTINGS
+LAB_URL=https://company-diver-production.up.railway.app
+GMAP_WORKER_KEY=<the diver lab's scoped worker key>
+WORKER_NAME=$(hostname -s)-fetch-diver
+SETTINGS
+chmod 600 ~/.local-fetch-worker-diver.env
+
+# A NEW agent. Do not bootout or edit com.eternalgy.localfetchworker, and do not
+# touch the colima or crawl4ai plists: one crawler, two readers.
+sed -e "s|__HOME__|$HOME|g" -e "s|__NODE__|$(which node)|g" -e "s|__NODE_DIR__|$(dirname $(which node))|g" \
+    local-fetch-worker/com.eternalgy.localfetchworker.diver.plist \
+    > ~/Library/LaunchAgents/com.eternalgy.localfetchworker.diver.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.eternalgy.localfetchworker.diver.plist
+```
+
+Both pollers write to the one `~/.local-fetch-worker/worker.log` — that path is
+in `worker.ts`, not the plist — so this copy's lines are
+`grep diver ~/.local-fetch-worker/worker.log`. Its launchd stdout is its own, at
+`~/.local-fetch-worker/launchd-diver.log`.
+
+Everything below applies to each poller separately: with Crawl4AI down, both
+stop claiming and both labs are told page reads are unavailable.
 
 ## When the mini is off
 

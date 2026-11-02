@@ -310,6 +310,48 @@ pmset -g | grep -E 'autorestart|^ sleep'
 Both must read what you set them to. `displaysleep` does not matter; only the machine
 sleeping does.
 
+## A second lab, on the same machine
+
+The mini serves two labs at once: `ee-auto`, everything above, and
+`company-diver` — the Mirror backend. Nothing is shared but the machine and this
+checkout. The diver gets its own LaunchAgent, its own log and its own env file,
+and the jobs above are left exactly as they are.
+
+A worker holds one lab at a time: `LAB_URL` is read once at startup, so two labs
+means two processes, not one process with two URLs.
+
+```bash
+# 1. The diver's settings. Its key is SCOPED — it claims gmap.scan and
+#    fetch.pages only, and is not the admin LAB_TOKEN. chmod 600, never the plist.
+umask 077; cat > ~/.gmap-worker-diver.env <<SETTINGS
+LAB_URL=https://company-diver-production.up.railway.app
+LAB_TOKEN=<the diver lab's scoped worker key>
+WORKER_NAME=$(hostname -s)-diver
+SETTINGS
+
+# 2. Foreground FIRST, the same rule as every worker here. Ctrl-C once the log
+#    shows it claiming from the diver URL with no 401.
+cd ~/automation-tools/worker && WORKER_ENV_FILE=$HOME/.gmap-worker-diver.env node macmini.mjs
+
+# 3. A NEW agent. Do not edit or bootout any com.eternalgy.gmapworker* already
+#    installed — those are the other lab's and must keep running.
+sed -e "s|__HOME__|$HOME|g" -e "s|__NODE__|$(which node)|g" -e "s|__NODE_DIR__|$(dirname $(which node))|g" \
+    worker/com.eternalgy.gmapworker.diver.plist \
+    > ~/Library/LaunchAgents/com.eternalgy.gmapworker.diver.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.eternalgy.gmapworker.diver.plist
+tail -f ~/Library/Logs/gmap-worker-diver.log
+```
+
+All four default lanes start, and the three whose types the key cannot claim
+cost nothing: the hub filters a claim's types against the key's scope and then
+records only what is left, so `-diver-fb`, `-diver-x` and `-diver-ads`
+long-poll, are handed nothing, and never make the diver lab believe fb/x/ads
+recon is available here. `WORKER_TYPES=gmap.scan` would silence them, at the
+price of giving up the lane split the day the key's scope widens.
+
+The page-fetch worker takes a second copy the same way —
+`agy-lab/local-fetch-worker/README.md`.
+
 ## The Step 2 Worker — the mini also shares List processing
 
 Separate from the Maps lanes above, the mini runs a second worker that shares

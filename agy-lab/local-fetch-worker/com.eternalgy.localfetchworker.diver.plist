@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A SECOND page-fetch poller, serving the company-diver lab while
+  com.eternalgy.localfetchworker keeps serving ee-auto. Install it with the sed
+  line in README.md — launchd does not expand ~, so __HOME__, __NODE__ and
+  __NODE_DIR__ must be real paths before this file is loaded. __NODE__ must be
+  Node 24 or newer: worker.ts is run as TypeScript, with no build step.
+
+  Same worker.ts as the original, from this checkout; LOCAL_FETCH_WORKER_ENV
+  below is what makes it the diver's.
+
+  It shares this Mac's ONE Crawl4AI container with the original, on purpose: a
+  second container would double the RAM and the browser count to serve the same
+  number of pages. THIS STARTS NEITHER CRAWL4AI NOR COLIMA, exactly as the
+  original does not — the worker going quiet when the container is missing is
+  the signal the hub reads.
+
+  No tokens here; the scoped key is in ~/.local-fetch-worker-diver.env, chmod
+  600. Note that worker.ts hard-codes its own log to
+  ~/.local-fetch-worker/worker.log, so both pollers append to that one file;
+  their lines carry their lane names. The launchd log below is this copy's alone.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.eternalgy.localfetchworker.diver</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__HOME__/automation-tools/agy-lab/local-fetch-worker/worker.ts</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__HOME__/automation-tools/agy-lab/local-fetch-worker</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/.local-fetch-worker/launchd-diver.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.local-fetch-worker/launchd-diver.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__NODE_DIR__:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>LOCAL_FETCH_WORKER_ENV</key>
+    <string>__HOME__/.local-fetch-worker-diver.env</string>
+  </dict>
+</dict>
+</plist>
