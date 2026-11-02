@@ -685,13 +685,13 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       $('fpOn').checked=s.enabled;$('fpPerDay').value=s.per_day;
       $('fpTpl').innerHTML='<option value="">Choose the template…</option>'+(r.templates||[]).map(function(t){return '<option value="'+t.id+'">'+esc(t.name)+'</option>'}).join('');$('fpTpl').value=String(s.template_id||'');
       $('fpName').value=s.sender.name;$('fpCompany').value=s.sender.company;$('fpPhone').value=s.sender.phone;$('fpEmail').value=s.sender.email;
-      var run=r.run,pc=(r.senders||[]).filter(function(x){return Date.now()-new Date(x.seen_at).getTime()<180000})[0];
-      $('fpState').textContent=(run?'Sending now: '+run.sent+' of '+run.goal+' sent, '+run.tried+' tried, '+run.sending+' being filled on the PC. About half a minute a form. ':'')+
+      var run=r.run,pc=(r.senders||[]).filter(function(x){return Date.now()-new Date(x.seen_at).getTime()<180000})[0],later=run&&new Date(run.started_at).getTime()>Date.now();
+      $('fpState').textContent=(later?'Scheduled: '+run.goal+' forms from '+new Date(run.started_at).toLocaleString('en-MY',{timeZone:'Asia/Kuala_Lumpur',weekday:'short',hour:'2-digit',minute:'2-digit'})+' KL, sent from the PC. ':run?'Sending now: '+run.sent+' of '+run.goal+' sent, '+run.tried+' tried, '+run.sending+' being filled on the PC. About half a minute a form. ':'')+
         (s.enabled?'Switch on: up to '+s.per_day+' a weekday, 08:00 to 15:00 KL. ':'Switch off. ')+'Sent today: '+r.sent_today+'.'+
         (checked?' '+num(checked)+' forms tried in all: '+num((c.sent||0)+(c.submitted_unconfirmed||0))+' sent.':'')+
         (pc?' Sending PC: '+pc.name+', online.':' No sending PC online: forms go out while a PC runs the Step 2 Worker.')+(r.problem?' Problem: '+r.problem:'');
-      $('fpNow').textContent=run?'Stop sending':'Send now';$('fpNow').dataset.stop=run?'1':'';$('fpNow').disabled=false;
-      clearTimeout(S.fpTimer);if(run)S.fpTimer=setTimeout(loadForms,15000);
+      $('fpNow').textContent=later?'Cancel the scheduled send':run?'Stop sending':'Send now';$('fpNow').dataset.stop=run?'1':'';$('fpNow').disabled=false;
+      clearTimeout(S.fpTimer);if(run)S.fpTimer=setTimeout(loadForms,later?60000:15000);
       var sa=(r.scan&&r.scan.all)||{},st=(r.scan&&r.scan.target)||{},total=0,left=0;
       Object.keys(sa).forEach(function(k){total+=sa[k];if(k==='not_checked'||k==='taken')left+=sa[k]});
       $('fpState').textContent+=' Websites checked by the PC: '+num(total-left)+' of '+num(total)+'. Open forms: '+num(sa.bot_can_submit||0)+', of them '+num(st.bot_can_submit||0)+' target companies.';

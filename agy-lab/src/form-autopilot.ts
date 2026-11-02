@@ -237,7 +237,7 @@ const STATUSES = ['sent', 'submitted_unconfirmed', 'dry_run', 'captcha', 'no_for
 const senders = new Map<string, number>();
 let lastProblem: string | null = null;
 
-/** A "send this many now" from the card, kept in the database so a redeploy does not lose it. */
+/** A "send this many now" from the card, kept in the database so a redeploy does not lose it. started_at may be later: a scheduled start. */
 type Run = { goal: number; started_at: string };
 async function getRun(): Promise<Run | null> {
   const v = (await db.sql<{ value: Run }>(`select value from email_marketing_setting where key = 'form_send_run'`)).rows[0]?.value;
@@ -248,10 +248,10 @@ async function setRun(run: Run | null): Promise<void> {
   await db.sql(`insert into email_marketing_setting (key, value) values ('form_send_run', $1::jsonb) on conflict (key) do update set value = excluded.value`, [JSON.stringify(run)]);
 }
 
-/** Starts "send this many now": PCs take them on their next ask, whatever the switch or the window. */
-export async function startRun(count: number): Promise<Run> {
+/** Starts "send this many", now or at startAt: PCs take them on their first ask after it, whatever the switch or the window. */
+export async function startRun(count: number, startAt?: Date): Promise<Run> {
   await ensureTables();
-  const run = { goal: count, started_at: new Date().toISOString() };
+  const run = { goal: count, started_at: (startAt ?? new Date()).toISOString() };
   await setRun(run);
   lastProblem = null;
   return run;
@@ -272,7 +272,7 @@ async function wanted(): Promise<number> {
     where status = 'sending' and taken_until < now()`);
   const sending = Number((await db.sql<{ n: number }>(`select count(*)::int as n from contact_form_send where status = 'sending'`)).rows[0]?.n ?? 0);
   const run = await getRun();
-  if (run) {
+  if (run && Date.parse(run.started_at) <= Date.now()) {
     const p = await runProgress(run);
     // Up to twice the goal is tried: some forms turn out closed in the browser.
     if (p.sent < run.goal && p.tried < run.goal * 2) return Math.max(0, Math.min(run.goal - p.sent, run.goal * 2 - p.tried) - p.sending);
@@ -307,7 +307,8 @@ export async function takeSend(worker: string, limit: number): Promise<SendJob[]
     [lead.company_id, lead.company_name, lead.website, m.template_id, m.subject, m.body, JSON.stringify(m.sender), worker, SEND_LEASE_SECONDS]);
     if (claim.rows.length) out.push({ company_id: lead.company_id, company_name: lead.company_name, website: lead.website, subject: m.subject, body: m.body, sender: m.sender });
   }
-  if (!out.length && await getRun()) { lastProblem = 'No open form is left waiting: every one found so far was sent, tried or emailed.'; await setRun(null); }
+  const run = await getRun();
+  if (!out.length && run && Date.parse(run.started_at) <= Date.now()) { lastProblem = 'No open form is left waiting: every one found so far was sent, tried or emailed.'; await setRun(null); }
   return out;
 }
 

@@ -589,11 +589,14 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
         if (id && !/^\d+$/.test(id)) return send(400, { error: 'company_id is a number' });
         return send(200, await formAutopilot.test(deliver, id || undefined));
       }
-      // Send now: {count} forms, outside the window and with the switch off too. The PCs send them.
+      // Send now, or from {start_at}: {count} forms, outside the window and with the switch off too. The PCs send them.
       if (method === 'POST' && p === '/api/email-marketing/form-autopilot/run') {
-        const count = Math.round(Number((await ctx.readJson(req)).count));
+        const body = await ctx.readJson(req);
+        const count = Math.round(Number(body.count));
         if (!(count >= 1 && count <= 500)) return send(400, { error: 'count is 1 to 500' });
-        return send(202, { run: await formAutopilot.startRun(count) });
+        const at = body.start_at ? new Date(String(body.start_at)) : undefined;
+        if (at && !(at.getTime() > Date.now() && at.getTime() < Date.now() + 7 * 86_400_000)) return send(400, { error: 'start_at is a time in the next 7 days' });
+        return send(202, { run: await formAutopilot.startRun(count, at) });
       }
       if (method === 'POST' && p === '/api/email-marketing/form-autopilot/run/stop') {
         await formAutopilot.stopRun();
