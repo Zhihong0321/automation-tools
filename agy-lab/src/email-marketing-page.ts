@@ -42,7 +42,7 @@ input,select,textarea{background:#0f1115;color:var(--ink);border:1px solid var(-
 .days label{display:inline-flex;gap:4px;align-items:center;margin:0 10px 6px 0;font-size:14px}
 .hint{font-size:12.5px;color:var(--muted);margin:6px 0 0}.hint code{color:var(--accent)}
 .check{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}.check:last-child{border-bottom:0}.check b{min-width:16px}
-nav.tabs{position:fixed;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(5,1fr);background:#12151a;border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom);z-index:5}
+nav.tabs{position:fixed;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(6,1fr);background:#12151a;border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom);z-index:5}
 nav.tabs a{display:flex;flex-direction:column;align-items:center;gap:2px;padding:9px 0 8px;color:var(--muted);text-decoration:none;font-size:11.5px;font-weight:600;position:relative}nav.tabs a .ic{font-size:19px;line-height:1}nav.tabs a[aria-current="page"]{color:var(--accent)}
 nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--bad);color:#1a0d0c;font-size:10.5px;font-weight:800;border-radius:999px;padding:0 5px;min-width:17px;text-align:center}
 [hidden]{display:none!important}
@@ -59,6 +59,7 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
 <a href="#replies" data-view="replies"><span class="ic">✉</span>Replies<span class="badge" id="badge" hidden></span></a>
 <a href="#chats" data-view="chats"><span class="ic">☰</span>Chats</a>
 <a href="#campaigns" data-view="campaigns"><span class="ic">➤</span>Campaigns</a>
+<a href="#templates" data-view="templates"><span class="ic">✎</span>Templates</a>
 <a href="#leads" data-view="leads"><span class="ic">◉</span>Leads</a>
 </nav>
 <div class="card" id="tokenCard" hidden><div class="row"><input id="token" class="grow" type="password" placeholder="LAB_TOKEN" autocomplete="current-password"><button class="primary" id="saveToken">Save</button></div></div>
@@ -96,8 +97,8 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
 <div class="row" style="margin-bottom:6px"><h2 style="margin:0" class="grow" id="cdName"></h2><span id="cdStatus"></span></div>
 <div class="row" style="margin-bottom:6px"><button id="cdStart" class="go small">Start</button><button id="cdPause" class="small">Pause</button><button id="cdStop" class="small">Stop</button><button id="cdDelete" class="danger small">Delete</button></div>
 <p class="muted small" id="cdStats"></p>
-<h3>Emails</h3><div id="steps"></div><button id="addStep" class="small">+ Follow-up</button>
-<p class="hint">Plain text. Blank lines make paragraphs. Fields: <code>{{company_name}}</code> <code>{{first_name}}</code> <code>{{category}}</code> <code>{{role}}</code>. Most leads are company inboxes with no person name, so lead with <code>{{company_name}}</code>. An empty follow-up subject replies in the same thread.</p>
+<h3>Emails</h3><div class="row" style="margin-bottom:8px"><select id="tplPick" class="grow"><option value="">Start from a template…</option></select><button id="tplUse" class="small">Use</button><button id="tplFromCamp" class="small">Save as template</button></div><div id="steps"></div><button id="addStep" class="small">+ Follow-up</button>
+<p class="hint">Plain text. Blank lines make paragraphs. Fields: <code>{{company_name}}</code> <code>{{first_name}}</code> <code>{{category}}</code> <code>{{role}}</code>, and your <code>{{sender_name}}</code> <code>{{sender_title}}</code> <code>{{sender_phone}}</code> <code>{{sender_footer}}</code> from Templates. Most leads are company inboxes with no person name, so lead with <code>{{company_name}}</code>. An empty follow-up subject replies in the same thread.</p>
 <h3>Schedule</h3>
 <div class="row"><input id="tz" value="Asia/Kuala_Lumpur" class="grow"><input id="startH" type="time" value="09:00"><span class="muted">to</span><input id="endH" type="time" value="17:00"></div>
 <div class="row" style="margin-top:8px"><label class="small muted">Minutes apart</label><input id="gap" type="number" min="3" value="10" style="width:80px"><label class="small muted">New per day</label><input id="perDay" type="number" min="1" value="15" style="width:80px"></div>
@@ -109,6 +110,25 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
 <h3>Leads in this campaign</h3><div class="table-wrap"><table><thead><tr><th>Company</th><th>Email</th><th>Status</th><th></th></tr></thead><tbody id="campLeads"></tbody></table></div>
 <div class="row" style="margin-top:10px"><button id="clPrev" class="small">Previous</button><button id="clNext" class="small">Next</button><span class="muted small" id="clPage"></span></div>
 </div></div>
+</section>
+
+<section id="v-templates" hidden>
+<div class="card"><h2>Sender</h2>
+<p class="hint" style="margin:0 0 8px">Typed once. It fills <code>{{sender_name}}</code> <code>{{sender_title}}</code> <code>{{sender_phone}}</code> <code>{{sender_footer}}</code> in any email when a campaign is saved. A campaign saved earlier keeps what it had.</p>
+<input id="sName" placeholder="Your name" style="width:100%;margin-bottom:6px">
+<input id="sTitle" placeholder="Your title, e.g. Business Development Manager" style="width:100%;margin-bottom:6px">
+<input id="sPhone" placeholder="Phone" style="width:100%;margin-bottom:6px">
+<textarea id="sFooter" style="min-height:90px" placeholder="Company name, registration number, address, and how to opt out"></textarea>
+<div class="row" style="margin-top:8px"><button class="primary" id="saveSender">Save sender</button><span class="muted small" id="senderNote"></span></div></div>
+<div class="card"><div class="row" style="margin-bottom:8px"><h2 class="grow" style="margin:0">Templates</h2><button class="primary small" id="newTpl">New</button></div>
+<div class="table-wrap"><table><thead><tr><th>Name</th><th class="num">Emails</th><th>Updated</th></tr></thead><tbody id="tplRows"><tr><td colspan="3" class="empty">Loading…</td></tr></tbody></table></div></div>
+<div class="card" id="tplEdit" hidden>
+<input id="tplName" placeholder="Template name" style="width:100%;margin-bottom:8px">
+<div id="tplSteps"></div><button id="tplAddStep" class="small">+ Follow-up</button>
+<h3>Insert a field</h3><div id="tplFields" class="row" style="flex-wrap:wrap"></div>
+<p class="hint">Click inside a subject or body, then a field. Lead fields are filled for each lead by Smartlead. Sender fields come from Sender above.</p>
+<div class="row" style="margin-top:12px;flex-wrap:wrap"><button class="primary" id="tplSave">Save template</button><button id="tplCheck">Check &amp; preview</button><button id="tplDelete" class="danger">Delete</button></div>
+<div id="tplProblems" style="margin-top:8px"></div><div id="tplPreview"></div></div>
 </section>
 
 <section id="v-leads" hidden>
@@ -154,7 +174,7 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
   document.querySelector('details.site').addEventListener('toggle',function(){$('siteNav').hidden=!this.open});
 
   // ---- routing ----
-  var VIEWS=['dashboard','replies','chats','reply','campaigns','leads'];
+  var VIEWS=['dashboard','replies','chats','reply','campaigns','templates','leads'];
   function route(){
     show('error');show('info');
     var h=location.hash.replace(/^#/,'')||'dashboard';var parts=h.split('/');var v=VIEWS.indexOf(parts[0])>=0?parts[0]:'dashboard';
@@ -165,7 +185,8 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
     if(v==='replies')loadConvos().then(renderQueue);
     if(v==='chats')loadConvos().then(renderChats);
     if(v==='reply')openReply(Number(parts[1])||null,decodeURIComponent(parts.slice(2).join('/')));
-    if(v==='campaigns')loadStatus().then(renderCampaigns);
+    if(v==='campaigns'){loadStatus().then(renderCampaigns);loadTemplates()}
+    if(v==='templates')loadTemplates();
     if(v==='leads'){loadStatus();hostStatus();if(!S.leadRows.length)loadLeads()}
     window.scrollTo(0,0);
   }
@@ -451,6 +472,79 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
   }
   $('pushSelected').onclick=function(){var k=pickedKeys();pushLeads({keys:k},k.length+' selected lead email'+(k.length===1?'':'s'))};
   $('pushAll').onclick=function(){pushLeads({all:true,search:$('leadSearch').value.trim(),source:$('leadSource').value,status:$('leadStatus').value,mail_host:$('leadHost').value},num(S.leadTotal)+' matching lead emails')};
+
+  // ---- templates and sender ----
+  var FIELDS={lead:[],sender:[]};
+  function fillTemplateSelect(){
+    var keep=$('tplPick').value;
+    $('tplPick').innerHTML='<option value="">Start from a template…</option>'+(S.templates||[]).map(function(t){return '<option value="'+t.id+'">'+esc(t.name)+'</option>'}).join('');$('tplPick').value=keep;
+  }
+  function renderFieldChips(){
+    $('tplFields').innerHTML=FIELDS.lead.concat(FIELDS.sender).map(function(f){return '<button class="small" data-f="'+esc(f)+'">{{'+esc(f)+'}}</button>'}).join('');
+  }
+  function loadTemplates(){
+    return api('/api/email-marketing/templates').then(function(r){
+      S.templates=r.templates||[];FIELDS={lead:r.lead_fields||[],sender:r.sender_fields||[]};var s=r.sender||{};
+      $('sName').value=s.sender_name||'';$('sTitle').value=s.sender_title||'';$('sPhone').value=s.sender_phone||'';$('sFooter').value=s.sender_footer||'';
+      $('tplRows').innerHTML=S.templates.length?S.templates.map(function(t){return '<tr class="click" data-id="'+t.id+'"><td>'+esc(t.name)+'</td><td class="num">'+t.steps.length+'</td><td>'+when(t.updated_at)+'</td></tr>'}).join(''):'<tr><td colspan="3" class="empty">No templates yet. Press New, write the emails, Save.</td></tr>';
+      fillTemplateSelect();renderFieldChips();
+    }).catch(fail);
+  }
+  $('saveSender').onclick=function(){
+    api('/api/email-marketing/sender',{method:'POST',body:{sender_name:$('sName').value,sender_title:$('sTitle').value,sender_phone:$('sPhone').value,sender_footer:$('sFooter').value}})
+      .then(function(){$('senderNote').textContent='Saved.';setTimeout(function(){$('senderNote').textContent=''},3000)}).catch(fail);
+  };
+  function tplRender(steps){$('tplSteps').innerHTML=steps.map(stepHtml).join('')}
+  function tplRead(){return Array.prototype.map.call(document.querySelectorAll('#tplSteps .step'),function(el,i){return {subject:el.querySelector('.subj').value,body:el.querySelector('.body').value,delay_days:i?Number(el.querySelector('.delay').value)||1:0}})}
+  function openTemplate(t){
+    S.tpl={id:t?t.id:null,last:null};$('tplEdit').hidden=false;$('tplName').value=t?t.name:'';
+    tplRender(t&&t.steps.length?t.steps:[{subject:'',body:'',delay_days:0},{subject:'',body:'',delay_days:3}]);
+    $('tplDelete').hidden=!t;$('tplProblems').innerHTML='';$('tplPreview').innerHTML='';$('tplEdit').scrollIntoView({behavior:'smooth'});
+  }
+  function showProblems(ps){
+    $('tplProblems').innerHTML=(ps&&ps.length)?ps.map(function(p){var bad=p.level==='error';return '<div class="check"><b class="'+(bad?'bad':'warn')+'">'+(bad?'✕':'!')+'</b><span>'+esc(p.text)+'</span></div>'}).join(''):'<div class="check"><b class="ok">✓</b><span>No problems found.</span></div>';
+  }
+  $('newTpl').onclick=function(){openTemplate(null)};
+  $('tplRows').onclick=function(e){var tr=e.target.closest('tr[data-id]');if(!tr)return;var t=S.templates.filter(function(x){return x.id===Number(tr.dataset.id)})[0];if(t)openTemplate(t)};
+  $('tplSteps').addEventListener('focusin',function(e){if(e.target.matches&&e.target.matches('.subj,.body'))S.tpl.last=e.target});
+  $('tplSteps').onclick=function(e){if(e.target.classList.contains('rm')){var st=tplRead();st.splice(Number(e.target.closest('.step').dataset.i),1);tplRender(st)}};
+  $('tplAddStep').onclick=function(){var st=tplRead();st.push({subject:'',body:'',delay_days:3});tplRender(st)};
+  $('tplFields').onclick=function(e){
+    var f=e.target.dataset&&e.target.dataset.f;if(!f)return;
+    var tag='{{'+f+'}}',el=S.tpl&&S.tpl.last;if(!el||!document.contains(el))el=document.querySelector('#tplSteps .body');if(!el)return;
+    var a=el.selectionStart==null?el.value.length:el.selectionStart,b=el.selectionEnd==null?a:el.selectionEnd;
+    el.value=el.value.slice(0,a)+tag+el.value.slice(b);el.focus();el.setSelectionRange(a+tag.length,a+tag.length);
+  };
+  $('tplSave').onclick=function(){
+    var name=$('tplName').value.trim();if(!name)return show('error','Give the template a name.');
+    api('/api/email-marketing/templates',{method:'POST',body:{id:S.tpl.id,name:name,steps:tplRead()}}).then(function(r){
+      S.tpl.id=r.id;$('tplDelete').hidden=false;showProblems(r.problems);return loadTemplates().then(function(){show('info','Template saved.')});
+    }).catch(fail);
+  };
+  $('tplCheck').onclick=function(){
+    api('/api/email-marketing/templates/check',{method:'POST',body:{steps:tplRead()}}).then(function(r){
+      showProblems(r.problems);
+      $('tplPreview').innerHTML='<h3>Preview: a company inbox with no person name</h3>'+r.preview.map(function(s){return '<div class="bubble"><b>'+esc(s.subject||'(same thread)')+'</b>\n\n'+esc(s.body)+'</div>'}).join('');
+    }).catch(fail);
+  };
+  $('tplDelete').onclick=function(){
+    if(!S.tpl||!S.tpl.id||!confirm('Delete the template "'+$('tplName').value+'"? Campaigns already made from it are not changed.'))return;
+    api('/api/email-marketing/templates/'+S.tpl.id,{method:'DELETE'}).then(function(){$('tplEdit').hidden=true;S.tpl=null;show('info','Template deleted.');return loadTemplates()}).catch(fail);
+  };
+  $('tplUse').onclick=function(){
+    var id=Number($('tplPick').value);if(!id)return;var t=S.templates.filter(function(x){return x.id===id})[0];if(!t)return;
+    var typed=readSteps().some(function(s){return s.subject.trim()||s.body.trim()});
+    if(typed&&!confirm('Replace the emails below with the template "'+t.name+'"?'))return;
+    renderSteps(t.steps.length?t.steps:[{subject:'',body:'',delay_days:0}]);
+  };
+  $('tplFromCamp').onclick=function(){
+    var steps=readSteps();if(!steps[0]||!steps[0].body.trim())return show('error','Write Email 1 first.');
+    var name=prompt('Template name',$('cdName').dataset.name||'');if(!name)return;
+    api('/api/email-marketing/templates',{method:'POST',body:{name:name.trim(),steps:steps}}).then(function(r){
+      var bad=(r.problems||[]).filter(function(p){return p.level==='error'}).length;
+      show('info','Saved as template "'+name.trim()+'".'+(bad?' It has '+bad+' problem'+(bad===1?'':'s')+' to fix before it can be used: open Templates and press Check.':''));return loadTemplates();
+    }).catch(fail);
+  };
 
   // ---- mail hosts ----
   var hostTimer=null;

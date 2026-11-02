@@ -15,6 +15,7 @@ import crypto from 'node:crypto';
 import * as db from './reportdb.ts';
 import * as emailList from './email-list.ts';
 import * as mailHosts from './email-mx.ts';
+import * as templates from './email-templates.ts';
 import { smartlead as sl } from './core/index.ts';
 
 type Ctx = {
@@ -177,6 +178,19 @@ function readSchedule(raw: any): sl.Schedule | null {
   };
 }
 
+/**
+ * The steps as Smartlead stores them: sender fields filled from the sender profile, text to HTML.
+ * Throws when an email would go out broken (a field nobody fills, a "[CONFIRM ...]" note left in).
+ */
+async function prepareSteps(raw: unknown): Promise<sl.Step[] | null> {
+  const steps = templates.cleanSteps(raw);
+  if (!steps.some((s) => s.body.trim())) return null;
+  const sender = await templates.getSender().catch(() => templates.DEFAULT_SENDER);
+  const blocked = templates.check(steps, sender).filter((p) => p.level === 'error');
+  if (blocked.length) throw new Error('The emails are not saved. Fix these first:\n' + blocked.map((p) => '• ' + p.text).join('\n'));
+  return readSteps(steps.map((s) => ({ ...s, subject: templates.fillSender(s.subject, sender), body: templates.fillSender(s.body, sender) })));
+}
+
 /** Applies whichever of steps / schedule / mailboxes the body carries; each part runs even if another fails. */
 async function setup(id: number, body: Record<string, unknown>, isNew: boolean): Promise<string[]> {
   const errors: string[] = [];
@@ -184,7 +198,7 @@ async function setup(id: number, body: Record<string, unknown>, isNew: boolean):
     try { await fn(); } catch (err) { errors.push(what + ': ' + (err as Error).message); }
   };
   let steps: sl.Step[] | null = null;
-  try { steps = readSteps(body.steps); } catch (err) { errors.push((err as Error).message); }
+  try { steps = await prepareSteps(body.steps); } catch (err) { errors.push((err as Error).message); }
   if (steps) await attempt('sequence', () => sl.saveSequences(id, steps!));
   const schedule = readSchedule(body.schedule);
   if (schedule) await attempt('schedule', () => sl.saveSchedule(id, schedule));
@@ -519,6 +533,46 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       return send(200, { rows: out.rows });
     }
 
+    // ---- templates and the sender profile ----
+    if (p === '/api/email-marketing/templates' || p === '/api/email-marketing/templates/check' || p === '/api/email-marketing/sender' || /^\/api\/email-marketing\/templates\/\d+$/.test(p)) {
+      if (!db.configured()) return send(503, { error: 'no report database configured' });
+      if (method === 'GET' && p === '/api/email-marketing/templates') {
+        const [list, sender] = await Promise.all([templates.list(), templates.getSender()]);
+        return send(200, { templates: list, sender, lead_fields: templates.LEAD_FIELDS, sender_fields: templates.SENDER_FIELDS });
+      }
+      if (method === 'POST' && p === '/api/email-marketing/templates/check') {
+        const steps = templates.cleanSteps((await ctx.readJson(req)).steps);
+        const sender = await templates.getSender();
+        // A typical lead: a company inbox, no person name.
+        const lead = { company_name: 'Acme Sdn Bhd', category: 'Factory', email: 'info@acme.com.my' };
+        return send(200, {
+          problems: templates.check(steps, sender),
+          preview: steps.map((s) => ({ subject: templates.render(s.subject, sender, lead), body: templates.render(s.body, sender, lead), delay_days: s.delay_days })),
+        });
+      }
+      if (method === 'POST' && p === '/api/email-marketing/templates') {
+        const body = await ctx.readJson(req);
+        const name = String(body.name ?? '').trim();
+        if (!name) return send(400, { error: 'name is required' });
+        const steps = templates.cleanSteps(body.steps);
+        const sender = await templates.getSender();
+        let id: number;
+        if (body.id) {
+          try { if (!(await templates.update(Number(body.id), name, steps))) return send(404, { error: 'no such template' }); }
+          catch (err) { if ((err as { code?: string }).code === '23505') return send(409, { error: 'another template is already called "' + name + '"' }); throw err; }
+          id = Number(body.id);
+        } else id = await templates.save(name, steps);
+        return send(200, { id, problems: templates.check(steps, sender) });
+      }
+      if (method === 'POST' && p === '/api/email-marketing/sender') {
+        const sender = templates.readSender(await ctx.readJson(req));
+        await templates.saveSender(sender);
+        return send(200, { sender });
+      }
+      const one = p.match(/templates\/(\d+)$/);
+      if (method === 'DELETE' && one) return send(200, { deleted: await templates.remove(Number(one[1])) });
+    }
+
     if (method === 'GET' && p === '/api/email-marketing/campaigns') {
       const list = (await sl.listCampaigns()) ?? [];
       const rows = await Promise.all(list.map(async (c) => campaignRow(c, await sl.campaignAnalytics(c.id).catch(() => null))));
@@ -529,6 +583,8 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       const body = await ctx.readJson(req);
       const name = String(body.name ?? '').trim();
       if (!name) return send(400, { error: 'name is required' });
+      // Before the campaign exists in Smartlead, so a broken email leaves no empty campaign behind.
+      try { await prepareSteps(body.steps); } catch (err) { return send(400, { error: (err as Error).message }); }
       const id = await sl.createCampaign(name);
       const errors = await setup(id, body, true);
       return send(200, { id, name, errors });
