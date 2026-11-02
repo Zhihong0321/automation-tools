@@ -116,11 +116,12 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
 <input id="leadSearch" placeholder="Search company, email or person" style="width:100%;margin-bottom:8px">
 <div class="row"><select id="leadSource" class="grow"><option value="all">All sources</option><option value="research">Contact research</option><option value="website">Website</option><option value="person">Has a person name</option></select>
 <select id="leadStatus" class="grow"><option value="new">Not in a campaign yet</option><option value="pushed">In a campaign</option><option value="replied">Replied</option><option value="stopped">Bounced or unsubscribed</option><option value="all">All</option></select></div>
-<div class="row" style="margin-top:8px"><span class="muted small grow" id="leadCount"></span></div>
+<div class="row" style="margin-top:8px"><select id="leadHost" class="grow" title="Who hosts the email: spread a campaign across hosts so no one provider sees too much"><option value="all">All mail hosts</option></select><button id="hostCheck" class="small">Check mail hosts</button></div>
+<div class="row" style="margin-top:8px"><span class="muted small grow" id="leadCount"></span><span class="muted small" id="hostInfo"></span></div>
 <div class="row" style="margin-top:8px"><select id="pushCampaign" class="grow"><option value="">Choose a campaign…</option></select></div>
 <div class="row" style="margin-top:8px"><button id="pushSelected" class="grow" disabled>Add selected</button><button id="pushAll" class="primary grow" disabled>Add all matching</button></div>
 </div>
-<div class="card"><div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="checkAll"></th><th>Company</th><th>Email</th><th>Campaigns</th></tr></thead><tbody id="leadRows"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody></table></div>
+<div class="card"><div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="checkAll"></th><th>Company</th><th>Email</th><th>Mail host</th><th>Campaigns</th></tr></thead><tbody id="leadRows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody></table></div>
 <div class="row" style="margin-top:10px"><button id="leadPrev" class="small">Previous</button><button id="leadNext" class="small">Next</button><span class="muted small" id="leadPage"></span></div></div>
 </section>
 </div>
@@ -165,7 +166,7 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
     if(v==='chats')loadConvos().then(renderChats);
     if(v==='reply')openReply(Number(parts[1])||null,decodeURIComponent(parts.slice(2).join('/')));
     if(v==='campaigns')loadStatus().then(renderCampaigns);
-    if(v==='leads'){loadStatus();if(!S.leadRows.length)loadLeads()}
+    if(v==='leads'){loadStatus();hostStatus();if(!S.leadRows.length)loadLeads()}
     window.scrollTo(0,0);
   }
   window.addEventListener('hashchange',route);
@@ -406,16 +407,23 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
 
   // ---- leads ----
   var LIMIT=100;
-  function leadQuery(){return 'search='+encodeURIComponent($('leadSearch').value.trim())+'&source='+$('leadSource').value+'&status='+$('leadStatus').value}
+  function leadQuery(){return 'search='+encodeURIComponent($('leadSearch').value.trim())+'&source='+$('leadSource').value+'&status='+$('leadStatus').value+'&mail_host='+encodeURIComponent($('leadHost').value)}
+  function hostOptions(counts){
+    var keep=$('leadHost').value,names=Object.keys(counts||{}).sort(function(a,b){return counts[b]-counts[a]}),total=0;
+    names.forEach(function(k){total+=counts[k]});
+    var label=function(k){return k==='unchecked'?'Not checked yet':k};
+    $('leadHost').innerHTML='<option value="all">All mail hosts ('+num(total)+')</option>'+names.map(function(k){return '<option value="'+esc(k)+'">'+esc(label(k))+' ('+num(counts[k])+')</option>'}).join('');
+    $('leadHost').value=names.indexOf(keep)>=0?keep:'all';
+  }
   function loadLeads(){
-    $('leadRows').innerHTML='<tr><td colspan="4" class="empty">Loading…</td></tr>';
+    $('leadRows').innerHTML='<tr><td colspan="5" class="empty">Loading…</td></tr>';
     return api('/api/email-marketing/leads?limit='+LIMIT+'&offset='+S.leadOffset+'&'+leadQuery()).then(function(r){
-      S.leadRows=r.rows||[];S.leadTotal=r.total||0;
+      S.leadRows=r.rows||[];S.leadTotal=r.total||0;hostOptions(r.mail_hosts);
       $('leadCount').textContent=num(S.leadTotal)+' matching';
       $('leadRows').innerHTML=S.leadRows.length?S.leadRows.map(function(x){
-        return '<tr><td><input type="checkbox" data-key="'+esc(x.key)+'"'+(S.picked[x.key]?' checked':'')+'></td><td>'+esc(x.company_name)+'<div class="muted tiny">'+esc([x.category,x.person_name].filter(Boolean).join(' · '))+'</div></td><td>'+esc(x.email)+'</td><td>'+(x.campaigns.length?x.campaigns.map(function(c){
+        return '<tr><td><input type="checkbox" data-key="'+esc(x.key)+'"'+(S.picked[x.key]?' checked':'')+'></td><td>'+esc(x.company_name)+'<div class="muted tiny">'+esc([x.category,x.person_name].filter(Boolean).join(' · '))+'</div></td><td>'+esc(x.email)+'</td><td>'+(x.mail_host?esc(x.mail_host):'<span class="muted tiny">not checked</span>')+'</td><td>'+(x.campaigns.length?x.campaigns.map(function(c){
           var st=c.bounced_at?['bad','bounced']:c.unsubscribed_at?['bad','unsubscribed']:c.replied_at?['ok','replied']:c.opened_at?['warn','opened']:c.last_event==='EMAIL_SENT'?['','sent']:['','added'];
-          return '<span class="pill '+st[0]+'">'+esc(c.name||('#'+c.id))+' · '+st[1]+'</span>'}).join(''):'<span class="muted tiny">none</span>')+'</td></tr>'}).join(''):'<tr><td colspan="4" class="empty">No lead emails match.</td></tr>';
+          return '<span class="pill '+st[0]+'">'+esc(c.name||('#'+c.id))+' · '+st[1]+'</span>'}).join(''):'<span class="muted tiny">none</span>')+'</td></tr>'}).join(''):'<tr><td colspan="5" class="empty">No lead emails match.</td></tr>';
       var end=Math.min(S.leadOffset+LIMIT,S.leadTotal);
       $('leadPage').textContent=S.leadTotal?(S.leadOffset+1)+'–'+end+' of '+num(S.leadTotal):'';
       $('leadPrev').disabled=S.leadOffset===0;$('leadNext').disabled=end>=S.leadTotal;$('checkAll').checked=false;syncPush();
@@ -426,7 +434,7 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
   $('leadRows').addEventListener('change',function(e){var k=e.target.dataset&&e.target.dataset.key;if(k){S.picked[k]=e.target.checked;syncPush()}});
   $('checkAll').onchange=function(){var on=this.checked;S.leadRows.forEach(function(x){S.picked[x.key]=on});document.querySelectorAll('#leadRows input[data-key]').forEach(function(i){i.checked=on});syncPush()};
   $('leadSearch').onkeydown=function(e){if(e.key==='Enter'){S.leadOffset=0;loadLeads()}};
-  $('leadSource').onchange=$('leadStatus').onchange=function(){S.leadOffset=0;loadLeads()};
+  $('leadSource').onchange=$('leadStatus').onchange=$('leadHost').onchange=function(){S.leadOffset=0;loadLeads()};
   $('leadPrev').onclick=function(){S.leadOffset=Math.max(0,S.leadOffset-LIMIT);loadLeads()};
   $('leadNext').onclick=function(){S.leadOffset+=LIMIT;loadLeads()};
   $('pushCampaign').onchange=syncPush;
@@ -442,7 +450,19 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
     }).catch(function(e){fail(e);syncPush()});
   }
   $('pushSelected').onclick=function(){var k=pickedKeys();pushLeads({keys:k},k.length+' selected lead email'+(k.length===1?'':'s'))};
-  $('pushAll').onclick=function(){pushLeads({all:true,search:$('leadSearch').value.trim(),source:$('leadSource').value,status:$('leadStatus').value},num(S.leadTotal)+' matching lead emails')};
+  $('pushAll').onclick=function(){pushLeads({all:true,search:$('leadSearch').value.trim(),source:$('leadSource').value,status:$('leadStatus').value,mail_host:$('leadHost').value},num(S.leadTotal)+' matching lead emails')};
+
+  // ---- mail hosts ----
+  var hostTimer=null;
+  function hostStatus(){
+    return api('/api/email-marketing/mail-hosts').then(function(r){
+      var run=r.run;
+      $('hostInfo').textContent=run.running?'Checking '+num(run.done)+' of '+num(run.total)+' domains…':num(r.checked)+' of '+num(r.domains)+' domains checked'+(run.error?' · '+run.error:'');
+      if(run.running){if(!hostTimer)hostTimer=setInterval(hostStatus,3000)}
+      else if(hostTimer){clearInterval(hostTimer);hostTimer=null;loadLeads()}
+    }).catch(function(){});
+  }
+  $('hostCheck').onclick=function(){api('/api/email-marketing/mail-hosts/check',{method:'POST',body:{}}).then(hostStatus).catch(fail)};
 
   // ---- start ----
   $('saveToken').onclick=function(){try{localStorage.setItem('labToken',$('token').value.trim())}catch(e){}$('tokenCard').hidden=true;route()};

@@ -14,6 +14,7 @@ import type http from 'node:http';
 import crypto from 'node:crypto';
 import * as db from './reportdb.ts';
 import * as emailList from './email-list.ts';
+import * as mailHosts from './email-mx.ts';
 import { smartlead as sl } from './core/index.ts';
 
 type Ctx = {
@@ -27,6 +28,8 @@ const NOT_A_MAILBOX = /\.(png|jpe?g|gif|webp|svg|css|js)$/i;
 
 export interface MarketingLead extends emailList.EmailRow {
   key: string;
+  /** Who hosts the email's domain (Google, Microsoft, Unknown, ...); null until email-mx has looked it up. */
+  mail_host: string | null;
   campaigns: {
     id: number; name: string | null; pushed_at: string; last_event: string | null; last_event_at: string | null;
     opened_at: string | null; replied_at: string | null; bounced_at: string | null; unsubscribed_at: string | null; category: string | null;
@@ -54,18 +57,25 @@ async function pushedByEmail(): Promise<Map<string, MarketingLead['campaigns']>>
   return map;
 }
 
-/** status: all | new (in no campaign yet) | pushed | replied | stopped (bounced or unsubscribed). */
-export async function leads(options: { search?: string | null; source?: string | null; status?: string | null; fresh?: boolean }): Promise<{ all: MarketingLead[]; shown: MarketingLead[] }> {
-  const [rows, pushed] = await Promise.all([emailList.allRows(options.fresh), pushedByEmail()]);
-  const all = rows.filter(eligible).map((r) => ({ ...r, key: r.company_id + '|' + r.email, campaigns: pushed.get(r.email) ?? [] }));
+/**
+ * status: all | new (in no campaign yet) | pushed | replied | stopped (bounced or unsubscribed).
+ * mail_host: all | unchecked | Google | Microsoft | ... | Unknown (see email-mx.ts).
+ * `matching` is the filtered list before the mail host filter, so the page can count each host.
+ */
+export async function leads(options: { search?: string | null; source?: string | null; status?: string | null; mail_host?: string | null; fresh?: boolean }): Promise<{ all: MarketingLead[]; shown: MarketingLead[]; matching: MarketingLead[] }> {
+  const [rows, pushed, hosts] = await Promise.all([
+    emailList.allRows(options.fresh), pushedByEmail(),
+    mailHosts.hostLabels().catch((err: Error) => { console.warn('[email-marketing] mail hosts unavailable: ' + err.message); return new Map<string, string>(); }),
+  ]);
+  const all = rows.filter(eligible).map((r) => ({ ...r, key: r.company_id + '|' + r.email, campaigns: pushed.get(r.email) ?? [], mail_host: hosts.get(mailHosts.domainOf(r.email)) ?? null }));
   const status = options.status || 'all';
-  const shown = (emailList.filter(all, options) as MarketingLead[])
+  const matching = (emailList.filter(all, options) as MarketingLead[])
     .filter((r) => status === 'all'
       || (status === 'new' && r.campaigns.length === 0)
       || (status === 'pushed' && r.campaigns.length > 0)
       || (status === 'replied' && r.campaigns.some((c) => c.replied_at))
       || (status === 'stopped' && doNotEmail(r)));
-  return { all, shown };
+  return { all, shown: mailHosts.filterHost(matching, options.mail_host), matching };
 }
 
 function splitName(name: string | null): { first_name?: string; last_name?: string } {
@@ -308,6 +318,10 @@ export async function syncWebhooks(): Promise<typeof webhookState> {
 
 /** Every 30 minutes, so a campaign made in Smartlead's own UI still reports back. */
 export function start(): void {
+  // Mail hosts of new lead emails; a run with nothing new to look up ends at once.
+  const hostTick = () => { if (db.configured()) mailHosts.startRun(); };
+  setTimeout(hostTick, 60_000);
+  setInterval(hostTick, 30 * 60_000);
   if (!sl.configured() || !webhookUrl()) return;
   const tick = () => void syncWebhooks()
     .then((s) => { if (s.errors.length) console.warn('[email-marketing] webhook sync: ' + s.errors.join('; ')); })
@@ -461,9 +475,9 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
 
     if (method === 'GET' && p === '/api/email-marketing/leads') {
       if (!db.configured()) return send(503, { error: 'no report database configured' });
-      const { all, shown } = await leads({
+      const { all, shown, matching } = await leads({
         search: url.searchParams.get('search'), source: url.searchParams.get('source'),
-        status: url.searchParams.get('status'), fresh: url.searchParams.get('fresh') === '1',
+        status: url.searchParams.get('status'), mail_host: url.searchParams.get('mail_host'), fresh: url.searchParams.get('fresh') === '1',
       });
       const limit = Math.max(1, intParam(url, 'limit', 50, 500));
       const offset = intParam(url, 'offset', 0, 1e9);
@@ -478,8 +492,20 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
           do_not_email: all.filter(doNotEmail).length,
           not_yet: all.filter((r) => !r.campaigns.length).length,
         },
+        mail_hosts: mailHosts.countHosts(matching),
         total: shown.length, limit, offset, rows: shown.slice(offset, offset + limit),
       });
+    }
+
+    if (method === 'GET' && p === '/api/email-marketing/mail-hosts') {
+      if (!db.configured()) return send(503, { error: 'no report database configured' });
+      return send(200, { run: mailHosts.runState(), ...await mailHosts.progress() });
+    }
+
+    if (method === 'POST' && p === '/api/email-marketing/mail-hosts/check') {
+      if (!db.configured()) return send(503, { error: 'no report database configured' });
+      const started = mailHosts.startRun();
+      return send(200, { started, run: mailHosts.runState() });
     }
 
     if (method === 'POST' && p === '/api/email-marketing/webhooks/sync') {
@@ -541,7 +567,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       if (method === 'POST' && sub === '/leads') {
         if (!db.configured()) return send(503, { error: 'no report database configured' });
         const body = await ctx.readJson(req);
-        const { all, shown } = await leads({ search: body.search as string, source: body.source as string, status: body.status as string });
+        const { all, shown } = await leads({ search: body.search as string, source: body.source as string, status: body.status as string, mail_host: body.mail_host as string });
         const keys = Array.isArray(body.keys) ? new Set(body.keys.map(String)) : null;
         const rows = keys ? all.filter((r) => keys.has(r.key)) : (body.all === true ? shown : []);
         if (!rows.length) return send(400, { error: 'no leads chosen: send keys[] or all:true with the filter' });
