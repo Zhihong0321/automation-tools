@@ -16,6 +16,7 @@ import * as db from './reportdb.ts';
 import * as emailList from './email-list.ts';
 import * as mailHosts from './email-mx.ts';
 import * as templates from './email-templates.ts';
+import * as autopilot from './email-autopilot.ts';
 import { smartlead as sl } from './core/index.ts';
 
 type Ctx = {
@@ -331,11 +332,28 @@ export async function syncWebhooks(): Promise<typeof webhookState> {
 }
 
 /** Every 30 minutes, so a campaign made in Smartlead's own UI still reports back. */
+/** What the autopilot needs from this file: the leads not in a campaign yet, a campaign's state, and push. */
+const autopilotDeps = (): autopilot.Deps<MarketingLead> => ({
+  pool: async () => (await leads({ status: 'new' })).matching,
+  campaign: async (id) => {
+    try {
+      const [c, a] = await Promise.all([sl.getCampaign(id), sl.campaignAnalytics(id)]);
+      const r = campaignRow(c, a);
+      return { name: String(c.name ?? ''), status: String(c.status ?? ''), max_new_per_day: Number(c.max_leads_per_day) || 0, not_started: r.not_started, sent: r.sent, bounced: r.bounced };
+    } catch { return null; }
+  },
+  push: (id, name, rows) => push(id, name, rows),
+});
+
 export function start(): void {
   // Mail hosts of new lead emails; a run with nothing new to look up ends at once.
   const hostTick = () => { if (db.configured()) mailHosts.startRun(); };
   setTimeout(hostTick, 60_000);
   setInterval(hostTick, 30 * 60_000);
+  // The autopilot: off until switched on in the page; then once a weekday morning it adds the day's leads.
+  const autoTick = () => void autopilot.tick(autopilotDeps()).catch((err: Error) => console.warn('[email-autopilot] ' + err.message));
+  setTimeout(autoTick, 90_000);
+  setInterval(autoTick, 10 * 60_000);
   if (!sl.configured() || !webhookUrl()) return;
   const tick = () => void syncWebhooks()
     .then((s) => { if (s.errors.length) console.warn('[email-marketing] webhook sync: ' + s.errors.join('; ')); })
@@ -531,6 +549,60 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       const out = await db.sql(`select id::text, campaign_id::text, email, event_type, at, received_at, payload from email_marketing_event order by received_at desc limit $1`,
         [Math.max(1, intParam(url, 'limit', 20, 200))]);
       return send(200, { rows: out.rows });
+    }
+
+    // ---- autopilot and the reports ----
+    if (p === '/api/email-marketing/autopilot' || p.startsWith('/api/email-marketing/autopilot/')) {
+      if (!db.configured()) return send(503, { error: 'no report database configured' });
+      if (method === 'POST' && p === '/api/email-marketing/autopilot') {
+        return send(200, { settings: await autopilot.saveSettings(await ctx.readJson(req)) });
+      }
+      if (method === 'POST' && (p === '/api/email-marketing/autopilot/preview' || p === '/api/email-marketing/autopilot/run')) {
+        return send(200, await autopilot.runOnce(autopilotDeps(), { dry: p.endsWith('/preview') }));
+      }
+      if (method === 'GET' && p === '/api/email-marketing/autopilot') {
+        const settings = await autopilot.getSettings();
+        return send(200, { settings, today_target: autopilot.todaysTarget(settings, autopilot.klNow().day), in_window: autopilot.inWindow(), last: autopilot.lastResult(), runs: await autopilot.recentRuns() });
+      }
+    }
+
+    if (method === 'GET' && p === '/api/email-marketing/today') {
+      if (!db.configured()) return send(503, { error: 'no report database configured' });
+      await db.migrate();
+      const day = `(now() at time zone 'Asia/Kuala_Lumpur')::date`;
+      const [sent, counts, hosts] = await Promise.all([
+        db.sql<{ email: string; campaign_name: string | null; company: string | null; at: string }>(
+          `select e.email, l.campaign_name, c.name as company, e.at
+             from email_marketing_event e
+             left join email_marketing_lead l on l.campaign_id = e.campaign_id and l.email = e.email
+             left join company_data c on c.id = l.company_id
+            where e.event_type = 'EMAIL_SENT' and (e.at at time zone 'Asia/Kuala_Lumpur')::date = ${day}
+            order by e.at desc limit 500`),
+        db.sql<{ event_type: string; n: string }>(
+          `select event_type, count(*)::text as n from email_marketing_event where (at at time zone 'Asia/Kuala_Lumpur')::date = ${day} group by event_type`),
+        mailHosts.hostLabels().catch(() => new Map<string, string>()),
+      ]);
+      const n = (type: string) => Number(counts.rows.find((r) => r.event_type === type)?.n ?? 0);
+      return send(200, {
+        day: autopilot.klNow().day,
+        sent: n('EMAIL_SENT'), opened: n('EMAIL_OPEN'), replied: n('EMAIL_REPLY'), bounced: n('EMAIL_BOUNCE'), unsubscribed: n('LEAD_UNSUBSCRIBED') + n('EMAIL_UNSUBSCRIBE'),
+        rows: sent.rows.map((r) => ({ ...r, mail_host: hosts.get(mailHosts.domainOf(r.email)) ?? null })),
+      });
+    }
+
+    if (method === 'GET' && p === '/api/email-marketing/unsubscribed') {
+      if (!db.configured()) return send(503, { error: 'no report database configured' });
+      await db.migrate();
+      const out = await db.sql<{ email: string; campaign_name: string | null; company: string | null; unsubscribed_at: string | null; bounced_at: string | null; category: string | null }>(
+        `select l.email, l.campaign_name, c.name as company, l.unsubscribed_at, l.bounced_at, l.category
+           from email_marketing_lead l left join company_data c on c.id = l.company_id
+          where l.unsubscribed_at is not null or l.bounced_at is not null or lower(coalesce(l.category, '')) like '%do not contact%'
+          order by coalesce(l.unsubscribed_at, l.bounced_at, l.last_event_at) desc nulls last limit 1000`);
+      return send(200, {
+        rows: out.rows.map((r) => ({ ...r, kind: r.unsubscribed_at ? 'unsubscribed' : r.bounced_at ? 'bounced' : 'do not contact', at: r.unsubscribed_at ?? r.bounced_at })),
+        unsubscribed: out.rows.filter((r) => r.unsubscribed_at).length,
+        bounced: out.rows.filter((r) => !r.unsubscribed_at && r.bounced_at).length,
+      });
     }
 
     // ---- templates and the sender profile ----

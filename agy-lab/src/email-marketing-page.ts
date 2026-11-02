@@ -10,6 +10,8 @@ export function page(): string {
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="dark"><meta name="theme-color" content="#0f1115"><title>Email hub · agy-lab</title>
+<link rel="manifest" href="/email-marketing/manifest.webmanifest"><link rel="icon" type="image/png" href="/email-marketing/icon-192.png"><link rel="apple-touch-icon" href="/email-marketing/icon-180.png">
+<meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Email hub"><meta name="apple-mobile-web-app-status-bar-style" content="black">
 <style>
 :root{--bg:#0f1115;--card:#171a20;--card2:#13161b;--ink:#e8eaed;--muted:#9aa3af;--line:#262b33;--ok:#4ade9f;--bad:#ff8b80;--warn:#f0c065;--accent:#7aa2f7}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -52,7 +54,7 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
   .sticky{bottom:0}
 }
 </style></head><body><div class="wrap">
-<header><h1>Email hub</h1><details class="site"><summary>Pages ▾</summary></details></header>
+<header><h1>Email hub</h1><button id="install" class="small" hidden>Install app</button><details class="site"><summary>Pages ▾</summary></details></header>
 <nav class="sitenav" id="siteNav" aria-label="Site" hidden>${navHtml(OPERATOR_NAV, '/email-marketing')}</nav>
 <nav class="tabs" id="tabs" aria-label="Email hub">
 <a href="#dashboard" data-view="dashboard"><span class="ic">▦</span>Home</a>
@@ -67,10 +69,22 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
 
 <section id="v-dashboard">
 <a class="card waiting" href="#replies" id="waitCard"><div class="big" id="waitN">–</div><div><b>replies waiting for you</b><div class="muted small" id="waitSub"></div></div></a>
+<div class="card"><h2>Sent today</h2><div class="tiles" id="todayTiles"></div>
+<div class="table-wrap"><table><thead><tr><th>Company</th><th>Mail host</th><th>Campaign</th><th>Time</th></tr></thead><tbody id="todayRows"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody></table></div></div>
+<div class="card" id="apCard"><div class="row"><h2 class="grow" style="margin:0">Autopilot</h2><label class="small"><input type="checkbox" id="apOn"> Send automatically</label></div>
+<p class="hint" id="apState"></p>
+<select id="apCamp" style="width:100%;margin:8px 0"></select>
+<div class="row" style="flex-wrap:wrap"><label class="small muted">New leads a day</label><input id="apPerDay" type="number" min="1" style="width:76px"><label class="small muted">Start at</label><input id="apStart" type="number" min="1" style="width:76px"><label class="small muted">Ramp days</label><input id="apRamp" type="number" min="0" style="width:76px"></div>
+<div class="row" style="margin-top:10px;flex-wrap:wrap"><button class="primary" id="apSave">Save</button><button id="apPreview">Preview today</button><button id="apRun" class="small">Add today's batch now</button></div>
+<div id="apOut"></div>
+<p class="hint">Each weekday morning (Kuala Lumpur) it adds the day's new leads to the campaign: one email per company, spread across mail hosts with none above half the day, never a do-not-call lead. It stops by itself when the campaign is not started, bounces pass 3%, or leads are still waiting unsent. Follow-ups come on top of the new leads and count toward the mailbox's daily limit.</p></div>
 <div class="card"><h2>Leads</h2><div class="tiles" id="leadTiles"></div></div>
 <div class="card"><h2>Sending</h2><div class="tiles" id="sendTiles"></div><p class="hint" id="sendNote"></p></div>
 <div class="card"><h2>Last 14 days</h2><div class="bars" id="bars"></div><p class="hint">Blue: emails sent. Green: replies. From the Smartlead webhook.</p></div>
-<div class="card"><h2>Campaigns</h2><div id="campCards"></div></div>
+<div class="card"><h2>Totals by campaign</h2><div class="table-wrap" id="campCards"></div><p class="hint">Read is an email that was opened, counted by a hidden image, so it undercounts. Unread is sent minus read.</p></div>
+<details class="card" id="unsubCard"><summary><b>Unsubscribed &amp; bounced</b> <span class="muted small" id="unsubCount"></span></summary>
+<div class="table-wrap"><table><thead><tr><th>Company</th><th>Email</th><th>Why</th><th>When</th></tr></thead><tbody id="unsubRows"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody></table></div>
+<p class="hint">These addresses are never emailed again.</p></details>
 <details class="card"><summary><b>Setup checks</b></summary><div id="checks" style="margin-top:8px"></div><h3>Sending mailboxes</h3><div class="table-wrap" id="mailboxes"></div></details>
 </section>
 
@@ -205,10 +219,63 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
       $('sendNote').textContent=G.bounce_rate!=null&&G.bounce_rate>0.03?'Bounce rate is over 3%: pause and clean the list before it hurts the mailbox.':'';
       var max=Math.max.apply(null,d.daily.map(function(x){return x.sent}).concat([1]));
       $('bars').innerHTML=d.daily.map(function(x){var dt=new Date(x.day+'T00:00:00');return '<div class="b"><span class="muted">'+dt.toLocaleDateString(undefined,{day:'numeric',month:'short'})+'</span><span class="t"><i style="width:'+(x.sent*100/max)+'%"></i><i class="r" style="width:'+(x.replied*100/max)+'%"></i></span><span class="tiny">'+num(x.sent)+(x.replied?' · <b class="ok">'+num(x.replied)+'</b>':'')+'</span></div>'}).reverse().join('');
-      $('campCards').innerHTML=d.campaigns.length?d.campaigns.map(function(c){return '<a class="item" href="#campaigns" data-camp="'+c.id+'"><div class="top"><span class="who">'+esc(c.name)+'</span>'+statusPill(c.status)+'</div><div class="sub">'+num(c.leads)+' leads · '+num(c.sent)+' sent · '+num(c.opened)+' opened · '+num(c.replied)+' replied · '+num(c.bounced)+' bounced</div></a>'}).join(''):'<div class="empty">No campaigns yet. Campaigns → New.</div>';
-    }).then(loadStatus).then(renderChecks).catch(fail);
+      var tot={sent:0,opened:0,replied:0,bounced:0,unsubscribed:0};
+      var trs=d.campaigns.map(function(c){['sent','opened','replied','bounced','unsubscribed'].forEach(function(k){tot[k]+=c[k]||0});
+        return '<tr class="click" data-camp="'+c.id+'"><td>'+esc(c.name)+'<div>'+statusPill(c.status)+'</div></td><td class="num">'+num(c.sent)+'</td><td class="num">'+num(c.opened)+'</td><td class="num">'+num(Math.max(0,c.sent-c.opened))+'</td><td class="num">'+num(c.replied)+'</td><td class="num">'+num(c.bounced)+'</td><td class="num">'+num(c.unsubscribed)+'</td></tr>'});
+      $('campCards').innerHTML='<table><thead><tr><th>Campaign</th><th class="num">Sent</th><th class="num">Read</th><th class="num">Unread</th><th class="num">Replied</th><th class="num">Bounced</th><th class="num">Unsub</th></tr></thead><tbody>'+
+        (trs.length?trs.join('')+'<tr><td><b>All campaigns</b></td><td class="num"><b>'+num(tot.sent)+'</b></td><td class="num"><b>'+num(tot.opened)+'</b></td><td class="num"><b>'+num(Math.max(0,tot.sent-tot.opened))+'</b></td><td class="num"><b>'+num(tot.replied)+'</b></td><td class="num"><b>'+num(tot.bounced)+'</b></td><td class="num"><b>'+num(tot.unsubscribed)+'</b></td></tr>':'<tr><td colspan="7" class="empty">No campaigns yet. Campaigns → New.</td></tr>')+'</tbody></table>';
+    }).then(loadStatus).then(function(){loadToday();loadAutopilot();loadUnsub()}).then(renderChecks).catch(fail);
   }
-  $('campCards').addEventListener('click',function(e){var a=e.target.closest('[data-camp]');if(a){S.openCamp=Number(a.dataset.camp)}});
+  $('campCards').addEventListener('click',function(e){var a=e.target.closest('[data-camp]');if(a){S.openCamp=Number(a.dataset.camp);location.hash='#campaigns'}});
+
+  // ---- today, autopilot, unsubscribed ----
+  function loadToday(){
+    return api('/api/email-marketing/today').then(function(r){
+      $('todayTiles').innerHTML=tile('Sent today',num(r.sent))+tile('Read',num(r.opened))+tile('Replied',num(r.replied))+tile('Bounced',num(r.bounced));
+      $('todayRows').innerHTML=r.rows.length?r.rows.map(function(x){return '<tr><td>'+esc(x.company||'')+'<div class="muted tiny">'+esc(x.email)+'</div></td><td>'+esc(x.mail_host||'')+'</td><td>'+esc(x.campaign_name||'')+'</td><td>'+new Date(x.at).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})+'</td></tr>'}).join(''):'<tr><td colspan="4" class="empty">Nothing sent yet today.</td></tr>';
+    }).catch(fail);
+  }
+  function loadUnsub(){
+    return api('/api/email-marketing/unsubscribed').then(function(r){
+      $('unsubCount').textContent=num(r.unsubscribed)+' unsubscribed · '+num(r.bounced)+' bounced';
+      $('unsubRows').innerHTML=r.rows.length?r.rows.map(function(x){return '<tr><td>'+esc(x.company||'')+'</td><td>'+esc(x.email)+'</td><td>'+esc(x.kind)+'</td><td>'+(x.at?when(x.at):'')+'</td></tr>'}).join(''):'<tr><td colspan="4" class="empty">Nobody has unsubscribed or bounced yet.</td></tr>';
+    }).catch(fail);
+  }
+  function mixText(mix){return Object.keys(mix||{}).map(function(k){return esc(k)+' '+mix[k]}).join(' · ')}
+  function apResult(r){
+    if(r.reason)return '<p class="hint">'+esc(r.reason)+'</p>';
+    return '<p class="hint"><b>'+num(r.picked)+' leads</b> for "'+esc(r.campaign||'')+'": '+mixText(r.mix)+(r.ran?'. Added '+num(r.added)+' to Smartlead.':'. Nothing added yet.')+'</p>'+
+      '<div class="small muted">'+(r.sample||[]).slice(0,10).map(function(x){return esc(x.company_name||x.email)+' <span class="tiny">('+esc(x.mail_host||'')+')</span>'}).join('<br>')+((r.sample||[]).length>10?'<br>…':'')+'</div>';
+  }
+  function loadAutopilot(){
+    return api('/api/email-marketing/autopilot').then(function(r){
+      var s=r.settings,box=((S.status&&S.status.mailboxes)||[])[0];
+      $('apOn').checked=s.enabled;$('apPerDay').value=s.new_per_day;$('apStart').value=s.ramp_start;$('apRamp').value=s.ramp_days;
+      var keep=s.campaign_id||'';
+      $('apCamp').innerHTML='<option value="">Choose the campaign to feed…</option>'+(S.campaigns||[]).map(function(c){return '<option value="'+c.id+'">'+esc(c.name)+' ('+esc(c.status)+')</option>'}).join('');$('apCamp').value=String(keep);
+      var today=(r.runs||[]).filter(function(x){return x.day===new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kuala_Lumpur'})})[0];
+      $('apState').textContent=(s.enabled?'ON. Today\'s target: '+r.today_target+' new leads'+(r.in_window?'.':', checked again in the next weekday window (08:00 to 15:00 KL).'):'OFF. Nothing is added until you switch it on.')+
+        (today?' Added today: '+today.added+' of '+today.picked+' ('+Object.keys(today.mix||{}).map(function(k){return k+' '+today.mix[k]}).join(', ')+').':'')+
+        (r.last&&r.last.reason&&!r.last.dry?' Last check: '+r.last.reason:'')+(box?' Mailbox limit: '+num(box.daily_limit)+' a day.':'');
+    }).catch(fail);
+  }
+  function apSettings(){return {enabled:$('apOn').checked,campaign_id:Number($('apCamp').value)||null,new_per_day:Number($('apPerDay').value),ramp_start:Number($('apStart').value),ramp_days:Number($('apRamp').value)}}
+  $('apSave').onclick=function(){
+    var b=apSettings();
+    if(b.enabled&&!b.campaign_id)return show('error','Choose the campaign to feed first.');
+    if(b.enabled&&!confirm('Switch autopilot on? From the next weekday check it adds leads to "'+$('apCamp').selectedOptions[0].textContent+'" and Smartlead sends them.'))return;
+    api('/api/email-marketing/autopilot',{method:'POST',body:b}).then(function(){show('info','Autopilot saved.');return loadAutopilot()}).catch(fail);
+  };
+  $('apPreview').onclick=function(){
+    var id=Number($('apCamp').value);if(!id)return show('error','Choose the campaign to feed first.');
+    var b=apSettings();delete b.enabled; // a preview never switches it on or off
+    api('/api/email-marketing/autopilot',{method:'POST',body:b}).then(function(){return api('/api/email-marketing/autopilot/preview',{method:'POST',body:{}})}).then(function(r){$('apOut').innerHTML=apResult(r)}).catch(fail);
+  };
+  $('apRun').onclick=function(){
+    if(!$('apOn').checked)return show('error','Switch Send automatically on and press Save first.');
+    if(!confirm('Add today\'s batch to the campaign now?'))return;
+    api('/api/email-marketing/autopilot/run',{method:'POST',body:{}}).then(function(r){$('apOut').innerHTML=apResult(r);return loadAutopilot()}).catch(fail);
+  };
   function setBadge(n){$('badge').hidden=!n;$('badge').textContent=n>99?'99+':String(n)}
   function loadStatus(){
     return Promise.all([api('/api/email-marketing/status'),api('/api/email-marketing/campaigns').catch(function(){return {campaigns:[]}})]).then(function(r){
@@ -557,6 +624,13 @@ nav.tabs .badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--
     }).catch(function(){});
   }
   $('hostCheck').onclick=function(){api('/api/email-marketing/mail-hosts/check',{method:'POST',body:{}}).then(hostStatus).catch(fail)};
+
+  // ---- phone app ----
+  if('serviceWorker' in navigator)window.addEventListener('load',function(){navigator.serviceWorker.register('/email-marketing-sw.js',{scope:'/email-marketing'}).catch(function(){})});
+  var installEvt=null;
+  window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();installEvt=e;$('install').hidden=false});
+  $('install').onclick=function(){if(installEvt){installEvt.prompt();installEvt=null}$('install').hidden=true};
+  window.addEventListener('appinstalled',function(){$('install').hidden=true});
 
   // ---- start ----
   $('saveToken').onclick=function(){try{localStorage.setItem('labToken',$('token').value.trim())}catch(e){}$('tokenCard').hidden=true;route()};

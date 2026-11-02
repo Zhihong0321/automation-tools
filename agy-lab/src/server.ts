@@ -39,6 +39,7 @@ import * as emailMarketing from './email-marketing.ts';
 import * as emailReplies from './email-replies.ts';
 import * as contactFormDelivery from './contact-form-delivery.ts';
 import { page as emailMarketingPage } from './email-marketing-page.ts';
+import * as emailPwa from './email-pwa.ts';
 import { page } from './ui.ts';
 import { page as docsPage } from './docs.ts';
 import { document as openApiDocument } from './openapi.ts';
@@ -259,6 +260,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (method === 'GET' && (p === '/company-dive' || p === '/company-dive/')) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' });
     return void res.end(companyDivePage());
+  }
+
+  // The email hub as a phone app: manifest, icons and service worker. Public, like the page itself.
+  const pwaFile = method === 'GET' ? emailPwa.file(p) : null;
+  if (pwaFile) {
+    res.writeHead(200, { 'content-type': pwaFile.type, 'cache-control': pwaFile.cache });
+    return void res.end(pwaFile.body);
   }
 
   if (method === 'GET' && (p === '/email-marketing' || p === '/email-marketing/')) {
