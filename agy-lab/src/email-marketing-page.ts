@@ -416,7 +416,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 </section>
 
 <section id="v-leads" hidden>
-<nav class="seg" aria-label="Leads"><a href="#leads" data-view="leads">Email leads</a><a href="#forms" data-view="forms">Contact forms</a></nav>
+<nav class="seg" aria-label="Leads"><a href="#leads" data-view="leads">Email leads</a><a href="#forms" data-view="forms">Contact forms</a><a href="#sentreport" data-view="sentreport">Sent report</a></nav>
 <div id="paneForms" hidden>
 <div class="searchbar"><input id="siteSearch" type="search" placeholder="Search company or website" autocomplete="off"></div>
 <div class="filters"><select id="siteFilter" aria-label="Which websites"><option value="waiting">Open form, waiting to send</option><option value="sent">Sent</option><option value="tried">Tried, not sent</option><option value="open">Every open form</option><option value="captcha">Behind a captcha (never sent)</option></select></div>
@@ -424,6 +424,15 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 <div class="list" id="siteRows"><div class="empty">Loading…</div></div>
 <div class="pager" style="margin-top:12px"><button id="sitePrev" class="sm">Previous</button><span id="sitePage" style="text-align:center"></span><button id="siteNext" class="sm">Next</button></div>
 <p class="hint">Malaysian lead websites the PC checked for a contact form. Waiting: an open form (no captcha) at a commercial or industrial company that was not emailed or tried yet; the Contact forms switch on Home sends to these, a few each weekday.</p>
+</div>
+<div id="paneReport" hidden>
+<div class="strip" id="repStrip"></div>
+<div class="sec-h"><h2>By day</h2><button class="linkb" id="repAll" hidden>All days</button></div>
+<div class="list" id="repDays"><div class="empty">Loading…</div></div>
+<div class="sec-h" style="margin-top:18px"><h2 id="repTitle">Every send</h2><span class="aside" id="repCount"></span></div>
+<div class="list" id="repRows"><div class="empty">Loading…</div></div>
+<div class="pager" style="margin-top:12px"><button id="repPrev" class="sm">Previous</button><span id="repPage" style="text-align:center"></span><button id="repNext" class="sm">Next</button></div>
+<p class="hint">Contact-form sends, as the hub logged them: the company, the exact subject and message, who it was from, which PC sent it, when, the outcome, and the screenshot the PC took after pressing send. Not confirmed: the form was sent but the site showed no thank-you.</p>
 </div>
 <div id="paneLeads">
 <div class="searchbar"><input id="leadSearch" type="search" placeholder="Search company, email or person" autocomplete="off"></div>
@@ -526,7 +535,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 
   // ---- routing ----
   // A hash name maps to the section that shows it, a section to its bottom tab.
-  var SECTION={dashboard:'dashboard',replies:'inbox',chats:'inbox',reply:'reply',campaigns:'campaigns',templates:'campaigns',campaign:'campaign',template:'template',leads:'leads',forms:'leads'};
+  var SECTION={dashboard:'dashboard',replies:'inbox',chats:'inbox',reply:'reply',campaigns:'campaigns',templates:'campaigns',campaign:'campaign',template:'template',leads:'leads',forms:'leads',sentreport:'leads'};
   var TAB={dashboard:'dashboard',inbox:'replies',reply:'replies',campaigns:'campaigns',campaign:'campaigns',template:'campaigns',leads:'leads'};
   var TITLE={dashboard:'Email hub',inbox:'Inbox',campaigns:'Campaigns',leads:'Leads',reply:'Reply',campaign:'Campaign',template:'Template'};
   var FOCUS={reply:'#replies',campaign:'#campaigns',template:'#templates'};
@@ -552,9 +561,10 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       var t=S.templates.filter(function(x){return x.id===Number(parts[1])})[0];
       if(t)openTemplate(t);else location.hash='#templates';
     });
-    if(sec==='leads'){$('paneLeads').hidden=v!=='leads';$('paneForms').hidden=v!=='forms'}
+    if(sec==='leads'){$('paneLeads').hidden=v!=='leads';$('paneForms').hidden=v!=='forms';$('paneReport').hidden=v!=='sentreport'}
     if(v==='leads'){loadStatus().catch(fail);hostStatus();if(!S.leadRows.length||soft)loadLeads()}
     if(v==='forms')loadSites();
+    if(v==='sentreport')loadReport();
     if(!soft)window.scrollTo(0,0);
   }
   window.addEventListener('hashchange',function(){S.moves++;route()});
@@ -724,6 +734,46 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       $('fpOut').innerHTML='<p class="hint"><b>'+esc(r.company_name)+'</b> ('+num(r.checked)+' sites checked): '+esc(String(r.status).replace(/_/g,' '))+'. '+esc(r.detail)+'</p>'+(r.screenshot?'<img src="'+esc(r.screenshot)+'" alt="The filled form" style="width:100%;border-radius:10px;margin-top:8px">':'');
     }).catch(function(e){$('fpOut').innerHTML='';fail(e)});
   };
+  // ---- contact-form sent report ----
+  var REP={day:null,offset:0};
+  var OUTCOME={sent:['ok','sent'],submitted_unconfirmed:['blue','sent, not confirmed'],sending:['blue','sending'],captcha:['warn','captcha'],interrupted:['bad','interrupted'],failed:['bad','failed'],no_form:['warn','no form'],site_unreachable:['warn','site down'],not_own_site:['warn','not own site']};
+  function loadReport(){
+    var q=new URLSearchParams({offset:String(REP.offset)});if(REP.day)q.set('day',REP.day);
+    return api('/api/email-marketing/form-autopilot/report?'+q.toString()).then(function(r){
+      var t=r.totals||{};
+      $('repStrip').innerHTML=[['sent today',t.today],['last 7 days',t.week],['sent in all',t.all_sent],['tried in all',t.all_tried]].map(function(x){return '<div><b>'+num(x[1])+'</b><span>'+x[0]+'</span></div>'}).join('');
+      $('repAll').hidden=!REP.day;
+      $('repDays').innerHTML=(r.days||[]).length?r.days.map(function(d){
+        return '<button class="rowl" data-day="'+esc(d.day)+'" style="width:100%;text-align:left;'+(REP.day===d.day?'background:var(--sunk)':'')+'"><div class="grow"><div class="rt">'+esc(dayName(d.day))+'</div><div class="rs">'+num(d.tried)+' tried'+(d.unconfirmed?', '+num(d.unconfirmed)+' not confirmed':'')+(d.other?', '+num(d.other)+' not sent':'')+(d.sending?', '+num(d.sending)+' sending':'')+'</div></div><div class="rr"><b>'+num(d.sent+d.unconfirmed)+'</b><div>sent</div></div></button>';
+      }).join(''):'<div class="empty">Nothing sent through a contact form yet.</div>';
+      $('repTitle').textContent=REP.day?'Sends on '+dayName(REP.day):'Every send';
+      $('repCount').textContent=num(r.total);
+      $('repRows').innerHTML=r.rows.length?r.rows.map(function(x){
+        var o=OUTCOME[x.status]||['blue',String(x.status).replace(/_/g,' ')],when=x.sent_at||x.checked_at,sd=x.sender||{},link=x.form_url||x.website;
+        var filled=(x.filled||[]).map(function(f){return esc(f.field)+' as '+esc(f.as)}).join(', ');
+        return '<div class="rowl"><div class="grow"><div class="rt">'+esc(x.company_name)+'</div><div class="rs"><a href="'+esc(link)+'" target="_blank" rel="noopener">'+esc(String(link).replace(/^https?:..(www[.])?/,''))+'</a></div>'+
+          '<div class="rs">'+esc(when?new Date(when).toLocaleString():'')+(x.taken_by?' · by '+esc(x.taken_by):'')+'</div>'+(x.detail?'<div class="rs">'+esc(x.detail)+'</div>':'')+
+          '<details><summary class="rs">Message and details</summary><div class="rs" style="white-space:pre-wrap;margin-top:6px"><b>'+esc(x.subject)+'</b>'+String.fromCharCode(10,10)+esc(x.message)+'</div>'+
+          '<div class="rs" style="margin-top:8px">From: '+esc([sd.name,sd.company,sd.phone,sd.email].filter(Boolean).join(' · '))+'</div>'+(filled?'<div class="rs">Boxes filled: '+filled+'</div>':'')+
+          (x.has_screenshot?'<button class="sm" data-shot="'+esc(x.company_id)+'" style="margin-top:8px">Show screenshot</button><div data-shotbox="'+esc(x.company_id)+'"></div>':'')+'</details>'+
+          '</div><div class="rr"><span class="chip '+o[0]+'">'+esc(o[1])+'</span><div>'+(when?ago(when)+' ago':'')+'</div></div></div>';
+      }).join(''):'<div class="empty">No send here yet.</div>';
+      var from=r.total?r.offset+1:0,to=Math.min(r.offset+r.page_size,r.total);
+      $('repPage').textContent=num(from)+'–'+num(to)+' of '+num(r.total);$('repPrev').disabled=r.offset<=0;$('repNext').disabled=to>=r.total;
+    }).catch(fail);
+  }
+  $('repDays').addEventListener('click',function(e){var b=e.target.closest('[data-day]');if(!b)return;REP.day=REP.day===b.dataset.day?null:b.dataset.day;REP.offset=0;loadReport()});
+  $('repAll').onclick=function(){REP.day=null;REP.offset=0;loadReport()};
+  $('repPrev').onclick=function(){REP.offset=Math.max(0,REP.offset-50);loadReport()};
+  $('repNext').onclick=function(){REP.offset+=50;loadReport()};
+  $('repRows').addEventListener('click',function(e){
+    var b=e.target.closest('[data-shot]');if(!b)return;b.disabled=true;b.textContent='Loading…';
+    api('/api/email-marketing/form-autopilot/screenshot/'+b.dataset.shot).then(function(r){
+      var box=document.querySelector('[data-shotbox="'+b.dataset.shot+'"]');b.remove();
+      box.innerHTML=r.screenshot?'<img src="'+esc(r.screenshot)+'" alt="The form after sending" style="width:100%;border-radius:10px;margin-top:8px">':'<p class="hint">No screenshot.</p>';
+    }).catch(function(e){b.disabled=false;b.textContent='Show screenshot';fail(e)});
+  });
+
   // ---- contact-form websites ----
   var SITE={offset:0,timer:null};
   var SITE_WORD={waiting:'waiting to send',sent:'sent',tried:'tried, not sent',open:'open forms',captcha:'behind a captcha'};

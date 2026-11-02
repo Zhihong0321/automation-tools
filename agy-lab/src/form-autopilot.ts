@@ -367,6 +367,42 @@ export async function test(deliver: (input: DeliverInput) => Promise<DeliverResu
   return { ...(t ?? { company_id: companyId ?? '', company_name: '', website: '', status: 'no_lead', detail: 'no open form found by the PC check yet', form_url: null, sent: false }), checked };
 }
 
+// ---- the sent report ------------------------------------------------------------------
+
+/** A send's day in Kuala Lumpur: when it was sent, else when it left the hub. */
+const SEND_DAY = `(coalesce(sent_at, claimed_at, checked_at) at time zone 'Asia/Kuala_Lumpur')::date`;
+
+/**
+ * The sent report: totals (today, 7 days, all), one line per day for the last 60 days, and every
+ * send of one day (or all), newest first, with the exact message, sender, PC and boxes filled.
+ */
+export async function report(opts: { day?: string; offset?: number }) {
+  await ensureTables();
+  const count = (where: string) => `count(*) filter (where ${where})::int`;
+  const outcome = `${count(`status = 'sent'`)} as sent, ${count(`status = 'submitted_unconfirmed'`)} as unconfirmed,
+    ${count(`status = 'sending'`)} as sending, ${count(`status not in ('sent', 'submitted_unconfirmed', 'sending')`)} as other, count(*)::int as tried`;
+  const today = `(now() at time zone 'Asia/Kuala_Lumpur')::date`;
+  const totals = (await db.sql(`select
+      ${count(`${SEND_DAY} = ${today} and sent_at is not null`)} as today, ${count(`${SEND_DAY} > ${today} - 7 and sent_at is not null`)} as week,
+      ${count(`sent_at is not null`)} as all_sent, count(*)::int as all_tried from contact_form_send`)).rows[0];
+  const days = (await db.sql(`select to_char(${SEND_DAY}, 'YYYY-MM-DD') as day, ${outcome} from contact_form_send group by 1 order by 1 desc limit 60`)).rows;
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(opts.day ?? '') ? opts.day! : null;
+  const offset = Math.max(0, Math.floor(Number(opts.offset) || 0));
+  const where = day ? `where ${SEND_DAY} = $2::date` : '';
+  const params: unknown[] = day ? [offset, day] : [offset];
+  const total = Number((await db.sql<{ n: number }>(`select count(*)::int as n from contact_form_send ${where.replace('$2', '$1')}`, day ? [day] : [])).rows[0]?.n ?? 0);
+  const rows = (await db.sql(`select company_id::text, company_name, website, form_url, status, detail, subject, message, sender, filled, taken_by,
+      claimed_at, sent_at, checked_at, screenshot is not null as has_screenshot
+    from contact_form_send ${where} order by coalesce(sent_at, checked_at) desc offset $1 limit ${PAGE}`, params)).rows;
+  return { totals, days, day, total, offset, page_size: PAGE, rows };
+}
+
+/** One send's screenshot, as the PC took it after pressing send. */
+export async function screenshot(companyId: string): Promise<string | null> {
+  await ensureTables();
+  return (await db.sql<{ screenshot: string | null }>(`select screenshot from contact_form_send where company_id = $1`, [companyId])).rows[0]?.screenshot ?? null;
+}
+
 // ---- the list in the app -----------------------------------------------------------
 
 /**

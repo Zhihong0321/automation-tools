@@ -603,6 +603,12 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       if (method === 'GET' && p === '/api/email-marketing/form-autopilot/sites') {
         return send(200, await formAutopilot.sites({ filter: url.searchParams.get('filter') ?? undefined, search: url.searchParams.get('search') ?? undefined, offset: Number(url.searchParams.get('offset')) || 0 }));
       }
+      // The sent report: totals, days, and each send with its message.
+      if (method === 'GET' && p === '/api/email-marketing/form-autopilot/report') {
+        return send(200, await formAutopilot.report({ day: url.searchParams.get('day') ?? undefined, offset: Number(url.searchParams.get('offset')) || 0 }));
+      }
+      const shot = /^\/api\/email-marketing\/form-autopilot\/screenshot\/(\d+)$/.exec(p);
+      if (method === 'GET' && shot) return send(200, { screenshot: await formAutopilot.screenshot(shot[1]!) });
     }
 
     if (method === 'GET' && p === '/api/email-marketing/today') {
