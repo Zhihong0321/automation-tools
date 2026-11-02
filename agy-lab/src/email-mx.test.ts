@@ -46,9 +46,9 @@ test('the lead list filters and counts by mail host', () => {
   assert.deepEqual(filterHost(rows, UNCHECKED).map((r) => r.email), ['e@w.com']);
 });
 
-test('the leads page carries the mail host filter and column', () => {
+test('the leads page carries the mail host filter and shows each lead\'s host', () => {
   const html = page();
   assert.match(html, /id="leadHost"/);
-  assert.match(html, /<th>Mail host<\/th>/);
+  assert.match(html, /x\.mail_host\?esc\(x\.mail_host\):'Mail host not checked'/);
   assert.doesNotMatch(html, /\$\{/);
 });

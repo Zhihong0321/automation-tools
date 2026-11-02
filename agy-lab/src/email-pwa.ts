@@ -6,9 +6,9 @@
 // Icons are drawn here as PNGs, so no image files sit in the repo.
 import zlib from 'node:zlib';
 
-const THEME = '#0f1115';
-const ACCENT = [122, 162, 247] as const; // the page's --accent
-const BG = [15, 17, 21] as const;
+const THEME = '#F3F5F2'; // the page's --paper
+const ACCENT = [255, 184, 28] as const; // the page's --sun
+const BG = [19, 33, 46] as const; // the page's --ink
 
 export const SW_PATH = '/email-marketing-sw.js';
 export const MANIFEST_PATH = '/email-marketing/manifest.webmanifest';
@@ -40,7 +40,7 @@ function near(px: number, py: number, ax: number, ay: number, bx: number, by: nu
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
-/** A blue envelope on the app's dark background, inside the safe area, so any mask keeps it whole. */
+/** A marigold envelope on the app's navy ink, inside the safe area, so any mask keeps it whole. */
 export function iconPng(size: number): Buffer {
   const rows: Buffer[] = [];
   const left = 0.24, right = 0.76, top = 0.33, bottom = 0.67, line = 0.022;
@@ -83,22 +83,36 @@ export const manifest = () => ({
     { src: '/email-marketing/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
     { src: '/email-marketing/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
   ],
+  // Long-press the home-screen icon to jump straight in.
+  shortcuts: [
+    { name: 'Replies waiting', short_name: 'Replies', url: '/email-marketing#replies' },
+    { name: 'Leads', url: '/email-marketing#leads' },
+  ],
 });
 
 export const serviceWorker = () => `// Email hub app shell. Bump CACHE to drop the old copy.
-const CACHE = 'email-hub-v1';
+const CACHE = 'email-hub-v2';
+const FONTS = 'email-hub-fonts';
 const PAGE = '/email-marketing';
 self.addEventListener('install', (e) => {
   self.skipWaiting();
   e.waitUntil(caches.open(CACHE).then((c) => c.add(PAGE)).catch(() => {}));
 });
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== FONTS).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
-// Only the page, network first. Everything else, and all of /api/, goes straight to the network.
+// The page, network first, and the Google font, cache first. Everything else, and all of /api/, goes straight to the network.
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  if (e.request.method !== 'GET' || e.request.mode !== 'navigate' || url.origin !== location.origin || !url.pathname.startsWith(PAGE)) return;
+  if (e.request.method !== 'GET') return;
+  if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
+    e.respondWith(caches.open(FONTS).then((c) => c.match(e.request).then((hit) => hit || fetch(e.request).then((res) => {
+      if (res.ok || res.type === 'opaque') c.put(e.request, res.clone());
+      return res;
+    }))));
+    return;
+  }
+  if (e.request.mode !== 'navigate' || url.origin !== location.origin || !url.pathname.startsWith(PAGE)) return;
   e.respondWith(fetch(e.request).then((res) => {
     if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(PAGE, copy)); }
     return res;
