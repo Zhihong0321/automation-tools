@@ -16,6 +16,8 @@ export const KINDS = {
   parallel: 'PARALLEL_API_KEY',
   smartlead: 'SMARTLEAD_API_KEY',
   pagespeed: 'GOOGLE_PAGESPEED_SERVICE_ACCOUNT',
+  // Not one key but the IMAP/SMTP logins of mailbox.ts, one per line.
+  mailboxes: 'MAILBOX_LOGINS',
 } as const;
 
 export type Kind = keyof typeof KINDS;

@@ -33,6 +33,7 @@ every feature at once, and a fix made here reaches all of them.
 | `pagespeed.ts` | Google PageSpeed Insights | `secrets.ts` (kind `pagespeed`) |
 | `parallel.ts` | Parallel's FindAll entity search (person research) | `secrets.ts` (kind `parallel`) |
 | `smartlead.ts` | Smartlead, the cold-email platform | `secrets.ts` (kind `smartlead`) |
+| `mailbox.ts` | our own mailboxes over IMAP and SMTP (mail leads send us outside Smartlead threads, and our answers to it) | `secrets.ts` (kind `mailboxes`: one `email password` login per line) |
 
 `secrets.ts` holds the one-key providers' keys (`gemini_contact_key`, edited on
 /workers under "Other API keys"). Every module falls back to its Railway variable

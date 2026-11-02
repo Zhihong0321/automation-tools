@@ -5,11 +5,15 @@
 // A reply is drafted as soon as its webhook lands, so it is usually ready by the time
 // the page opens; opening a reply with no draft writes one on the spot. Drafts live in
 // email_marketing_draft, one per lead message answered.
+//
+// Mail a lead sent our mailboxes outside the Smartlead thread (email-inbox.ts) joins the
+// same conversation and thread; its draft is answered over SMTP from that mailbox.
 import fs from 'node:fs';
 import type http from 'node:http';
 import * as db from './reportdb.ts';
 import { llm } from './core/index.ts';
 import { smartlead as sl } from './core/index.ts';
+import * as inbox from './email-inbox.ts';
 import { campaignRow, htmlToText, leads, pick, stripQuoted, textToHtml, threads, webhookEvent } from './email-marketing.ts';
 
 type Ctx = {
@@ -20,7 +24,8 @@ type Ctx = {
 /** How to write for Eternalgy (email-skill.md): who is writing, the company's facts, the profile PDF and the voice. */
 export const SKILL = fs.readFileSync(new URL('./email-skill.md', import.meta.url), 'utf8').trim();
 
-export interface Message { inbound: boolean; stats_id: string | null; message_id: string | null; time: string | null; subject: string | null; body: string; body_html: string }
+/** mailbox: set on mail that came to one of our mailboxes outside Smartlead's thread. */
+export interface Message { inbound: boolean; stats_id: string | null; message_id: string | null; time: string | null; subject: string | null; body: string; body_html: string; mailbox?: string | null }
 
 export interface Draft {
   id: string; campaign_id: string; email: string; company_id: string | null;
@@ -30,7 +35,7 @@ export interface Draft {
 }
 
 async function migrate(): Promise<void> {
-  await db.migrate();
+  await Promise.all([db.migrate(), inbox.ready()]);
   await db.sql(`
     create table if not exists email_marketing_draft (
       id               bigserial primary key,
@@ -108,16 +113,24 @@ export function cleanDraft(answer: string): string {
 
 async function companyFor(email: string, campaignId: number): Promise<{ id: string | null; name: string | null; category: string | null }> {
   const out = await db.sql<{ id: string | null; name: string | null; category: string | null }>(
-    `select c.id::text, c.name, c.category from email_marketing_lead l left join company_data c on c.id = l.company_id
-      where l.email = $1 order by (l.campaign_id = $2) desc limit 1`, [email, campaignId]);
+    `select c.id::text, c.name, c.category
+       from (select company_id, campaign_id, 0 as rank from email_marketing_lead where email = $1
+             union all select company_id, campaign_id, 1 from email_marketing_inbox where email = $1 and company_id is not null) l
+       left join company_data c on c.id = l.company_id
+      order by (l.campaign_id = $2) desc, l.rank limit 1`, [email, campaignId]);
   return out.rows[0] ?? { id: null, name: null, category: null };
 }
 
-/** The thread for this lead in this campaign (or its first campaign with a reply). */
+/** The thread for this lead in this campaign (or its first campaign with a reply), with the mail they sent us directly. */
 async function loadThread(email: string, campaignId: number | null) {
-  const t = await threads(email, campaignId);
+  const [t, direct] = await Promise.all([threads(email, campaignId), inbox.rows(email).catch(() => [])]);
   const thread = t.threads.find((x) => !campaignId || x.campaign_id === campaignId) ?? t.threads.find((x) => x.messages.some((m: Message) => m.inbound)) ?? t.threads[0] ?? null;
-  return { lead: t.lead, thread };
+  if (!direct.length) return { lead: t.lead, thread };
+  const first = direct.find((r) => !campaignId || Number(r.campaign_id) === campaignId) ?? direct[0];
+  // Someone who only ever wrote to us directly (a lead's colleague) has no Smartlead thread: the mailbox's is theirs.
+  const base = thread ?? { campaign_id: Number(first.campaign_id), campaign_name: first.campaign_name, category_id: null, last_sent_at: null, last_reply_at: null, messages: [], error: null };
+  const lead = t.lead ?? { id: null, email, first_name: first.email_name, last_name: null, company_name: first.company ?? null, custom_fields: null, unsubscribed: false };
+  return { lead, thread: { ...base, messages: inbox.merge(base.messages as Message[], direct.map(inbox.asMessage)) } };
 }
 
 const pending = new Map<string, Promise<Draft>>();
@@ -178,14 +191,17 @@ export async function send(draftId: number, body: string): Promise<Draft> {
   const d = out.rows[0];
   if (!d) throw Object.assign(new Error('no such draft'), { status: 404 });
   if (d.status === 'sent') throw Object.assign(new Error(`already sent ${d.sent_at}`), { status: 409 });
-  if (!d.reply_stats_id) throw Object.assign(new Error('Smartlead gave this reply no stats id, so it cannot be answered in the thread'), { status: 422 });
+  // No stats id: the lead wrote to our mailbox directly, so the answer goes out from it over SMTP.
+  const direct = d.reply_stats_id ? null : await inbox.byMessageId(d.reply_message_id);
+  if (!d.reply_stats_id && !direct?.inbound) throw Object.assign(new Error('Smartlead gave this reply no stats id, so it cannot be answered in the thread'), { status: 422 });
   const text = body.trim();
   if (!text) throw Object.assign(new Error('the reply is empty'), { status: 400 });
   // Claim it first, so a double tap on a phone sends once.
   const claim = await db.sql(`update email_marketing_draft set status = 'sent', sent_at = now(), sent_body = $2, updated_at = now() where id = $1 and status <> 'sent' returning id`, [draftId, text]);
   if (!claim.rowCount) throw Object.assign(new Error('already sent'), { status: 409 });
   try {
-    await sl.reply(Number(d.campaign_id), {
+    if (direct) await inbox.answer(direct, text);
+    else await sl.reply(Number(d.campaign_id), {
       email_stats_id: d.reply_stats_id,
       email_body: textToHtml(text),
       // reply_message_id doubles as the draft's key and can be a stats id or a time; only a real Message-ID goes on.
@@ -213,7 +229,8 @@ export interface Conversation {
 
 /**
  * Every thread where the lead replied: the webhook's record first, then Smartlead's
- * master inbox for anything that replied before the webhook existed.
+ * master inbox for anything that replied before the webhook existed, then mail they
+ * sent our mailboxes directly.
  */
 export async function conversations(): Promise<Conversation[]> {
   await ready();
@@ -237,7 +254,10 @@ export async function conversations(): Promise<Conversation[]> {
     const have = byKey.get(k);
     if (have) {
       if (!have.preview && c.preview) have.preview = c.preview;
-      if (c.replied_at && (!have.replied_at || c.replied_at > have.replied_at)) have.replied_at = c.replied_at;
+      if (c.replied_at && (!have.replied_at || c.replied_at > have.replied_at)) {
+        have.replied_at = c.replied_at;
+        if (c.preview) have.preview = c.preview;
+      }
       return;
     }
     const d = draftOf.get(k);
@@ -265,6 +285,12 @@ export async function conversations(): Promise<Conversation[]> {
       }
       if (rows.length < 20) break;
     }
+  }
+  // Mail the lead sent our mailboxes outside the Smartlead thread.
+  for (const r of await inbox.rows().catch(() => [])) {
+    if (!r.inbound) continue;
+    add({ email: r.email, campaign_id: Number(r.campaign_id), campaign_name: r.campaign_name, company: r.company ?? null, category: null,
+      replied_at: new Date(r.received_at).toISOString(), preview: stripQuoted(r.body_text ?? '') || r.subject || '' });
   }
   const list = [...byKey.values()];
   for (const c of list) {
@@ -323,11 +349,15 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
   const p = url.pathname;
   const method = req.method ?? 'GET';
   const send_ = (status: number, body: unknown) => { ctx.json(res, status, body); return true; };
-  const routes = ['/api/email-marketing/dashboard', '/api/email-marketing/conversations', '/api/email-marketing/response', '/api/email-marketing/drafts'];
+  const routes = ['/api/email-marketing/dashboard', '/api/email-marketing/conversations', '/api/email-marketing/response', '/api/email-marketing/drafts', '/api/email-marketing/inbox'];
   if (!routes.some((r) => p === r || p.startsWith(r + '/'))) return false;
   if (!db.configured()) return send_(503, { error: 'no report database configured' });
   try {
     if (method === 'GET' && p === '/api/email-marketing/dashboard') return send_(200, await dashboard());
+
+    // The mailboxes read for direct mail: each one's last read, error and what it kept; POST .../poll reads them now.
+    if (method === 'GET' && p === '/api/email-marketing/inbox') return send_(200, await inbox.status());
+    if (method === 'POST' && p === '/api/email-marketing/inbox/poll') { await inbox.poll(); return send_(200, await inbox.status()); }
 
     if (method === 'GET' && p === '/api/email-marketing/conversations') {
       const list = await conversations();

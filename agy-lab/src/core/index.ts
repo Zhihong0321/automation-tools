@@ -12,6 +12,7 @@
 //   pagespeed  Google PageSpeed Insights
 //   parallel   Parallel's FindAll entity search (person research)
 //   smartlead  Smartlead, the cold-email platform (campaigns, leads, replies)
+//   mailbox    our own mailboxes over IMAP and SMTP: mail leads send us directly, and our answers
 //   search     web search for pipelines: Tavily and Exa, keys and provider fallback inside
 //   secrets    the keys of the one-key providers above (MiniMax, Maps, Parallel,
 //              Smartlead, PageSpeed), kept in the hub database
@@ -28,6 +29,7 @@ export * as maps from './maps.ts';
 export * as pagespeed from './pagespeed.ts';
 export * as parallel from './parallel.ts';
 export * as smartlead from './smartlead.ts';
+export * as mailbox from './mailbox.ts';
 export * as secrets from './secrets.ts';
 export * as search from './search.ts';
 export { startCall, type ApiCall, type ApiName } from '../cost.ts';

@@ -37,6 +37,7 @@ import * as diveDeeper from './divedeeper.ts';
 import * as siteEmails from './site-emails.ts';
 import * as emailMarketing from './email-marketing.ts';
 import * as emailReplies from './email-replies.ts';
+import * as emailInbox from './email-inbox.ts';
 import * as contactFormDelivery from './contact-form-delivery.ts';
 import { page as emailMarketingPage } from './email-marketing-page.ts';
 import * as emailPwa from './email-pwa.ts';
@@ -544,6 +545,7 @@ server.listen(PORT, '0.0.0.0', () => {
   autoScan.start();
   void siteEmails.start();
   emailMarketing.start();
+  emailInbox.start();
   // Extract model lanes saved on /workers; until they load, calls use CONTACT_LLM_*.
   void extractLlm.refresh();
   contactWorker.start();

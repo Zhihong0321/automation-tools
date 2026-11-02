@@ -13,7 +13,10 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.3.0",
+    "imapflow": "2.5.2",
     "libphonenumber-js": "1.13.15",
+    "mailparser": "3.9.40",
+    "nodemailer": "10.1.2",
     "pg": "^8.16.3",
     "puppeteer-core": "25.13.0",
     "typebox": "1.3.27"
