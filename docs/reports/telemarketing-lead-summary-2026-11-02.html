@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Telemarketing Lead Summary</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#111418;--grey:#5c636d;--muted:#8a9099;--line:#e6e8eb;--band:#f2f3f5;--paper:#fff;--desk:#d9dcdf;--dark:#0e1013;--on-dark:#f3f4f6;--accent:#0f6b4a;--display:"Inter Tight","Inter",system-ui,sans-serif;--body:"Inter",system-ui,sans-serif}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;background:var(--desk);font-family:var(--body);color:var(--ink)}
+.deck{position:fixed;inset:0;display:grid;place-items:center;overflow:hidden}
+.slide{grid-area:1/1;width:1920px;height:1080px;background:var(--paper);padding:110px 140px 80px;display:none;flex-direction:column;flex-shrink:0;transform-origin:center center;box-shadow:0 20px 60px rgba(0,0,0,.18)}
+.slide.on{display:flex}
+.slide.dark{background:var(--dark);color:var(--on-dark)}
+.eyebrow{font:600 22px/1 var(--display);letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+h1{font:600 124px/1.02 var(--display);letter-spacing:-.03em;margin-top:44px}
+h2{font:600 64px/1.08 var(--display);letter-spacing:-.02em;margin-top:22px}
+.sub{font-size:30px;line-height:1.45;color:var(--grey);margin-top:34px;max-width:1250px}
+.dark .sub,.dark .eyebrow{color:#9aa1ab}
+.foot{margin-top:auto;display:flex;justify-content:space-between;font-size:20px;color:var(--muted);border-top:1px solid var(--line);padding-top:26px}
+.dark .foot{border-color:#262a30}
+.cover-num{display:flex;gap:110px;margin-top:84px}
+.cover-num b{display:block;font:600 100px/1 var(--display);letter-spacing:-.03em;color:#fff}
+.cover-num span{display:block;font-size:24px;color:#9aa1ab;margin-top:14px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:26px;margin-top:54px}
+.kpi{background:var(--band);border-radius:18px;padding:32px 32px 28px;display:flex;flex-direction:column;min-height:310px}
+.kpi.lead{background:var(--dark);color:var(--on-dark)}
+.kpi .no{font:600 20px/1 var(--display);color:var(--muted);letter-spacing:.1em}
+.kpi .v{font:600 74px/1 var(--display);letter-spacing:-.03em;margin-top:auto}
+.kpi .t{font:600 26px/1.2 var(--display);margin-top:18px}
+.kpi .d{font-size:19px;color:var(--grey);margin-top:8px;line-height:1.35}
+.kpi.lead .d{color:#9aa1ab}
+.kpi .p{font:600 20px/1 var(--display);color:var(--accent);margin-top:14px}
+.funnel{margin-top:70px;display:flex;flex-direction:column;gap:30px}
+.frow{display:grid;grid-template-columns:430px 1fr 200px 120px;align-items:center;gap:30px}
+.flabel{font:600 30px/1.2 var(--display)}
+.ftrack{height:64px;background:var(--band);border-radius:10px;overflow:hidden}
+.fbar{height:100%;background:var(--accent);border-radius:10px}
+.fbar.base{background:var(--ink)}
+.fnum{font:600 40px/1 var(--display);text-align:right;letter-spacing:-.02em}
+.fpct{font:500 26px/1 var(--display);color:var(--grey);text-align:right}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:64px}
+.big{background:var(--band);border-radius:22px;padding:56px}
+.big>b{display:block;font:600 150px/1 var(--display);letter-spacing:-.04em}
+.big .t{font:600 34px/1.2 var(--display);margin-top:26px}
+.big ul{margin-top:28px;padding-left:28px;font-size:25px;line-height:1.7;color:var(--grey)}
+.big li b{font-weight:600;color:var(--ink)}
+.defs{display:grid;grid-template-columns:1fr 1fr;gap:22px 70px;margin-top:38px}
+.defs div{border-top:2px solid var(--ink);padding-top:18px}
+.defs h3{font:600 26px/1.2 var(--display)}
+.defs p{font-size:21px;line-height:1.5;color:var(--grey);margin-top:10px}
+.nav{position:fixed;bottom:18px;right:22px;display:flex;gap:8px;align-items:center;font:500 14px var(--body);color:#444;z-index:2}
+.nav button{border:0;background:#fff;border-radius:8px;width:38px;height:38px;font-size:18px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.12)}
+@media print{@page{size:1920px 1080px;margin:0}html,body{background:#fff}.deck{position:static;display:block}.slide{display:flex!important;transform:none!important;box-shadow:none;break-after:page}.nav{display:none}}
+</style></head><body>
+<div class="deck" id="deck">
+
+<section class="slide dark on">
+  <div class="eyebrow">Eternalgy · Lead intelligence · Malaysia</div>
+  <h1>Telemarketing<br>Lead Summary</h1>
+  <p class="sub">Every Google Maps lead in the call list, combined with what company deep research found on the 51,607 companies it has covered so far.</p>
+  <div class="cover-num">
+    <div><b>163,620</b><span>unique companies</span></div>
+    <div><b>104,608</b><span>mobile numbers</span></div>
+    <div><b>23,901</b><span>person names</span></div>
+  </div>
+  <div class="foot"><span>Data as of 2 November 2026, 16:13 MYT</span><span>1 / 5</span></div>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">The seven numbers</div>
+  <h2>What the lead list holds today</h2>
+  <div class="grid">
+    <div class="kpi lead"><span class="no">01</span><span class="v">163,620</span><span class="t">Total companies</span><span class="d">unique, branches not counted</span></div>
+    <div class="kpi"><span class="no">02</span><span class="v">24,554</span><span class="t">Companies with website</span><span class="d">own website, not a social page</span><span class="p">15.0% of companies</span></div>
+    <div class="kpi"><span class="no">03</span><span class="v">20,493</span><span class="t">Companies with email</span><span class="d">at least 1 email address</span><span class="p">12.5% of companies</span></div>
+    <div class="kpi"><span class="no">04</span><span class="v">87,342</span><span class="t">Companies with mobile</span><span class="d">at least 1 number in 01x / +601x format</span><span class="p">53.4% of companies</span></div>
+    <div class="kpi"><span class="no">05</span><span class="v">1,170</span><span class="t">Mobile with a person name</span><span class="d">at least 1 mobile tied to a named person</span><span class="p">0.7% of companies</span></div>
+    <div class="kpi"><span class="no">06</span><span class="v">104,608</span><span class="t">Mobile numbers found</span><span class="d">counted once per company</span></div>
+    <div class="kpi"><span class="no">07</span><span class="v">23,901</span><span class="t">Person names found</span><span class="d">named people, once per company</span></div>
+    <div class="kpi"><span class="no">AVG</span><span class="v">1.20</span><span class="t">Mobiles per company</span><span class="d">among companies with at least one mobile</span></div>
+  </div>
+  <div class="foot"><span>Telemarketing Lead Summary</span><span>2 / 5</span></div>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">Reachability</div>
+  <h2>From listing to a named person on a mobile</h2>
+  <div class="funnel"><div class="frow"><div class="flabel">Unique companies</div><div class="ftrack"><div class="fbar base" style="width:100.00%"></div></div><div class="fnum">163,620</div><div class="fpct">100%</div></div><div class="frow"><div class="flabel">With website</div><div class="ftrack"><div class="fbar" style="width:15.01%"></div></div><div class="fnum">24,554</div><div class="fpct">15.0%</div></div><div class="frow"><div class="flabel">With email address</div><div class="ftrack"><div class="fbar" style="width:12.52%"></div></div><div class="fnum">20,493</div><div class="fpct">12.5%</div></div><div class="frow"><div class="flabel">With a mobile phone</div><div class="ftrack"><div class="fbar" style="width:53.38%"></div></div><div class="fnum">87,342</div><div class="fpct">53.4%</div></div><div class="frow"><div class="flabel">Mobile with a person name</div><div class="ftrack"><div class="fbar" style="width:0.72%"></div></div><div class="fnum">1,170</div><div class="fpct">0.7%</div></div></div>
+  <p class="sub" style="margin-top:60px">53.4% of companies can be called on a mobile today; 0.7% have a mobile that reaches a named person.</p>
+  <div class="foot"><span>Share of 163,620 unique companies</span><span>3 / 5</span></div>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">Contacts found</div>
+  <h2>Numbers and names to call</h2>
+  <div class="two">
+    <div class="big"><b>104,608</b><div class="t">Mobile phone numbers</div>
+      <ul><li>Across <b>87,342</b> companies</li><li><b>1,829</b> belong to a named person</li><li>Malaysian mobile format only: 01x / +601x</li></ul></div>
+    <div class="big"><b>23,901</b><div class="t">Person names</div>
+      <ul><li>Across <b>9,927</b> companies</li><li><b>1,170</b> companies have a named person on a mobile</li><li>From contact research and company deep research</li></ul></div>
+  </div>
+  <div class="foot"><span>Telemarketing Lead Summary</span><span>4 / 5</span></div>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">How it was counted</div>
+  <h2>Definitions</h2>
+  <div class="defs">
+    <div><h3>Unique company</h3><p>One per company. The 176,375 live Google Maps listings fold to 163,620: branches of one registered name (Sdn Bhd, Bhd, PLT) are already merged, and 12,755 more branch listings that share one website fold into 3,205 chains.</p></div>
+    <div><h3>Website</h3><p>The company's own site. Facebook, Instagram, WhatsApp, Shopee, link-in-bio and similar shared pages do not count.</p></div>
+    <div><h3>Email address</h3><p>Any email read off the company website or found by contact research and company deep research.</p></div>
+    <div><h3>Mobile phone</h3><p>A number in Malaysian mobile format, 01xxxxxxxx(x) or +601xxxxxxxx(x), from Google Maps, the website or research. Office lines are left out.</p></div>
+    <div><h3>Mobile with a person name</h3><p>A mobile number research ties to a named person (decision maker or validated contact), not a company line.</p></div>
+    <div><h3>Person name</h3><p>Every named person research found, counted once per company. Unnamed company lines are not people.</p></div>
+  </div>
+  <p class="sub" style="font-size:20px;margin-top:26px;max-width:none">Counts every live lead in the call list, including 23,517 blacklisted and 6,622 do-not-call listings. Hidden and merged listings are left out. Read from the lead database on 2 Nov 2026.</p>
+  <div class="foot"><span>Sources: Google Maps scans, website email check, contact research, company deep research</span><span>5 / 5</span></div>
+</section>
+
+</div>
+<div class="nav"><button id="prev" aria-label="Previous slide">&#8249;</button><span id="pos"></span><button id="next" aria-label="Next slide">&#8250;</button></div>
+<script>
+const slides=[...document.querySelectorAll('.slide')];let i=0;
+function fit(){const s=Math.min(innerWidth/1920,innerHeight/1080)*0.96;slides.forEach(el=>el.style.transform='scale('+s+')');}
+function show(k){i=Math.max(0,Math.min(slides.length-1,k));slides.forEach((el,j)=>el.classList.toggle('on',j===i));document.getElementById('pos').textContent=(i+1)+' / '+slides.length;}
+addEventListener('resize',fit);
+addEventListener('keydown',e=>{if(['ArrowRight','PageDown',' '].includes(e.key))show(i+1);if(['ArrowLeft','PageUp'].includes(e.key))show(i-1);});
+document.getElementById('prev').onclick=()=>show(i-1);document.getElementById('next').onclick=()=>show(i+1);
+fit();show(0);
+</script></body></html>
