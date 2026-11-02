@@ -134,7 +134,9 @@ export const mixOf = (rows: Array<{ mail_host: string | null }>): Record<string,
 
 export interface CampaignState { name: string; status: string; max_new_per_day: number; not_started: number; sent: number; bounced: number }
 
-const ACTIVE = new Set(['ACTIVE', 'START', 'STARTED']);
+// Smartlead marks a started campaign COMPLETED once every lead has been sent (and an empty one
+// at once), so a fed campaign is completed most mornings: it is fed and started again.
+const ACTIVE = new Set(['ACTIVE', 'START', 'STARTED', 'COMPLETED']);
 
 export interface Plan<T> { skip: string | null; target: number; rows: T[] }
 
@@ -201,6 +203,8 @@ export interface Deps<T extends PoolRow> {
   pool(): Promise<T[]>;
   campaign(id: number): Promise<CampaignState | null>;
   push(campaignId: number, campaignName: string | null, rows: T[]): Promise<{ added: number; sent: number; failed: number; errors: string[] }>;
+  /** Starts the campaign again after a completed one is fed. */
+  start(campaignId: number): Promise<unknown>;
 }
 
 export interface RunResult { ran: boolean; reason: string | null; target: number; picked: number; added: number; mix: Record<string, number>; campaign: string | null; sample: Array<{ email: string; mail_host: string | null; company_name?: string }> }
@@ -233,6 +237,7 @@ export async function runOnce<T extends PoolRow & { company_name?: string }>(dep
   try {
     const out = await deps.push(settings.campaign_id!, campaign!.name, p.rows);
     if (!out.added && !out.sent) throw new Error(out.errors.join('; ') || 'Smartlead took none of them');
+    if (campaign!.status.toUpperCase() === 'COMPLETED') await deps.start(settings.campaign_id!);
     await db.sql(`update email_autopilot_run set added = $2, note = $3 where day = $1`, [today, out.added, out.failed ? `${out.failed} failed: ${out.errors.join('; ')}` : null]);
     return finish({ ran: true, reason: null, ...base, picked: p.rows.length, added: out.added, mix: mixOf(p.rows), sample });
   } catch (err) {

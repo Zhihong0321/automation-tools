@@ -346,6 +346,7 @@ const autopilotDeps = (): autopilot.Deps<MarketingLead> => ({
     } catch { return null; }
   },
   push: (id, name, rows) => push(id, name, rows),
+  start: (id) => sl.setStatus(id, 'START'),
 });
 
 export function start(): void {

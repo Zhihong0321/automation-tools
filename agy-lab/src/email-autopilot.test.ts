@@ -67,6 +67,8 @@ test('the plan stops when the campaign is not ready, bounces, or still has leads
   const run = (campaign: CampaignState | null, s = settings()) => plan({ settings: s, today: '2026-11-03', campaign, pool, contacted: new Set() });
   assert.match(run(null).skip!, /not found/);
   assert.match(run(camp({ status: 'PAUSED' })).skip!, /campaign is paused/);
+  assert.match(run(camp({ status: 'DRAFTED' })).skip!, /campaign is drafted/);
+  assert.equal(run(camp({ status: 'COMPLETED' })).skip, null); // yesterday's batch all sent: feed it again
   assert.match(run(camp({ sent: 100, bounced: 5 })).skip!, /Paused: 5\.0% of 100/);
   assert.equal(run(camp({ sent: 10, bounced: 5 })).skip, null); // too few sent to judge
   assert.match(run(camp({ not_started: 10 })).skip!, /10 leads are still waiting/);
