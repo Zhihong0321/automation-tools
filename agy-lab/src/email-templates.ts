@@ -22,7 +22,7 @@ export const DEFAULT_SENDER: Sender = {
   sender_name: '',
   sender_title: '',
   sender_phone: '+60 11-2100 0099',
-  sender_footer: 'Eternalgy Sdn Bhd (1523087-A), 01-23, Jalan Mutiara Emas 10/19, Taman Mount Austin, 81100 Johor Bahru. Not relevant? Reply "stop" and we won\'t write again.',
+  sender_footer: 'CIDB G7 contractor · SEDA Registered PV Service Provider · MyHIJAU certified\n12 MWp+ installed · 1,100+ sites commissioned · Golden Bull Award 2025\n\nNot relevant? Reply "stop" and I won\'t write again.',
 };
 
 const FIELD = /\{\{\s*([a-z_]+)\s*\}\}/gi;
