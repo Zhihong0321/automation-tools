@@ -10,32 +10,45 @@
 //      Target companies (email-autopilot.ts TARGET_CATEGORY) are handed out first.
 //   2. Sending: the same commercial and industrial companies the email autopilot picks
 //      (isTargetCompany), whose site the PC found bot_can_submit, never emailed and never tried
-//      here. contact-form-delivery.ts opens a browser, fills the form with the campaign's step-1
-//      subject and body and the campaign mailbox as the sender, and presses send. A website
+//      here. contact-form-delivery.ts opens a browser, fills the form with the first step of the
+//      template chosen for forms and the fixed form sender (name, company, mobile, email), and
+//      presses send. A website
 //      shared by several leads (a directory, a head office) is skipped.
 // Every lead tried is one contact_form_send row, claimed before the browser opens, so a lead is
 // never sent twice, even across a redeploy. Weekdays in the email window (08:00 to 15:00 KL),
 // up to per_day sends a day.
 import type http from 'node:http';
 import * as db from './reportdb.ts';
+import * as templates from './email-templates.ts';
 import { klNow, inWindow, isTargetCompany, TARGET_CATEGORY, SOLAR } from './email-autopilot.ts';
 import { ELIGIBLE, sharedHosts, siteHost } from './site-emails.ts';
 import type { FormStatus } from './list-step2.ts';
 import type { DeliverInput, DeliverResult } from './contact-form-delivery.ts';
 
-export interface Settings { enabled: boolean; per_day: number }
-export const DEFAULTS: Settings = { enabled: false, per_day: 10 };
+/** Who every form says it is from. */
+export interface FormSender { name: string; company: string; phone: string; email: string }
+/** template_id: the email template (Templates tab) whose first step goes into the form. */
+export interface Settings { enabled: boolean; per_day: number; template_id: number | null; sender: FormSender }
+export const DEFAULT_SENDER: FormSender = { name: 'Mr. Alex Gan', company: 'Eternalgy Sdn Bhd', phone: '01121000099', email: 'eternalgy@atap.solar' };
+export const DEFAULTS: Settings = { enabled: false, per_day: 10, template_id: null, sender: DEFAULT_SENDER };
 
 export function readSettings(raw: any): Settings {
-  return { enabled: raw?.enabled === true, per_day: Math.round(Math.min(Math.max(Number(raw?.per_day) || DEFAULTS.per_day, 1), 100)) };
+  const s = raw?.sender ?? {};
+  const field = (k: keyof FormSender) => String(s[k] ?? '').trim().slice(0, 120) || DEFAULT_SENDER[k];
+  return {
+    enabled: raw?.enabled === true,
+    per_day: Math.round(Math.min(Math.max(Number(raw?.per_day) || DEFAULTS.per_day, 1), 100)),
+    template_id: Number(raw?.template_id) > 0 ? Number(raw.template_id) : null,
+    sender: { name: field('name'), company: field('company'), phone: field('phone'), email: /@/.test(String(s.email ?? '')) ? field('email') : DEFAULT_SENDER.email },
+  };
 }
 
-/** What goes into a form: the campaign's step 1, already filled for the lead, and who it is from. */
-export interface Message { campaign_id: number; campaign_name: string; subject: string; body: string; sender: DeliverInput['sender'] }
+/** What goes into a form: the chosen template's first step, already filled for the lead, and who it is from. */
+export interface Message { template_id: number; template_name: string; subject: string; body: string; sender: DeliverInput['sender'] }
 export interface Lead { company_id: string; company_name: string; category: string | null; website: string }
 
 export interface Deps {
-  /** The campaign's step 1 for this lead, or why there is none. */
+  /** The chosen template's first step for this lead, or why there is none. */
   message(lead: Lead): Promise<Message | string>;
   deliver(input: DeliverInput): Promise<DeliverResult>;
 }
@@ -67,6 +80,7 @@ function ensureTables(): Promise<void> {
       checked_at   timestamptz not null default now(),
       sent_at      timestamptz)`))
     .then(() => db.sql(`create index if not exists contact_form_send_sent_idx on contact_form_send (sent_at) where sent_at is not null`))
+    .then(() => db.sql(`alter table contact_form_send add column if not exists template_id bigint`))
     // status is 'taken' while a PC has the site, then the form verdict.
     .then(() => db.sql(`create table if not exists contact_form_scan (
       company_id  bigint primary key references company_data(id) on delete cascade,
@@ -200,8 +214,8 @@ export async function tryLead(lead: Lead, deps: Deps, options: { dry?: boolean }
   const message = await deps.message(lead);
   if (typeof message === 'string') return { ...base, status: 'no_message', detail: message, form_url: null, sent: false };
   if (!options.dry) {
-    const claim = await db.sql(`insert into contact_form_send (company_id, company_name, website, campaign_id, status) values ($1, $2, $3, $4, 'checking') on conflict (company_id) do nothing returning company_id`,
-      [lead.company_id, lead.company_name, lead.website, message.campaign_id]);
+    const claim = await db.sql(`insert into contact_form_send (company_id, company_name, website, template_id, status) values ($1, $2, $3, $4, 'checking') on conflict (company_id) do nothing returning company_id`,
+      [lead.company_id, lead.company_name, lead.website, message.template_id]);
     if (!claim.rows.length) return { ...base, status: 'already_tried', detail: 'this lead was tried before', form_url: null, sent: false };
   }
   const save = async (t: Tried, filled: unknown = null) => {
@@ -263,7 +277,43 @@ export async function status() {
   const day = klNow().day;
   const counts = Object.fromEntries((await db.sql<{ status: string; n: number }>(`select status, count(*)::int as n from contact_form_send group by 1 order by 2 desc`)).rows.map((r) => [r.status, r.n]));
   const recent = (await db.sql(`select company_id::text, company_name, website, status, detail, form_url, checked_at, sent_at from contact_form_send where status <> 'checking' order by checked_at desc limit 40`)).rows;
-  return { settings, in_window: inWindow(), sent_today: await sentToday(day), counts, scan: await scanCounts(), recent, last: last };
+  const tpls = (await templates.list()).map((t) => ({ id: t.id, name: t.name }));
+  return { settings, templates: tpls, in_window: inWindow(), sent_today: await sentToday(day), counts, scan: await scanCounts(), recent, last: last };
+}
+
+// ---- the list in the app -----------------------------------------------------------
+
+/**
+ * The websites the PC checked, for the Contact forms list. waiting: an open form at a target
+ * company not tried or emailed yet; sent; tried (pressed nothing, or it failed); open: every open
+ * form; captcha: forms behind a captcha, never sent by the hub.
+ */
+export const SITE_FILTERS = ['waiting', 'sent', 'tried', 'open', 'captcha'] as const;
+const PAGE = 50;
+
+export async function sites(opts: { filter?: string; search?: string; offset?: number }) {
+  await ensureTables();
+  const waiting = `s.status = 'bot_can_submit' and f.company_id is null and ${TARGET_SQL}
+    and not exists (select 1 from email_marketing_lead e where e.company_id = c.id)`;
+  const where: Record<(typeof SITE_FILTERS)[number], string> = {
+    waiting,
+    sent: `f.sent_at is not null`,
+    tried: `f.company_id is not null and f.sent_at is null and f.status <> 'checking'`,
+    open: `s.status = 'bot_can_submit'`,
+    captcha: `s.status = 'captcha'`,
+  };
+  const filter = (SITE_FILTERS as readonly string[]).includes(opts.filter ?? '') ? opts.filter as keyof typeof where : 'waiting';
+  const from = `from contact_form_scan s join company_data c on c.id = s.company_id left join contact_form_send f on f.company_id = c.id`;
+  const counts = (await db.sql<Record<string, number>>(`select ${SITE_FILTERS.map((k) => `count(*) filter (where ${where[k]})::int as ${k}`).join(', ')} ${from}`)).rows[0];
+  const search = String(opts.search ?? '').trim().slice(0, 100);
+  const like = search ? ['%' + search.replace(/[\\%_]/g, (m) => '\\' + m) + '%'] : [];
+  const match = (n: number) => (search ? ` and (c.name ilike $${n} or c.website ilike $${n})` : '');
+  const offset = Math.max(0, Math.floor(Number(opts.offset) || 0));
+  const total = Number((await db.sql<{ n: number }>(`select count(*)::int as n ${from} where ${where[filter]}${match(1)}`, like)).rows[0]?.n ?? 0);
+  const rows = (await db.sql(`select c.id::text as company_id, c.name as company_name, c.category, c.website, s.status as form, s.url as form_url, s.detail as form_detail,
+      f.status as send_status, f.detail as send_detail, f.sent_at, f.checked_at as tried_at
+    ${from} where ${where[filter]}${match(2)} order by coalesce(f.checked_at, s.checked_at) desc nulls last, c.id offset $1 limit ${PAGE}`, [offset, ...like])).rows;
+  return { filter, counts, total, offset, page_size: PAGE, rows };
 }
 
 /**

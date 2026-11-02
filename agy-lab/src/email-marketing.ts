@@ -355,26 +355,29 @@ const autopilotDeps = (): autopilot.Deps<MarketingLead> => ({
   start: (id) => sl.setStatus(id, 'START'),
 });
 
-/** The contact-form autopilot sends the email autopilot's campaign: its step 1, answered to its mailbox. Read once per run. */
+/** The contact-form autopilot sends the first step of the template chosen for forms, from the fixed form sender. Read once per run. */
 const formDeps = (): formAutopilot.Deps => {
   type Loaded = Omit<formAutopilot.Message, 'subject' | 'body'> & { subject: string; body: string; profile: templates.Sender };
   let loaded: Promise<Loaded | string> | null = null;
   const load = async (): Promise<Loaded | string> => {
-    const id = (await autopilot.getSettings()).campaign_id;
-    if (!id) return 'Choose the email autopilot\'s campaign first: the forms send its first email.';
-    const [c, seq, boxes, profile] = await Promise.all([sl.getCampaign(id), sl.campaignSequences(id), sl.campaignMailboxes(id), templates.getSender()]);
-    const first = (seq ?? []).sort((x: any, y: any) => x.seq_number - y.seq_number)[0];
-    const box = (boxes ?? [])[0];
-    if (!first) return `The campaign "${c.name}" has no email yet.`;
-    if (!box?.from_email) return `The campaign "${c.name}" has no mailbox for the answers.`;
+    const settings = await formAutopilot.getSettings();
+    if (!settings.template_id) return 'Choose the template for contact forms first.';
+    const [list, saved] = await Promise.all([templates.list(), templates.getSender()]);
+    const tpl = list.find((t) => t.id === settings.template_id);
+    const first = tpl?.steps[0];
+    if (!tpl) return 'The template chosen for contact forms was deleted. Choose another.';
+    if (!first?.body.trim()) return `The template "${tpl.name}" has no email yet.`;
+    const s = settings.sender;
+    // The form sender's name and mobile stand in for the email sender's in {{sender_name}} and {{sender_phone}}.
+    const profile = { ...saved, sender_name: s.name, sender_phone: s.phone };
     return {
-      campaign_id: id, campaign_name: String(c.name ?? ''), subject: String(first.subject ?? ''), body: htmlToText(first.email_body), profile,
-      sender: { name: box.from_name || profile.sender_name, email: box.from_email, phone: profile.sender_phone || undefined, company: 'Eternalgy', website: 'https://eternalgy.me' },
+      template_id: tpl.id, template_name: tpl.name, subject: first.subject, body: first.body, profile,
+      sender: { name: s.name, email: s.email, phone: s.phone, company: s.company, website: 'https://eternalgy.me' },
     };
   };
   return {
     message: async (lead) => {
-      const m = await (loaded ??= load().catch((err: Error) => 'Reading the campaign from Smartlead failed: ' + err.message));
+      const m = await (loaded ??= load().catch((err: Error) => 'Reading the template failed: ' + err.message));
       if (typeof m === 'string') return m;
       const { profile, ...rest } = m;
       const fields = { company_name: lead.company_name, category: lead.category ?? '' };
@@ -625,6 +628,10 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       // Sends now, outside the window too, up to the day's number.
       if (method === 'POST' && p === '/api/email-marketing/form-autopilot/run') {
         return send(200, await formAutopilot.runOnce(formDeps(), { force: true }));
+      }
+      // The websites the PC checked, for the Contact forms list.
+      if (method === 'GET' && p === '/api/email-marketing/form-autopilot/sites') {
+        return send(200, await formAutopilot.sites({ filter: url.searchParams.get('filter') ?? undefined, search: url.searchParams.get('search') ?? undefined, offset: Number(url.searchParams.get('offset')) || 0 }));
       }
     }
 

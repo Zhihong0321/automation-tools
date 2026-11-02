@@ -92,7 +92,8 @@ export type Step = { id: string; field: string; as: string; action: 'type' | 'se
 /** What goes in each box. Required boxes we cannot place get a neutral answer, and are reported. */
 export function planFill(form: FormInfo, input: DeliverInput): Step[] {
   const s = input.sender;
-  const [first, ...rest] = s.name.trim().split(/\s+/);
+  // A title (Mr., Dr., Dato') belongs to the full name only: first and last name boxes get "Alex" and "Gan".
+  const [first, ...rest] = s.name.trim().replace(/^(mr|mrs|ms|miss|mdm|dr|dato'?|datuk|encik|en|puan|pn|cik)\.?\s+/i, '').split(/\s+/);
   const kinds = form.fields.map(classify);
   const split = kinds.includes('first_name') || kinds.includes('last_name');
   const message = fillTemplate(input.message, input.lead);

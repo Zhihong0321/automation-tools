@@ -305,11 +305,16 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 <div class="panel">
 <div class="ap-head"><div class="grow"><h2 class="t">Contact forms</h2><p class="hint" id="fpState"></p></div><label class="switch" aria-label="Send through contact forms"><input type="checkbox" id="fpOn"><span></span></label></div>
 <details class="more" style="border:0;margin:6px -14px -14px;background:none"><summary>Settings and the latest sites</summary><div class="in">
+<label class="f" for="fpTpl">Message: the first email of this template</label><select id="fpTpl"></select>
+<label class="f" for="fpName">Name</label><input id="fpName" autocomplete="off">
+<label class="f" for="fpCompany">Company name</label><input id="fpCompany" autocomplete="off">
+<label class="f" for="fpPhone">Mobile</label><input id="fpPhone" type="tel" inputmode="tel" autocomplete="off">
+<label class="f" for="fpEmail">Email</label><input id="fpEmail" type="email" inputmode="email" autocomplete="off">
 <label class="f" for="fpPerDay">Sent a day</label><input id="fpPerDay" type="number" inputmode="numeric" min="1" max="100">
 <div class="btns" style="margin-top:14px"><button class="primary grow" id="fpSave">Save</button><button class="grow" id="fpTest">Test one, no send</button></div>
 <div id="fpOut"></div>
 <div class="list" id="fpRows" style="margin-top:8px"></div>
-<p class="hint">Each weekday from 08:00 to 15:00 (Kuala Lumpur) it takes the same commercial and industrial companies as the autopilot above, by their website instead of an email. A PC running the Step 2 Worker checks each site for a contact form with no captcha (Railway reads no site), and the hub sends the campaign's first email through it, from the campaign mailbox, so answers land in Replies. Each company is tried once, never sent twice, and not emailed after a form send.</p>
+<p class="hint">Each weekday from 08:00 to 15:00 (Kuala Lumpur) it takes the same commercial and industrial companies as the autopilot above, by their website instead of an email. A PC running the Step 2 Worker checks each site for a contact form with no captcha (Railway reads no site), and the hub sends the first email of the chosen template through it, with the name, company, mobile and email above. Answers come to that email. Each company is tried once, never sent twice, and not emailed after a form send.</p>
 </div></details>
 </div>
 </div>
@@ -410,6 +415,16 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 </section>
 
 <section id="v-leads" hidden>
+<nav class="seg" aria-label="Leads"><a href="#leads" data-view="leads">Email leads</a><a href="#forms" data-view="forms">Contact forms</a></nav>
+<div id="paneForms" hidden>
+<div class="searchbar"><input id="siteSearch" type="search" placeholder="Search company or website" autocomplete="off"></div>
+<div class="filters"><select id="siteFilter" aria-label="Which websites"><option value="waiting">Open form, waiting to send</option><option value="sent">Sent</option><option value="tried">Tried, not sent</option><option value="open">Every open form</option><option value="captcha">Behind a captcha (never sent)</option></select></div>
+<div class="meta-row"><span class="grow" id="siteCount"></span></div>
+<div class="list" id="siteRows"><div class="empty">Loading…</div></div>
+<div class="pager" style="margin-top:12px"><button id="sitePrev" class="sm">Previous</button><span id="sitePage" style="text-align:center"></span><button id="siteNext" class="sm">Next</button></div>
+<p class="hint">Malaysian lead websites the PC checked for a contact form. Waiting: an open form (no captcha) at a commercial or industrial company that was not emailed or tried yet; the Contact forms switch on Home sends to these, a few each weekday.</p>
+</div>
+<div id="paneLeads">
 <div class="searchbar"><input id="leadSearch" type="search" placeholder="Search company, email or person" autocomplete="off"></div>
 <div class="filters">
 <select id="leadStatus" aria-label="Status"><option value="new">Not in a campaign yet</option><option value="pushed">In a campaign</option><option value="replied">Replied</option><option value="stopped">Bounced or unsubscribed</option><option value="all">Any status</option></select>
@@ -422,6 +437,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 <div class="list" id="leadRows"><div class="empty">Loading…</div></div>
 <div class="pager" style="margin-top:12px"><button id="leadPrev" class="sm">Previous</button><span id="leadPage" style="text-align:center"></span><button id="leadNext" class="sm">Next</button></div>
 <div class="pushbar"><button class="ink block" id="pushOpen">Add leads to a campaign</button></div>
+</div>
 </section>
 </main>
 
@@ -509,7 +525,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 
   // ---- routing ----
   // A hash name maps to the section that shows it, a section to its bottom tab.
-  var SECTION={dashboard:'dashboard',replies:'inbox',chats:'inbox',reply:'reply',campaigns:'campaigns',templates:'campaigns',campaign:'campaign',template:'template',leads:'leads'};
+  var SECTION={dashboard:'dashboard',replies:'inbox',chats:'inbox',reply:'reply',campaigns:'campaigns',templates:'campaigns',campaign:'campaign',template:'template',leads:'leads',forms:'leads'};
   var TAB={dashboard:'dashboard',inbox:'replies',reply:'replies',campaigns:'campaigns',campaign:'campaigns',template:'campaigns',leads:'leads'};
   var TITLE={dashboard:'Email hub',inbox:'Inbox',campaigns:'Campaigns',leads:'Leads',reply:'Reply',campaign:'Campaign',template:'Template'};
   var FOCUS={reply:'#replies',campaign:'#campaigns',template:'#templates'};
@@ -535,7 +551,9 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       var t=S.templates.filter(function(x){return x.id===Number(parts[1])})[0];
       if(t)openTemplate(t);else location.hash='#templates';
     });
+    if(sec==='leads'){$('paneLeads').hidden=v!=='leads';$('paneForms').hidden=v!=='forms'}
     if(v==='leads'){loadStatus().catch(fail);hostStatus();if(!S.leadRows.length||soft)loadLeads()}
+    if(v==='forms')loadSites();
     if(!soft)window.scrollTo(0,0);
   }
   window.addEventListener('hashchange',function(){S.moves++;route()});
@@ -654,6 +672,8 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       var s=r.settings,c=r.counts||{},checked=0;
       Object.keys(c).forEach(function(k){if(k!=='checking')checked+=c[k]});
       $('fpOn').checked=s.enabled;$('fpPerDay').value=s.per_day;
+      $('fpTpl').innerHTML='<option value="">Choose the template…</option>'+(r.templates||[]).map(function(t){return '<option value="'+t.id+'">'+esc(t.name)+'</option>'}).join('');$('fpTpl').value=String(s.template_id||'');
+      $('fpName').value=s.sender.name;$('fpCompany').value=s.sender.company;$('fpPhone').value=s.sender.phone;$('fpEmail').value=s.sender.email;
       $('fpState').textContent=(s.enabled?'On. Sent today: '+r.sent_today+' of '+s.per_day+(r.in_window?'.':'; next in the weekday window (08:00 to 15:00 KL).'):'Off. No form is sent until you switch it on.')+
         (checked?' '+num(checked)+' forms tried: '+num((c.sent||0)+(c.submitted_unconfirmed||0))+' sent, '+num(c.captcha||0)+' behind a captcha.':'')+(r.last&&r.last.reason?' Last check: '+r.last.reason:'');
       var sa=(r.scan&&r.scan.all)||{},st=(r.scan&&r.scan.target)||{},total=0,left=0;
@@ -663,8 +683,9 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
     }).catch(fail);
   }
   function fpSave(){
-    var b={enabled:$('fpOn').checked,per_day:Number($('fpPerDay').value)};
-    if(b.enabled&&!confirm('Switch contact forms on? Each weekday it sends the campaign\'s first email through up to '+b.per_day+' company websites.')){$('fpOn').checked=false;return}
+    var b={enabled:$('fpOn').checked,per_day:Number($('fpPerDay').value),template_id:Number($('fpTpl').value)||null,sender:{name:$('fpName').value,company:$('fpCompany').value,phone:$('fpPhone').value,email:$('fpEmail').value}};
+    if(b.enabled&&!b.template_id){$('fpOn').checked=false;$('fpCard').querySelector('details').open=true;return show('error','Choose the template for contact forms first.')}
+    if(b.enabled&&!confirm('Switch contact forms on? Each weekday it sends the first email of "'+$('fpTpl').selectedOptions[0].textContent+'" through up to '+b.per_day+' company websites, as '+b.sender.name+'.')){$('fpOn').checked=false;return}
     api('/api/email-marketing/form-autopilot',{method:'POST',body:b}).then(function(){show('info',b.enabled?'Contact forms are on.':'Saved. Contact forms are off.');return loadForms()}).catch(function(e){fail(e);loadForms()});
   }
   $('fpSave').onclick=fpSave;
@@ -675,6 +696,30 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       $('fpOut').innerHTML='<p class="hint"><b>'+esc(r.company_name)+'</b> ('+num(r.checked)+' sites checked): '+esc(String(r.status).replace(/_/g,' '))+'. '+esc(r.detail)+'</p>'+(r.screenshot?'<img src="'+esc(r.screenshot)+'" alt="The filled form" style="width:100%;border-radius:10px;margin-top:8px">':'');
     }).catch(function(e){$('fpOut').innerHTML='';fail(e)});
   };
+  // ---- contact-form websites ----
+  var SITE={offset:0,timer:null};
+  var SITE_WORD={waiting:'waiting to send',sent:'sent',tried:'tried, not sent',open:'open forms',captcha:'behind a captcha'};
+  function loadSites(){
+    var q=new URLSearchParams({filter:$('siteFilter').value,offset:String(SITE.offset)});
+    var s=$('siteSearch').value.trim();if(s)q.set('search',s);
+    return api('/api/email-marketing/form-autopilot/sites?'+q.toString()).then(function(r){
+      var c=r.counts||{};
+      Array.prototype.forEach.call($('siteFilter').options,function(o){o.textContent=o.textContent.replace(/ \([\d,]+\)$/,'')+' ('+num(c[o.value])+')'});
+      $('siteCount').textContent=num(r.total)+' '+SITE_WORD[r.filter];
+      $('siteRows').innerHTML=r.rows.length?r.rows.map(function(x){
+        var st=x.sent_at?['ok','sent']:x.send_status?[x.send_status==='captcha'?'warn':'bad',x.send_status]:x.form==='captcha'?['warn','captcha']:['blue','waiting'];
+        var link=x.form_url||x.website;
+        return '<div class="rowl"><div class="grow"><div class="rt">'+esc(x.company_name)+'</div><div class="rs">'+esc(x.category||'')+'</div><div class="rs"><a href="'+esc(link)+'" target="_blank" rel="noopener">'+esc(String(link).replace(/^https?:\/\/(www\.)?/,''))+'</a></div>'+(x.send_detail||x.form==='captcha'?'<div class="rs">'+esc(x.send_detail||x.form_detail)+'</div>':'')+'</div><div class="rr"><span class="chip '+st[0]+'">'+esc(String(st[1]).replace(/_/g,' '))+'</span><div>'+((x.tried_at)?ago(x.tried_at)+' ago':'')+'</div></div></div>';
+      }).join(''):'<div class="empty">No website here yet.</div>';
+      var from=r.total?r.offset+1:0,to=Math.min(r.offset+r.page_size,r.total);
+      $('sitePage').textContent=num(from)+'–'+num(to)+' of '+num(r.total);
+      $('sitePrev').disabled=r.offset<=0;$('siteNext').disabled=to>=r.total;
+    }).catch(fail);
+  }
+  $('siteFilter').onchange=function(){SITE.offset=0;loadSites()};
+  $('siteSearch').oninput=function(){clearTimeout(SITE.timer);SITE.timer=setTimeout(function(){SITE.offset=0;loadSites()},350)};
+  $('sitePrev').onclick=function(){SITE.offset=Math.max(0,SITE.offset-50);loadSites();window.scrollTo(0,0)};
+  $('siteNext').onclick=function(){SITE.offset+=50;loadSites();window.scrollTo(0,0)};
   function setBadge(n){
     $('badge').hidden=!n;$('badge').textContent=n>99?'99+':String(n);$('segN').textContent=n?'('+n+')':'';
     try{if(n&&navigator.setAppBadge)navigator.setAppBadge(n);else if(navigator.clearAppBadge)navigator.clearAppBadge()}catch(e){}
