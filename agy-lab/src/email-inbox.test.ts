@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mailbox } from './core/index.ts';
-import { coveredBy, merge, normId } from './email-inbox.ts';
+import { coveredBy, merge, normId, sameSite } from './email-inbox.ts';
+
+test('a contact-form answer is matched by the website: same host, or one inside the other', () => {
+  assert.equal(sameSite('komasi.com', 'www.komasi.com'), true);
+  assert.equal(sameSite('mail.acme.com.my', 'acme.com.my'), true);
+  assert.equal(sameSite('acme.com.my', 'shop.acme.com.my'), true);
+  assert.equal(sameSite('notacme.com.my', 'acme.com.my'), false);
+  assert.equal(sameSite('acme.com', ''), false);
+});
 
 test('mailbox logins: one per line, Google app password pasted in groups, hosts optional', () => {
   const list = mailbox.parseLogins([

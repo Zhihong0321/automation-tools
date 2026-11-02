@@ -3,8 +3,10 @@
 // another address, or a mail to any other mailbox saved on /workers never reached
 // /email-marketing. Every two minutes each saved mailbox's INBOX is read over IMAP
 // (core mailbox, nothing marked read); a mail whose sender is a lead, or shares a
-// lead's company domain, is kept in email_marketing_inbox. Mail from anyone else is
-// not kept.
+// lead's company domain, or writes from the website domain of a company we sent a
+// contact form to (form-autopilot.ts), is kept in email_marketing_inbox. Mail from
+// anyone else is not kept. A contact-form answer has no campaign; our form message
+// is kept beside it as the first message of that thread.
 //
 // A kept mail is the same reply Smartlead reported when an EMAIL_REPLY webhook for that
 // sender landed around it, or Smartlead's thread holds it: then it is left to the
@@ -77,7 +79,25 @@ const SYSTEM_SENDER = /^(mailer-daemon|postmaster|no-?reply|do-?not-?reply|notif
 
 export const normId = (id: string | null | undefined) => String(id ?? '').trim().replace(/^<|>$/g, '').toLowerCase();
 
-interface Match { lead_email: string; campaign_id: number; campaign_name: string | null; company_id: number | null; matched_by: 'lead' | 'domain' }
+interface Match { lead_email: string; campaign_id: number; campaign_name: string | null; company_id: number | null; matched_by: 'lead' | 'domain' | 'form' }
+
+/** A sender's mail domain belongs to a website: the same host, or one inside the other (mail.acme.my and acme.my). */
+export function sameSite(domain: string, host: string): boolean {
+  const d = domain.toLowerCase().replace(/^www\./, '');
+  const h = host.toLowerCase().replace(/^www\./, '');
+  return Boolean(d && h) && (d === h || d.endsWith('.' + h) || h.endsWith('.' + d));
+}
+
+/** Companies sent our message through their contact form (form-autopilot.ts), read at most every two minutes. */
+let formSent: { at: number; rows: Array<{ company_id: string; website: string; subject: string | null; message: string | null; sent_at: string }> } | null = null;
+async function formSends() {
+  if (formSent && Date.now() - formSent.at < 120_000) return formSent.rows;
+  const rows = (await db.sql<{ company_id: string; website: string; subject: string | null; message: string | null; sent_at: string }>(
+    `select company_id::text, website, subject, message, sent_at from contact_form_send where sent_at is not null`).catch(() => ({ rows: [] }))).rows;
+  formSent = { at: Date.now(), rows };
+  return rows;
+}
+const hostOf = (website: string) => { try { return new URL(/^https?:\/\//i.test(website) ? website : 'http://' + website).hostname; } catch { return ''; } };
 
 /** The lead a sender belongs to: themself, else (not on a free-mail domain) a lead at their company's domain. */
 export async function matchSender(email: string): Promise<Match | null> {
@@ -96,7 +116,23 @@ export async function matchSender(email: string): Promise<Match | null> {
   const peer = await db.sql<{ email: string; campaign_id: string; campaign_name: string | null; company_id: string | null }>(
     `select email, campaign_id::text, campaign_name, company_id::text from email_marketing_lead where split_part(lower(email), '@', 2) = $1 order by pushed_at desc limit 1`, [domain]);
   const p = peer.rows[0];
-  return p ? { lead_email: p.email.toLowerCase(), campaign_id: Number(p.campaign_id), campaign_name: p.campaign_name, company_id: p.company_id ? Number(p.company_id) : null, matched_by: 'domain' } : null;
+  if (p) return { lead_email: p.email.toLowerCase(), campaign_id: Number(p.campaign_id), campaign_name: p.campaign_name, company_id: p.company_id ? Number(p.company_id) : null, matched_by: 'domain' };
+  // A company we wrote to through its contact form: no campaign, the sender's domain is its website's.
+  const form = (await formSends()).find((f) => sameSite(domain, hostOf(f.website)));
+  return form ? { lead_email: email, campaign_id: 0, campaign_name: 'Contact form', company_id: Number(form.company_id), matched_by: 'form' } : null;
+}
+
+/**
+ * Our contact-form message, as the first message of the sender's thread, so the conversation
+ * and the reply draft show what they are answering. Kept once per sender, dated when it was sent.
+ */
+async function keepFormMessage(mailboxEmail: string, from: string, companyId: number | null): Promise<void> {
+  const sent = (await formSends()).find((f) => Number(f.company_id) === companyId);
+  if (!sent?.message) return;
+  await db.sql(
+    `insert into email_marketing_inbox (mailbox, message_id, inbound, email, lead_email, campaign_id, campaign_name, company_id, matched_by, subject, body_text, received_at, handled_at, direct)
+     values ($1, $2, false, $3, $3, 0, 'Contact form', $4, 'form-sent', $5, $6, $7::timestamptz, now(), true) on conflict (mailbox, message_id) do nothing`,
+    [mailboxEmail, `contact-form-${companyId}-${from}`, from, companyId, sent.subject, sent.message, sent.sent_at]);
 }
 
 export interface MailboxState { email: string; ok: boolean | null; error: string | null; checked_at: string | null; kept: number }
@@ -129,6 +165,7 @@ export async function poll(): Promise<typeof state> {
             [login.email, m.message_id, from, m.from_name, match.lead_email, match.campaign_id, match.campaign_name, match.company_id, match.matched_by,
               m.subject, m.text || htmlToText(m.html), m.html || null, m.in_reply_to, m.references, m.received_at]);
           kept += saved.rowCount ?? 0;
+          if (saved.rowCount && match.matched_by === 'form') await keepFormMessage(login.email, from, match.company_id);
         }
         await db.sql(
           `insert into email_marketing_inbox_cursor (mailbox, uid_validity, last_uid, checked_at, kept, error) values ($1, $2, $3, now(), $4, null)
@@ -185,10 +222,11 @@ async function act(row: InboxRow): Promise<void> {
   }
   if (row.company_id) {
     const who = row.matched_by === 'domain' ? `${row.email} (same company as ${row.lead_email})` : row.email;
+    const where = row.matched_by === 'form' ? 'answering our contact-form message' : 'outside the campaign thread';
     await db.sql(
       `insert into lead_activity_log (company_id, action, previous_status, new_status, notes, is_mock, created_at)
        select c.id, 'email_event', coalesce(c.lead_status, 'unassigned'), 'email_replied', $2, false, now() from company_data c where c.id = $1`,
-      [row.company_id, `Email from ${who} to ${row.mailbox}, outside the campaign thread: ${stripQuoted(row.body_text ?? '').slice(0, 600) || row.subject || '(no text)'}`]).catch(() => {});
+      [row.company_id, `Email from ${who} to ${row.mailbox}, ${where}: ${stripQuoted(row.body_text ?? '').slice(0, 600) || row.subject || '(no text)'}`]).catch(() => {});
   }
   const replies = await import('./email-replies.ts');
   replies.draftSoon(row.email, campaignId || null);
