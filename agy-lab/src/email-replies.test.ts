@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPrompt, cleanDraft, latestInbound, messageKey, type Message } from './email-replies.ts';
+import { SKILL, buildPrompt, cleanDraft, latestInbound, messageKey, type Message } from './email-replies.ts';
 
 const msg = (inbound: boolean, body: string, over: Partial<Message> = {}): Message =>
   ({ inbound, stats_id: 's1', message_id: null, time: '2026-11-04T09:00:00Z', subject: null, body, body_html: '<p>' + body + '</p>', ...over });
@@ -18,9 +18,19 @@ test('the prompt carries the thread, the company and the rules that keep it hone
   assert.match(p, /Lim Hardware \(Hardware store\)/);
   assert.match(p, /THEM \(the lead\)[^\n]*\nhow much for 50kW\?/);
   assert.match(p, /Never invent prices/);
-  assert.match(p, /language they wrote in/);
+  assert.match(p, /detect the language of THEIR LATEST message/);
+  assert.match(p, /Short, simple, clear/);
   assert.match(p, /Extra instruction from the sender: in Malay/);
   assert.doesNotMatch(buildPrompt({ company: null, category: null, campaign: null, messages: [msg(true, 'hi')] }), /Extra instruction/);
+});
+
+test('the prompt carries the Eternalgy skill: the profile PDF, the facts and the voice', () => {
+  const p = buildPrompt({ company: 'Lim Steel', category: 'Factory', campaign: 'Johor C&I', messages: [msg(true, 'send more details')] });
+  assert.ok(p.startsWith(SKILL));
+  assert.match(p, /https:\/\/eternalgy\.me\/docs\/eternalgy-corporate-profile-2026\.pdf/);
+  assert.match(p, /CIDB Grade G7/);
+  assert.match(p, /Voice: short, simple, clear/);
+  assert.doesNotMatch(p, /Do not mention links/);
 });
 
 test('a draft loses fences, a subject line and a signature the model added', () => {

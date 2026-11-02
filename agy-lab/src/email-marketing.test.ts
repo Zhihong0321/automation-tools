@@ -38,6 +38,14 @@ test('plain text becomes paragraphs and comes back the same', () => {
   assert.equal(htmlToText(html), text);
 });
 
+test('a link in plain text goes out clickable and comes back as the same text', () => {
+  const url = 'https://eternalgy.me/docs/eternalgy-corporate-profile-2026.pdf';
+  const text = `Our profile:\n${url}.`;
+  const html = textToHtml(text);
+  assert.equal(html, `<p>Our profile:<br><a href="${url}">${url}</a>.</p>`);
+  assert.equal(htmlToText(html), text);
+});
+
 test('inbox rows and thread messages read either field naming', () => {
   const a = inboxItem({ lead_email: 'x@y.com', email_campaign_id: 7, email_lead_id: 9, last_reply_time: 't', is_read: false });
   assert.deepEqual([a.email, a.campaign_id, a.lead_id, a.unread], ['x@y.com', 7, 9, true]);

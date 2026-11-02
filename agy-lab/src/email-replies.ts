@@ -5,6 +5,7 @@
 // A reply is drafted as soon as its webhook lands, so it is usually ready by the time
 // the page opens; opening a reply with no draft writes one on the spot. Drafts live in
 // email_marketing_draft, one per lead message answered.
+import fs from 'node:fs';
 import type http from 'node:http';
 import * as db from './reportdb.ts';
 import { llm } from './core/index.ts';
@@ -16,12 +17,8 @@ type Ctx = {
   readJson: (req: http.IncomingMessage) => Promise<Record<string, unknown>>;
 };
 
-/** Who is writing, and what Eternalgy sells, for the model. The mailbox adds the signature. */
-const SENDER = process.env.EMAIL_REPLY_SENDER?.trim() || [
-  'You write as Gan Zhi Hong, Marketing Manager at Eternalgy Sdn Bhd.',
-  'Eternalgy is a Malaysian solar PV company: engineering, procurement and construction (EPC), installation, maintenance and distribution of solar systems for commercial, industrial and home roofs. It is a SEDA-registered PV service provider and PV investor, based in Johor Bahru.',
-  'WhatsApp for a faster chat: +60 11-2100 0099.',
-].join('\n');
+/** How to write for Eternalgy (email-skill.md): who is writing, the company's facts, the profile PDF and the voice. */
+export const SKILL = fs.readFileSync(new URL('./email-skill.md', import.meta.url), 'utf8').trim();
 
 export interface Message { inbound: boolean; stats_id: string | null; message_id: string | null; time: string | null; subject: string | null; body: string; body_html: string }
 
@@ -76,7 +73,9 @@ export function buildPrompt(input: { company: string | null; category: string | 
   const thread = input.messages.map((m) =>
     `--- ${m.inbound ? 'THEM (the lead)' : 'US (Eternalgy)'}${m.time ? ' · ' + m.time : ''}${m.subject ? ' · subject: ' + m.subject : ''}\n${m.body.trim() || '(empty)'}`).join('\n\n');
   return [
-    SENDER,
+    SKILL,
+    '',
+    '---',
     '',
     `The lead: ${input.company || 'unknown company'}${input.category ? ` (${input.category})` : ''}. Campaign: ${input.campaign || 'cold email'}.`,
     '',
@@ -84,13 +83,13 @@ export function buildPrompt(input: { company: string | null; category: string | 
     thread,
     '',
     'Write our reply to their latest message.',
-    '- Reply in the language they wrote in (English, Malay or Chinese).',
-    '- Answer what they actually asked or said, first. Keep it short: under 120 words, 2 to 4 short paragraphs.',
-    '- If they are interested or asking questions, move to one clear next step: a short call or a free site visit / roof assessment, and offer WhatsApp.',
-    '- Never invent prices, savings figures, specifications, timelines or promises. If they ask for something you cannot know, say you will confirm it or work it out after seeing their roof and electricity bill.',
-    '- If they are not interested or ask to stop, write one or two polite lines that close the conversation and say they will not be emailed again.',
+    '- First detect the language of THEIR LATEST message (English, Malay, Chinese or any other) and write the whole reply in that language, even if earlier messages were in another. If it mixes languages, use the one most of it is in.',
+    '- Short, simple, clear. Answer what they asked in the first sentence. Under 80 words (the link line does not count), 2 or 3 short paragraphs. No filler, no flowery thanks.',
+    '- If they are interested or asking questions, end with one clear next step: send the TNB bill, a free site survey or a short call, and offer WhatsApp.',
+    '- Never invent prices, savings figures, specifications, timelines or promises. State only facts from the skill above. If they ask for something you cannot know, say we will work it out from their roof and electricity bill.',
+    '- If they are not interested or ask to stop, write one or two lines that close the conversation and say they will not be emailed again.',
     '- If it is an auto-reply or out-of-office, write a one-line note saying you will follow up later.',
-    '- Do not mention links, booking pages, attachments or brochures: the email carries none. Ask them to reply with a good time, or WhatsApp.',
+    '- The only link you may write is the company profile PDF, by the rules in the skill above. No other links, booking pages or attachments.',
     '- Plain text only. No subject line, no "Dear [Name]" placeholders, no signature (it is added automatically), no markdown.',
     input.instruction ? `\nExtra instruction from the sender: ${input.instruction}` : '',
     '',

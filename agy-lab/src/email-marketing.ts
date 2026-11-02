@@ -142,9 +142,12 @@ export async function push(campaignId: number, campaignName: string | null, rows
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+/** A bare link (the company profile PDF in a reply) goes out clickable. */
+const linkify = (html: string) => html.replace(/https?:\/\/[^\s<]*[^\s<.,;:!?)]/g, (u) => `<a href="${u}">${u}</a>`);
+
 /** The page edits plain text; Smartlead stores HTML. Blank lines make paragraphs. */
 export function textToHtml(text: string): string {
-  return text.trim().split(/\r?\n\s*\r?\n/).map((p) => '<p>' + esc(p).replace(/\r?\n/g, '<br>') + '</p>').join('');
+  return text.trim().split(/\r?\n\s*\r?\n/).map((p) => '<p>' + linkify(esc(p)).replace(/\r?\n/g, '<br>') + '</p>').join('');
 }
 
 export function htmlToText(html: string): string {
