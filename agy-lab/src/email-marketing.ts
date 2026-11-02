@@ -380,7 +380,6 @@ const formDeps = (): formAutopilot.Deps => {
       const fields = { company_name: lead.company_name, category: lead.category ?? '' };
       return { ...rest, subject: templates.render(m.subject, profile, fields), body: templates.render(m.body, profile, fields) };
     },
-    scan: formAutopilot.scan,
     deliver,
   };
 };

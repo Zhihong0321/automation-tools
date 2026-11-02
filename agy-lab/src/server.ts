@@ -27,6 +27,7 @@ import * as countryResearch from './country-research.ts';
 import * as searchList from './search-list.ts';
 import * as companies from './company-uid.ts';
 import * as listStep2 from './list-step2.ts';
+import * as formAutopilot from './form-autopilot.ts';
 import { searchListPage } from './search-list-page.ts';
 import { researchLeadsPage } from './research-leads-page.ts';
 import * as contactKeys from './contact-keys.ts';
@@ -355,6 +356,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         && await jobs.handle(req, res, url, { json, readJson, scope: { types: gmapWorker.JOB_TYPES } })) return;
       // The step-2 worker on a PC: take a batch of leads, send back each result (list-step2.ts).
       if (p.startsWith('/api/list-step2/worker/') && await listStep2.handleWorker(req, res, url, { json, readJson })) return;
+      // The same worker checks Malaysian lead websites for an open contact form (form-autopilot.ts).
+      if (p.startsWith('/api/form-scan/worker/') && await formAutopilot.handleWorker(req, res, url, { json, readJson })) return;
       return json(res, 403, { error: 'the Gmap worker key only reaches the worker routes' });
     }
   }
@@ -395,6 +398,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 
   // ---- list processing step 2: each found business's best contact method ----
   if (await listStep2.handle(req, res, url, { json, readJson })) return;
+  if (await formAutopilot.handleWorker(req, res, url, { json, readJson })) return;
   if (await companies.handle(req, res, url, { json })) return;
 
   // ---- the Gmap Local Worker package, engine and sweep words ---------------

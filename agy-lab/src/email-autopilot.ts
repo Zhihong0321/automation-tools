@@ -81,7 +81,7 @@ export function isTarget(r: { email: string; category?: string | null; company_n
 }
 
 /** Solar installers and other renewable-energy firms: competitors, never sent the pitch. */
-const SOLAR = /solar|photovoltaic|\bpv\b|renewable|green energy|tenaga suria/i;
+export const SOLAR = /solar|photovoltaic|\bpv\b|renewable|green energy|tenaga suria/i;
 
 /** The company half of isTarget: the category, a name that reads as a company, and not a solar firm. The contact-form autopilot uses it alone. */
 export function isTargetCompany(r: { category?: string | null; company_name?: string | null }): boolean {

@@ -309,7 +309,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 <div class="btns" style="margin-top:14px"><button class="primary grow" id="fpSave">Save</button><button class="grow" id="fpTest">Test one, no send</button></div>
 <div id="fpOut"></div>
 <div class="list" id="fpRows" style="margin-top:8px"></div>
-<p class="hint">Each weekday from 08:00 to 15:00 (Kuala Lumpur) it takes the same commercial and industrial companies as the autopilot above, by their website instead of an email. It checks the site for a contact form with no captcha and sends the campaign's first email through it, from the campaign mailbox, so answers land in Replies. Each company is tried once, never sent twice, and not emailed after a form send.</p>
+<p class="hint">Each weekday from 08:00 to 15:00 (Kuala Lumpur) it takes the same commercial and industrial companies as the autopilot above, by their website instead of an email. A PC running the Step 2 Worker checks each site for a contact form with no captcha (Railway reads no site), and the hub sends the campaign's first email through it, from the campaign mailbox, so answers land in Replies. Each company is tried once, never sent twice, and not emailed after a form send.</p>
 </div></details>
 </div>
 </div>
@@ -655,7 +655,10 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       Object.keys(c).forEach(function(k){if(k!=='checking')checked+=c[k]});
       $('fpOn').checked=s.enabled;$('fpPerDay').value=s.per_day;
       $('fpState').textContent=(s.enabled?'On. Sent today: '+r.sent_today+' of '+s.per_day+(r.in_window?'.':'; next in the weekday window (08:00 to 15:00 KL).'):'Off. No form is sent until you switch it on.')+
-        (checked?' '+num(checked)+' sites checked: '+num((c.sent||0)+(c.submitted_unconfirmed||0))+' sent, '+num(c.captcha||0)+' behind a captcha.':'')+(r.last&&r.last.reason?' Last check: '+r.last.reason:'');
+        (checked?' '+num(checked)+' forms tried: '+num((c.sent||0)+(c.submitted_unconfirmed||0))+' sent, '+num(c.captcha||0)+' behind a captcha.':'')+(r.last&&r.last.reason?' Last check: '+r.last.reason:'');
+      var sa=(r.scan&&r.scan.all)||{},st=(r.scan&&r.scan.target)||{},total=0,left=0;
+      Object.keys(sa).forEach(function(k){total+=sa[k];if(k==='not_checked'||k==='taken')left+=sa[k]});
+      $('fpState').textContent+=' Websites checked by the PC: '+num(total-left)+' of '+num(total)+'. Open forms: '+num(sa.bot_can_submit||0)+', of them '+num(st.bot_can_submit||0)+' target companies.';
       $('fpRows').innerHTML=(r.recent||[]).map(function(x){var k=x.sent_at?'ok':x.status==='captcha'?'warn':x.status==='failed'?'bad':'blue';return '<div class="rowl"><div class="grow"><div class="rt">'+esc(x.company_name)+'</div><div class="rs">'+esc(x.form_url||x.website)+'</div><div class="rs">'+esc(x.detail)+'</div></div><div class="rr"><span class="chip '+k+'">'+esc(String(x.status).replace(/_/g,' '))+'</span><div>'+(x.checked_at?ago(x.checked_at)+' ago':'')+'</div></div></div>'}).join('');
     }).catch(fail);
   }

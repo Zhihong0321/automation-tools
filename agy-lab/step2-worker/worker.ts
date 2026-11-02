@@ -6,7 +6,9 @@
 // own internet line, and sends each result back as soon as it is ready. Each
 // slot takes its next lead as soon as it is free, so one slow lead or send never
 // holds up the others. Only outbound requests. When no step-2 job is running it
-// asks again every minute, so it shares the work whenever the PC is on and a job is running.
+// checks Malaysian lead websites for an open contact form instead (form-autopilot.ts:
+// the same processLead, only its form verdict sent back), so Railway reads no site.
+// With neither, it asks again every minute.
 //
 // It holds the Gmap worker key (an HMAC of LAB_TOKEN that reaches only the
 // worker routes), never LAB_TOKEN. A machine that already holds LAB_TOKEN (the
@@ -52,7 +54,8 @@ const env = settings();
 const LAB_URL = (env.LAB_URL ?? '').replace(/\/+$/, '');
 const KEY = env.GMAP_WORKER_KEY || env.LAB_TOKEN || '';
 const WORKER = env.WORKER_NAME || 'pc-' + os.hostname().toLowerCase().replace(/[^a-z0-9.-]+/g, '-');
-const CONCURRENCY = Math.max(1, Math.min(20, Number(env.CONCURRENCY) || 6));
+// CONCURRENCY in the environment wins over worker.env, for a run started by hand.
+const CONCURRENCY = Math.max(1, Math.min(20, Number(process.env.CONCURRENCY || env.CONCURRENCY) || 6));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const SEND_MS = 60_000;
@@ -72,13 +75,16 @@ async function post(route: string, body: Record<string, unknown>): Promise<any> 
 
 /** One lead, its answer sent back; a send that fails is tried twice more, then left to the lease. */
 async function work(lead: any, reader: Reader): Promise<boolean> {
-  const result = await reader.read(lead);
+  // A website from the form check: only its form verdict goes back.
+  const site = lead.kind === 'form';
+  const result = await reader.read(site ? { business: { name: lead.company_name, website: lead.website }, contact: null, country: 'Malaysia' } : lead);
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      await post('/api/list-step2/worker/done', { worker: WORKER, job_id: lead.job_id, place_key: lead.place_key, result });
+      if (site) await post('/api/form-scan/worker/done', { worker: WORKER, company_id: lead.company_id, form: result.form });
+      else await post('/api/list-step2/worker/done', { worker: WORKER, job_id: lead.job_id, place_key: lead.place_key, result });
       return true;
     } catch (err) {
-      log(`could not send ${lead.business?.name ?? lead.place_key}: ${(err as Error).message}`);
+      log(`could not send ${lead.business?.name ?? lead.company_name ?? lead.place_key}: ${(err as Error).message}`);
       await sleep(10_000 * attempt);
     }
   }
@@ -94,13 +100,20 @@ let idle = false;
 
 async function fill(): Promise<void> {
   try {
-    const leads = (await post('/api/list-step2/worker/take', { worker: WORKER, limit: Math.min(WORKER_BATCH_MAX, CONCURRENCY * 2) })).leads ?? [];
+    const limit = Math.min(WORKER_BATCH_MAX, CONCURRENCY * 2);
+    const leads = (await post('/api/list-step2/worker/take', { worker: WORKER, limit })).leads ?? [];
     if (leads.length) {
       idle = false;
       queue.push(...leads);
       return;
     }
-    if (!idle) log('no step-2 work running; asking again every minute');
+    const sites = (await post('/api/form-scan/worker/take', { worker: WORKER, limit })).sites ?? [];
+    if (sites.length) {
+      idle = false;
+      queue.push(...sites.map((s: any) => ({ ...s, kind: 'form' })));
+      return;
+    }
+    if (!idle) log('no step-2 work and no website to check; asking again every minute');
     idle = true;
   } catch (err) {
     log('could not reach the hub: ' + (err as Error).message);
@@ -131,7 +144,7 @@ async function main(): Promise<void> {
     for (;;) {
       const lead = await nextLead();
       try { if (await work(lead, reader)) { total++; recent++; } }
-      catch (err) { log(`${lead.business?.name ?? lead.place_key}: ${(err as Error).message}`); }
+      catch (err) { log(`${lead.business?.name ?? lead.company_name ?? lead.place_key}: ${(err as Error).message}`); }
       if (Date.now() - since >= 60_000) {
         log(`${recent} leads done in the last ${Math.round((Date.now() - since) / 1000)} s (${total} since start)`);
         recent = 0;
