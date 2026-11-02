@@ -67,6 +67,22 @@ export function todaysTarget(s: Settings, today: string): number {
 
 export interface PoolRow { email: string; company_id: string; mail_host: string | null; person_name: string | null; lead_status: string | null }
 
+/** Businesses with a big daytime power bill: the ones a solar tax-allowance email is for. */
+const TARGET_CATEGORY = /manufactur|factory|industr|packaging|logistic|warehouse|freight|hotel|resort|supermarket|hypermarket|cold storage|plastic|metal|steel|food processing|printing|textile|engineering|fabricat|machine shop|chemical|rubber|\bmill\b|hospital|shopping mall|wholesal|distributor|construction|contractor|petrol|gas station|laundry|bakery|cement|quarry/i;
+const FREE_MAIL = /@(gmail|googlemail|yahoo|ymail|rocketmail|hotmail|outlook|live|msn|icloud|me|aol|protonmail|proton|tutanota|gmx|mail|qq|163|126)\.[a-z.]+$/i;
+
+/**
+ * A lead worth this campaign: a commercial or industrial category, a company email (not a
+ * personal webmail), and a company name that reads as one in "{{company_name}} electricity
+ * bill" (not "0", a street address or a Maps description).
+ */
+export function isTarget(r: { email: string; category?: string | null; company_name?: string | null }): boolean {
+  const name = String(r.company_name ?? '').trim();
+  return TARGET_CATEGORY.test(r.category ?? '')
+    && !FREE_MAIL.test(r.email)
+    && /[a-z]{3}/i.test(name) && name.length <= 60 && !/^\d|\bjalan\b|,\s*\d{5}\b/i.test(name);
+}
+
 /** n leads spread over mail hosts in proportion to the pool, no host above maxShare of n. */
 export function pickBatch<T extends PoolRow>(pool: T[], n: number, maxShare: number): T[] {
   const bestPerCompany = new Map<string, T>();

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pickBatch, plan, todaysTarget, inWindow, klNow, readSettings, mixOf, DEFAULTS, type PoolRow, type CampaignState, type Settings } from './email-autopilot.ts';
+import { isTarget, pickBatch, plan, todaysTarget, inWindow, klNow, readSettings, mixOf, DEFAULTS, type PoolRow, type CampaignState, type Settings } from './email-autopilot.ts';
 import { NO_MX } from './email-mx.ts';
 
 let id = 0;
@@ -94,4 +94,18 @@ test('settings are clamped to sane values and default to off', () => {
   const s = readSettings({ enabled: true, new_per_day: 9999, ramp_start: 0, ramp_days: 999, max_provider_share: 5, campaign_id: '12' });
   assert.deepEqual([s.new_per_day, s.ramp_start, s.ramp_days, s.max_provider_share, s.campaign_id], [200, 5, 60, 1, 12]);
   assert.equal(readSettings({ new_per_day: 3, ramp_start: 9 }).ramp_start, 3);
+});
+
+test('the campaign targets commercial and industrial companies with a company email and a real name', () => {
+  const ok = { email: 'sales@lim-plastic.com.my', category: 'Plastic injection molding service', company_name: 'Lim Plastic Industries Sdn Bhd' };
+  assert.equal(isTarget(ok), true);
+  assert.equal(isTarget({ ...ok, category: 'Hotel' }), true);
+  assert.equal(isTarget({ ...ok, category: 'Hair salon' }), false);
+  assert.equal(isTarget({ ...ok, category: 'Corporate office' }), false);
+  assert.equal(isTarget({ ...ok, category: null }), false);
+  assert.equal(isTarget({ ...ok, email: 'tommytan04@gmail.com' }), false);
+  assert.equal(isTarget({ ...ok, email: 'boss@hotmail.com' }), false);
+  assert.equal(isTarget({ ...ok, company_name: '0' }), false);
+  assert.equal(isTarget({ ...ok, company_name: '129,JALAN MAHARANI 84000 MUAR JOHOR' }), false);
+  assert.equal(isTarget({ ...ok, company_name: '(SHIMZ) Near Persiaran Rimba Permai, Cyberjaya, 63000 Cyberjaya, Selangor' }), false);
 });

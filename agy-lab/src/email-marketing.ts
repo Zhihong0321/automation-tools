@@ -335,9 +335,9 @@ export async function syncWebhooks(): Promise<typeof webhookState> {
 }
 
 /** Every 30 minutes, so a campaign made in Smartlead's own UI still reports back. */
-/** What the autopilot needs from this file: the leads not in a campaign yet, a campaign's state, and push. */
+/** What the autopilot needs from this file: the target leads not in a campaign yet, a campaign's state, and push. */
 const autopilotDeps = (): autopilot.Deps<MarketingLead> => ({
-  pool: async () => (await leads({ status: 'new' })).matching,
+  pool: async () => (await leads({ status: 'new' })).matching.filter(autopilot.isTarget),
   campaign: async (id) => {
     try {
       const [c, a] = await Promise.all([sl.getCampaign(id), sl.campaignAnalytics(id)]);
