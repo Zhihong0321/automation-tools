@@ -304,6 +304,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 <div class="sec" id="fpCard">
 <div class="panel">
 <div class="ap-head"><div class="grow"><h2 class="t">Contact forms</h2><p class="hint" id="fpState"></p></div><label class="switch" aria-label="Send through contact forms"><input type="checkbox" id="fpOn"><span></span></label></div>
+<div class="btns" style="margin-top:10px;flex-wrap:nowrap;align-items:center"><input id="fpNowN" type="number" inputmode="numeric" min="1" max="500" value="50" aria-label="How many to send now" style="width:90px;flex:none"><button class="primary grow" id="fpNow">Send now</button></div>
 <details class="more" style="border:0;margin:6px -14px -14px;background:none"><summary>Settings and the latest sites</summary><div class="in">
 <label class="f" for="fpTpl">Message: the first email of this template</label><select id="fpTpl"></select>
 <label class="f" for="fpName">Name</label><input id="fpName" autocomplete="off">
@@ -676,6 +677,10 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       $('fpName').value=s.sender.name;$('fpCompany').value=s.sender.company;$('fpPhone').value=s.sender.phone;$('fpEmail').value=s.sender.email;
       $('fpState').textContent=(s.enabled?'On. Sent today: '+r.sent_today+' of '+s.per_day+(r.in_window?'.':'; next in the weekday window (08:00 to 15:00 KL).'):'Off. No form is sent until you switch it on.')+
         (checked?' '+num(checked)+' forms tried: '+num((c.sent||0)+(c.submitted_unconfirmed||0))+' sent, '+num(c.captcha||0)+' behind a captcha.':'')+(r.last&&r.last.reason?' Last check: '+r.last.reason:'');
+      var lv=r.live;
+      $('fpNow').disabled=!!lv;$('fpNow').textContent=lv?'Sending…':'Send now';
+      if(lv)$('fpState').textContent='Sending now: '+lv.sent+' of '+lv.target+' sent, '+lv.tried+' forms tried. About half a minute per form. '+$('fpState').textContent;
+      clearTimeout(S.fpTimer);if(lv)S.fpTimer=setTimeout(loadForms,15000);
       var sa=(r.scan&&r.scan.all)||{},st=(r.scan&&r.scan.target)||{},total=0,left=0;
       Object.keys(sa).forEach(function(k){total+=sa[k];if(k==='not_checked'||k==='taken')left+=sa[k]});
       $('fpState').textContent+=' Websites checked by the PC: '+num(total-left)+' of '+num(total)+'. Open forms: '+num(sa.bot_can_submit||0)+', of them '+num(st.bot_can_submit||0)+' target companies.';
@@ -688,6 +693,16 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
     if(b.enabled&&!confirm('Switch contact forms on? Each weekday it sends the first email of "'+$('fpTpl').selectedOptions[0].textContent+'" through up to '+b.per_day+' company websites, as '+b.sender.name+'.')){$('fpOn').checked=false;return}
     api('/api/email-marketing/form-autopilot',{method:'POST',body:b}).then(function(){show('info',b.enabled?'Contact forms are on.':'Saved. Contact forms are off.');return loadForms()}).catch(function(e){fail(e);loadForms()});
   }
+  $('fpNow').onclick=function(){
+    var n=Math.round(Number($('fpNowN').value));if(!(n>=1&&n<=500))return show('error','Send 1 to 500 at a time.');
+    if(!$('fpTpl').value)return show('error','Choose the template for contact forms first.');
+    if(!confirm('Send "'+$('fpTpl').selectedOptions[0].textContent+'" through '+n+' company contact forms now, as '+$('fpName').value+'?'))return;
+    $('fpNow').disabled=true;
+    api('/api/email-marketing/form-autopilot',{method:'POST',body:{template_id:Number($('fpTpl').value),sender:{name:$('fpName').value,company:$('fpCompany').value,phone:$('fpPhone').value,email:$('fpEmail').value}}})
+      .then(function(){return api('/api/email-marketing/form-autopilot/run',{method:'POST',body:{count:n}})})
+      .then(function(r){show(r.started?'info':'error',r.started?'Sending '+n+' now. The card shows each one as it goes.':r.reason);return loadForms()})
+      .catch(function(e){fail(e);loadForms()});
+  };
   $('fpSave').onclick=fpSave;
   $('fpOn').onchange=fpSave;
   $('fpTest').onclick=function(){

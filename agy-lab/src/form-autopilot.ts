@@ -237,30 +237,49 @@ export interface RunResult { at: string; reason: string | null; checked: number;
 let last: RunResult | null = null;
 export const lastResult = () => last;
 let running = false;
+/** The run going now, for the card: how many it means to send, sent and tried so far. */
+let live: { target: number; sent: number; tried: number; started_at: string; manual: boolean } | null = null;
 
-/** Try leads until today's per_day sends are reached, or MAX_TRIES_PER_TICK leads were tried. */
-export async function runOnce(deps: Deps, options: { force?: boolean } = {}): Promise<RunResult> {
+/**
+ * Try leads until today's per_day sends are reached, or MAX_TRIES_PER_TICK leads were tried.
+ * count: a run started by hand from the card, "send this many now": it ignores the switch, the
+ * window and per_day, and tries up to twice count leads.
+ */
+export async function runOnce(deps: Deps, options: { force?: boolean; count?: number } = {}): Promise<RunResult> {
   const finish = (r: Omit<RunResult, 'at'>) => (last = { ...r, at: new Date().toISOString() });
   if (running) return finish({ reason: 'A run is already going.', checked: 0, sent: 0, tried: [] });
   running = true;
   try {
     const settings = await getSettings();
-    if (!settings.enabled && !options.force) return finish({ reason: 'Contact-form autopilot is off.', checked: 0, sent: 0, tried: [] });
-    let done = await sentToday(klNow().day);
-    if (done >= settings.per_day) return finish({ reason: `Today's ${settings.per_day} are sent.`, checked: 0, sent: 0, tried: [] });
+    if (!settings.enabled && !options.force && !options.count) return finish({ reason: 'Contact-form autopilot is off.', checked: 0, sent: 0, tried: [] });
+    const already = options.count ? 0 : await sentToday(klNow().day);
+    const target = options.count ?? settings.per_day;
+    const maxTries = options.count ? options.count * 2 : MAX_TRIES_PER_TICK;
+    if (already >= target) return finish({ reason: `Today's ${settings.per_day} are sent.`, checked: 0, sent: 0, tried: [] });
+    live = { target: target - already, sent: 0, tried: 0, started_at: new Date().toISOString(), manual: Boolean(options.count) };
     const tried: RunResult['tried'] = [];
     let sent = 0;
-    for (const lead of await candidates(MAX_TRIES_PER_TICK * 2)) {
-      if (done >= settings.per_day || tried.length >= MAX_TRIES_PER_TICK) break;
+    for (const lead of await candidates(maxTries * 2)) {
+      if (already + sent >= target || tried.length >= maxTries) break;
       const { screenshot: _, ...t } = await tryLead(lead, deps);
       if (t.status === 'no_message') return finish({ reason: t.detail, checked: tried.length, sent, tried });
       tried.push(t);
-      if (t.sent) { done++; sent++; }
+      if (t.sent) sent++;
+      live = { ...live, sent, tried: tried.length };
     }
     return finish({ reason: tried.length ? null : 'No open form is waiting: the PC has not found one that was not tried or emailed yet.', checked: tried.length, sent, tried });
   } finally {
     running = false;
+    live = null;
   }
+}
+
+/** "Send this many now", from the card: starts in the background and answers at once; the card follows it. */
+export function startNow(deps: Deps, count: number): { started: boolean; reason?: string } {
+  if (running) return { started: false, reason: 'A run is already going.' };
+  void runOnce(deps, { count }).then((r) => console.log(`[form-autopilot] send-now: sent ${r.sent} of ${count} (${r.checked} tried)${r.reason ? ': ' + r.reason : ''}`),
+    (err: Error) => console.warn('[form-autopilot] send-now failed: ' + err.message));
+  return { started: true };
 }
 
 /** The 10-minute check: switched on and inside the window, it sends until the day is full. */
@@ -278,7 +297,7 @@ export async function status() {
   const counts = Object.fromEntries((await db.sql<{ status: string; n: number }>(`select status, count(*)::int as n from contact_form_send group by 1 order by 2 desc`)).rows.map((r) => [r.status, r.n]));
   const recent = (await db.sql(`select company_id::text, company_name, website, status, detail, form_url, checked_at, sent_at from contact_form_send where status <> 'checking' order by checked_at desc limit 40`)).rows;
   const tpls = (await templates.list()).map((t) => ({ id: t.id, name: t.name }));
-  return { settings, templates: tpls, in_window: inWindow(), sent_today: await sentToday(day), counts, scan: await scanCounts(), recent, last: last };
+  return { settings, templates: tpls, in_window: inWindow(), sent_today: await sentToday(day), counts, scan: await scanCounts(), recent, last: last, live };
 }
 
 // ---- the list in the app -----------------------------------------------------------

@@ -625,9 +625,11 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
         if (id && !/^\d+$/.test(id)) return send(400, { error: 'company_id is a number' });
         return send(200, await formAutopilot.test(formDeps(), id || undefined));
       }
-      // Sends now, outside the window too, up to the day's number.
+      // Send now: {count} forms, outside the window and with the switch off too; runs in the background.
       if (method === 'POST' && p === '/api/email-marketing/form-autopilot/run') {
-        return send(200, await formAutopilot.runOnce(formDeps(), { force: true }));
+        const count = Math.round(Number((await ctx.readJson(req)).count));
+        if (!(count >= 1 && count <= 500)) return send(400, { error: 'count is 1 to 500' });
+        return send(202, formAutopilot.startNow(formDeps(), count));
       }
       // The websites the PC checked, for the Contact forms list.
       if (method === 'GET' && p === '/api/email-marketing/form-autopilot/sites') {
