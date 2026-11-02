@@ -301,6 +301,19 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 </div>
 </div>
 
+<div class="sec" id="fpCard">
+<div class="panel">
+<div class="ap-head"><div class="grow"><h2 class="t">Contact forms</h2><p class="hint" id="fpState"></p></div><label class="switch" aria-label="Send through contact forms"><input type="checkbox" id="fpOn"><span></span></label></div>
+<details class="more" style="border:0;margin:6px -14px -14px;background:none"><summary>Settings and the latest sites</summary><div class="in">
+<label class="f" for="fpPerDay">Sent a day</label><input id="fpPerDay" type="number" inputmode="numeric" min="1" max="100">
+<div class="btns" style="margin-top:14px"><button class="primary grow" id="fpSave">Save</button><button class="grow" id="fpTest">Test one, no send</button></div>
+<div id="fpOut"></div>
+<div class="list" id="fpRows" style="margin-top:8px"></div>
+<p class="hint">Each weekday from 08:00 to 15:00 (Kuala Lumpur) it takes the same commercial and industrial companies as the autopilot above, by their website instead of an email. It checks the site for a contact form with no captcha and sends the campaign's first email through it, from the campaign mailbox, so answers land in Replies. Each company is tried once, never sent twice, and not emailed after a form send.</p>
+</div></details>
+</div>
+</div>
+
 <div class="sec">
 <div class="sec-h"><h2>Last 14 days</h2></div>
 <div class="panel"><div class="chart" id="chart"></div><div class="axis" id="axis"></div><div class="cap" id="chartCap"></div></div>
@@ -552,7 +565,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       var hot=G.bounce_rate!=null&&G.bounce_rate>0.03;$('sendNote').hidden=!hot;
       $('sendNote').textContent=hot?'Bounce rate is '+pct(G.bounce_rate)+', over 3%. Pause and clean the list before it hurts the mailbox.':'';
       renderChart(d.daily||[]);renderCampTotals(d.campaigns||[]);
-    }).then(loadStatus).then(function(){loadToday();loadAutopilot();loadUnsub();loadConvos().then(renderWaitNext)}).then(renderChecks).catch(fail);
+    }).then(loadStatus).then(function(){loadToday();loadAutopilot();loadForms();loadUnsub();loadConvos().then(renderWaitNext)}).then(renderChecks).catch(fail);
   }
   function renderWaitNext(){
     var c=S.queue[0];$('waitNext').hidden=!c;if(!c)return;
@@ -635,6 +648,29 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
     if(!$('apOn').checked)return show('error','Switch autopilot on first.');
     if(!confirm('Add today\'s batch to the campaign now?'))return;
     api('/api/email-marketing/autopilot/run',{method:'POST',body:{}}).then(function(r){$('apOut').innerHTML=apResult(r);return loadAutopilot()}).catch(fail);
+  };
+  function loadForms(){
+    return api('/api/email-marketing/form-autopilot').then(function(r){
+      var s=r.settings,c=r.counts||{},checked=0;
+      Object.keys(c).forEach(function(k){if(k!=='checking')checked+=c[k]});
+      $('fpOn').checked=s.enabled;$('fpPerDay').value=s.per_day;
+      $('fpState').textContent=(s.enabled?'On. Sent today: '+r.sent_today+' of '+s.per_day+(r.in_window?'.':'; next in the weekday window (08:00 to 15:00 KL).'):'Off. No form is sent until you switch it on.')+
+        (checked?' '+num(checked)+' sites checked: '+num((c.sent||0)+(c.submitted_unconfirmed||0))+' sent, '+num(c.captcha||0)+' behind a captcha.':'')+(r.last&&r.last.reason?' Last check: '+r.last.reason:'');
+      $('fpRows').innerHTML=(r.recent||[]).map(function(x){var k=x.sent_at?'ok':x.status==='captcha'?'warn':x.status==='failed'?'bad':'blue';return '<div class="rowl"><div class="grow"><div class="rt">'+esc(x.company_name)+'</div><div class="rs">'+esc(x.form_url||x.website)+'</div><div class="rs">'+esc(x.detail)+'</div></div><div class="rr"><span class="chip '+k+'">'+esc(String(x.status).replace(/_/g,' '))+'</span><div>'+(x.checked_at?ago(x.checked_at)+' ago':'')+'</div></div></div>'}).join('');
+    }).catch(fail);
+  }
+  function fpSave(){
+    var b={enabled:$('fpOn').checked,per_day:Number($('fpPerDay').value)};
+    if(b.enabled&&!confirm('Switch contact forms on? Each weekday it sends the campaign\'s first email through up to '+b.per_day+' company websites.')){$('fpOn').checked=false;return}
+    api('/api/email-marketing/form-autopilot',{method:'POST',body:b}).then(function(){show('info',b.enabled?'Contact forms are on.':'Saved. Contact forms are off.');return loadForms()}).catch(function(e){fail(e);loadForms()});
+  }
+  $('fpSave').onclick=fpSave;
+  $('fpOn').onchange=fpSave;
+  $('fpTest').onclick=function(){
+    $('fpOut').innerHTML='<p class="hint">Checking sites for an open form, then filling it without sending. This takes a minute or two…</p>';
+    api('/api/email-marketing/form-autopilot/test',{method:'POST',body:{}}).then(function(r){
+      $('fpOut').innerHTML='<p class="hint"><b>'+esc(r.company_name)+'</b> ('+num(r.checked)+' sites checked): '+esc(String(r.status).replace(/_/g,' '))+'. '+esc(r.detail)+'</p>'+(r.screenshot?'<img src="'+esc(r.screenshot)+'" alt="The filled form" style="width:100%;border-radius:10px;margin-top:8px">':'');
+    }).catch(function(e){$('fpOut').innerHTML='';fail(e)});
   };
   function setBadge(n){
     $('badge').hidden=!n;$('badge').textContent=n>99?'99+':String(n);$('segN').textContent=n?'('+n+')':'';

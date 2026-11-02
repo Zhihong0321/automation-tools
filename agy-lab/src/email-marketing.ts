@@ -17,6 +17,8 @@ import * as emailList from './email-list.ts';
 import * as mailHosts from './email-mx.ts';
 import * as templates from './email-templates.ts';
 import * as autopilot from './email-autopilot.ts';
+import * as formAutopilot from './form-autopilot.ts';
+import { deliver } from './contact-form-delivery.ts';
 import { smartlead as sl } from './core/index.ts';
 
 type Ctx = {
@@ -337,7 +339,11 @@ export async function syncWebhooks(): Promise<typeof webhookState> {
 /** Every 30 minutes, so a campaign made in Smartlead's own UI still reports back. */
 /** What the autopilot needs from this file: the target leads not in a campaign yet, a campaign's state, and push. */
 const autopilotDeps = (): autopilot.Deps<MarketingLead> => ({
-  pool: async () => (await leads({ status: 'new' })).matching.filter(autopilot.isTarget),
+  // A company that already got the message through its contact form is not emailed too.
+  pool: async () => {
+    const byForm = await formAutopilot.sentCompanyIds();
+    return (await leads({ status: 'new' })).matching.filter((r) => autopilot.isTarget(r) && !byForm.has(String(r.company_id)));
+  },
   campaign: async (id) => {
     try {
       const [c, a] = await Promise.all([sl.getCampaign(id), sl.campaignAnalytics(id)]);
@@ -349,6 +355,36 @@ const autopilotDeps = (): autopilot.Deps<MarketingLead> => ({
   start: (id) => sl.setStatus(id, 'START'),
 });
 
+/** The contact-form autopilot sends the email autopilot's campaign: its step 1, answered to its mailbox. Read once per run. */
+const formDeps = (): formAutopilot.Deps => {
+  type Loaded = Omit<formAutopilot.Message, 'subject' | 'body'> & { subject: string; body: string; profile: templates.Sender };
+  let loaded: Promise<Loaded | string> | null = null;
+  const load = async (): Promise<Loaded | string> => {
+    const id = (await autopilot.getSettings()).campaign_id;
+    if (!id) return 'Choose the email autopilot\'s campaign first: the forms send its first email.';
+    const [c, seq, boxes, profile] = await Promise.all([sl.getCampaign(id), sl.campaignSequences(id), sl.campaignMailboxes(id), templates.getSender()]);
+    const first = (seq ?? []).sort((x: any, y: any) => x.seq_number - y.seq_number)[0];
+    const box = (boxes ?? [])[0];
+    if (!first) return `The campaign "${c.name}" has no email yet.`;
+    if (!box?.from_email) return `The campaign "${c.name}" has no mailbox for the answers.`;
+    return {
+      campaign_id: id, campaign_name: String(c.name ?? ''), subject: String(first.subject ?? ''), body: htmlToText(first.email_body), profile,
+      sender: { name: box.from_name || profile.sender_name, email: box.from_email, phone: profile.sender_phone || undefined, company: 'Eternalgy', website: 'https://eternalgy.me' },
+    };
+  };
+  return {
+    message: async (lead) => {
+      const m = await (loaded ??= load().catch((err: Error) => 'Reading the campaign from Smartlead failed: ' + err.message));
+      if (typeof m === 'string') return m;
+      const { profile, ...rest } = m;
+      const fields = { company_name: lead.company_name, category: lead.category ?? '' };
+      return { ...rest, subject: templates.render(m.subject, profile, fields), body: templates.render(m.body, profile, fields) };
+    },
+    scan: formAutopilot.scan,
+    deliver,
+  };
+};
+
 export function start(): void {
   // Mail hosts of new lead emails; a run with nothing new to look up ends at once.
   const hostTick = () => { if (db.configured()) mailHosts.startRun(); };
@@ -358,6 +394,10 @@ export function start(): void {
   const autoTick = () => void autopilot.tick(autopilotDeps()).catch((err: Error) => console.warn('[email-autopilot] ' + err.message));
   setTimeout(autoTick, 90_000);
   setInterval(autoTick, 10 * 60_000);
+  // The contact-form autopilot: off until switched on; then each weekday it sends until the day's number is reached.
+  const formTick = () => void formAutopilot.tick(formDeps()).catch((err: Error) => console.warn('[form-autopilot] ' + err.message));
+  setTimeout(formTick, 150_000);
+  setInterval(formTick, 10 * 60_000);
   if (!sl.configured() || !webhookUrl()) return;
   const tick = () => void syncWebhooks()
     .then((s) => { if (s.errors.length) console.warn('[email-marketing] webhook sync: ' + s.errors.join('; ')); })
@@ -567,6 +607,25 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       if (method === 'GET' && p === '/api/email-marketing/autopilot') {
         const settings = await autopilot.getSettings();
         return send(200, { settings, today_target: autopilot.todaysTarget(settings, autopilot.klNow().day), in_window: autopilot.inWindow(), last: autopilot.lastResult(), runs: await autopilot.recentRuns() });
+      }
+    }
+
+    // ---- contact-form autopilot ----
+    if (p === '/api/email-marketing/form-autopilot' || p.startsWith('/api/email-marketing/form-autopilot/')) {
+      if (!db.configured()) return send(503, { error: 'no report database configured' });
+      if (method === 'GET' && p === '/api/email-marketing/form-autopilot') return send(200, await formAutopilot.status());
+      if (method === 'POST' && p === '/api/email-marketing/form-autopilot') {
+        return send(200, { settings: await formAutopilot.saveSettings(await ctx.readJson(req)) });
+      }
+      // A dry run: one form filled and shown, never sent. {company_id} picks the lead, else the next one with an open form.
+      if (method === 'POST' && p === '/api/email-marketing/form-autopilot/test') {
+        const id = String((await ctx.readJson(req)).company_id ?? '');
+        if (id && !/^\d+$/.test(id)) return send(400, { error: 'company_id is a number' });
+        return send(200, await formAutopilot.test(formDeps(), id || undefined));
+      }
+      // Sends now, outside the window too, up to the day's number.
+      if (method === 'POST' && p === '/api/email-marketing/form-autopilot/run') {
+        return send(200, await formAutopilot.runOnce(formDeps(), { force: true }));
       }
     }
 

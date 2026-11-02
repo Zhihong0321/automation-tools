@@ -68,7 +68,7 @@ export function todaysTarget(s: Settings, today: string): number {
 export interface PoolRow { email: string; company_id: string; mail_host: string | null; person_name: string | null; lead_status: string | null }
 
 /** Businesses with a big daytime power bill: the ones a solar tax-allowance email is for. */
-const TARGET_CATEGORY = /manufactur|factory|industr|packaging|logistic|warehouse|freight|hotel|resort|supermarket|hypermarket|cold storage|plastic|metal|steel|food processing|printing|textile|engineering|fabricat|machine shop|chemical|rubber|\bmill\b|hospital|shopping mall|wholesal|distributor|construction|contractor|petrol|gas station|laundry|bakery|cement|quarry/i;
+export const TARGET_CATEGORY = /manufactur|factory|industr|packaging|logistic|warehouse|freight|hotel|resort|supermarket|hypermarket|cold storage|plastic|metal|steel|food processing|printing|textile|engineering|fabricat|machine shop|chemical|rubber|\bmill\b|hospital|shopping mall|wholesal|distributor|construction|contractor|petrol|gas station|laundry|bakery|cement|quarry/i;
 const FREE_MAIL = /@(gmail|googlemail|yahoo|ymail|rocketmail|hotmail|outlook|live|msn|icloud|me|aol|protonmail|proton|tutanota|gmx|mail|qq|163|126)\.[a-z.]+$/i;
 
 /**
@@ -77,9 +77,13 @@ const FREE_MAIL = /@(gmail|googlemail|yahoo|ymail|rocketmail|hotmail|outlook|liv
  * bill" (not "0", a street address or a Maps description).
  */
 export function isTarget(r: { email: string; category?: string | null; company_name?: string | null }): boolean {
+  return isTargetCompany(r) && !FREE_MAIL.test(r.email);
+}
+
+/** The company half of isTarget: the category, and a name that reads as a company. The contact-form autopilot uses it alone. */
+export function isTargetCompany(r: { category?: string | null; company_name?: string | null }): boolean {
   const name = String(r.company_name ?? '').trim();
   return TARGET_CATEGORY.test(r.category ?? '')
-    && !FREE_MAIL.test(r.email)
     && /[a-z]{3}/i.test(name) && name.length <= 60 && !/^\d|\bjalan\b|,\s*\d{5}\b/i.test(name);
 }
 

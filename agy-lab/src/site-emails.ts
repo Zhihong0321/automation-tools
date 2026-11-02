@@ -191,7 +191,7 @@ export async function scanSite(website: string | null | undefined, fetcher: (url
 // ---- storage -----------------------------------------------------------------
 
 /** SQL that is true for a lead the lane should read. */
-const ELIGIBLE = `c.merged_into is null and coalesce(c.is_hidden, false) = false and c.blacklist_reason is null
+export const ELIGIBLE = `c.merged_into is null and coalesce(c.is_hidden, false) = false and c.blacklist_reason is null
   and coalesce(c.lead_status, 'unassigned') <> 'do_not_call'
   and coalesce(c.website, '') <> ''
   and c.website !~* '(facebook\\.com|fb\\.com|fb\\.me|instagram\\.com|wa\\.me|whatsapp|linktr\\.ee|tiktok\\.com|shopee\\.|lazada\\.|linkedin\\.com|twitter\\.com|youtube\\.com|business\\.site|goo\\.gl|g\\.page|bit\\.ly)'`;
@@ -208,7 +208,7 @@ export function siteHost(website: string | null | undefined): string | null {
   return url ? new URL(url).hostname.toLowerCase().replace(/^www\./, '') : null;
 }
 
-async function sharedHosts(): Promise<Set<string>> {
+export async function sharedHosts(): Promise<Set<string>> {
   if (shared && Date.now() - shared.at < 3_600_000) return shared.hosts;
   const res = await db.sql<{ host: string }>(
     `select ${HOST_SQL} as host from company_data where merged_into is null and coalesce(website, '') <> ''
