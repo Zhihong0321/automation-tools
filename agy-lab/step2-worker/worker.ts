@@ -136,14 +136,27 @@ async function nextLead(): Promise<any> {
  * when "Send now" or the switch wants one, with the exact subject, message and sender it logged;
  * the outcome, the boxes filled and a screenshot go back to the hub, which keeps the record.
  */
+// Forms filled at once, so one slow website never holds up the others.
+const SEND_LANES = 4;
+// A website that keeps the browser busy this long is left behind, and the next form goes on.
+const FROZEN_MS = 4 * 60_000;
+
 async function sendForms(): Promise<void> {
+  await Promise.all(Array.from({ length: SEND_LANES }, () => sendLane()));
+}
+
+async function sendLane(): Promise<void> {
   for (;;) {
     let forms: any[] = [];
     try { forms = (await post('/api/form-send/worker/take', { worker: WORKER, limit: 1 })).forms ?? []; }
     catch (err) { log('could not ask the hub for forms to send: ' + (err as Error).message); }
     if (!forms.length) { await sleep(20_000); continue; }
     for (const f of forms) {
-      const result = await deliver({ lead: { company_name: f.company_name, website: f.website }, sender: f.sender, subject: f.subject, message: f.body });
+      const frozen = { status: 'failed', detail: `the website kept the browser busy for ${FROZEN_MS / 60_000} minutes; left it and moved on`, form_url: null, filled: null, screenshot: null } as any;
+      const result = await Promise.race([
+        deliver({ lead: { company_name: f.company_name, website: f.website }, sender: f.sender, subject: f.subject, message: f.body }),
+        sleep(FROZEN_MS).then(() => frozen),
+      ]);
       log(`form ${f.company_name}: ${result.status} (${result.detail})`);
       const { status, detail, form_url, filled, screenshot } = result;
       for (let attempt = 1; attempt <= 3; attempt++) {

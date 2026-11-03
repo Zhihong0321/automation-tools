@@ -115,15 +115,21 @@ export async function sentCompanyIds(): Promise<Set<string>> {
 
 /** The next leads to send to: target companies whose form the PC found open, never emailed, never tried here. */
 async function candidates(limit: number): Promise<Lead[]> {
-  const rows = (await db.sql<Lead>(`
-    select c.id::text as company_id, c.name as company_name, c.category, c.website
-      from contact_form_scan s join company_data c on c.id = s.company_id
-     where s.status = 'bot_can_submit' and ${ELIGIBLE} and ${TARGET_SQL}
-       and not exists (select 1 from contact_form_send f where f.company_id = c.id)
-       and not exists (select 1 from email_marketing_lead e where e.company_id = c.id)
-     order by s.checked_at limit $1`, [limit])).rows;
   const shared = await sharedHosts();
-  return rows.filter((r) => isTargetCompany(r) && !shared.has(siteHost(r.website) ?? ''));
+  const out: Lead[] = [];
+  // Read the waiting list a page at a time until enough pass the name and shared-site checks, or it ends.
+  for (let offset = 0; out.length < limit; offset += 500) {
+    const rows = (await db.sql<Lead>(`
+      select c.id::text as company_id, c.name as company_name, c.category, c.website
+        from contact_form_scan s join company_data c on c.id = s.company_id
+       where s.status = 'bot_can_submit' and ${ELIGIBLE} and ${TARGET_SQL}
+         and not exists (select 1 from contact_form_send f where f.company_id = c.id)
+         and not exists (select 1 from email_marketing_lead e where e.company_id = c.id)
+       order by s.checked_at, c.id limit 500 offset $1`, [offset])).rows;
+    out.push(...rows.filter((r) => isTargetCompany(r) && !shared.has(siteHost(r.website) ?? '')));
+    if (rows.length < 500) break;
+  }
+  return out.slice(0, limit);
 }
 
 const sentToday = async (day: string): Promise<number> => Number((await db.sql<{ n: number }>(
