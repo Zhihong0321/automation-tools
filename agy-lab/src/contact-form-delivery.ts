@@ -231,14 +231,21 @@ function snapshot(prefix: string): { forms: FormInfo[]; pageCaptcha: string | nu
 
 const FALLBACK_PATHS = ['/contact', '/contact-us', '/contactus', '/hubungi-kami', '/contact.html'];
 
-let chain: Promise<unknown> = Promise.resolve();
-
-/** One delivery at a time on this machine: each opens its own browser and closes it. Never throws. */
-export function deliver(input: DeliverInput): Promise<DeliverResult> {
-  const run = chain.then(() => deliverNow(input), () => deliverNow(input));
-  chain = run.catch(() => {});
-  return run;
+/**
+ * Each delivery opens its own browser and closes it. They run side by side (the worker's lanes),
+ * never queued behind one another: a queue let one frozen site hold back every form after it.
+ * Never throws.
+ */
+export async function deliver(input: DeliverInput): Promise<DeliverResult> {
+  return deliverNow(input);
 }
+
+// A delivery that is still running after this is killed; a send already pressed is then
+// recorded as submitted_unconfirmed, never as failed. The worker's own 4-minute race is the backstop.
+export const DELIVER_MS = 3 * 60_000;
+// Each browser call that the page does not answer within this gets an error instead of waiting forever.
+const CALL_MS = 30_000;
+const NAVIGATE_MS = 45_000;
 
 async function deliverNow(input: DeliverInput): Promise<DeliverResult> {
   const out: DeliverResult = {
@@ -250,17 +257,24 @@ async function deliverNow(input: DeliverInput): Promise<DeliverResult> {
   const exe = browserPath();
   if (!exe) return done('failed', 'no browser on this machine (set CHROME_PATH)');
   let browser: any = null;
+  // Set just before the send button is pressed: from then on a failure means "maybe sent".
+  let clicked = false;
+  // Kills the browser when the whole delivery runs too long, which fails every pending call at once.
+  const killer = setTimeout(() => { try { browser?.process()?.kill('SIGKILL'); } catch { /* already gone */ } }, DELIVER_MS);
   try {
     const { default: puppeteer } = await import('puppeteer-core');
     browser = await puppeteer.launch({
-      executablePath: exe, headless: true, protocolTimeout: 0,
+      executablePath: exe, headless: true, protocolTimeout: CALL_MS,
       args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--lang=en-GB'],
     });
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 900 });
     await page.setUserAgent((await browser.userAgent()).replace('HeadlessChrome', 'Chrome'));
-    page.setDefaultTimeout(0);
-    page.setDefaultNavigationTimeout(0);
+    page.setDefaultTimeout(CALL_MS);
+    page.setDefaultNavigationTimeout(NAVIGATE_MS);
+    // A site's alert() or confirm() freezes the page until answered; answer it and keep its words for readOutcome.
+    const dialogs: string[] = [];
+    page.on('dialog', (d: any) => { dialogs.push(String(d.message?.() ?? '')); d.accept().catch(() => {}); });
 
     const open = async (url: string): Promise<boolean> => {
       out.pages_checked.push(url);
@@ -338,6 +352,7 @@ async function deliverNow(input: DeliverInput): Promise<DeliverResult> {
       const before = await hit.frame.evaluate(() => document.body.innerText).catch(() => '');
       const urlBefore = page.url();
       const sendBtn = await hit.frame.$(`[data-cfd="${pick.id}-send"]`);
+      clicked = true;
       if (sendBtn) await sendBtn.click().catch(() => sendBtn.evaluate((b: HTMLElement) => b.click()));
       else await hit.frame.evaluate((id: string) => {
         const f = document.querySelector(`[data-cfd-form="${id}"]`);
@@ -350,16 +365,23 @@ async function deliverNow(input: DeliverInput): Promise<DeliverResult> {
         const f = document.querySelector(`[data-cfd-form="${id}"]`);
         return !f || (f as HTMLElement).getBoundingClientRect().height < 5;
       }, pick.id).catch(() => true);
-      const outcome = readOutcome(after, before, formGone, page.url() !== urlBefore);
+      const outcome = readOutcome([after, ...dialogs].join('\n'), before, formGone, page.url() !== urlBefore);
       try { out.screenshot = 'data:image/jpeg;base64,' + await page.screenshot({ type: 'jpeg', quality: 60, encoding: 'base64' }); } catch { /* keep the filled shot */ }
       return done(outcome.status, outcome.detail);
     }
     if (lastCaptcha) return done('captcha', `skipped: ${lastCaptcha}`);
     return done('no_form', `no contact form on ${out.pages_checked.length} page(s) checked`);
   } catch (err) {
-    return done('failed', (err as Error).message.slice(0, 300));
+    const why = (err as Error).message.slice(0, 300);
+    if (clicked) return done('submitted_unconfirmed', `the send button was pressed, then the page stopped answering (${why}); not resent`);
+    return done('failed', why);
   } finally {
-    if (browser) await browser.close().catch(() => {});
+    clearTimeout(killer);
+    if (browser) {
+      // A browser that will not close is killed, so no headless Chrome is left behind on this PC.
+      await Promise.race([browser.close().catch(() => {}), sleep(5_000)]);
+      try { browser.process()?.kill('SIGKILL'); } catch { /* already closed */ }
+    }
   }
 }
 
