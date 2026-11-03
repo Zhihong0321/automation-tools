@@ -296,7 +296,16 @@ export interface SendJob { company_id: string; company_name: string; website: st
  * company and site, the exact subject and message, from whom, when, to which PC), so the hub's log
  * has every send even if the PC never answers; the PC's answer adds the outcome.
  */
-export async function takeSend(worker: string, limit: number): Promise<SendJob[]> {
+export function takeSend(worker: string, limit: number): Promise<SendJob[]> {
+  // One take at a time: four PC lanes that read the same candidates at once would all lose the claim
+  // race, and an empty answer would wrongly end the run ("no open form is left").
+  const run = takeChain.then(() => takeSendNow(worker, limit));
+  takeChain = run.catch(() => {});
+  return run;
+}
+let takeChain: Promise<unknown> = Promise.resolve();
+
+async function takeSendNow(worker: string, limit: number): Promise<SendJob[]> {
   await ensureTables();
   senders.set(worker, Date.now());
   const n = Math.min(limit, await wanted());
