@@ -48,7 +48,7 @@ export interface Field {
   id: string; tag: string; type: string; name: string; label: string; required: boolean;
   options?: string[]; group?: string;
 }
-export interface FormInfo { id: string; fields: Field[]; submitText: string; captcha: string | null }
+export interface FormInfo { id: string; fields: Field[]; submitText: string; captcha: string | null; mailto?: boolean }
 
 export type Kind = 'email' | 'phone' | 'first_name' | 'last_name' | 'name' | 'company' | 'subject' | 'website' | 'message' | 'consent';
 
@@ -77,6 +77,8 @@ export function pickForm(forms: FormInfo[]): FormInfo | null {
   let best: FormInfo | null = null;
   let bestScore = 0;
   for (const form of forms) {
+    // Pressing a mailto: form opens the visitor's mail app on this PC, so it is never picked.
+    if (form.mailto) continue;
     const kinds = form.fields.map(classify);
     if (form.fields.some((f) => f.type === 'password' || f.type === 'search')) continue;
     if (!kinds.includes('message') || !(kinds.includes('email') || kinds.includes('phone'))) continue;
@@ -231,6 +233,8 @@ function snapshot(prefix: string): { forms: FormInfo[]; pageCaptcha: string | nu
     forms.push({
       id: formId, fields, submitText: send ? ((send.textContent || '') + ' ' + (send.getAttribute('value') || '')).trim() : '',
       captcha: localCaptcha ? 'a captcha on the form' : quiz ? 'a question that checks for robots' : null,
+      // A mailto: action hands the message to the visitor's mail app (Windows pops it up); it is never a web send.
+      mailto: /^\s*mailto:/i.test(c.getAttribute('action') || '') || /^\s*mailto:/i.test(send?.closest('a')?.getAttribute('href') || send?.getAttribute('href') || ''),
     });
   });
   return { forms, pageCaptcha };
