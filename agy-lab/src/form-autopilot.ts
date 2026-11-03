@@ -25,7 +25,8 @@ import * as templates from './email-templates.ts';
 import { klNow, inWindow, isTargetCompany, TARGET_CATEGORY, SOLAR } from './email-autopilot.ts';
 import { ELIGIBLE, sharedHosts, siteHost } from './site-emails.ts';
 import type { FormStatus } from './list-step2.ts';
-import type { DeliverInput, DeliverResult } from './contact-form-delivery.ts';
+import type { DeliverInput, DeliverResult, AssistField, AssistFill } from './contact-form-delivery.ts';
+import { llm } from './core/index.ts';
 
 /** Who every form says it is from. */
 export interface FormSender { name: string; company: string; phone: string; email: string }
@@ -186,7 +187,42 @@ export async function scanCounts() {
 
 type Ctx = { json: (res: http.ServerResponse, status: number, body: unknown) => void; readJson: (req: http.IncomingMessage) => Promise<Record<string, unknown>> };
 
-const WORKER_ROUTES = ['/api/form-scan/worker/take', '/api/form-scan/worker/done', '/api/form-send/worker/take', '/api/form-send/worker/done'];
+const WORKER_ROUTES = ['/api/form-scan/worker/take', '/api/form-scan/worker/done', '/api/form-send/worker/take', '/api/form-send/worker/done', '/api/form-send/worker/assist'];
+
+// The uses a required box can get when the script could not place it: sender values, the subject, or a dash.
+const ASSIST_USES = ['name', 'email', 'phone', 'company', 'website', 'subject', 'dash'];
+
+/**
+ * The LLM step: a PC sends the boxes its script could not place, and the LLM says which sender value
+ * fits each one. Only boxes it was sent may be answered, only with the listed uses, so no new text
+ * reaches a form. A bad or empty answer is an empty list and the script carries on.
+ */
+export async function assistFill(body: any): Promise<{ fills: AssistFill[] }> {
+  const fields: AssistField[] = (Array.isArray(body.fields) ? body.fields : []).slice(0, 80).map((f: any) => ({
+    id: String(f.id ?? ''), tag: String(f.tag ?? ''), type: String(f.type ?? ''), name: String(f.name ?? '').slice(0, 80),
+    label: String(f.label ?? '').slice(0, 160), required: f.required === true, options: Array.isArray(f.options) ? f.options.slice(0, 30).map(String) : undefined,
+  }));
+  const boxes = fields.filter((f) => f.required && f.tag !== 'select' && f.type !== 'checkbox' && f.type !== 'radio');
+  if (!boxes.length) return { fills: [] };
+  const prompt = [
+    "A solar company is sending its first message through the contact form on a Malaysian company's website.",
+    'These required boxes could not be matched to a purpose by their label. For each, pick the one use that fits, from:',
+    ASSIST_USES.join(', ') + '. "dash" when nothing fits. name = the sender\'s name, email, phone, company, website, subject.',
+    'Reply with JSON only: {"fills":[{"id":"<box id>","use":"<use>"}]}. Use only the ids listed.',
+    'Boxes: ' + JSON.stringify(boxes.map(({ id, tag, type, name, label }) => ({ id, tag, type, name, label }))),
+    'Form submit button: ' + String(body.submit_text ?? '').slice(0, 80),
+  ].join('\n');
+  try {
+    const answer = (await llm.chat(prompt, { step: 'form-assist', temperature: 0 })).answer;
+    const json = JSON.parse(answer.slice(answer.indexOf('{'), answer.lastIndexOf('}') + 1));
+    const ids = new Set(boxes.map((f) => f.id));
+    const fills = (Array.isArray(json.fills) ? json.fills : []).filter((x: any) => ids.has(String(x?.id)) && ASSIST_USES.includes(String(x?.use)))
+      .map((x: any) => ({ id: String(x.id), use: String(x.use) }));
+    return { fills };
+  } catch {
+    return { fills: [] };
+  }
+}
 
 /** The routes a PC worker's key reaches: websites to check and their verdicts; forms to send and their outcomes. */
 export async function handleWorker(req: http.IncomingMessage, res: http.ServerResponse, url: URL, { json, readJson }: Ctx): Promise<boolean> {
@@ -198,6 +234,7 @@ export async function handleWorker(req: http.IncomingMessage, res: http.ServerRe
     const worker = String(body.worker ?? '').trim();
     if (!/^[a-z0-9][a-z0-9._-]{1,62}$/i.test(worker) || /^hub-/i.test(worker)) throw Object.assign(new Error('send a worker name: letters, digits, dot, dash'), { code: 'bad_request' });
     const sending = p.startsWith('/api/form-send/');
+    if (p.endsWith('/assist')) return json(res, 200, await assistFill(body)), true;
     if (p.endsWith('/take')) {
       if (sending) return json(res, 200, { forms: await takeSend(worker, Math.min(5, Math.max(1, Math.floor(Number(body.limit) || 1)))), leaseSeconds: SEND_LEASE_SECONDS }), true;
       const limit = Math.min(SCAN_BATCH_MAX, Math.max(1, Math.floor(Number(body.limit) || 10)));

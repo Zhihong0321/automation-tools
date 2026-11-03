@@ -22,7 +22,14 @@ export interface DeliverInput {
   message: string;
   /** Fill the form and keep the screenshot, but do not press send. */
   dry_run?: boolean;
+  /** The LLM step: asked about required boxes the script could not place. Null or an empty answer keeps the script's own fill. */
+  assist?: Assist;
 }
+/** A required box the script could not place, as the LLM is asked about it. */
+export interface AssistField { id: string; tag: string; type: string; name: string; label: string; required: boolean; options?: string[] }
+/** The LLM's answer for one box: which sender value goes in it. */
+export interface AssistFill { id: string; use: string }
+export type Assist = (req: { company_name: string; website: string; url: string; submit_text: string; fields: AssistField[] }) => Promise<AssistFill[] | null>;
 export type Status = 'sent' | 'submitted_unconfirmed' | 'dry_run' | 'captcha' | 'no_form' | 'not_own_site' | 'site_unreachable' | 'failed';
 export interface DeliverResult {
   status: Status;
@@ -323,7 +330,26 @@ async function deliverNow(input: DeliverInput): Promise<DeliverResult> {
       const captcha = pick.captcha ?? hit.pageCaptcha ?? pageCaptcha;
       if (captcha) { await shot(); return done('captcha', `skipped: the contact form is guarded by ${captcha}`); }
 
-      for (const step of planFill(pick, input)) {
+      // The LLM step: where the script could not place a required box, the LLM says which sender value fits it.
+      // Its answer is used only for those boxes and only with the listed values; anything else keeps the script's fill.
+      const assisted = async (plan: Step[]): Promise<Step[]> => {
+        const stuck = plan.some((s) => s.as === 'unknown, required');
+        if (!stuck || !input.assist) return plan;
+        const fills = await input.assist({
+          company_name: input.lead.company_name, website: input.lead.website, url: page.url(), submit_text: pick.submitText,
+          fields: pick.fields.map(({ id, tag, type, name, label, required, options }) => ({ id, tag, type, name, label, required, options })),
+        }).catch(() => null);
+        const s = input.sender;
+        const values: Record<string, string> = {
+          name: s.name, email: s.email, phone: s.phone ?? '-', company: s.company ?? '-', website: s.website ?? '-',
+          subject: fillTemplate(input.subject || 'Enquiry', input.lead), dash: '-',
+        };
+        return plan.map((step) => {
+          const fill = step.as === 'unknown, required' ? fills?.find((f) => f.id === step.id) : undefined;
+          return fill && values[fill.use] !== undefined ? { ...step, as: `${fill.use} (assisted)`, value: values[fill.use]! } : step;
+        });
+      };
+      for (const step of await assisted(planFill(pick, input))) {
         const el = await hit.frame.$(`[data-cfd="${step.id}"]`);
         if (!el) continue;
         try {

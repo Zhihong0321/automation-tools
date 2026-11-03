@@ -154,7 +154,14 @@ async function sendLane(): Promise<void> {
     for (const f of forms) {
       const frozen = { status: 'failed', detail: `the website kept the browser busy for ${FROZEN_MS / 60_000} minutes; left it and moved on`, form_url: null, filled: null, screenshot: null } as any;
       const result = await Promise.race([
-        deliver({ lead: { company_name: f.company_name, website: f.website }, sender: f.sender, subject: f.subject, message: f.body }),
+        deliver({
+          lead: { company_name: f.company_name, website: f.website }, sender: f.sender, subject: f.subject, message: f.body,
+          // The LLM step runs on the hub (its keys live there); no answer means the script's fill stands.
+          assist: async (req) => {
+            try { return (await post('/api/form-send/worker/assist', { worker: WORKER, ...req })).fills ?? null; }
+            catch (err) { log(`llm step for ${f.company_name} gave no answer: ${(err as Error).message.slice(0, 120)}`); return null; }
+          },
+        }),
         sleep(FROZEN_MS).then(() => frozen),
       ]);
       log(`form ${f.company_name}: ${result.status} (${result.detail})`);
