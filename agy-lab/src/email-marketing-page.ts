@@ -333,6 +333,14 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 </div>
 
 <div class="sec">
+<div class="sec-h"><h2>Contact-form log</h2><a class="aside" href="#sentreport">By day</a></div>
+<div class="strip" id="flStrip"></div>
+<p class="hint" id="flRun"></p>
+<div class="list" id="flRows"><div class="empty">Loading…</div></div>
+<p class="hint">Every form this PC filled on a company website: what was sent, when, and the outcome. Tap one for the message and the screenshot.</p>
+</div>
+
+<div class="sec">
 <div class="sec-h"><h2>Leads</h2></div>
 <div class="stats" id="leadTiles"></div>
 </div>
@@ -594,7 +602,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       var hot=G.bounce_rate!=null&&G.bounce_rate>0.03;$('sendNote').hidden=!hot;
       $('sendNote').textContent=hot?'Bounce rate is '+pct(G.bounce_rate)+', over 3%. Pause and clean the list before it hurts the mailbox.':'';
       renderChart(d.daily||[]);renderCampTotals(d.campaigns||[]);
-    }).then(loadStatus).then(function(){loadToday();loadAutopilot();loadForms();loadUnsub();loadConvos().then(renderWaitNext)}).then(renderChecks).catch(fail);
+    }).then(loadStatus).then(function(){loadToday();loadAutopilot();loadForms();loadFormLog();loadUnsub();loadConvos().then(renderWaitNext)}).then(renderChecks).catch(fail);
   }
   function renderWaitNext(){
     var c=S.queue[0];$('waitNext').hidden=!c;if(!c)return;
@@ -737,6 +745,26 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
   // ---- contact-form sent report ----
   var REP={day:null,offset:0};
   var OUTCOME={sent:['ok','sent'],submitted_unconfirmed:['blue','sent, not confirmed'],sending:['blue','sending'],captcha:['warn','captcha'],interrupted:['bad','interrupted'],failed:['bad','failed'],no_form:['warn','no form'],site_unreachable:['warn','site down'],not_own_site:['warn','not own site']};
+  function repRow(x){
+        var o=OUTCOME[x.status]||['blue',String(x.status).replace(/_/g,' ')],when=x.sent_at||x.checked_at,sd=x.sender||{},link=x.form_url||x.website;
+        var filled=(x.filled||[]).map(function(f){return esc(f.field)+' as '+esc(f.as)}).join(', ');
+        return '<div class="rowl"><div class="grow"><div class="rt">'+esc(x.company_name)+'</div><div class="rs"><a href="'+esc(link)+'" target="_blank" rel="noopener">'+esc(String(link).replace(/^https?:..(www[.])?/,''))+'</a></div>'+
+          '<div class="rs">'+esc(when?new Date(when).toLocaleString():'')+(x.taken_by?' · by '+esc(x.taken_by):'')+'</div>'+(x.detail?'<div class="rs">'+esc(x.detail)+'</div>':'')+
+          '<details><summary class="rs">Message and details</summary><div class="rs" style="white-space:pre-wrap;margin-top:6px"><b>'+esc(x.subject)+'</b>'+String.fromCharCode(10,10)+esc(x.message)+'</div>'+
+          '<div class="rs" style="margin-top:8px">From: '+esc([sd.name,sd.company,sd.phone,sd.email].filter(Boolean).join(' · '))+'</div>'+(filled?'<div class="rs">Boxes filled: '+filled+'</div>':'')+
+          (x.has_screenshot?'<button class="sm" data-shot="'+esc(x.company_id)+'" style="margin-top:8px">Show screenshot</button><div data-shotbox="'+esc(x.company_id)+'"></div>':'')+'</details>'+
+          '</div><div class="rr"><span class="chip '+o[0]+'">'+esc(o[1])+'</span><div>'+(when?ago(when)+' ago':'')+'</div></div></div>';
+  }
+  // The contact-form log on the main page: totals, the run, and the latest 20 sends.
+  function loadFormLog(){
+    return Promise.all([api('/api/email-marketing/form-autopilot/report?offset=0'),api('/api/email-marketing/form-autopilot')]).then(function(a){
+      var r=a[0],t=r.totals||{},run=a[1].run;
+      $('flStrip').innerHTML=[['sent today',t.today],['last 7 days',t.week],['sent in all',t.all_sent],['tried in all',t.all_tried]].map(function(x){return '<div><b>'+num(x[1])+'</b><span>'+x[0]+'</span></div>'}).join('');
+      $('flRun').textContent=run?(new Date(run.started_at).getTime()>Date.now()?'Scheduled: '+run.goal+' forms.':'Run going: '+run.sent+' of '+run.goal+' sent, '+run.tried+' tried, '+run.sending+' being filled now.'):'No run going.';
+      $('flRows').innerHTML=r.rows.length?r.rows.slice(0,20).map(repRow).join(''):'<div class="empty">No contact form sent yet.</div>';
+      clearTimeout(S.flTimer);if(run&&!$('flRows').hidden)S.flTimer=setTimeout(loadFormLog,30000);
+    }).catch(fail);
+  }
   function loadReport(){
     var q=new URLSearchParams({offset:String(REP.offset)});if(REP.day)q.set('day',REP.day);
     return api('/api/email-marketing/form-autopilot/report?'+q.toString()).then(function(r){
@@ -748,16 +776,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       }).join(''):'<div class="empty">Nothing sent through a contact form yet.</div>';
       $('repTitle').textContent=REP.day?'Sends on '+dayName(REP.day):'Every send';
       $('repCount').textContent=num(r.total);
-      $('repRows').innerHTML=r.rows.length?r.rows.map(function(x){
-        var o=OUTCOME[x.status]||['blue',String(x.status).replace(/_/g,' ')],when=x.sent_at||x.checked_at,sd=x.sender||{},link=x.form_url||x.website;
-        var filled=(x.filled||[]).map(function(f){return esc(f.field)+' as '+esc(f.as)}).join(', ');
-        return '<div class="rowl"><div class="grow"><div class="rt">'+esc(x.company_name)+'</div><div class="rs"><a href="'+esc(link)+'" target="_blank" rel="noopener">'+esc(String(link).replace(/^https?:..(www[.])?/,''))+'</a></div>'+
-          '<div class="rs">'+esc(when?new Date(when).toLocaleString():'')+(x.taken_by?' · by '+esc(x.taken_by):'')+'</div>'+(x.detail?'<div class="rs">'+esc(x.detail)+'</div>':'')+
-          '<details><summary class="rs">Message and details</summary><div class="rs" style="white-space:pre-wrap;margin-top:6px"><b>'+esc(x.subject)+'</b>'+String.fromCharCode(10,10)+esc(x.message)+'</div>'+
-          '<div class="rs" style="margin-top:8px">From: '+esc([sd.name,sd.company,sd.phone,sd.email].filter(Boolean).join(' · '))+'</div>'+(filled?'<div class="rs">Boxes filled: '+filled+'</div>':'')+
-          (x.has_screenshot?'<button class="sm" data-shot="'+esc(x.company_id)+'" style="margin-top:8px">Show screenshot</button><div data-shotbox="'+esc(x.company_id)+'"></div>':'')+'</details>'+
-          '</div><div class="rr"><span class="chip '+o[0]+'">'+esc(o[1])+'</span><div>'+(when?ago(when)+' ago':'')+'</div></div></div>';
-      }).join(''):'<div class="empty">No send here yet.</div>';
+      $('repRows').innerHTML=r.rows.length?r.rows.map(repRow).join(''):'<div class="empty">No send here yet.</div>';
       var from=r.total?r.offset+1:0,to=Math.min(r.offset+r.page_size,r.total);
       $('repPage').textContent=num(from)+'–'+num(to)+' of '+num(r.total);$('repPrev').disabled=r.offset<=0;$('repNext').disabled=to>=r.total;
     }).catch(fail);
@@ -766,13 +785,14 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
   $('repAll').onclick=function(){REP.day=null;REP.offset=0;loadReport()};
   $('repPrev').onclick=function(){REP.offset=Math.max(0,REP.offset-50);loadReport()};
   $('repNext').onclick=function(){REP.offset+=50;loadReport()};
-  $('repRows').addEventListener('click',function(e){
-    var b=e.target.closest('[data-shot]');if(!b)return;b.disabled=true;b.textContent='Loading…';
+  function showShot(e){
+    var b=e.target.closest('[data-shot]');if(!b)return;var box=b.nextElementSibling;b.disabled=true;b.textContent='Loading…';
     api('/api/email-marketing/form-autopilot/screenshot/'+b.dataset.shot).then(function(r){
-      var box=document.querySelector('[data-shotbox="'+b.dataset.shot+'"]');b.remove();
+      b.remove();
       box.innerHTML=r.screenshot?'<img src="'+esc(r.screenshot)+'" alt="The form after sending" style="width:100%;border-radius:10px;margin-top:8px">':'<p class="hint">No screenshot.</p>';
     }).catch(function(e){b.disabled=false;b.textContent='Show screenshot';fail(e)});
-  });
+  }
+  $('repRows').addEventListener('click',showShot);$('flRows').addEventListener('click',showShot);
 
   // ---- contact-form websites ----
   var SITE={offset:0,timer:null};
