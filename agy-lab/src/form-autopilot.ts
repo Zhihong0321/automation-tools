@@ -18,7 +18,7 @@
 // The hub is the log: every send is one contact_form_send row, written before it leaves the hub,
 // so a lead is never sent twice. A form a PC took and never answered is marked interrupted and
 // never sent again. PCs send when "Send now" on the card asks for a number of forms, or when the
-// switch is on: weekdays in the email window (08:00 to 15:00 KL), up to per_day a day.
+// switch is on: any day, any hour, up to per_day a day.
 import type http from 'node:http';
 import * as db from './reportdb.ts';
 import * as templates from './email-templates.ts';
@@ -40,7 +40,7 @@ export function readSettings(raw: any): Settings {
   const field = (k: keyof FormSender) => String(s[k] ?? '').trim().slice(0, 120) || DEFAULT_SENDER[k];
   return {
     enabled: raw?.enabled === true,
-    per_day: Math.round(Math.min(Math.max(Number(raw?.per_day) || DEFAULTS.per_day, 1), 100)),
+    per_day: Math.round(Math.min(Math.max(Number(raw?.per_day) || DEFAULTS.per_day, 1), 20000)),
     template_id: Number(raw?.template_id) > 0 ? Number(raw.template_id) : null,
     sender: { name: field('name'), company: field('company'), phone: field('phone'), email: /@/.test(String(s.email ?? '')) ? field('email') : DEFAULT_SENDER.email },
   };
@@ -325,7 +325,8 @@ async function wanted(): Promise<number> {
     if (!p.sending) await setRun(null);
   }
   const settings = await getSettings();
-  if (!settings.enabled || !inWindow()) return 0;
+  // Forms are not email: no send window, any day, any hour.
+  if (!settings.enabled) return 0;
   return Math.max(0, settings.per_day - await sentToday(klNow().day) - sending);
 }
 

@@ -593,7 +593,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       if (method === 'POST' && p === '/api/email-marketing/form-autopilot/run') {
         const body = await ctx.readJson(req);
         const count = Math.round(Number(body.count));
-        if (!(count >= 1 && count <= 500)) return send(400, { error: 'count is 1 to 500' });
+        if (!(count >= 1 && count <= 20000)) return send(400, { error: 'count is 1 to 20000' });
         const at = body.start_at ? new Date(String(body.start_at)) : undefined;
         if (at && !(at.getTime() > Date.now() && at.getTime() < Date.now() + 7 * 86_400_000)) return send(400, { error: 'start_at is a time in the next 7 days' });
         return send(202, { run: await formAutopilot.startRun(count, at) });

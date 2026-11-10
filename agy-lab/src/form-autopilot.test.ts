@@ -4,12 +4,12 @@ import { readSettings, DEFAULTS, DEFAULT_SENDER, SENT } from './form-autopilot.t
 import { planFill, type Field } from './contact-form-delivery.ts';
 import { isTarget, isTargetCompany, TARGET_CATEGORY } from './email-autopilot.ts';
 
-test('the contact-form autopilot ships off, 10 a day, and keeps per_day between 1 and 100', () => {
+test('the contact-form autopilot ships off, 10 a day, and keeps per_day between 1 and 20000', () => {
   assert.deepEqual(readSettings({}), DEFAULTS);
   assert.equal(DEFAULTS.enabled, false);
   assert.equal(readSettings({ enabled: 'yes' }).enabled, false);
   assert.equal(readSettings({ per_day: 0 }).per_day, 10);
-  assert.equal(readSettings({ per_day: 500 }).per_day, 100);
+  assert.equal(readSettings({ per_day: 50000 }).per_day, 20000);
   assert.equal(readSettings({ enabled: true, per_day: 7.4 }).per_day, 7);
 });
 

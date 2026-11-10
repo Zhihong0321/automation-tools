@@ -304,14 +304,14 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 <div class="sec" id="fpCard">
 <div class="panel">
 <div class="ap-head"><div class="grow"><h2 class="t">Contact forms</h2><p class="hint" id="fpState"></p></div><label class="switch" aria-label="Send through contact forms"><input type="checkbox" id="fpOn"><span></span></label></div>
-<div class="btns" style="margin-top:10px;flex-wrap:nowrap;align-items:center"><input id="fpNowN" type="number" inputmode="numeric" min="1" max="500" value="50" aria-label="How many to send now" style="width:90px;flex:none"><button class="primary grow" id="fpNow">Send now</button></div>
+<div class="btns" style="margin-top:10px;flex-wrap:nowrap;align-items:center"><input id="fpNowN" type="number" inputmode="numeric" min="1" max="20000" value="500" aria-label="How many to send now" style="width:90px;flex:none"><button class="primary grow" id="fpNow">Send now</button></div>
 <details class="more" style="border:0;margin:6px -14px -14px;background:none"><summary>Settings and the latest sites</summary><div class="in">
 <label class="f" for="fpTpl">Message: the first email of this template</label><select id="fpTpl"></select>
 <label class="f" for="fpName">Name</label><input id="fpName" autocomplete="off">
 <label class="f" for="fpCompany">Company name</label><input id="fpCompany" autocomplete="off">
 <label class="f" for="fpPhone">Mobile</label><input id="fpPhone" type="tel" inputmode="tel" autocomplete="off">
 <label class="f" for="fpEmail">Email</label><input id="fpEmail" type="email" inputmode="email" autocomplete="off">
-<label class="f" for="fpPerDay">Sent a day</label><input id="fpPerDay" type="number" inputmode="numeric" min="1" max="100">
+<label class="f" for="fpPerDay">Sent a day</label><input id="fpPerDay" type="number" inputmode="numeric" min="1" max="20000">
 <div class="btns" style="margin-top:14px"><button class="primary grow" id="fpSave">Save</button><button class="grow" id="fpTest">Test one, no send</button></div>
 <div id="fpOut"></div>
 <div class="list" id="fpRows" style="margin-top:8px"></div>
@@ -725,7 +725,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       if(!confirm('Stop sending? Forms a PC is filling right now still finish.'))return;
       return api('/api/email-marketing/form-autopilot/run/stop',{method:'POST',body:{}}).then(function(){show('info','Stopped.');return loadForms()}).catch(fail);
     }
-    var n=Math.round(Number($('fpNowN').value));if(!(n>=1&&n<=500))return show('error','Send 1 to 500 at a time.');
+    var n=Math.round(Number($('fpNowN').value));if(!(n>=1&&n<=20000))return show('error','Send 1 to 20000 at a time.');
     if(!$('fpTpl').value)return show('error','Choose the template for contact forms first.');
     if(!confirm('Send "'+$('fpTpl').selectedOptions[0].textContent+'" through '+n+' company contact forms now, as '+$('fpName').value+'?'))return;
     $('fpNow').disabled=true;
