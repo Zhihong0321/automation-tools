@@ -1044,12 +1044,13 @@ async function lane(name: string, env: NodeJS.ProcessEnv): Promise<void> {
 }
 
 /**
- * Contact research is switched off on the hub (owner's order, 2026-11-01): the
- * worker does not start and the auto-queue mints nothing. Turn it back on by
- * returning false here. Off only in production, so the tests still run it.
+ * Contact research was switched off on the hub from 2026-11-01 and back on from
+ * 2026-11-12 (owner's order). To switch it off again, return
+ * `env.NODE_ENV === 'production'` here. To only hold the auto-queue, set
+ * AUTO_CONTACT_PAUSED=1 on Railway instead.
  */
-export function switchedOff(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.NODE_ENV === 'production';
+export function switchedOff(_env: NodeJS.ProcessEnv = process.env): boolean {
+  return false;
 }
 
 /** CONTACT_LANES lanes (default 8), each one company at a time. */
