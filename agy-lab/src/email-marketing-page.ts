@@ -311,7 +311,6 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 <label class="f" for="fpCompany">Company name</label><input id="fpCompany" autocomplete="off">
 <label class="f" for="fpPhone">Mobile</label><input id="fpPhone" type="tel" inputmode="tel" autocomplete="off">
 <label class="f" for="fpEmail">Email</label><input id="fpEmail" type="email" inputmode="email" autocomplete="off">
-<label class="f" for="fpPerDay">Sent a day</label><input id="fpPerDay" type="number" inputmode="numeric" min="1" max="20000">
 <div class="btns" style="margin-top:14px"><button class="primary grow" id="fpSave">Save</button><button class="grow" id="fpTest">Test one, no send</button></div>
 <div id="fpOut"></div>
 <div class="list" id="fpRows" style="margin-top:8px"></div>
@@ -690,12 +689,12 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
     return api('/api/email-marketing/form-autopilot').then(function(r){
       var s=r.settings,c=r.counts||{},checked=0;
       Object.keys(c).forEach(function(k){if(k!=='checking')checked+=c[k]});
-      $('fpOn').checked=s.enabled;$('fpPerDay').value=s.per_day;
+      $('fpOn').checked=s.enabled;
       $('fpTpl').innerHTML='<option value="">Choose the template…</option>'+(r.templates||[]).map(function(t){return '<option value="'+t.id+'">'+esc(t.name)+'</option>'}).join('');$('fpTpl').value=String(s.template_id||'');
       $('fpName').value=s.sender.name;$('fpCompany').value=s.sender.company;$('fpPhone').value=s.sender.phone;$('fpEmail').value=s.sender.email;
       var run=r.run,pc=(r.senders||[]).filter(function(x){return Date.now()-new Date(x.seen_at).getTime()<180000})[0],later=run&&new Date(run.started_at).getTime()>Date.now();
       $('fpState').textContent=(later?'Scheduled: '+run.goal+' forms from '+new Date(run.started_at).toLocaleString('en-MY',{timeZone:'Asia/Kuala_Lumpur',weekday:'short',hour:'2-digit',minute:'2-digit'})+' KL, sent from the PC. ':run?'Sending now: '+run.sent+' of '+run.goal+' sent, '+run.tried+' tried, '+run.sending+' being filled on the PC. About half a minute a form. ':'')+
-        (s.enabled?'Switch on: up to '+s.per_day+' a weekday, 08:00 to 15:00 KL. ':'Switch off. ')+'Sent today: '+r.sent_today+'.'+
+        (s.enabled?'Switch on: no daily limit, sends 09:00 to 17:30 KL, every day. ':'Switch off. ')+'Sent today: '+r.sent_today+'.'+
         (checked?' '+num(checked)+' forms tried in all: '+num((c.sent||0)+(c.submitted_unconfirmed||0))+' sent.':'')+
         (pc?' Sending PC: '+pc.name+', online.':' No sending PC online: forms go out while a PC runs the Step 2 Worker.')+(r.problem?' Problem: '+r.problem:'');
       $('fpNow').textContent=later?'Cancel the scheduled send':run?'Stop sending':'Send now';$('fpNow').dataset.stop=run?'1':'';$('fpNow').disabled=false;
@@ -715,9 +714,9 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       '</div><div class="rr"><span class="chip '+k+'">'+esc(String(x.status).replace(/_/g,' '))+'</span><div>'+(when?ago(when)+' ago':'')+'</div></div></div>';
   }
   function fpSave(){
-    var b={enabled:$('fpOn').checked,per_day:Number($('fpPerDay').value),template_id:Number($('fpTpl').value)||null,sender:{name:$('fpName').value,company:$('fpCompany').value,phone:$('fpPhone').value,email:$('fpEmail').value}};
+    var b={enabled:$('fpOn').checked,template_id:Number($('fpTpl').value)||null,sender:{name:$('fpName').value,company:$('fpCompany').value,phone:$('fpPhone').value,email:$('fpEmail').value}};
     if(b.enabled&&!b.template_id){$('fpOn').checked=false;$('fpCard').querySelector('details').open=true;return show('error','Choose the template for contact forms first.')}
-    if(b.enabled&&!confirm('Switch contact forms on? Each weekday it sends the first email of "'+$('fpTpl').selectedOptions[0].textContent+'" through up to '+b.per_day+' company websites, as '+b.sender.name+'.')){$('fpOn').checked=false;return}
+    if(b.enabled&&!confirm('Switch contact forms on? It sends the first email of "'+$('fpTpl').selectedOptions[0].textContent+'" through company websites, 09:00 to 17:30 KL every day, with no daily limit, as '+b.sender.name+'.')){$('fpOn').checked=false;return}
     api('/api/email-marketing/form-autopilot',{method:'POST',body:b}).then(function(){show('info',b.enabled?'Contact forms are on.':'Saved. Contact forms are off.');return loadForms()}).catch(function(e){fail(e);loadForms()});
   }
   $('fpNow').onclick=function(){
