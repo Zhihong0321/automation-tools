@@ -16,6 +16,8 @@ export const KINDS = {
   parallel: 'PARALLEL_API_KEY',
   smartlead: 'SMARTLEAD_API_KEY',
   pagespeed: 'GOOGLE_PAGESPEED_SERVICE_ACCOUNT',
+  // Our own page reader, myworker.up.railway.app (myworker.ts).
+  myworker: 'LOCAL_GMAP_WORKER_API_KEY',
   // Not one key but the IMAP/SMTP logins of mailbox.ts, one per line.
   mailboxes: 'MAILBOX_LOGINS',
 } as const;

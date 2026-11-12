@@ -2,104 +2,59 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as pagefetch from './pagefetch.ts';
 
-type Job = { id: string; status: string; result: unknown; error: string | null; worker: string | null };
+type Job = Awaited<ReturnType<NonNullable<pagefetch.ReadOptions['fetchPage']>>>;
 
-/** A broker stand-in: records what was created and answers with a job you set up. */
-function broker(opts: { types?: string[]; answer?: Partial<Job>; status?: string } = {}) {
-  const created: Array<{ type: string; payload: any; timeoutMs: number }> = [];
-  const cancelled: string[] = [];
-  return {
-    created,
-    cancelled,
-    liveTypes: () => opts.types ?? ['fetch.pages'],
-    create(type: string, payload: unknown, timeoutMs = 0) {
-      created.push({ type, payload, timeoutMs });
-      return { id: 'job1' } as any;
-    },
-    async wait() {
-      return { id: 'job1', status: opts.status ?? 'done', result: null, error: null, worker: 'mini-fetch', ...opts.answer } as any;
-    },
-    cancel(id: string) { cancelled.push(id); return null as any; },
+/** A myworker stand-in: answers each URL from the map, records what it was asked. */
+function worker(answers: Record<string, Partial<Job> | Error>) {
+  const asked: string[] = [];
+  const fetchPage = async (url: string): Promise<Job> => {
+    asked.push(url);
+    const a = answers[url];
+    if (a instanceof Error) throw a;
+    return { status: 'done', worker: 'mac-mini', error: null, result: null, ...a } as Job;
   };
+  return { asked, fetchPage };
 }
 
-test('with no fetch worker checked in, the read refuses instead of reading nothing', async () => {
-  const b = broker({ types: ['gmap.scan'] });
-  await assert.rejects(
-    () => pagefetch.read(['https://a.test/'], { broker: b }),
-    (err: Error & { code?: string }) => err.code === 'not_installed' && /no fetch\.pages worker/.test(err.message),
-  );
-  assert.equal(b.created.length, 0, 'no job is queued for a worker that is not there');
-});
-
 test('pages come back in Tavily /extract shape, and cost nothing', async () => {
-  const b = broker({ answer: { result: { pages: [{ url: 'https://a.test/', markdown: '# A' }], failed: [] } } });
-  const out = await pagefetch.read(['https://a.test/'], { broker: b });
+  const w = worker({ 'https://a.test/': { result: { content: '# A' } } });
+  const out = await pagefetch.read(['https://a.test/'], { fetchPage: w.fetchPage });
   assert.deepEqual(out.results, [{ url: 'https://a.test/', raw_content: '# A' }]);
   assert.deepEqual(out.failed_results, []);
   assert.equal(out.usage.credits, 0);
-  assert.equal(out.worker, 'mini-fetch');
-  assert.equal(b.created[0]!.type, 'fetch.pages');
-  assert.deepEqual(b.created[0]!.payload.urls, ['https://a.test/']);
+  assert.equal(out.worker, 'mac-mini');
+  assert.deepEqual(w.asked, ['https://a.test/']);
 });
 
 test('a page the worker could not read is a failed_result, not a thrown error', async () => {
-  const b = broker({ answer: { result: {
-    pages: [{ url: 'https://ok.test/', markdown: 'text' }],
-    failed: [{ url: 'https://dead.test/', error: 'the host does not resolve' }],
-  } } });
-  const out = await pagefetch.read(['https://ok.test/', 'https://dead.test/'], { broker: b });
+  const w = worker({
+    'https://ok.test/': { result: { content: 'text' } },
+    'https://dead.test/': { status: 'failed', error: 'the host does not resolve' },
+  });
+  const out = await pagefetch.read(['https://ok.test/', 'https://dead.test/'], { fetchPage: w.fetchPage });
   assert.equal(out.results.length, 1);
   assert.deepEqual(out.failed_results, [{ url: 'https://dead.test/', error: 'the host does not resolve' }]);
 });
 
-test('a URL the worker never mentioned is still accounted for', async () => {
-  const b = broker({ answer: { result: { pages: [{ url: 'https://a.test/', markdown: 'text' }], failed: [] } } });
-  const out = await pagefetch.read(['https://a.test/', 'https://forgotten.test/'], { broker: b });
-  assert.deepEqual(out.failed_results, [{ url: 'https://forgotten.test/', error: 'the worker returned nothing for this URL' }]);
+test('the service being down or keyless fails each page, never the call', async () => {
+  const down = Object.assign(new Error('no myworker API key is saved'), { code: 'not_installed' });
+  const w = worker({ 'https://a.test/': down, 'https://b.test/': down });
+  const out = await pagefetch.read(['https://a.test/', 'https://b.test/'], { fetchPage: w.fetchPage });
+  assert.equal(out.results.length, 0);
+  assert.equal(out.failed_results.length, 2);
+  assert.match(out.failed_results[0]!.error, /no myworker API key/);
 });
 
-test('a page with a URL but no text is not passed off as read', async () => {
-  const b = broker({ answer: { result: { pages: [{ url: 'https://a.test/', markdown: '   ' }], failed: [] } } });
-  const out = await pagefetch.read(['https://a.test/'], { broker: b });
-  assert.deepEqual(out.results, []);
-  assert.equal(out.failed_results.length, 1);
+test('an empty page and a read still running are failed rows with a reason', async () => {
+  const w = worker({ 'https://empty.test/': { result: { content: '  ' } }, 'https://slow.test/': { status: 'running' } });
+  const out = await pagefetch.read(['https://empty.test/', 'https://slow.test/'], { fetchPage: w.fetchPage });
+  assert.deepEqual(out.failed_results.map((f) => f.error), ['the page had no text', 'the read was still running when the service answered']);
 });
 
-test('a batch that never came back is cancelled, not left to run its lease out', async () => {
-  const b = broker({ status: 'running' });
-  await assert.rejects(
-    () => pagefetch.read(['https://a.test/'], { broker: b, timeoutMs: 1_000 }),
-    (err: Error & { code?: string }) => err.code === 'timeout',
-  );
-  assert.deepEqual(b.cancelled, ['job1']);
-});
-
-test('a worker failure is the read failing, not an empty page', async () => {
-  const b = broker({ status: 'failed', answer: { status: 'failed', error: 'crawl4ai is not answering' } });
-  await assert.rejects(
-    () => pagefetch.read(['https://a.test/'], { broker: b }),
-    (err: Error & { code?: string }) => err.code === 'engine_error' && /crawl4ai is not answering/.test(err.message),
-  );
-});
-
-test('duplicates collapse and the batch is capped at Tavily\'s own ceiling', async () => {
-  const b = broker({ answer: { result: { pages: [], failed: [] } } });
-  const many = Array.from({ length: 30 }, (_, i) => `https://a.test/${i}`);
-  await pagefetch.read([...many, 'https://a.test/0', ' '], { broker: b });
-  const sent: string[] = b.created[0]!.payload.urls;
-  assert.equal(sent.length, pagefetch.MAX_URLS);
-  assert.equal(new Set(sent).size, pagefetch.MAX_URLS);
-});
-
-test('no URLs asks the broker for nothing', async () => {
-  const b = broker();
-  const out = await pagefetch.read([], { broker: b });
-  assert.deepEqual(out, { results: [], failed_results: [], usage: { credits: 0 }, worker: null });
-  assert.equal(b.created.length, 0);
-});
-
-test('the batch ceiling grows with the page count and is bounded', () => {
-  assert.ok(pagefetch.batchMs(1) < pagefetch.batchMs(20), 'twenty pages get longer than one');
-  assert.equal(pagefetch.batchMs(10_000), pagefetch.batchMs(20_000), 'and it stops growing somewhere');
+test('duplicates and blanks are dropped, and a batch stops at Tavily\'s 20', async () => {
+  const urls = ['https://a.test/', 'https://a.test/', ' ', ...Array.from({ length: 30 }, (_, i) => `https://p${i}.test/`)];
+  const w = worker({});
+  await pagefetch.read(urls, { fetchPage: w.fetchPage });
+  assert.equal(w.asked.length, pagefetch.MAX_URLS);
+  assert.equal(new Set(w.asked).size, w.asked.length);
 });

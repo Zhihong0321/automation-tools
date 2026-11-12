@@ -354,8 +354,8 @@ export function releaseFor(lease: Lease, cause: unknown): void {
  * does for contact research, and the call moves on to the next key; the credits
  * Tavily reports for the call are counted against the key.
  *
- * NO PAGE READS. Since 2026-11-01 a page is read by the Mac mini or a PC fetch
- * worker (pagefetch.ts, Crawl4AI on a home line) for nothing, so /extract and
+ * NO PAGE READS. Since 2026-11-01 a page is read by our own worker PCs
+ * (pagefetch.ts, through myworker.up.railway.app since 2026-11-12) for nothing, so /extract and
  * /crawl are refused here before a key is picked: Tavily is never paid to read
  * a page again, whoever asks.
  */
