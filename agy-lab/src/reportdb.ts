@@ -1295,7 +1295,15 @@ export async function applyLeadBlacklist(opts: { all?: boolean } = {}): Promise<
 }
 
 /**
- * Active, visible, non-DNC, non-blacklisted companies the auto-queue may research.
+ * An address in Negeri Sembilan: the state's name, a postcode 70000-73999, or one
+ * of its towns. POSIX classes, no backslashes (see NAME_KEY_SQL).
+ */
+export const NEGERI_SEMBILAN_SQL =
+  "~* '(negeri[[:space:]]*sembilan|(^|[^0-9])7[0-3][0-9]{3}([^0-9]|$)|[[:<:]](seremban|senawang|nilai|mantin|port[[:space:]]+dickson|rembau|kuala[[:space:]]+pilah|tampin|jempol|bahau|gemas|lukut)[[:>:]])'";
+
+/**
+ * Active, visible, non-DNC, non-blacklisted companies the auto-queue may research,
+ * Negeri Sembilan first.
  * A lead qualifies when it has never had a legacy contact report, or when its
  * legacy contact reports are all failed. A queued, running, completed, or
  * partial report keeps the company out of the backlog.
@@ -1318,6 +1326,8 @@ export async function contactResearchBacklog(limit: number): Promise<Record<stri
            and p.status <> 'failed'
        )
      order by
+       -- Negeri Sembilan leads first (owner's order, 2026-11-12).
+       case when coalesce(c.address, '') ${NEGERI_SEMBILAN_SQL} then 0 else 1 end,
        case when exists (
          select 1 from published_report p
          where p.company_id = c.id
