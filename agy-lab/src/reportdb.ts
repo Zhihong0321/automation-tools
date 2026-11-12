@@ -1295,11 +1295,17 @@ export async function applyLeadBlacklist(opts: { all?: boolean } = {}): Promise<
 }
 
 /**
- * An address in Negeri Sembilan: the state's name, a postcode 70000-73999, or one
- * of its towns. POSIX classes, no backslashes (see NAME_KEY_SQL).
+ * An address in Negeri Sembilan, as SQL over the address column `a`: it names the
+ * state, or it names no other state and its postcode (the last 5-digit number) is
+ * 70000-73999, or, with no postcode at all, it names a Negeri Sembilan town. A
+ * town or street name alone is not enough: Kampung Lukut is in Kota Tinggi and
+ * Jalan Tampin is in Klang. POSIX classes, no backslashes (see NAME_KEY_SQL).
  */
-export const NEGERI_SEMBILAN_SQL =
-  "~* '(negeri[[:space:]]*sembilan|(^|[^0-9])7[0-3][0-9]{3}([^0-9]|$)|[[:<:]](seremban|senawang|nilai|mantin|port[[:space:]]+dickson|rembau|kuala[[:space:]]+pilah|tampin|jempol|bahau|gemas|lukut)[[:>:]])'";
+export function negeriSembilanSql(a: string): string {
+  const otherState = "[[:<:]](johor|selangor|kuala[[:space:]]+lumpur|melaka|malacca|perak|pahang|pulau[[:space:]]+pinang|penang|kedah|kelantan|terengganu|perlis|sabah|sarawak|putrajaya|labuan|wilayah[[:space:]]+persekutuan|india)[[:>:]]";
+  const town = "[[:<:]](seremban|senawang|nilai|mantin|port[[:space:]]+dickson|rembau|kuala[[:space:]]+pilah|tampin|jempol|bahau|gemas|lukut)[[:>:]]";
+  return `(${a} ~* 'negeri[[:space:]]*sembilan' or (${a} !~* '${otherState}' and coalesce((regexp_match(${a}, '.*(^|[^0-9])([0-9]{5})([^0-9]|$)'))[2] ~ '^7[0-3]', ${a} ~* '${town}')))`;
+}
 
 /**
  * Active, visible, non-DNC, non-blacklisted companies the auto-queue may research,
@@ -1327,7 +1333,7 @@ export async function contactResearchBacklog(limit: number): Promise<Record<stri
        )
      order by
        -- Negeri Sembilan leads first (owner's order, 2026-11-12).
-       case when coalesce(c.address, '') ${NEGERI_SEMBILAN_SQL} then 0 else 1 end,
+       case when ${negeriSembilanSql("coalesce(c.address, '')")} then 0 else 1 end,
        case when exists (
          select 1 from published_report p
          where p.company_id = c.id

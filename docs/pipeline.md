@@ -147,8 +147,8 @@ The groups (government, banks, malls, chains, competitors and so on) and what ea
 
 - Every 60 seconds it queues up to 3 contact research jobs, and none while 3 are still waiting.
 - It takes only leads that were checked against the blacklist, came out clean, and were never
-  researched. Negeri Sembilan leads go first (address names the state, a town there, or a
-  postcode 70000-73999); within each group, a lead whose earlier research failed goes first.
+  researched. Negeri Sembilan leads go first (the address names the state, or names no other
+  state and its postcode is 70000-73999; a town name counts only when there is no postcode); within each group, a lead whose earlier research failed goes first.
 - It holds itself while no contact worker is live, and while every Exa and Tavily key is resting.
 - New leads from a scan reach it on their own: scan, blacklist check, then the next cycle.
 
