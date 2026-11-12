@@ -204,6 +204,10 @@ type DiveLogs = {
  * 2026-10-31 carry no time and sort first; their cost is worked out from what
  * they recorded, and an LLM call without tokens gets tokens estimated from text.
  */
+function webOrTavily(via: string | undefined): Pick<ApiCall, 'api' | 'provider'> {
+  return via && via !== 'tavily' ? { api: 'web', provider: via } : { api: 'tavily' };
+}
+
 export function diveCalls(result: DiveLogs | null | undefined): ApiCall[] {
   if (!result) return [];
   const llm = (uses: LlmUse[] | null | undefined): ApiCall[] => (uses ?? []).map((c) => {
@@ -217,7 +221,8 @@ export function diveCalls(result: DiveLogs | null | undefined): ApiCall[] {
   });
   const out: ApiCall[] = [
     ...llm(result.llm),
-    ...(result.tavily ?? []).map((c): ApiCall => ({ at: c.at ?? '', api: 'tavily', what: `${c.label} (${c.path})`, credits: c.credits, ms: c.ms, ok: c.ok, usd: c.usd ?? c.credits * PRICES.tavilyCredit, ...(c.note ? { note: c.note } : {}) })),
+    // A call our own workers served (page read, site map) is 'web', never Tavily: Tavily only searches.
+    ...(result.tavily ?? []).map((c): ApiCall => ({ at: c.at ?? '', ...webOrTavily((c as { via?: string }).via), what: `${c.label} (${c.path})`, credits: c.credits, ms: c.ms, ok: c.ok, usd: c.usd ?? c.credits * PRICES.tavilyCredit, ...(c.note ? { note: c.note } : {}) })),
     ...(result.brave ?? []),
     ...llm(result.people?.llm),
     ...(result.people?.exa ?? []).map((c): ApiCall => ({ at: c.at ?? '', api: 'exa', what: `${c.kind}: ${c.query}`, results: c.results, ms: c.ms ?? 0, ok: c.ok, usd: c.usd ?? (c.ok ? c.dollars : 0), ...(c.note ? { note: c.note } : {}) })),
