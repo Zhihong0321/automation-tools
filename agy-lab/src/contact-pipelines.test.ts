@@ -120,3 +120,75 @@ test('the Tavily pipeline only searches on Tavily; site map and pages come from 
     pi.setRunnerForTests(null);
   }
 });
+
+/** An Exa stand-in: the general search answers `general`, the company search `companies`, the people search one LinkedIn profile. */
+function exaMock(general: Array<Record<string, unknown>>, companies: Array<Record<string, unknown>> = []) {
+  const asked: string[] = [];
+  const fetchImpl = (async (_url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body));
+    const kind = body.category === 'people' ? 'people' : body.category === 'company' ? 'site' : 'general';
+    asked.push(kind);
+    const results = kind === 'people'
+      ? [{ url: 'https://my.linkedin.com/in/valentina-kim', title: 'Valentina Kim - Owner - Kim\'s Florist', highlights: ['Owner at Kim\'s Florist, Johor Bahru'] }]
+      : kind === 'site' ? companies : general;
+    return new Response(JSON.stringify({ results, costDollars: { total: 0.007 } }), { status: 200 });
+  }) as typeof fetch;
+  return { asked, fetchImpl };
+}
+
+const noWorker = {
+  mapSite: async () => ({ results: [], worker: 'pc-test-fetch', error: null, usage: { credits: 0 } }),
+  readPages: async (urls: string[]) => ({ results: urls.map((url) => ({ url, raw_content: 'Kim\'s Florist\nHP 012-319 7772' })), failed_results: [], usage: { credits: 0 }, worker: 'pc-test-fetch' }),
+};
+
+async function runExa(lead: Record<string, unknown>, mock: ReturnType<typeof exaMock>) {
+  exaApi.setKeysForTests(['exa-test']);
+  pi.setRunnerForTests(async () => JSON.stringify({ people: [], phones: [{ number: '012-319 7772', label: 'mobile', evidence_url: '' }], emails: [] }));
+  try {
+    const result = await exaPipeline.research(lead, { fetchImpl: mock.fetchImpl, timeoutMs: 60_000, ...noWorker });
+    return result.research_meta as Record<string, unknown>;
+  } finally {
+    pi.setRunnerForTests(null);
+    exaApi.setKeysForTests(null);
+  }
+}
+
+test('Exa plan: a lead with a website gets the general and people searches only, never the company search', async () => {
+  const mock = exaMock([{ url: 'https://www.facebook.com/kimsflorist', title: "Kim's Florist", text: 'HP 012-319 7772' }]);
+  const meta = await runExa({ name: target.name, location: 'Johor Bahru', website: 'https://www.kimsflorist.com.my/' }, mock);
+  assert.deepEqual(mock.asked.sort(), ['general', 'people']);
+  assert.deepEqual((meta.cost as Record<string, unknown>).exa_searches, 2);
+  assert.equal(meta.official_site, 'https://www.kimsflorist.com.my/');
+});
+
+test('Exa plan: a site among the general hits saves the company search and still gets the people search', async () => {
+  const mock = exaMock([{ url: 'https://www.kimsflorist.com.my/contact', title: "Kim's Florist Johor Bahru", text: 'Tel 07-224 3663 Johor' }]);
+  const meta = await runExa({ name: target.name, location: 'Johor Bahru' }, mock);
+  assert.deepEqual(mock.asked.sort(), ['general', 'people']);
+  assert.equal(meta.official_site, 'https://www.kimsflorist.com.my/');
+  const plan = meta.plan as Array<Record<string, unknown>>;
+  assert.equal(plan.find((step) => step.step === 'site')!.ran, false);
+});
+
+test('Exa plan: no site anywhere skips the people search and says why on the report', async () => {
+  const mock = exaMock([{ url: 'https://www.yellowpages.my/kims', title: "Kim's Florist", text: 'HP 012-319 7772' }], []);
+  const meta = await runExa({ name: target.name, location: 'Johor Bahru' }, mock);
+  assert.deepEqual(mock.asked.sort(), ['general', 'site']);
+  assert.equal(meta.official_site, null);
+  const people = (meta.plan as Array<Record<string, unknown>>).find((step) => step.step === 'people')!;
+  assert.equal(people.ran, false);
+  assert.equal(people.why, exaPipeline.PEOPLE_SKIP_WHY);
+});
+
+test('Exa plan: a site found by the company search gets the people search', async () => {
+  const mock = exaMock([{ url: 'https://www.yellowpages.my/kims', title: "Kim's Florist", text: 'HP 012-319 7772' }],
+    [{ url: 'https://www.kimsflorist.com.my/', title: "Kim's Florist", entities: [{ properties: { headquarters: { country: 'Malaysia' } } }] }]);
+  const meta = await runExa({ name: target.name, location: 'Johor Bahru' }, mock);
+  assert.deepEqual(mock.asked, ['general', 'site', 'people']);
+  assert.equal(meta.official_site, 'https://www.kimsflorist.com.my/');
+});
+
+test('a Maps note in brackets is left out of the searched name', () => {
+  assert.equal(exaPipeline.searchName('Yasrree (M) Sdn.Bhd [Warehouse and Office]'), 'Yasrree (M) Sdn.Bhd');
+  assert.equal(exaPipeline.searchName('Plain Name'), 'Plain Name');
+});

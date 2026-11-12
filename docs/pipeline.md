@@ -162,13 +162,19 @@ First live run: 22 jobs in 10 minutes, 19 completed, 1 failed and then succeeded
 | Switches | LLM lanes on `/workers` (the `llm_lane` table; `CONTACT_LLM_*` only when it is empty), `CONTACT_LANES` (default 3), `CONTACT_TIMEOUT_MS` (default 180,000) |
 | Keys | Exa and Tavily keys are kept in the hub: `GET /api/contact-keys`, or the `/workers` page. `EXA_API_KEYS` / `TAVILY_API_KEYS` are read only when the hub has none stored. |
 | Status | `GET /api/jobs` (lanes `pi-contact`), `GET /api/contact-keys` (quota per key), `GET /api/contact-stats` (finds per provider) |
-| Cost | Exa about $0.017 a company. Tavily fallback about 4 credits a company, on free keys. |
+| Cost | Exa 2 searches ($0.014) for most companies, 3 ($0.021) when only the company search finds the site. Tavily fallback about 4 credits a company, on free keys. |
 | Pause | pause the auto-queue (step 6). Jobs already queued still run. |
 
 Two steps per company:
 1. **Search.** The Exa pipeline runs while any Exa key has credits (23 keys). If every Exa key is
    resting, or Exa fails, the job falls back to the v2 pipeline on Tavily (19 free keys, 1,000
-   credits a month each).
+   credits a month each). The Exa pipeline goes cheapest first (since 2026-11-12):
+   - always the general search (name and address, with page text);
+   - the company search only when neither the lead nor the general hits give the company's site;
+   - the people (LinkedIn) search only when the company has a site. A lead with no site anywhere
+     skips it: it found someone for only 6-9% of such leads.
+   - the site itself is read on our worker PCs, for nothing.
+   Each step that did not run is on the report, with its reason (`research_meta.plan`).
 2. **Read.** A model reads the pages found and pulls out people, phones and emails. It may only return
    what is printed on those pages. The model is **deepseek-v4.1-flash-1017** on every enabled lane
    saved on `/workers`, through the app's one LLM router (`core/llm.ts`): the lanes take turns, a lane

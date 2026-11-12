@@ -225,6 +225,7 @@ export function extractContactsPrompt(target: Target, pages: Page[], results: So
     '- Copy each number exactly as printed, area code included. Never change 07 to 03 or add digits.',
     '- Skip a number or email that is masked or cut, such as 016-709 82**, 07-356 2XXX or s*****@ksl.net.my, and a placeholder such as +60 3-7000 0000.',
     '- label: whose it is or what it is (person name, branch, "WhatsApp", "mobile", "office", "fax"), as printed. A Malaysian number starting 01 is "mobile" unless the text says otherwise.',
+    '- A WhatsApp link such as wa.me/60123456789 prints a mobile number: list it with label "WhatsApp".',
     '- The same digits written another way are one phone. List it once.',
     '- Skip numbers and emails of a different business, a mall, a landlord, a directory site itself, or a neighbouring shop.',
     '- When a name is shared by several businesses, keep only what matches this address or this website.',
@@ -466,9 +467,9 @@ export function officialSite(target: Target, sources: Source[]): string {
   return '';
 }
 
-/** The brand without its branch: "Thai Odyssey @ Komtar JBCC" is "Thai Odyssey", for people searches. */
+/** The brand without its branch: "Thai Odyssey @ Komtar JBCC" is "Thai Odyssey", and "Yasrree [Warehouse]" is "Yasrree", for people searches. */
 export function coreName(name: string): string {
-  const core = name.split(/\s+(?:@|\||-|–)\s+|\s*\(/)[0]!.trim();
+  const core = name.split(/\s+(?:@|\||-|–)\s+|\s*[([]/)[0]!.trim();
   return core.length >= 3 ? core : name.trim();
 }
 

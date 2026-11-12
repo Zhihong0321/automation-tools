@@ -139,3 +139,40 @@ Findings:
 - The people come from an index of profiles. Exa's `people` category and Exa's LinkedIn search find them, and Tavily's LinkedIn search finds far fewer. That is why Tavily alone is weakest on people.
 - Tavily's free raw content makes long prompts. Both Pi stalls happened on the Tavily pipeline's pages for KSL Holdings.
 - Exa reads the company's site cheaply ($0.001 a page). `extras.links` gives the WhatsApp and mailto links that page text leaves out.
+
+## Prod data and the cheapest-first plan, 2026-11-12
+
+996 completed prod reports from the Exa pipeline (31 Oct - 1 Nov 2026), read through `/api/contact-research/<id>`.
+Over 40 days `/api/contact-stats` shows Exa as the general provider for 44,277 jobs and Tavily for 5,153:
+Exa found 0.52 people a job, Tavily 0.15. Brave is not used for contacts: it returns snippets only and has no people index.
+
+Where the finds came from (people / emails / mobiles):
+
+| source | people | emails | mobiles |
+|---|---|---|---|
+| people (LinkedIn) search | 457 | 19 | 7 |
+| company's own site (read on our workers, free) | 121 | 304 | 250 |
+| other pages from the general search | 98 | 274 | 628 |
+
+How often the people search found someone, by lead:
+
+| lead | share of leads | found a LinkedIn person |
+|---|---|---|
+| has a website | 40% | 25% (shops) - 43% (firms) |
+| no website, site found | 18% | 16-20% |
+| no website, no site found | 43% | 6-9% |
+
+The old plan ran the general and people searches for every lead and the company search for every lead with no website:
+2.6 Exa searches ($0.019) a company. The new plan (`research()` in contact-exa.ts) skips the company search when the
+general hits already give the site, and skips the people search when there is no site: about 2.0-2.2 searches a company,
+16-23% fewer calls. Phones and emails come from the general search and the site, so they are unchanged. People drop by
+about 9% (61 of 676 in the sample came from LinkedIn on leads with no site).
+
+Test on one lead with no website (Fortunelina Asia Sdn Bhd, Klang), same day, same keys:
+
+| | old plan | new plan |
+|---|---|---|
+| Exa searches | general, people, company (3) | general, company (2) |
+| cost | $0.021 | $0.014 |
+| people / phones / emails | 1 / 2 / 0 | 1 / 2 / 0 |
+| time | 13 s | 15 s |
