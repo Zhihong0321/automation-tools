@@ -69,7 +69,7 @@ test('tel, mailto and WhatsApp links are kept, other links are not', () => {
   ]), ['tel:+6072243663', 'mailto:sales@kims.example', 'https://wa.me/60169629627']);
 });
 
-test('the Tavily pipeline searches on Tavily, reads the site on a fetch worker, and keeps the report shape', async () => {
+test('the Tavily pipeline only searches on Tavily; site map and pages come from our workers, and the report shape is kept', async () => {
   const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
   const fetchMock = (async (url: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body));
@@ -81,7 +81,6 @@ test('the Tavily pipeline searches on Tavily, reads the site on a fetch worker, 
         usage: { credits: body.search_depth === 'advanced' ? 2 : 1 },
       });
     }
-    if (url.endsWith('/map')) return json({ results: ['https://www.kimsflorist.com.my/', 'https://www.kimsflorist.com.my/contact-us'], usage: { credits: 1 } });
     throw new Error('the pipeline fetched a page itself: ' + url);
   }) as typeof fetch;
   // The site's pages come from a fetch worker (pagefetch.ts), never Tavily's /extract.
@@ -91,23 +90,30 @@ test('the Tavily pipeline searches on Tavily, reads the site on a fetch worker, 
     return { results: [{ url: 'https://www.kimsflorist.com.my/contact-us', raw_content: 'Contact Valentina Kim, Owner\nHP 012-319 7772\nsales@kimsflorist.com.my' }],
       failed_results: [], usage: { credits: 0 }, worker: 'pc-test-fetch' };
   };
+  const mapped: string[] = [];
+  const mapSite = async (site: string) => {
+    mapped.push(site);
+    return { results: ['https://www.kimsflorist.com.my/', 'https://www.kimsflorist.com.my/contact-us'], worker: 'pc-test-fetch', error: null, usage: { credits: 0 } };
+  };
   pi.setRunnerForTests(async () => JSON.stringify({
     people: [{ name: 'valentina kim', position: 'Owner', evidence_url: 'https://www.kimsflorist.com.my/contact-us' }],
     phones: [{ number: '012-319 7772', label: 'Valentina Kim mobile', evidence_url: 'https://www.kimsflorist.com.my/contact-us' }],
     emails: [{ email: 'sales@kimsflorist.com.my', label: 'Sales', evidence_url: 'https://www.kimsflorist.com.my/contact-us' }],
   }));
   try {
-    const result = await (tavilyApi.setKeysForTests(['tvly-test']), tavilyPipeline.research({ name: target.name, location: 'Johor Bahru' }, { fetchImpl: fetchMock, timeoutMs: 60_000, readPages }));
+    const result = await (tavilyApi.setKeysForTests(['tvly-test']), tavilyPipeline.research({ name: target.name, location: 'Johor Bahru' }, { fetchImpl: fetchMock, timeoutMs: 60_000, readPages, mapSite }));
     const people = result.decision_makers as Array<Record<string, unknown>>;
     assert.equal(people[0]!.name, 'Valentina Kim');
     assert.equal(people[0]!.found_by, 'tavily');
     assert.equal(people[0]!.direct_phone, '012-319 7772');
     const meta = result.research_meta as Record<string, unknown>;
     assert.equal(meta.official_site, 'https://www.kimsflorist.com.my/');
-    assert.deepEqual(meta.cost, { tavily_credits: 6, dollars: 0.048 });
-    assert.equal(read.length, 1, 'the site is read in one worker batch');
-    assert.ok(read[0]!.includes('https://www.kimsflorist.com.my/contact-us'));
-    assert.ok(!calls.some((call) => call.url.endsWith('/extract')), 'Tavily is never asked to read a page');
+    assert.deepEqual(meta.cost, { tavily_credits: 5, dollars: 0.04 });
+    assert.deepEqual(mapped, ['https://www.kimsflorist.com.my/'], 'the site is mapped on our workers');
+    assert.equal(read.length, 2, 'search hits and site pages are each read in one worker batch');
+    assert.ok(read[1]!.includes('https://www.kimsflorist.com.my/contact-us'));
+    assert.ok(calls.every((call) => call.url.endsWith('/search')), 'Tavily is only ever asked to search');
+    assert.ok(calls.every((call) => !('include_raw_content' in call.body)), 'a search never asks Tavily for whole pages');
     assert.ok(calls.every((call) => call.url.startsWith('https://api.tavily.com/')));
     assert.ok(calls.filter((call) => call.url.endsWith('/search')).every((call) => call.body.country === 'malaysia'));
   } finally {

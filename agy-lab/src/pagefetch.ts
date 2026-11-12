@@ -80,3 +80,81 @@ export async function read(urls: string[], opts: ReadOptions = {}): Promise<Extr
   }
   return { results, failed_results: failed, usage: { credits: 0 }, worker: workers.length ? workers.join(', ') : 'myworker' };
 }
+
+// ---------------------------------------------------------------- site map
+
+/** What Tavily's /map gave: the site's own URLs. Built on our workers instead. */
+export type SiteMap = { results: string[]; worker: string | null; error: string | null; usage: { credits: number } };
+
+const ASSET = /\.(?:jpe?g|png|gif|webp|svg|ico|css|js|mjs|json|xml|zip|rar|mp4|mp3|webm|woff2?|ttf|eot)(?:[?#]|$)/i;
+
+function sameSite(a: string, b: string): boolean {
+  return a.replace(/^www\./, '') === b.replace(/^www\./, '');
+}
+
+/** Absolute same-site page URLs from a page's HTML hrefs, in page order. */
+export function linksOf(html: string, base: string): string[] {
+  const out: string[] = [];
+  const host = new URL(base).hostname;
+  for (const m of String(html ?? '').matchAll(/href\s*=\s*["']([^"'#]+)/gi)) {
+    try {
+      const u = new URL(m[1]!.trim(), base);
+      if (!/^https?:$/.test(u.protocol) || !sameSite(u.hostname, host) || ASSET.test(u.pathname)) continue;
+      u.hash = '';
+      out.push(u.toString());
+    } catch { /* not a URL */ }
+  }
+  return out;
+}
+
+/** <loc> entries of a sitemap or sitemap index. */
+export function locsOf(xml: string): string[] {
+  return [...String(xml ?? '').matchAll(/<loc>\s*(?:<!\[CDATA\[)?\s*([^<\]\s]+)/gi)].map((m) => m[1]!.trim());
+}
+
+/**
+ * The site's own pages, the stand-in for Tavily /map: the home page's links
+ * first (the pages its owner put in the menu), then its sitemap.xml (one level
+ * of a sitemap index followed). Read on our workers through myworker. Never
+ * throws: a site that answers nothing is an empty map with the reason.
+ */
+export async function mapSite(site: string, opts: ReadOptions & { limit?: number } = {}): Promise<SiteMap> {
+  const limit = Math.max(1, opts.limit ?? 50);
+  let home: URL;
+  try { home = new URL(/^https?:\/\//i.test(site) ? site : 'https://' + site); } catch {
+    return { results: [], worker: null, error: `not a URL: ${String(site).slice(0, 100)}`, usage: { credits: 0 } };
+  }
+  const get = opts.fetchPage ?? myworker.fetchPage;
+  const workers = new Set<string>();
+  const errors: string[] = [];
+  const raw = async (url: string, format: 'html' | 'text'): Promise<string> => {
+    try {
+      const job = await get(url, { timeoutMs: opts.timeoutMs ?? 60_000, format, mainContent: false });
+      if (job?.worker) workers.add(job.worker);
+      if (job?.status === 'done') return String(job.result?.content ?? '');
+      errors.push(`${url}: ${job?.error ?? job?.status ?? 'no answer'}`);
+    } catch (cause) {
+      errors.push(`${url}: ${(cause as Error)?.message ?? cause}`);
+    }
+    return '';
+  };
+
+  const root = home.origin + '/';
+  const [html, xml] = await Promise.all([raw(root, 'html'), raw(home.origin + '/sitemap.xml', 'text')]);
+  let locs = locsOf(xml);
+  if (/<sitemapindex/i.test(xml)) {
+    const children = locs.slice(0, 3);
+    locs = (await Promise.all(children.map((u) => raw(u, 'text').then(locsOf)))).flat();
+  }
+  const seen = new Set<string>();
+  const results: string[] = [];
+  for (const u of [root, ...linksOf(html, root), ...locs.filter((u) => { try { return sameSite(new URL(u).hostname, home.hostname) && !ASSET.test(new URL(u).pathname); } catch { return false; } })]) {
+    const key = u.replace(/\/+$/, '').replace(/^https?:\/\/(www\.)?/i, '').toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    results.push(u);
+    if (results.length >= limit) break;
+  }
+  const error = results.length > 1 ? null : errors.join('; ').slice(0, 300) || null;
+  return { results: html || locs.length ? results : [], worker: workers.size ? [...workers].join(', ') : 'myworker', error, usage: { credits: 0 } };
+}

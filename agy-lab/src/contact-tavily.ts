@@ -27,7 +27,7 @@ const MAP_LIMIT = 40;
 export const DOLLARS_PER_CREDIT = 0.008;
 
 /** One Tavily call through the app's core (core/tavily.ts), which picks the key, rests a spent one and counts its credits. */
-async function call<T>(endpoint: 'search' | 'map', body: Record<string, unknown>, fetchImpl: FetchImpl, timeoutMs = 45_000): Promise<T & { usage?: { credits?: number } }> {
+async function call<T>(endpoint: 'search', body: Record<string, unknown>, fetchImpl: FetchImpl, timeoutMs = 45_000): Promise<T & { usage?: { credits?: number } }> {
   return await tavily.request(endpoint, body, { fetchImpl, timeoutMs }) as T & { usage?: { credits?: number } };
 }
 
@@ -43,12 +43,12 @@ function searches(target: cw.Target): SearchSpec[] {
     {
       purpose: 'general',
       query: location ? `"${name}" ${location}` : `"${name}"`,
-      body: { ...base, search_depth: 'advanced', chunks_per_source: 3, include_raw_content: 'text' },
+      body: { ...base, search_depth: 'advanced', chunks_per_source: 3 },
     },
     {
       purpose: 'people',
       query: `"${name}" owner OR director OR "managing director" OR manager OR founder phone email`,
-      body: { ...base, search_depth: 'advanced', chunks_per_source: 3, include_raw_content: 'text' },
+      body: { ...base, search_depth: 'advanced', chunks_per_source: 3 },
     },
     {
       purpose: 'linkedin',
@@ -60,7 +60,7 @@ function searches(target: cw.Target): SearchSpec[] {
 
 type Found = { searched: cw.Searched; pages: cw.Page[]; credits: number };
 
-async function runSearches(target: cw.Target, fetchImpl: FetchImpl): Promise<Found> {
+async function runSearches(target: cw.Target, fetchImpl: FetchImpl, readPages: PageReader = pagefetch.read): Promise<Found> {
   const specs = searches(target);
   const answers = await Promise.all(specs.map((spec) =>
     call<{ results?: RawResult[] }>('search', { query: spec.query, ...spec.body }, fetchImpl)
@@ -70,7 +70,7 @@ async function runSearches(target: cw.Target, fetchImpl: FetchImpl): Promise<Fou
         throw cause;
       })));
   const sources: cw.Source[] = [];
-  const pages: cw.Page[] = [];
+  const toRead: string[] = [];
   const log: cw.SearchLog[] = [];
   let credits = 0;
   answers.forEach((answer, i) => {
@@ -82,14 +82,18 @@ async function runSearches(target: cw.Target, fetchImpl: FetchImpl): Promise<Fou
     const hits = results.map((row) => ({ url: String(row.url ?? ''), title: clean(row.title, 200), content: clean(row.content, 600) }));
     const found = cw.toSources(target, hits, 'tavily');
     sources.push(...(spec.purpose === 'linkedin' ? found.map((source) => ({ ...source, kind: 'social' })) : found));
+    if (spec.purpose === 'linkedin') return;
     for (const row of results) {
       const url = cw.publicUrl(row.url);
-      const text = String(row.raw_content ?? '').trim();
-      if (!url || !text || cw.isLinkedinPerson(url) || cw.isJobAdvertisement(url) || cw.isStalePdf(url)) continue;
-      pages.push({ url, text: text.slice(0, RAW_PAGE_CHARS) });
+      if (!url || cw.isLinkedinPerson(url) || cw.isJobAdvertisement(url) || cw.isStalePdf(url)) continue;
+      toRead.push(url);
     }
   });
-  return { searched: { sources: dedupeSources(sources), queries: specs.map((spec) => spec.query), log }, pages: dedupePages(pages).slice(0, MAX_SEARCH_PAGES), credits };
+  // Tavily searches only; the hits' pages are read on our own workers.
+  const wanted = [...new Map(toRead.map((url) => [cw.dedupeKey(url), url])).values()].slice(0, MAX_SEARCH_PAGES);
+  const read = await readOnWorker(wanted, readPages);
+  if (wanted.length) log.push({ provider: 'fetch-worker', purpose: 'extract', query: `read ${wanted.length} search hit page(s)${read.worker ? ' on ' + read.worker : ''}${read.error ? ' (failed: ' + read.error.slice(0, 80) + ')' : ''}`, results: read.pages.length, credits: 0 });
+  return { searched: { sources: dedupeSources(sources), queries: specs.map((spec) => spec.query), log }, pages: dedupePages(read.pages), credits };
 }
 
 function clean(value: unknown, max: number): string {
@@ -117,25 +121,13 @@ function dedupePages(pages: cw.Page[]): cw.Page[] {
 }
 
 
-/** Map the company's site, then have a fetch worker read the home page and its contact, about and team pages. */
-async function readSite(site: string, fetchImpl: FetchImpl, readPages: PageReader): Promise<{ pages: cw.Page[]; log: cw.SearchLog[]; credits: number }> {
+/** Map the company's site on our workers, then have them read the home page and its contact, about and team pages. */
+async function readSite(site: string, _fetchImpl: FetchImpl, readPages: PageReader, mapSite: typeof pagefetch.mapSite = pagefetch.mapSite): Promise<{ pages: cw.Page[]; log: cw.SearchLog[]; credits: number }> {
   const log: cw.SearchLog[] = [];
-  let credits = 0;
-  let mapped: string[] = [];
-  try {
-    const host = new URL(site).hostname.replace(/^www\./, '').replace(/\./g, '\\.');
-    const map = await call<{ results?: string[] }>('map', {
-      url: site, max_depth: 2, max_breadth: 30, limit: MAP_LIMIT, allow_external: false,
-      select_domains: [`^(www\\.)?${host}$`], timeout: 30,
-    }, fetchImpl);
-    mapped = Array.isArray(map.results) ? map.results.filter((url) => typeof url === 'string') : [];
-    const spent = map.usage?.credits ?? Math.ceil(mapped.length / 10);
-    credits += spent;
-    log.push({ provider: 'tavily', purpose: 'site', query: 'map ' + site, results: mapped.length, credits: spent });
-  } catch (cause) {
-    log.push({ provider: 'tavily', purpose: 'site', query: `map ${site} (failed: ${(cause as Error).message.slice(0, 80)})`, results: 0, credits: 0 });
-    if ((cause as { code?: string }).code === 'quota' || (cause as { code?: string }).code === 'rate_limit') throw cause;
-  }
+  const credits = 0;
+  const map = await mapSite(site, { limit: MAP_LIMIT });
+  const mapped = map.results;
+  log.push({ provider: 'fetch-worker', purpose: 'site', query: `map ${site} on ${map.worker ?? 'myworker'}${map.error ? ' (' + map.error.slice(0, 80) + ')' : ''}`, results: mapped.length, credits: 0 });
   const urls = cw.pickSitePages(site, mapped);
   const read = await readOnWorker(urls, readPages);
   log.push({ provider: 'fetch-worker', purpose: 'extract', query: `read ${urls.length} page(s) of ${site}${read.worker ? ' on ' + read.worker : ''}${read.error ? ' (failed: ' + read.error.slice(0, 80) + ')' : ''}`, results: read.pages.length, credits: 0 });
@@ -164,12 +156,12 @@ async function readOnWorker(urls: string[], readPages: PageReader): Promise<{ pa
 }
 
 /** One company through the Tavily pipeline with one key. Same result shape as contact-worker's research(). */
-export async function research(raw: unknown, deps: { fetchImpl?: FetchImpl; timeoutMs?: number; readPages?: PageReader }): Promise<Record<string, unknown>> {
+export async function research(raw: unknown, deps: { fetchImpl?: FetchImpl; timeoutMs?: number; readPages?: PageReader; mapSite?: typeof pagefetch.mapSite }): Promise<Record<string, unknown>> {
   const target = cw.targetFromPayload(raw);
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const found = await runSearches(target, fetchImpl);
+  const found = await runSearches(target, fetchImpl, deps.readPages ?? pagefetch.read);
   const site = cw.officialSite(target, found.searched.sources);
-  const siteRead = site ? await readSite(site, fetchImpl, deps.readPages ?? pagefetch.read) : { pages: [], log: [], credits: 0 };
+  const siteRead = site ? await readSite(site, fetchImpl, deps.readPages ?? pagefetch.read, deps.mapSite ?? pagefetch.mapSite) : { pages: [], log: [], credits: 0 };
   // Site pages first: they are the company's own words.
   const pages = dedupePages([...siteRead.pages, ...found.pages]);
   const searched: cw.Searched = { ...found.searched, log: [...found.searched.log, ...siteRead.log] };

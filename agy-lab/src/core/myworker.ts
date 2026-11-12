@@ -40,7 +40,7 @@ function fail(message: string, code: string): Error {
  */
 export async function fetchPage(
   url: string,
-  opts: { timeoutMs?: number; fetchImpl?: FetchImpl; baseUrl?: string } = {},
+  opts: { timeoutMs?: number; fetchImpl?: FetchImpl; baseUrl?: string; format?: 'markdown' | 'text' | 'html'; mainContent?: boolean } = {},
 ): Promise<FetchJob> {
   await secrets.load();
   const key = secrets.get('myworker');
@@ -52,7 +52,7 @@ export async function fetchPage(
     res = await fetchImpl(`${(opts.baseUrl ?? BASE_URL).replace(/\/+$/, '')}/api/fetch`, {
       method: 'POST',
       headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ url, format: 'markdown', mainContent: true, timeoutMs }),
+      body: JSON.stringify({ url, format: opts.format ?? 'markdown', mainContent: opts.mainContent ?? true, timeoutMs }),
     });
   } catch (cause) {
     throw fail(`myworker unreachable: ${(cause as Error).message}`, 'engine_error');

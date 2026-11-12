@@ -111,8 +111,9 @@ export class Budget {
   calls: TavilyCall[] = [];
   readonly max: number;
   constructor(max = MAX_TAVILY_CALLS) { this.max = max; }
-  get used(): number { return this.calls.length; }
-  get left(): number { return this.max - this.calls.length; }
+  /** Only Tavily searches count: maps and page reads run on our own workers (pagefetch.ts) for nothing. */
+  get used(): number { return this.calls.filter((c) => c.path === 'search').length; }
+  get left(): number { return this.max - this.used; }
   get credits(): number { return this.calls.reduce((n, c) => n + c.credits, 0); }
 }
 
@@ -120,6 +121,7 @@ export class BudgetSpent extends Error {}
 
 type TavilyRequest = typeof tavily.request;
 type PageReader = typeof pagefetch.read;
+type SiteMapper = typeof pagefetch.mapSite;
 
 export async function budgetedCall(
   budget: Budget,
@@ -128,27 +130,29 @@ export async function budgetedCall(
   label: string,
   request: TavilyRequest = tavily.request,
   readPages: PageReader = pagefetch.read,
+  mapSite: SiteMapper = pagefetch.mapSite,
 ): Promise<Record<string, any>> {
-  if (budget.left <= 0) throw new BudgetSpent(`Tavily budget of ${budget.max} calls is spent`);
+  if (path === 'search' && budget.left <= 0) throw new BudgetSpent(`Tavily budget of ${budget.max} calls is spent`);
   const started = Date.now();
   const at = new Date(started).toISOString();
-  const via = path === 'extract' ? 'macmini' : 'tavily';
+  const via = path === 'search' ? 'tavily' : 'myworker';
   try {
-    // Pages are read on the Mac mini since 2026-11-01 (pagefetch.ts): the same
-    // answer shape, for nothing, from an address websites actually serve.
-    // Search and map stay with Tavily — they are search, not page reads.
-    const out = path === 'extract'
+    // Tavily is for web search only. Every page read and site map runs on our
+    // own worker PCs through myworker (pagefetch.ts), for nothing.
+    const out: Record<string, any> = path === 'extract'
       ? await readPages((body.urls as string[]) ?? [])
-      : await request(path, body);
-    const credits = Number(out.usage?.credits ?? 0);
-    budget.calls.push({ n: budget.used + 1, at, path, label, credits, ms: Date.now() - started, ok: true, usd: credits * PRICES.tavilyCredit,
-      via: path === 'extract' ? (out as pagefetch.ExtractAnswer).worker ?? via : via });
+      : path === 'map'
+        ? await mapSite(String(body.url ?? ''), { limit: Number(body.limit) || 50 })
+        : await request('search', body);
+    const credits = path === 'search' ? Number(out.usage?.credits ?? 0) : 0;
+    budget.calls.push({ n: budget.calls.length + 1, at, path, label, credits, ms: Date.now() - started, ok: true, usd: credits * PRICES.tavilyCredit,
+      via: path === 'search' ? via : out.worker ?? via, ...(path === 'map' && out.error ? { note: String(out.error).slice(0, 200) } : {}) });
     return out;
   } catch (err) {
     const code = (err as { code?: string }).code;
     // Refused before any work was done (no key, or no fetch lane): no budget spent.
     if (code !== 'quota' && code !== 'not_installed') {
-      budget.calls.push({ n: budget.used + 1, at, path, label, credits: 0, ms: Date.now() - started, ok: false, usd: 0, note: (err as Error).message.slice(0, 200), via });
+      budget.calls.push({ n: budget.calls.length + 1, at, path, label, credits: 0, ms: Date.now() - started, ok: false, usd: 0, note: (err as Error).message.slice(0, 200), via });
     }
     throw err;
   }
@@ -550,12 +554,19 @@ async function dive(company: string, country: string, progress: Progress, budget
   try {
     const out = await T('search', {
       query: `${company} ${country} company profile`,
-      search_depth: 'advanced', max_results: 20, include_answer: 'advanced', include_raw_content: 'markdown',
+      search_depth: 'advanced', max_results: 20, include_answer: 'advanced',
       ...(tavilyCountry ? { country: tavilyCountry } : {}),
     }, 'T1 big picture');
     t1Answer = String(out.answer ?? '');
     addSearchResults(out, 'tavily:T1');
     await say('discover', `Tavily T1: ${(out.results ?? []).length} results; ${ledger.sources.length} unique URLs in total`);
+    // Tavily searches only; the T1 hits' pages are read on our own workers.
+    const t1Urls = (out.results ?? []).map((r: any) => String(r.url ?? '')).filter((u: string) => /^https?:\/\//i.test(u) && !isWalled(hostOf(u))).slice(0, 20);
+    if (t1Urls.length) {
+      await T('extract', { urls: t1Urls }, 'T1 pages')
+        .then((read) => { addExtractResults(read, 'tavily:T1'); return say('discover', `T1 pages: read ${(read.results ?? []).length} of ${t1Urls.length} on our workers`); })
+        .catch((err) => say('discover', `T1 pages failed: ${err.message}`));
+    }
   } catch (err) {
     await say('discover', `Tavily T1 failed: ${(err as Error).message}`);
   }
@@ -584,7 +595,7 @@ async function dive(company: string, country: string, progress: Progress, budget
       const out = await T('map', { url: 'https://' + mapDomain, max_depth: 2, limit: 50 }, 'T2 site map');
       mapped = [...new Set((out.results ?? []).map(String))] as string[];
     } catch (err) {
-      await say('read', `Tavily T2 failed: ${(err as Error).message}`);
+      await say('read', `T2 site map failed: ${(err as Error).message}`);
     }
     // /map sometimes answers with no pages for a site it mapped fine an hour
     // earlier. The official pages discovery already found are the fallback.
@@ -593,7 +604,7 @@ async function dive(company: string, country: string, progress: Progress, budget
       mapped = ledger.sources.filter((s) => official.has(hostOf(s.url))).map((s) => s.url);
     }
     const unread = mapped.filter((u) => (ledger.find(u)?.contentKind ?? 'none') === 'none');
-    await say('read', `Tavily T2: ${mapped.length} official pages, ${unread.length} not read yet`);
+    await say('read', `T2 site map (our workers): ${mapped.length} official pages, ${unread.length} not read yet`);
     if (unread.length) {
       const pick = await askJson<{ urls?: string[] }>(pickPagesPrompt(company, identity, unread.slice(0, 150), 15), { step: 'pick-pages', uses, warn },
         { urls: [...unread].sort((x, y) => x.length - y.length).slice(0, 15) });
@@ -604,10 +615,10 @@ async function dive(company: string, country: string, progress: Progress, budget
   for (const u of ownPages) relevant.add(ledger.add(u, '', [], 'tavily:T2').id);
 
   await Promise.all([
-    ownPages.length && T('extract', { urls: ownPages, extract_depth: 'advanced', format: 'markdown' }, 'T3 official pages')
+    ownPages.length && T('extract', { urls: ownPages }, 'T3 official pages')
       .then((out) => { addExtractResults(out, 'tavily:T3'); return say('read', `Tavily T3: read ${(out.results ?? []).length} of ${ownPages.length} official pages`); })
       .catch((err) => say('read', `Tavily T3 failed: ${err.message}`)),
-    thirdParty.length && T('extract', { urls: thirdParty.map((s) => s.url), extract_depth: 'advanced', format: 'markdown' }, 'T4 third-party pages')
+    thirdParty.length && T('extract', { urls: thirdParty.map((s) => s.url) }, 'T4 third-party pages')
       .then((out) => { addExtractResults(out, 'tavily:T4'); return say('read', `Tavily T4: read ${(out.results ?? []).length} of ${thirdParty.length} third-party pages`); })
       .catch((err) => say('read', `Tavily T4 failed: ${err.message}`)),
   ]);
@@ -645,7 +656,7 @@ async function dive(company: string, country: string, progress: Progress, budget
   };
   for (let i = 0; i < searches.length; i += 3) {
     await Promise.all(searches.slice(i, i + 3).map((s, j) => {
-      const label = `T${budget.used + 1 + j}`;
+      const label = `T${budget.calls.length + 1 + j}`;
       return gapSearch(s, label)
         .then((n) => say('fill', `${label} "${s.query}": ${n} results`))
         .catch((err) => say('fill', `${label} "${s.query}" failed: ${err.message}`));
@@ -668,12 +679,12 @@ async function dive(company: string, country: string, progress: Progress, budget
   if (next.length) {
     const beforeReserve = new Set(ledger.sources.map((s) => `${s.id}:${s.contentKind}`));
     for (const n of next) {
-      const label = `T${budget.used + 1}`;
+      const label = `T${budget.calls.length + 1}`;
       try {
         if (n.kind === 'extract') {
           const urls = ids(n.ids, ledger).map((id) => ledger.byId(id)!).filter((s) => s.contentKind === 'none').map((s) => s.url).slice(0, 20);
           if (!urls.length) continue;
-          const out = await T('extract', { urls, extract_depth: 'advanced', format: 'markdown' }, `${label} reserve read`);
+          const out = await T('extract', { urls }, `${label} reserve read`);
           addExtractResults(out, `tavily:${label}`);
           await say('reflect', `${label} read ${(out.results ?? []).length} of ${urls.length} pages`);
         } else if (typeof n.query === 'string') {
@@ -849,7 +860,7 @@ async function execute(id: number): Promise<void> {
     const finalStatus = result.warnings.length ? 'partial' : 'done';
     await updateRow(id, {
       status: finalStatus, stage: 'done', log, result,
-      tavily_calls: result.tavily.length,
+      tavily_calls: result.tavily.filter((c) => c.path === 'search').length,
       tavily_credits: result.tavily.reduce((n, c) => n + c.credits, 0),
       brave_calls: result.braveCalls,
       llm_calls: result.llm.length,
@@ -870,7 +881,7 @@ async function execute(id: number): Promise<void> {
     await updateRow(id, {
       status: 'failed', error: message, log, finished_at: new Date().toISOString(),
       ...(stats ? {
-        tavily_calls: stats.tavily.length,
+        tavily_calls: stats.tavily.filter((c) => c.path === 'search').length,
         tavily_credits: stats.tavily.reduce((n, c) => n + c.credits, 0),
         brave_calls: stats.braveCalls,
         llm_calls: stats.llmCalls,

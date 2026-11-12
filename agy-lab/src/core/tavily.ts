@@ -354,19 +354,23 @@ export function releaseFor(lease: Lease, cause: unknown): void {
  * does for contact research, and the call moves on to the next key; the credits
  * Tavily reports for the call are counted against the key.
  *
- * NO PAGE READS. Since 2026-11-01 a page is read by our own worker PCs
- * (pagefetch.ts, through myworker.up.railway.app since 2026-11-12) for nothing, so /extract and
- * /crawl are refused here before a key is picked: Tavily is never paid to read
- * a page again, whoever asks.
+ * WEB SEARCH ONLY (2026-11-12). Every page read and site map runs on our own
+ * worker PCs (pagefetch.ts, through myworker.up.railway.app), so /extract,
+ * /crawl and /map are refused here before a key is picked, and a search never
+ * asks Tavily for whole pages (include_raw_content is dropped).
  */
 export async function request(
-  path: 'search' | 'map',
+  path: 'search',
   body: Record<string, unknown>,
   opts: { timeoutMs?: number; fetchImpl?: FetchImpl; log?: ApiCall[]; what?: string } = {},
 ): Promise<Record<string, any>> {
   const asked: string = path;
-  if (asked !== 'search' && asked !== 'map') {
-    throw fail(`tavily /${asked} is retired: pages are read by the fetch workers (pagefetch.ts), not bought from Tavily`, 'unsupported');
+  if (asked !== 'search') {
+    throw fail(`tavily /${asked} is retired: Tavily is for web search only; pages and site maps are read on our own workers (pagefetch.ts)`, 'unsupported');
+  }
+  if ('include_raw_content' in body) {
+    body = { ...body };
+    delete body.include_raw_content;
   }
   const call = startCall('tavily', opts.what ?? `${path}: ${String(body.query ?? body.url ?? '').slice(0, 200)}`, { provider: 'tavily' });
   try {
@@ -380,7 +384,7 @@ export async function request(
 }
 
 async function requestPool(
-  path: 'search' | 'map',
+  path: 'search',
   body: Record<string, unknown>,
   opts: { timeoutMs?: number; fetchImpl?: FetchImpl },
 ): Promise<Record<string, any>> {

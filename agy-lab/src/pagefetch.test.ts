@@ -58,3 +58,26 @@ test('duplicates and blanks are dropped, and a batch stops at Tavily\'s 20', asy
   assert.equal(w.asked.length, pagefetch.MAX_URLS);
   assert.equal(new Set(w.asked).size, w.asked.length);
 });
+
+test('a site map comes from the home page links and the sitemap, read on our workers', async () => {
+  const asked: Array<[string, string | undefined]> = [];
+  const fetchPage = async (url: string, o: { format?: string } = {}) => {
+    asked.push([url, o.format]);
+    const content = url.endsWith('/sitemap.xml')
+      ? '<urlset><url><loc>https://www.a.test/about</loc></url><url><loc>https://other.test/x</loc></url><url><loc>https://a.test/logo.png</loc></url></urlset>'
+      : '<a href="/contact-us">c</a><a href="https://a.test/about/">a</a><a href="mailto:x@a.test">m</a><a href="https://fb.com/a">f</a>';
+    return { status: 'done', worker: 'pc-1', error: null, result: { content } } as any;
+  };
+  const map = await pagefetch.mapSite('https://a.test/shop', { fetchPage });
+  assert.deepEqual(map.results, ['https://a.test/', 'https://a.test/contact-us', 'https://a.test/about/']);
+  assert.equal(map.worker, 'pc-1');
+  assert.equal(map.usage.credits, 0);
+  assert.deepEqual(asked.map((a) => a[1]).sort(), ['html', 'text']);
+});
+
+test('a site no worker can read maps to nothing with the reason, never a throw', async () => {
+  const fetchPage = async () => { throw new Error('myworker unreachable'); };
+  const map = await pagefetch.mapSite('a.test', { fetchPage: fetchPage as any });
+  assert.deepEqual(map.results, []);
+  assert.match(map.error ?? '', /unreachable/);
+});

@@ -14,6 +14,7 @@
 // 3. Pi extracts from those pages and the search snippets, as in v2.
 import * as cw from './contact-worker.ts';
 import { exa } from './core/index.ts';
+import * as pagefetch from './pagefetch.ts';
 
 type FetchImpl = typeof fetch;
 
@@ -174,50 +175,25 @@ export function contactLinks(links: string[]): string[] {
     .map((link) => decodeURIComponent(link.replace(/[?#].*$/, '')).slice(0, 120)))].slice(0, 12);
 }
 
-function pageOf(row: ExaResult & { extras?: { links?: string[] } }): cw.Page | null {
-  const url = cw.publicUrl(row.url);
-  const text = String(row.text ?? '').trim();
-  if (!url || !text) return null;
-  const links = contactLinks(row.extras?.links ?? []);
-  return { url, text: text.slice(0, PAGE_CHARS) + (links.length ? '\nContact links on this page: ' + links.join(' ') : '') };
-}
-
 /**
- * The company's own site, read by Exa in two calls: the home page with its
- * links, then the pages those links point to whose path says contact, about,
- * team or management. Exa's own subpageTarget picked mailto: and wa.me links
- * over /contact and /about-us on the sites we tried, so the pick is ours.
+ * The company's own site, read on our own worker PCs (pagefetch.ts, through
+ * myworker), never bought from Exa: the home page's links and sitemap give the
+ * site's pages, and the home page plus its contact, about, team and management
+ * pages are read. Never throws; a site no worker could read is a log line.
  */
-async function readSite(site: string, fetchImpl: FetchImpl): Promise<{ pages: cw.Page[]; log: cw.SearchLog[]; dollars: number }> {
+async function readSite(site: string, _fetchImpl: FetchImpl): Promise<{ pages: cw.Page[]; log: cw.SearchLog[]; dollars: number }> {
   const log: cw.SearchLog[] = [];
-  const pages: cw.Page[] = [];
-  let dollars = 0;
-  try {
-    const home = await call('contents', {
-      urls: [site], text: { maxCharacters: PAGE_CHARS }, extras: { links: 200 }, livecrawlTimeout: 15_000,
-    }, fetchImpl, 60_000);
-    const row = (home.results ?? [])[0] as (ExaResult & { extras?: { links?: string[] } }) | undefined;
-    const homePage = row ? pageOf(row) : null;
-    if (homePage) pages.push(homePage);
-    dollars += home.costDollars?.total ?? 0;
-    const links = row?.extras?.links ?? [];
-    log.push({ provider: 'exa', purpose: 'site', query: `contents ${site} with links`, results: links.length, dollars: home.costDollars?.total ?? 0 });
-    const more = cw.pickSitePages(site, links).slice(1);
-    if (more.length) {
-      const rest = await call('contents', { urls: more, text: { maxCharacters: PAGE_CHARS }, extras: { links: 200 }, livecrawlTimeout: 15_000 }, fetchImpl, 60_000);
-      for (const sub of rest.results ?? []) {
-        const page = pageOf(sub as ExaResult & { extras?: { links?: string[] } });
-        if (page) pages.push(page);
-      }
-      dollars += rest.costDollars?.total ?? 0;
-      log.push({ provider: 'exa', purpose: 'extract', query: `contents ${more.length} page(s) of ${site}`, results: (rest.results ?? []).length, dollars: rest.costDollars?.total ?? 0 });
-    }
-  } catch (cause) {
-    const code = (cause as { code?: string }).code;
-    if (code === 'quota' || code === 'rate_limit') throw cause;
-    log.push({ provider: 'exa', purpose: 'extract', query: `contents ${site} (failed: ${(cause as Error).message.slice(0, 80)})`, results: 0, dollars: 0 });
-  }
-  return { pages: dedupe(pages, (p) => p.url), log, dollars };
+  const map = await pagefetch.mapSite(site, { limit: 60 });
+  log.push({ provider: 'fetch-worker', purpose: 'site', query: `map ${site} on ${map.worker ?? 'myworker'}${map.error ? ' (' + map.error.slice(0, 80) + ')' : ''}`, results: map.results.length, dollars: 0 });
+  const urls = cw.pickSitePages(site, map.results.length ? map.results : [site]);
+  const read = await pagefetch.read(urls);
+  const pages = read.results.flatMap((row): cw.Page[] => {
+    const url = cw.publicUrl(row.url);
+    const text = String(row.raw_content ?? '').trim();
+    return url && text ? [{ url, text: text.slice(0, PAGE_CHARS) }] : [];
+  });
+  log.push({ provider: 'fetch-worker', purpose: 'extract', query: `read ${urls.length} page(s) of ${site} on ${read.worker ?? 'myworker'}${read.failed_results.length ? ` (${read.failed_results.length} failed)` : ''}`, results: pages.length, dollars: 0 });
+  return { pages: dedupe(pages, (p) => p.url), log, dollars: 0 };
 }
 
 /** One company through the Exa pipeline with one key. Same result shape as contact-worker's research(). */

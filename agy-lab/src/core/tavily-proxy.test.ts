@@ -32,16 +32,19 @@ test('PROXY_NO_KEY on a Tavily search rests the proxy source for its retry-after
   assert.equal(err.restMs, 60_000);
 });
 
-test('Tavily is never paid to read a page: extract and crawl are refused before any request', async () => {
+test('Tavily is for web search only: extract, crawl and map are refused before any request', async () => {
   tavily.setKeysForTests(['tvly-test']);
   let requests = 0;
   const spy = (async () => { requests++; return Response.json({ results: [], usage: { credits: 1 } }); }) as typeof fetch;
-  for (const path of ['extract', 'crawl']) {
+  for (const path of ['extract', 'crawl', 'map']) {
     const err = await tavily.request(path as 'search', { urls: ['https://example.com'] }, { fetchImpl: spy }).catch((e) => e);
     assert.equal(err.code, 'unsupported', `/${path} is refused`);
-    assert.match(err.message, /fetch workers/);
+    assert.match(err.message, /web search only/);
   }
   assert.equal(requests, 0, 'no request left for Tavily');
-  await tavily.request('search', { query: 'x' }, { fetchImpl: spy });
+  let sent: Record<string, unknown> = {};
+  const keep = (async (_u: string, init: RequestInit) => { requests++; sent = JSON.parse(String(init.body)); return Response.json({ results: [], usage: { credits: 1 } }); }) as typeof fetch;
+  await tavily.request('search', { query: 'x', include_raw_content: 'markdown' }, { fetchImpl: keep });
   assert.equal(requests, 1, 'search still goes to Tavily');
+  assert.ok(!('include_raw_content' in sent), 'but never asks it for whole pages');
 });
