@@ -40,3 +40,15 @@ This list is the daerah-level master.
 | 7 | Kuala Selangor | 8 | Not run | | 0 | 0 | 0 | |
 | 8 | Hulu Selangor | 6 | Not run | | 0 | 0 | 0 | |
 | 9 | Sabak Bernam | 4 | Not run | | 0 | 0 | 0 | |
+
+## Negeri Sembilan
+
+Towns are from a Gemini research pass (unverified). Nilai and Mantin are towns inside the official
+Seremban district, not official daerah; they were added as daerah per the 2026-11-12 request.
+
+| # | Daerah | Towns | Status | Run date | Towns searched | Tamans added | Rejected | Notes |
+|---|---|---|---|---|---|---|---|---|
+| 1 | Seremban | 9 | Done | 2026-11-12 | 9 | 23 | 22 | Rejected: Kampung, Kg, Bandar, Pekan and other non-taman names. No taman names found in Rasah, Rahang, Paroi (Sendayan had only Bandar Sri Sendayan). Needs a look: Rasah had 793 addresses but almost no area names came out of it. |
+| 2 | Nilai | 3 | Done | 2026-11-12 | 3 | 1 | 1 | Rejected: Desa Kolej. No taman names in Bandar Enstek or Kota Sri Mas. Needs a look: Bandar Enstek had 417 addresses. |
+| 3 | Mantin | 3 | Done | 2026-11-12 | 3 | 32 | 13 | Rejected: Kampung, Kg and other non-taman names. No taman names in Pajam or Bandar Akademia. |
+| 4 | Port Dickson | 7 | Done | 2026-11-12 | 7 | 39 | 31 | Rejected: Kampung, Kg and other non-taman names. No taman names in Bandar Springhill or Pengkalan Kempas. Taman Perindustrian Lukut Indah is an industrial estate, kept as approved. |

@@ -8533,9 +8533,64 @@ export const SELANGOR_TERRITORY: StateTerritory = {
   ]
 };
 
+// Negeri Sembilan: four daerah added on 2026-11-12. Towns come from a Gemini
+// research pass and are unverified; no taman is listed yet, so the Maps finder
+// (taman-finder.ts) proposes every area name it finds for approval.
+const NS_STATE = 'Negeri Sembilan';
+function nsDistrict(num: number, name: string, towns: Array<[string, string]>): DistrictLocation {
+  const id = 'negeri_sembilan_' + name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  return {
+    id, num, name, state: NS_STATE,
+    towns: towns.map(([town, place]) => ({
+      id: id + '_' + town.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
+      name: town,
+      fullName: town + ' (' + name + ')',
+      queryPlace: place,
+      tamans: [],
+    })),
+  };
+}
+
+export const NEGERI_SEMBILAN_TERRITORY: StateTerritory = {
+  state: NS_STATE,
+  districts: [
+    nsDistrict(1, 'Seremban', [
+      ['Bandar Seremban', 'Bandar Seremban, Seremban, Negeri Sembilan'],
+      ['Rasah', 'Rasah, Seremban, Negeri Sembilan'],
+      ['Rahang', 'Rahang, Seremban, Negeri Sembilan'],
+      ['Senawang', 'Senawang, Seremban, Negeri Sembilan'],
+      ['Ampangan', 'Ampangan, Seremban, Negeri Sembilan'],
+      ['Sendayan', 'Bandar Sri Sendayan, Seremban, Negeri Sembilan'],
+      ['Labu', 'Labu, Seremban, Negeri Sembilan'],
+      ['Paroi', 'Paroi, Seremban, Negeri Sembilan'],
+      ['Mambau', 'Mambau, Seremban, Negeri Sembilan'],
+    ]),
+    nsDistrict(2, 'Nilai', [
+      ['Bandar Baru Nilai', 'Bandar Baru Nilai, Nilai, Negeri Sembilan'],
+      ['Bandar Enstek', 'Bandar Enstek, Nilai, Negeri Sembilan'],
+      ['Kota Sri Mas', 'Kota Sri Mas, Nilai, Negeri Sembilan'],
+    ]),
+    nsDistrict(3, 'Mantin', [
+      ['Mantin', 'Mantin, Mantin, Negeri Sembilan'],
+      ['Pajam', 'Pajam, Mantin, Negeri Sembilan'],
+      ['Bandar Akademia', 'Bandar Akademia, Mantin, Negeri Sembilan'],
+    ]),
+    nsDistrict(4, 'Port Dickson', [
+      ['Bandar Port Dickson', 'Bandar Port Dickson, Port Dickson, Negeri Sembilan'],
+      ['Lukut', 'Lukut, Port Dickson, Negeri Sembilan'],
+      ['Bandar Springhill', 'Bandar Springhill, Port Dickson, Negeri Sembilan'],
+      ['Pengkalan Kempas', 'Pengkalan Kempas, Port Dickson, Negeri Sembilan'],
+      ['Teluk Kemang', 'Teluk Kemang, Port Dickson, Negeri Sembilan'],
+      ['Pasir Panjang', 'Pasir Panjang, Port Dickson, Negeri Sembilan'],
+      ['Linggi', 'Linggi, Port Dickson, Negeri Sembilan'],
+    ]),
+  ],
+};
+
 export const ALL_TERRITORIES: Record<string, StateTerritory> = {
   selangor: SELANGOR_TERRITORY,
   johor: JOHOR_TERRITORY,
+  'negeri sembilan': NEGERI_SEMBILAN_TERRITORY,
 };
 
 /** A taman taman-finder.ts found and checked on Google Maps. */
