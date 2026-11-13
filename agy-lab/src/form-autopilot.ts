@@ -334,12 +334,9 @@ async function wanted(): Promise<number> {
   // Outside 09:00 to 17:30 KL no new form is taken; forms already taken are finished.
   if (!formWindowOpen()) return 0;
   const run = await getRun();
-  if (run && Date.parse(run.started_at) <= Date.now()) {
-    const p = await runProgress(run);
-    // Up to twice the goal is tried: some forms turn out closed in the browser.
-    if (p.sent < run.goal && p.tried < run.goal * 2) return Math.max(0, Math.min(run.goal - p.sent, run.goal * 2 - p.tried) - p.sending);
-    if (!p.sending) await setRun(null);
-  }
+  // A run goes on until it is stopped from the card or no open lead is left (takeSendNow ends it then).
+  // It is not stopped at a count, so it carries on from one form window to the next without a new start.
+  if (run && Date.parse(run.started_at) <= Date.now()) return FORM_TAKE_MAX;
   const settings = await getSettings();
   if (!settings.enabled) return 0;
   // No daily cap and no cap on forms in flight: each PC lane asks for one form at a time.
