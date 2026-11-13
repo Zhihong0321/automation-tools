@@ -2897,10 +2897,29 @@ export async function getTelemarketerRoster(): Promise<TelemarketerAgent[]> {
   return res.rows;
 }
 
-export async function getTelemarketerDetails(): Promise<TelemarketerAgent[]> {
+// One count at a time: the page asks for this from several places at once, and each
+// copy scanned the lead table for 35-135 s on a 4-connection pool. Callers share the run.
+let telemarketerDetailsRun: Promise<TelemarketerAgent[]> | null = null;
+export function getTelemarketerDetails(): Promise<TelemarketerAgent[]> {
+  if (!telemarketerDetailsRun) {
+    telemarketerDetailsRun = telemarketerDetailsQuery().finally(() => { telemarketerDetailsRun = null; });
+  }
+  return telemarketerDetailsRun;
+}
+
+async function telemarketerDetailsQuery(): Promise<TelemarketerAgent[]> {
   if (!configured()) return [];
   await migrate();
+  // `assigned` keeps only the leads somebody owns and every count below already
+  // requires (merged_into null, not hidden), so the answer is the same as joining the
+  // whole table -- but the OR-of-lower(trim()) join no longer runs over every unowned lead.
   const res = await sql<TelemarketerAgent>(`
+    with assigned as materialized (
+      select telemarketer_uid, assigned_to, lead_status, merged_into, is_hidden, id
+      from company_data
+      where merged_into is null and coalesce(is_hidden, false) = false
+        and (telemarketer_uid is not null or assigned_to is not null)
+    )
     select
       t.id,
       t.uid,
@@ -2917,7 +2936,7 @@ export async function getTelemarketerDetails(): Promise<TelemarketerAgent[]> {
       count(c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'not_interested')::int as not_interested_count,
       count(c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'do_not_call')::int as dnc_count
     from telemarketer t
-    left join company_data c on (
+    left join assigned c on (
       (t.uid is not null and (c.telemarketer_uid = t.uid or c.telemarketer_uid = ('uid:' || t.uid) or lower(trim(c.assigned_to)) = lower(trim(t.uid)) or lower(trim(c.assigned_to)) = lower(trim('uid:' || t.uid))))
       or lower(trim(c.assigned_to)) = lower(trim(t.name))
     )
