@@ -41,6 +41,24 @@ function directPool(): InstanceType<typeof Pool> {
   return pool;
 }
 
+// Diagnostics only, never on the result path: when callers queue for a connection,
+// say which queries are holding the pool and for how long (once every 20 s).
+const inflight = new Map<number, { text: string; at: number }>();
+let inflightSeq = 0;
+let poolWatchAt = 0;
+function watchPool(p: InstanceType<typeof Pool>): void {
+  try {
+    const now = Date.now();
+    if (p.waitingCount < 1 || now - poolWatchAt < 20_000) return;
+    poolWatchAt = now;
+    const slow = [...inflight.values()]
+      .sort((a, b) => a.at - b.at)
+      .slice(0, 6)
+      .map((q) => `${Math.round((now - q.at) / 1000)}s ${q.text.replace(/\s+/g, ' ').trim().slice(0, 110)}`);
+    console.warn(`[db-pool] ${p.waitingCount} waiting, ${p.totalCount}/${p.options.max} connections, ${inflight.size} in flight; oldest: ${slow.join(' || ')}`);
+  } catch { /* diagnostics must never touch a query */ }
+}
+
 /**
  * Stringify a value for a ::jsonb parameter, with lone surrogates repaired.
  *
@@ -63,8 +81,16 @@ const jsonParam = (value: unknown): string =>
 
 export async function sql<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<QueryResult<T>> {
   if (directConfigured()) {
-    const out = await directPool().query(text, params);
-    return { rows: out.rows as T[], rowCount: out.rowCount };
+    const p = directPool();
+    const id = ++inflightSeq;
+    inflight.set(id, { text, at: Date.now() });
+    watchPool(p);
+    try {
+      const out = await p.query(text, params);
+      return { rows: out.rows as T[], rowCount: out.rowCount };
+    } finally {
+      inflight.delete(id);
+    }
   }
   if (!proxyConfigured()) {
     throw new Error('report database is not configured; link DATABASE_URL or set PG_PROXY_URL, PG_DB_NAME and PG_PROXY_TOKEN');
