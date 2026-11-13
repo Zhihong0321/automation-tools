@@ -284,10 +284,10 @@ const senders = new Map<string, number>();
 let lastProblem: string | null = null;
 
 /** A "send this many now" from the card, kept in the database so a redeploy does not lose it. started_at may be later: a scheduled start. */
-type Run = { goal: number; started_at: string };
+type Run = { started_at: string };
 async function getRun(): Promise<Run | null> {
   const v = (await db.sql<{ value: Run }>(`select value from email_marketing_setting where key = 'form_send_run'`)).rows[0]?.value;
-  return v && v.goal > 0 ? v : null;
+  return v && v.started_at ? v : null;
 }
 async function setRun(run: Run | null): Promise<void> {
   if (!run) { await db.sql(`delete from email_marketing_setting where key = 'form_send_run'`); return; }
@@ -295,9 +295,9 @@ async function setRun(run: Run | null): Promise<void> {
 }
 
 /** Starts "send this many", now or at startAt: PCs take them on their first ask after it, whatever the switch; only inside the form window. */
-export async function startRun(count: number, startAt?: Date): Promise<Run> {
+export async function startRun(startAt?: Date): Promise<Run> {
   await ensureTables();
-  const run = { goal: count, started_at: (startAt ?? new Date()).toISOString() };
+  const run = { started_at: (startAt ?? new Date()).toISOString() };
   await setRun(run);
   lastProblem = null;
   return run;
