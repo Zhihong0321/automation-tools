@@ -2705,14 +2705,31 @@ async function loadAgentsView(){
   if(!state.token)return;
   var cont=el('agentsContainer');
   if(cont&&!agentState.agents.length)cont.innerHTML='<div class="empty">Loading telemarketers roster…</div>';
+  // Two steps: the names come at once from the light list; the per-agent lead counts
+  // (a scan of the whole lead table) fill in when they arrive.
+  var countsIn=false;
+  var full=api('/api/telemarketers');
   try{
-    var res=await api('/api/telemarketers');
+    var light=await api('/api/telemarketers?light=1');
+    if(!countsIn&&!agentState.agents.length){
+      agentState.agents=light.agents||[];
+      renderAgentRoleFilter();
+      renderAgentsSummary(agentState.agents);
+      var lE=el('agentsTotalLeadsCount');var cE=el('agentsContactedCount');
+      if(lE)lE.textContent='…';
+      if(cE)cE.textContent='…';
+      renderAgents();
+    }
+  }catch(err){/* the full call below still reports its own error */}
+  try{
+    var res=await full;
+    countsIn=true;
     agentState.agents=res.agents||[];
     renderAgentRoleFilter();
     renderAgentsSummary(agentState.agents);
     renderAgents();
   }catch(err){
-    if(cont)cont.innerHTML='<div class="empty error">'+esc(err.message)+'</div>';
+    if(cont&&!agentState.agents.length)cont.innerHTML='<div class="empty error">'+esc(err.message)+'</div>';
     if(!authLost(err))showToast('Failed to load telemarketers: '+err.message);
   }
 }
