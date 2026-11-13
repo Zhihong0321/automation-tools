@@ -377,7 +377,13 @@ async function takeSendNow(worker: string, limit: number): Promise<SendJob[]> {
     if (claim.rows.length) out.push({ company_id: lead.company_id, company_name: lead.company_name, website: lead.website, subject: m.subject, body: m.body, sender: m.sender });
   }
   const run = await getRun();
-  if (!out.length && run && Date.parse(run.started_at) <= Date.now()) { lastProblem = 'No open form is left waiting: every one found so far was sent, tried or emailed.'; await setRun(null); }
+  // Nothing ready right now is not the end: the PCs are still checking websites and more open forms come in.
+  // The run ends only when no target company is left to check or to send to; otherwise it waits for the next take.
+  if (!out.length && run && Date.parse(run.started_at) <= Date.now()) {
+    const left = await scanCounts().then((s) => (s.target.not_checked ?? 0) + (s.target.taken ?? 0)).catch(() => 0);
+    if (left > 0) lastProblem = `Waiting: no open form is ready yet; the PCs are still checking ${left} target websites.`;
+    else { lastProblem = 'Finished: no target company is left to send to.'; await setRun(null); }
+  }
   return out;
 }
 
