@@ -339,6 +339,7 @@ a.nav-button{display:inline-flex;align-items:center;text-decoration:none}.gate-h
             <select class="input select" id="teleStateSelect" onchange="onTeleStateChange()" style="height:38px;font-size:13px;font-weight:600;min-width:110px;">
               <option value="johor" selected>Johor</option>
               <option value="selangor">Selangor</option>
+              <option value="negeri sembilan">Negeri Sembilan</option>
             </select>
           </div>
           <div style="display:flex;flex-direction:column;gap:3px;">
