@@ -18,7 +18,7 @@
 // The hub is the log: every send is one contact_form_send row, written before it leaves the hub,
 // so a lead is never sent twice. A form a PC took and never answered is marked interrupted and
 // never sent again. PCs send when "Send now" on the card asks for a number of forms, or when the
-// switch is on. No daily cap. Sends only inside the form window, 09:00 to 17:30 Kuala Lumpur time, every day.
+// switch is on. No daily cap and no time limit: forms go out at any hour of any day.
 import type http from 'node:http';
 import * as db from './reportdb.ts';
 import * as templates from './email-templates.ts';
@@ -301,7 +301,7 @@ async function setRun(run: Run | null): Promise<void> {
   await db.sql(`insert into email_marketing_setting (key, value) values ('form_send_run', $1::jsonb) on conflict (key) do update set value = excluded.value`, [JSON.stringify(run)]);
 }
 
-/** Starts "send this many", now or at startAt: PCs take them on their first ask after it, whatever the switch; only inside the form window. */
+/** Starts "send this many", now or at startAt: PCs take them on their first ask after it, whatever the switch. */
 export async function startRun(startAt?: Date): Promise<Run> {
   await ensureTables();
   const run = { started_at: (startAt ?? new Date()).toISOString() };
@@ -319,30 +319,16 @@ async function runProgress(run: Run) {
   return { ...run, ...r };
 }
 
-/** The form window: 09:00 to 17:30 Kuala Lumpur time, every day. Forms go out only inside it. */
-export const FORM_WINDOW_START_MIN = 9 * 60;
-export const FORM_WINDOW_END_MIN = 17 * 60 + 30;
 /** Forms one PC asks for at a time (the take route allows at most this many). */
 const FORM_TAKE_MAX = 5;
 
-export function formWindowOpen(now: Date = new Date()): boolean {
-  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kuala_Lumpur', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now);
-  const hour = Number(parts.find((p) => p.type === 'hour')?.value);
-  const minute = Number(parts.find((p) => p.type === 'minute')?.value);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return false;
-  const mins = hour * 60 + minute;
-  return mins >= FORM_WINDOW_START_MIN && mins < FORM_WINDOW_END_MIN;
-}
-
-/** How many forms PCs may take now: the run from the card, or the switch, inside the form window. No daily cap. */
+/** How many forms PCs may take now: the run from the card, or the switch. No daily cap and no time limit. */
 async function wanted(): Promise<number> {
   await db.sql(`update contact_form_send set status = 'interrupted', detail = 'the PC stopped answering while sending this form; not sent again in case it went through', taken_until = null
     where status = 'sending' and taken_until < now()`);
-  // Outside 09:00 to 17:30 KL no new form is taken; forms already taken are finished.
-  if (!formWindowOpen()) return 0;
   const run = await getRun();
   // A run goes on until it is stopped from the card or no open lead is left (takeSendNow ends it then).
-  // It is not stopped at a count, so it carries on from one form window to the next without a new start.
+  // It is not stopped at a count or by the clock, so it carries on through the night without a new start.
   if (run && Date.parse(run.started_at) <= Date.now()) return FORM_TAKE_MAX;
   const settings = await getSettings();
   if (!settings.enabled) return 0;
@@ -426,7 +412,7 @@ export async function status() {
   const counts = Object.fromEntries(countsOut.rows.map((r) => [r.status, r.n]));
   const tpls = tplRows.map((t) => ({ id: t.id, name: t.name }));
   const pcs = [...senders].map(([name, at]) => ({ name, seen_at: new Date(at).toISOString() }));
-  return { settings, templates: tpls, in_window: formWindowOpen(), sent_today: sentCount, counts, run: run && await runProgress(run), senders: pcs, problem: lastProblem, scan, recent: recentOut.rows };
+  return { settings, templates: tpls, sent_today: sentCount, counts, run: run && await runProgress(run), senders: pcs, problem: lastProblem, scan, recent: recentOut.rows };
 }
 
 // ---- a preview -----------------------------------------------------------------------
