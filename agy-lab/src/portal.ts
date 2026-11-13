@@ -3155,12 +3155,12 @@ async function openTamanAssignModal(btn){
     el('tamanAssignSubmitBtn').textContent=count>0?'Assign '+count+' Leads':'Assign Taman';
   }
 
-  if(!leadState.telemarketers||!leadState.telemarketers.length){
-    await loadTelemarketers();
-  }
-  var sel=el('tamanAssignTeleSelect');
-  if(sel){
-    var opts='<option value="">Choose telemarketer...</option>';
+  // Open the modal at once; the telemarketer list fills in when it arrives, so a slow
+  // database never makes the Assign button look dead.
+  function fillTeleSelect(loading){
+    var sel=el('tamanAssignTeleSelect');
+    if(!sel)return;
+    var opts='<option value="">'+(loading?'Loading telemarketers...':'Choose telemarketer...')+'</option>';
     (leadState.telemarketers||[]).forEach(function(a){
       var val=agentValue(a);
       var selected=(currentAssigned && (a.name.toLowerCase()===currentAssigned.toLowerCase() || (a.uid && currentAssigned==='uid:'+a.uid)))?' selected':'';
@@ -3168,7 +3168,13 @@ async function openTamanAssignModal(btn){
     });
     sel.innerHTML=opts;
   }
+  var needList=!leadState.telemarketers||!leadState.telemarketers.length;
+  fillTeleSelect(needList);
   modal.classList.remove('hidden');
+  if(needList){
+    await loadTelemarketers();
+    fillTeleSelect(false);
+  }
 }
 function closeTamanAssignModal(){
   var modal=el('tamanAssignModal');
