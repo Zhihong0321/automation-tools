@@ -2885,16 +2885,27 @@ export async function listTelemarketers(): Promise<string[]> {
 }
 
 /** Roster only, no lead counts: one tiny table, so it answers even while the big scans queue. */
+// Two connections kept apart from the main pool, for small answers a person is waiting on
+// (the Assign dialog's roster). The main pool queues them behind big scans for a minute or more.
+let reservedPool: InstanceType<typeof Pool> | null = null;
+function reserved(): InstanceType<typeof Pool> {
+  if (!reservedPool) {
+    reservedPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 2, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 10_000 });
+  }
+  return reservedPool;
+}
+
 export async function getTelemarketerRoster(): Promise<TelemarketerAgent[]> {
   if (!configured()) return [];
   await migrate();
-  const res = await sql<TelemarketerAgent>(`
+  const text = `
     select id, uid, name, phone, email, notes, active, created_at::text,
       0 as total_assigned, 0 as pending_count, 0 as contacted_count,
       0 as interested_count, 0 as not_interested_count, 0 as dnc_count
     from telemarketer order by active desc, name asc
-  `);
-  return res.rows;
+  `;
+  if (directConfigured()) return (await reserved().query(text)).rows as TelemarketerAgent[];
+  return (await sql<TelemarketerAgent>(text)).rows;
 }
 
 // One count at a time: the page asks for this from several places at once, and each
