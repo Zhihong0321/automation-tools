@@ -4039,6 +4039,13 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
   }
 
   if (method === 'GET' && p === '/api/telemarketers') {
+    // ?light=1: names only (the Assign dialog). The full answer counts every lead
+    // per telemarketer, a scan of the whole lead table.
+    if (url.searchParams.get('light') === '1') {
+      const agents = await db.getTelemarketerRoster().catch(() => []);
+      ctx.json(res, 200, { telemarketers: agents.filter((a) => a.active).map((a) => a.name), agents, stats: null });
+      return true;
+    }
     const [telemarketers, agents, stats] = await Promise.all([
       db.listTelemarketers().catch(() => []),
       db.getTelemarketerDetails().catch(() => []),

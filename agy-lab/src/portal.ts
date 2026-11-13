@@ -3157,22 +3157,27 @@ async function openTamanAssignModal(btn){
 
   // Open the modal at once; the telemarketer list fills in when it arrives, so a slow
   // database never makes the Assign button look dead.
+  // Own light list (names only): the full /api/telemarketers counts every lead and queues behind big scans.
+  function roster(){return (leadState.telemarketers&&leadState.telemarketers.length)?leadState.telemarketers:(teleState.roster||[])}
   function fillTeleSelect(loading){
     var sel=el('tamanAssignTeleSelect');
     if(!sel)return;
     var opts='<option value="">'+(loading?'Loading telemarketers...':'Choose telemarketer...')+'</option>';
-    (leadState.telemarketers||[]).forEach(function(a){
+    roster().forEach(function(a){
       var val=agentValue(a);
       var selected=(currentAssigned && (a.name.toLowerCase()===currentAssigned.toLowerCase() || (a.uid && currentAssigned==='uid:'+a.uid)))?' selected':'';
       opts+='<option value="'+attr(val)+'"'+selected+'>'+esc(agentLabel(a))+'</option>';
     });
     sel.innerHTML=opts;
   }
-  var needList=!leadState.telemarketers||!leadState.telemarketers.length;
+  var needList=!roster().length;
   fillTeleSelect(needList);
   modal.classList.remove('hidden');
   if(needList){
-    await loadTelemarketers();
+    try{
+      var light=await api('/api/telemarketers?light=1');
+      teleState.roster=(light.agents||[]).filter(function(a){return a.active});
+    }catch(err){if(!authLost(err))showToast('Failed to load telemarketers: '+err.message)}
     fillTeleSelect(false);
   }
 }

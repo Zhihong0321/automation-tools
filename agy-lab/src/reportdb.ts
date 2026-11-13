@@ -2884,6 +2884,19 @@ export async function listTelemarketers(): Promise<string[]> {
   return res.rows.map((r) => r.name);
 }
 
+/** Roster only, no lead counts: one tiny table, so it answers even while the big scans queue. */
+export async function getTelemarketerRoster(): Promise<TelemarketerAgent[]> {
+  if (!configured()) return [];
+  await migrate();
+  const res = await sql<TelemarketerAgent>(`
+    select id, uid, name, phone, email, notes, active, created_at::text,
+      0 as total_assigned, 0 as pending_count, 0 as contacted_count,
+      0 as interested_count, 0 as not_interested_count, 0 as dnc_count
+    from telemarketer order by active desc, name asc
+  `);
+  return res.rows;
+}
+
 export async function getTelemarketerDetails(): Promise<TelemarketerAgent[]> {
   if (!configured()) return [];
   await migrate();
