@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as db from './reportdb.ts';
 import { eligible, mailName, toSmartlead, textToHtml, htmlToText, inboxItem, threadMessage, stripQuoted, webhookEvent, activityNote, webhookKey, webhookUrl, doNotEmail, type MarketingLead } from './email-marketing.ts';
 import { page } from './email-marketing-page.ts';
 import type { EmailRow } from './email-list.ts';
@@ -114,3 +115,33 @@ test('a reply drops the email it quotes, in the forms mail apps use', () => {
   assert.equal(threadMessage({ type: 'REPLY', email_body: '<p>Ok</p><p>On Mon, X wrote:<br>&gt; old</p>' }).body, 'Ok');
   assert.match(threadMessage({ type: 'SENT', email_body: '<p>Ok</p><p>On Mon, X wrote:</p>' }).body, /wrote:/);
 });
+
+test('the embedded client script parses cleanly and does not duplicate form-autopilot in loadFormLog', () => {
+  const html = page();
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  assert.ok(scripts.length >= 1);
+  for (const s of scripts) new Function(s);
+  const logFn = html.match(/function loadFormLog\(\)\{[\s\S]*?\n  \}/)?.[0] ?? '';
+  assert.ok(logFn.includes('/api/email-marketing/form-autopilot/report?offset=0'));
+  assert.doesNotMatch(logFn, /api\('\/api\/email-marketing\/form-autopilot'\)/);
+});
+
+test('swr deduplicates concurrent cold reads and invalidateSwr clears exact and prefixed keys', async () => {
+  let runs = 0;
+  const key = 'testSwr:unit';
+  db.invalidateSwr('testSwr');
+  const [a, b] = await Promise.all([
+    db.swr(key, 5_000, async () => { runs++; await new Promise((r) => setTimeout(r, 15)); return 'v1'; }),
+    db.swr(key, 5_000, async () => { runs++; return 'v1-dup'; }),
+  ]);
+  assert.equal(a, 'v1');
+  assert.equal(b, 'v1');
+  assert.equal(runs, 1);
+  assert.equal(await db.swr(key, 5_000, async () => { runs++; return 'v2'; }), 'v1');
+  assert.equal(runs, 1);
+  db.invalidateSwr('testSwr');
+  assert.equal(await db.swr(key, 5_000, async () => { runs++; return 'v2'; }), 'v2');
+  assert.equal(runs, 2);
+  db.invalidateSwr('testSwr');
+});
+

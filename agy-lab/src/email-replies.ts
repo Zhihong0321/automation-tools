@@ -14,7 +14,7 @@ import * as db from './reportdb.ts';
 import { llm } from './core/index.ts';
 import { smartlead as sl } from './core/index.ts';
 import * as inbox from './email-inbox.ts';
-import { campaignRow, htmlToText, leads, pick, stripQuoted, textToHtml, threads, webhookEvent } from './email-marketing.ts';
+import { cachedCampaignRows, cachedMailboxes, campaignRow, htmlToText, leads, pick, stripQuoted, textToHtml, threads, webhookEvent } from './email-marketing.ts';
 
 type Ctx = {
   json: (res: http.ServerResponse, status: number, body: unknown) => void;
@@ -173,6 +173,7 @@ export function generate(email: string, campaignId: number | null, instruction: 
       `update email_marketing_draft set draft = coalesce($4, draft), status = $5, error = $6, model = coalesce($7, model), updated_at = now()
         where campaign_id = $1 and email = $2 and reply_message_id = $3 returning *`,
       [...ident, draft, draft ? 'ready' : 'failed', error, model]);
+    db.invalidateSwr('emailReplies:conversations');
     return saved.rows[0];
   })().finally(() => pending.delete(key));
   pending.set(key, job);
@@ -219,6 +220,7 @@ export async function send(draftId: number, body: string): Promise<Draft> {
        select c.id, 'email_event', coalesce(c.lead_status, 'unassigned'), 'email_answered', $2, false, now() from company_data c where c.id = $1`,
       [d.company_id, `Email reply sent to ${d.email}: ${text.slice(0, 600)}`]).catch(() => {});
   }
+  db.invalidateSwr('emailReplies:conversations');
   return (await db.sql<Draft>(`select * from email_marketing_draft where id = $1`, [draftId])).rows[0];
 }
 
@@ -234,88 +236,109 @@ export interface Conversation {
  */
 export async function conversations(): Promise<Conversation[]> {
   await ready();
-  const local = await db.sql<{ email: string; campaign_id: string; campaign_name: string | null; replied_at: string; company: string | null; category: string | null }>(`
-    select l.email, l.campaign_id::text, l.campaign_name, l.replied_at, c.name as company, c.category
-      from email_marketing_lead l left join company_data c on c.id = l.company_id
-     where l.replied_at is not null`);
-  const lastReply = await db.sql<{ email: string; campaign_id: string; payload: unknown }>(`
-    select distinct on (campaign_id, email) email, campaign_id::text, payload
-      from email_marketing_event where event_type = 'EMAIL_REPLY' and email is not null
-     order by campaign_id, email, received_at desc`);
-  const drafts = await db.sql<{ email: string; campaign_id: string; status: Draft['status']; sent_at: string | null; updated_at: string }>(`
-    select distinct on (campaign_id, email) email, campaign_id::text, status, sent_at, updated_at
-      from email_marketing_draft order by campaign_id, email, created_at desc`);
-  const key = (e: string, c: string | number) => c + '|' + e;
-  const previews = new Map(lastReply.rows.map((r) => [key(r.email, r.campaign_id), webhookEvent(r.payload).text]));
-  const draftOf = new Map(drafts.rows.map((r) => [key(r.email, r.campaign_id), r]));
-  const byKey = new Map<string, Conversation>();
-  const add = (c: Omit<Conversation, 'draft_status' | 'answered_at' | 'needs_reply'>) => {
-    const k = key(c.email, c.campaign_id);
-    const have = byKey.get(k);
-    if (have) {
-      if (!have.preview && c.preview) have.preview = c.preview;
-      if (c.replied_at && (!have.replied_at || c.replied_at > have.replied_at)) {
-        have.replied_at = c.replied_at;
-        if (c.preview) have.preview = c.preview;
+  return db.swr('emailReplies:conversations', 20_000, async () => {
+    const [local, lastReply, drafts, inboxRows] = await Promise.all([
+      db.sql<{ email: string; campaign_id: string; campaign_name: string | null; replied_at: string; company: string | null; category: string | null }>(`
+        select l.email, l.campaign_id::text, l.campaign_name, l.replied_at, c.name as company, c.category
+          from email_marketing_lead l left join company_data c on c.id = l.company_id
+         where l.replied_at is not null`),
+      db.sql<{ email: string; campaign_id: string; payload: unknown }>(`
+        select distinct on (campaign_id, email) email, campaign_id::text, payload
+          from email_marketing_event where event_type = 'EMAIL_REPLY' and email is not null
+         order by campaign_id, email, received_at desc`),
+      db.sql<{ email: string; campaign_id: string; status: Draft['status']; sent_at: string | null; updated_at: string }>(`
+        select distinct on (campaign_id, email) email, campaign_id::text, status, sent_at, updated_at
+          from email_marketing_draft order by campaign_id, email, created_at desc`),
+      inbox.rows().catch(() => []),
+    ]);
+    const key = (e: string, c: string | number) => c + '|' + e;
+    const previews = new Map(lastReply.rows.map((r) => [key(r.email, r.campaign_id), webhookEvent(r.payload).text]));
+    const draftOf = new Map(drafts.rows.map((r) => [key(r.email, r.campaign_id), r]));
+    const byKey = new Map<string, Conversation>();
+    const add = (c: Omit<Conversation, 'draft_status' | 'answered_at' | 'needs_reply'>) => {
+      const k = key(c.email, c.campaign_id);
+      const have = byKey.get(k);
+      if (have) {
+        if (!have.preview && c.preview) have.preview = c.preview;
+        if (c.replied_at && (!have.replied_at || c.replied_at > have.replied_at)) {
+          have.replied_at = c.replied_at;
+          if (c.preview) have.preview = c.preview;
+        }
+        return;
       }
-      return;
+      const d = draftOf.get(k);
+      // pg hands timestamptz back as a Date; compared with the ISO replied_at it is never later.
+      const answered = d?.status === 'sent' && d.sent_at ? new Date(d.sent_at).toISOString() : null;
+      byKey.set(k, { ...c, draft_status: d?.status ?? null, answered_at: answered, needs_reply: false });
+    };
+    for (const r of local.rows) {
+      add({ email: r.email, campaign_id: Number(r.campaign_id), campaign_name: r.campaign_name, company: r.company, category: r.category,
+        replied_at: new Date(r.replied_at).toISOString(), preview: previews.get(key(r.email, r.campaign_id)) ?? '' });
     }
-    const d = draftOf.get(k);
-    // pg hands timestamptz back as a Date; compared with the ISO replied_at it is never later.
-    const answered = d?.status === 'sent' && d.sent_at ? new Date(d.sent_at).toISOString() : null;
-    byKey.set(k, { ...c, draft_status: d?.status ?? null, answered_at: answered, needs_reply: false });
-  };
-  for (const r of local.rows) {
-    add({ email: r.email, campaign_id: Number(r.campaign_id), campaign_name: r.campaign_name, company: r.company, category: r.category,
-      replied_at: new Date(r.replied_at).toISOString(), preview: previews.get(key(r.email, r.campaign_id)) ?? '' });
-  }
-  if (sl.configured()) {
-    for (let offset = 0; offset < 200; offset += 20) {
-      const page = await sl.inboxReplies(offset, 20).catch(() => null);
-      const rows: any[] = Array.isArray(page?.data) ? page!.data : [];
-      for (const m of rows) {
-        const email = String(pick(m, 'lead_email', 'lead.email', 'to_email', 'email') ?? '').toLowerCase();
-        const campaign = Number(pick(m, 'email_campaign_id', 'campaign_id', 'campaign.id'));
-        if (!email || !campaign) continue;
-        const when = pick(m, 'last_reply_time', 'reply_time', 'last_message.received_at');
-        add({ email, campaign_id: campaign, campaign_name: pick(m, 'email_campaign_name', 'campaign_name', 'campaign.name'),
-          company: pick(m, 'lead_company_name', 'company_name', 'lead.company_name', 'lead.company'), category: null,
-          replied_at: when ? new Date(when).toISOString() : null,
-          preview: stripQuoted(htmlToText(pick(m, 'last_reply.email_body', 'last_message.body', 'email_body', 'reply_body') ?? '')) });
+    if (sl.configured()) {
+      for (let offset = 0; offset < 200; offset += 20) {
+        const page = await sl.inboxReplies(offset, 20).catch(() => null);
+        const rows: any[] = Array.isArray(page?.data) ? page!.data : [];
+        for (const m of rows) {
+          const email = String(pick(m, 'lead_email', 'lead.email', 'to_email', 'email') ?? '').toLowerCase();
+          const campaign = Number(pick(m, 'email_campaign_id', 'campaign_id', 'campaign.id'));
+          if (!email || !campaign) continue;
+          const when = pick(m, 'last_reply_time', 'reply_time', 'last_message.received_at');
+          add({ email, campaign_id: campaign, campaign_name: pick(m, 'email_campaign_name', 'campaign_name', 'campaign.name'),
+            company: pick(m, 'lead_company_name', 'company_name', 'lead.company_name', 'lead.company'), category: null,
+            replied_at: when ? new Date(when).toISOString() : null,
+            preview: stripQuoted(htmlToText(pick(m, 'last_reply.email_body', 'last_message.body', 'email_body', 'reply_body') ?? '')) });
+        }
+        if (rows.length < 20) break;
       }
-      if (rows.length < 20) break;
     }
-  }
-  // Mail the lead sent our mailboxes outside the Smartlead thread.
-  for (const r of await inbox.rows().catch(() => [])) {
-    if (!r.inbound) continue;
-    add({ email: r.email, campaign_id: Number(r.campaign_id), campaign_name: r.campaign_name, company: r.company ?? null, category: null,
-      replied_at: new Date(r.received_at).toISOString(), preview: stripQuoted(r.body_text ?? '') || r.subject || '' });
-  }
-  const list = [...byKey.values()];
-  for (const c of list) {
-    c.preview = c.preview.slice(0, 240);
-    c.needs_reply = c.draft_status !== 'dismissed' && !(c.answered_at && (!c.replied_at || c.answered_at >= c.replied_at));
-  }
-  return list.sort((a, b) => String(b.replied_at ?? '').localeCompare(String(a.replied_at ?? '')));
+    // Mail the lead sent our mailboxes outside the Smartlead thread.
+    for (const r of inboxRows) {
+      if (!r.inbound) continue;
+      add({ email: r.email, campaign_id: Number(r.campaign_id), campaign_name: r.campaign_name, company: r.company ?? null, category: null,
+        replied_at: new Date(r.received_at).toISOString(), preview: stripQuoted(r.body_text ?? '') || r.subject || '' });
+    }
+    const list = [...byKey.values()];
+    for (const c of list) {
+      c.preview = c.preview.slice(0, 240);
+      c.needs_reply = c.draft_status !== 'dismissed' && !(c.answered_at && (!c.replied_at || c.answered_at >= c.replied_at));
+    }
+    return list.sort((a, b) => String(b.replied_at ?? '').localeCompare(String(a.replied_at ?? '')));
+  });
 }
 
 /** The numbers the dashboard opens on. */
 export async function dashboard() {
   const [leadSet, campaigns, mailboxes, convos, daily] = await Promise.all([
     db.configured() ? leads({}) : Promise.resolve({ all: [], shown: [] }),
-    sl.configured() ? sl.listCampaigns().then((list) => Promise.all((list ?? []).map(async (c) => campaignRow(c, await sl.campaignAnalytics(c.id).catch(() => null))))) : [],
-    sl.configured() ? sl.listMailboxes().catch(() => []) : [],
+    sl.configured() ? cachedCampaignRows() : Promise.resolve([]),
+    sl.configured() ? cachedMailboxes().catch(() => []) : Promise.resolve([]),
     conversations().catch(() => []),
     db.sql<{ day: string; sent: string; opened: string; replied: string; bounced: string }>(`
-      select to_char(d, 'YYYY-MM-DD') as day,
-             count(e.id) filter (where e.event_type = 'EMAIL_SENT')::text as sent,
-             count(e.id) filter (where e.event_type = 'EMAIL_OPEN')::text as opened,
-             count(e.id) filter (where e.event_type = 'EMAIL_REPLY')::text as replied,
-             count(e.id) filter (where e.event_type = 'EMAIL_BOUNCE')::text as bounced
-        from generate_series(date_trunc('day', now() at time zone 'Asia/Kuala_Lumpur') - interval '13 days', date_trunc('day', now() at time zone 'Asia/Kuala_Lumpur'), interval '1 day') d
-        left join email_marketing_event e on date_trunc('day', e.at at time zone 'Asia/Kuala_Lumpur') = d
-       group by d order by d`).then((r) => r.rows).catch(() => []),
+      with days as (
+        select generate_series(
+          date_trunc('day', now() at time zone 'Asia/Kuala_Lumpur') - interval '13 days',
+          date_trunc('day', now() at time zone 'Asia/Kuala_Lumpur'),
+          interval '1 day'
+        )::date as day
+      ),
+      agg as (
+        select (e.at at time zone 'Asia/Kuala_Lumpur')::date as day,
+               count(*) filter (where e.event_type = 'EMAIL_SENT')::text as sent,
+               count(*) filter (where e.event_type = 'EMAIL_OPEN')::text as opened,
+               count(*) filter (where e.event_type = 'EMAIL_REPLY')::text as replied,
+               count(*) filter (where e.event_type = 'EMAIL_BOUNCE')::text as bounced
+          from email_marketing_event e
+         where e.at >= ((date_trunc('day', now() at time zone 'Asia/Kuala_Lumpur') - interval '13 days') at time zone 'Asia/Kuala_Lumpur')
+         group by 1
+      )
+      select to_char(d.day, 'YYYY-MM-DD') as day,
+             coalesce(a.sent, '0') as sent,
+             coalesce(a.opened, '0') as opened,
+             coalesce(a.replied, '0') as replied,
+             coalesce(a.bounced, '0') as bounced
+        from days d left join agg a on a.day = d.day
+       order by d.day`).then((r) => r.rows).catch(() => []),
   ]);
   const all = leadSet.all;
   const sum = (k: keyof ReturnType<typeof campaignRow>) => campaigns.reduce((n, c) => n + (Number(c[k]) || 0), 0);
@@ -339,7 +362,7 @@ export async function dashboard() {
     },
     replies: { total: convos.length, waiting: convos.filter((c) => c.needs_reply).length },
     daily: daily.map((d) => ({ day: d.day, sent: Number(d.sent), opened: Number(d.opened), replied: Number(d.replied), bounced: Number(d.bounced) })),
-    campaigns: campaigns.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))),
+    campaigns: [...campaigns].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))),
     model: llm.config()?.model ?? null,
   };
 }
@@ -357,7 +380,11 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
 
     // The mailboxes read for direct mail: each one's last read, error and what it kept; POST .../poll reads them now.
     if (method === 'GET' && p === '/api/email-marketing/inbox') return send_(200, await inbox.status());
-    if (method === 'POST' && p === '/api/email-marketing/inbox/poll') { await inbox.poll(); return send_(200, await inbox.status()); }
+    if (method === 'POST' && p === '/api/email-marketing/inbox/poll') {
+      await inbox.poll();
+      db.invalidateSwr('emailReplies:conversations');
+      return send_(200, await inbox.status());
+    }
 
     if (method === 'GET' && p === '/api/email-marketing/conversations') {
       const list = await conversations();
@@ -395,6 +422,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       if (one[2] === 'send') return send_(200, { draft: await send(id, String((await ctx.readJson(req)).body ?? '')) });
       await ready();
       const out = await db.sql<Draft>(`update email_marketing_draft set status = 'dismissed', updated_at = now() where id = $1 and status <> 'sent' returning *`, [id]);
+      if (out.rowCount) db.invalidateSwr('emailReplies:conversations');
       return send_(out.rowCount ? 200 : 409, out.rowCount ? { draft: out.rows[0] } : { error: 'already sent' });
     }
     return send_(404, { error: 'not found' });

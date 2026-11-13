@@ -30,7 +30,6 @@ export interface EmailStats {
 }
 
 const CACHE_MS = 2 * 60_000;
-let cached: { at: number; rows: EmailRow[] } | null = null;
 
 async function build(): Promise<EmailRow[]> {
   const byKey = new Map<string, EmailRow>();
@@ -45,7 +44,14 @@ async function build(): Promise<EmailRow[]> {
     if (!have.source_url && row.source_url) have.source_url = row.source_url;
   };
 
-  const researched = await db.getCompanyContactRows({ researchedOnly: true });
+  const [researched, site] = await Promise.all([
+    db.getResearchedCompanyEmailRows(),
+    db.sql<{ company_id: string; email: string; source_url: string | null; name: string; category: string | null; lead_status: string | null; assigned_to: string | null }>(`
+      select ce.company_id::text, ce.email, ce.source_url, c.name, c.category, c.lead_status, c.assigned_to
+        from company_email ce join company_data c on c.id = ce.company_id
+       where c.merged_into is null and coalesce(c.is_hidden, false) = false`),
+  ]);
+
   for (const raw of researched) {
     const g = extractCompanyContacts(raw);
     const base = { company_id: g.company_id, company_name: g.company_name, category: g.category, lead_status: g.lead_status, assigned_to: g.assigned_to };
@@ -60,10 +66,6 @@ async function build(): Promise<EmailRow[]> {
     }
   }
 
-  const site = await db.sql<{ company_id: string; email: string; source_url: string | null; name: string; category: string | null; lead_status: string | null; assigned_to: string | null }>(`
-    select ce.company_id::text, ce.email, ce.source_url, c.name, c.category, c.lead_status, c.assigned_to
-      from company_email ce join company_data c on c.id = ce.company_id
-     where c.merged_into is null and coalesce(c.is_hidden, false) = false`);
   for (const r of site.rows) {
     add({ email: r.email, company_id: r.company_id, company_name: r.name, category: r.category, person_name: null, person_role: null, source_url: r.source_url, lead_status: r.lead_status, assigned_to: r.assigned_to }, 'website');
   }
@@ -72,9 +74,8 @@ async function build(): Promise<EmailRow[]> {
 }
 
 export async function allRows(fresh = false): Promise<EmailRow[]> {
-  if (!fresh && cached && Date.now() - cached.at < CACHE_MS) return cached.rows;
-  cached = { at: Date.now(), rows: await build() };
-  return cached.rows;
+  if (fresh) db.invalidateSwr('emailList:allRows');
+  return db.swr('emailList:allRows', CACHE_MS, build);
 }
 
 export function stats(rows: EmailRow[]): EmailStats {

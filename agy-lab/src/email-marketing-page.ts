@@ -581,7 +581,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
   // ---- home ----
   function cell(label,value,sub){return '<div><b>'+value+'</b><span>'+esc(label)+(sub?', '+sub:'')+'</span></div>'}
   function loadDashboard(){
-    return api('/api/email-marketing/dashboard').then(function(d){
+    var dashP=api('/api/email-marketing/dashboard').then(function(d){
       var L=d.leads,G=d.sending;
       setBadge(d.replies.waiting);
       var rw=d.replies.waiting,rt=d.replies.total;
@@ -601,7 +601,14 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       var hot=G.bounce_rate!=null&&G.bounce_rate>0.03;$('sendNote').hidden=!hot;
       $('sendNote').textContent=hot?'Bounce rate is '+pct(G.bounce_rate)+', over 3%. Pause and clean the list before it hurts the mailbox.':'';
       renderChart(d.daily||[]);renderCampTotals(d.campaigns||[]);
-    }).then(loadStatus).then(function(){loadToday();loadAutopilot();loadForms();loadFormLog();loadUnsub();loadConvos().then(renderWaitNext)}).then(renderChecks).catch(fail);
+    });
+    var statusP=loadStatus().then(renderChecks);
+    var convosP=loadConvos();
+    var apP=api('/api/email-marketing/autopilot');
+    loadToday();loadForms();loadFormLog();loadUnsub();
+    Promise.all([statusP,apP]).then(function(a){applyAutopilot(a[1])}).catch(fail);
+    Promise.all([dashP,convosP]).then(renderWaitNext).catch(fail);
+    return dashP.catch(fail);
   }
   function renderWaitNext(){
     var c=S.queue[0];$('waitNext').hidden=!c;if(!c)return;
@@ -653,17 +660,18 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
     return '<p class="hint"><b>'+num(r.picked)+' leads</b> for "'+esc(r.campaign||'')+'": '+mixText(r.mix)+(r.ran?'. Added '+num(r.added)+' to Smartlead.':'. Nothing added yet.')+'</p>'+
       '<div class="list" style="margin-top:8px">'+(r.sample||[]).slice(0,10).map(function(x){return '<div class="rowl" style="min-height:0;padding:9px 12px"><span class="grow rt" style="font-weight:500">'+esc(x.company_name||x.email)+'</span><span class="rr">'+esc(x.mail_host||'')+'</span></div>'}).join('')+((r.sample||[]).length>10?'<div class="rowl" style="min-height:0;padding:9px 12px"><span class="rs">and '+((r.sample||[]).length-10)+' more</span></div>':'')+'</div>';
   }
+  function applyAutopilot(r){
+    var s=r.settings,box=((S.status&&S.status.mailboxes)||[])[0];
+    $('apOn').checked=s.enabled;$('apPerDay').value=s.new_per_day;$('apStart').value=s.ramp_start;$('apRamp').value=s.ramp_days;
+    var keep=s.campaign_id||'';
+    $('apCamp').innerHTML='<option value="">Choose the campaign to feed…</option>'+(S.campaigns||[]).map(function(c){return '<option value="'+c.id+'">'+esc(c.name)+' ('+esc(c.status)+')</option>'}).join('');$('apCamp').value=String(keep);
+    var today=(r.runs||[]).filter(function(x){return x.day===new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kuala_Lumpur'})})[0];
+    $('apState').textContent=(s.enabled?'On. Today\'s target is '+r.today_target+' new leads'+(r.in_window?'.':', checked again in the next weekday window (08:00 to 15:00 KL).'):'Off. Nothing is added until you switch it on.')+
+      (today?' Added today: '+today.added+' of '+today.picked+' ('+mixText(today.mix)+').':'')+
+      (r.last&&r.last.reason&&!r.last.dry?' Last check: '+r.last.reason:'')+(box?' Mailbox limit: '+num(box.daily_limit)+' a day.':'');
+  }
   function loadAutopilot(){
-    return api('/api/email-marketing/autopilot').then(function(r){
-      var s=r.settings,box=((S.status&&S.status.mailboxes)||[])[0];
-      $('apOn').checked=s.enabled;$('apPerDay').value=s.new_per_day;$('apStart').value=s.ramp_start;$('apRamp').value=s.ramp_days;
-      var keep=s.campaign_id||'';
-      $('apCamp').innerHTML='<option value="">Choose the campaign to feed…</option>'+(S.campaigns||[]).map(function(c){return '<option value="'+c.id+'">'+esc(c.name)+' ('+esc(c.status)+')</option>'}).join('');$('apCamp').value=String(keep);
-      var today=(r.runs||[]).filter(function(x){return x.day===new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kuala_Lumpur'})})[0];
-      $('apState').textContent=(s.enabled?'On. Today\'s target is '+r.today_target+' new leads'+(r.in_window?'.':', checked again in the next weekday window (08:00 to 15:00 KL).'):'Off. Nothing is added until you switch it on.')+
-        (today?' Added today: '+today.added+' of '+today.picked+' ('+mixText(today.mix)+').':'')+
-        (r.last&&r.last.reason&&!r.last.dry?' Last check: '+r.last.reason:'')+(box?' Mailbox limit: '+num(box.daily_limit)+' a day.':'');
-    }).catch(fail);
+    return api('/api/email-marketing/autopilot').then(applyAutopilot).catch(fail);
   }
   function apSettings(){return {enabled:$('apOn').checked,campaign_id:Number($('apCamp').value)||null,new_per_day:Number($('apPerDay').value),ramp_start:Number($('apStart').value),ramp_days:Number($('apRamp').value)}}
   function apSave(){
@@ -755,8 +763,8 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
   }
   // The contact-form log on the main page: totals, the run, and the latest 20 sends.
   function loadFormLog(){
-    return Promise.all([api('/api/email-marketing/form-autopilot/report?offset=0'),api('/api/email-marketing/form-autopilot')]).then(function(a){
-      var r=a[0],t=r.totals||{},run=a[1].run;
+    return api('/api/email-marketing/form-autopilot/report?offset=0').then(function(r){
+      var t=r.totals||{},run=r.run;
       $('flStrip').innerHTML=[['sent today',t.today],['last 7 days',t.week],['sent in all',t.all_sent],['tried in all',t.all_tried]].map(function(x){return '<div><b>'+num(x[1])+'</b><span>'+x[0]+'</span></div>'}).join('');
       $('flRun').textContent=run?(new Date(run.started_at).getTime()>Date.now()?'Scheduled start.':'Run going until stopped: '+run.sent+' sent, '+run.tried+' tried, '+run.sending+' being filled now.'):'No run going.';
       $('flRows').innerHTML=r.rows.length?r.rows.slice(0,20).map(repRow).join(''):'<div class="empty">No contact form sent yet.</div>';

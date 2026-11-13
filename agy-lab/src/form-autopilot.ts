@@ -93,6 +93,9 @@ function ensureTables(): Promise<void> {
       taken_until timestamptz,
       checked_at  timestamptz)`))
     .then(() => db.sql(`create index if not exists contact_form_scan_status_idx on contact_form_scan (status)`))
+    .then(() => db.sql(`create index if not exists contact_form_send_checked_idx on contact_form_send (checked_at desc)`))
+    .then(() => db.sql(`create index if not exists contact_form_send_claimed_idx on contact_form_send (claimed_at) where claimed_at is not null`))
+    .then(() => db.sql(`create index if not exists contact_form_send_order_idx on contact_form_send (coalesce(sent_at, checked_at) desc)`))
     // A lead claimed by a hub that died mid-way is never retried: it may have been sent.
     .then(() => db.sql(`update contact_form_send set status = 'interrupted', detail = 'the hub restarted while this lead was worked; not retried in case it was sent' where status = 'checking' and checked_at < now() - interval '1 hour'`))
     .then(() => undefined, (err) => { ready = null; throw err; });
@@ -137,7 +140,9 @@ async function candidates(limit: number): Promise<Lead[]> {
 }
 
 const sentToday = async (day: string): Promise<number> => Number((await db.sql<{ n: number }>(
-  `select count(*)::int as n from contact_form_send where sent_at is not null and (sent_at at time zone 'Asia/Kuala_Lumpur')::date = $1::date`, [day])).rows[0]?.n ?? 0);
+  `select count(*)::int as n from contact_form_send
+    where sent_at >= ($1::date::timestamp at time zone 'Asia/Kuala_Lumpur')
+      and sent_at < (($1::date + 1)::timestamp at time zone 'Asia/Kuala_Lumpur')`, [day])).rows[0]?.n ?? 0);
 
 // ---- the form check, on a PC ---------------------------------------------------
 
@@ -178,14 +183,16 @@ export async function saveScan(worker: string, companyId: string, form: any): Pr
 /** How far the PC check is: verdicts for every Malaysian site and for the target companies, and what is left. */
 export async function scanCounts() {
   await ensureTables();
-  const rows = (await db.sql<{ status: string; n: number; target: number }>(`
-    select coalesce(s.status, 'not_checked') as status, count(*)::int as n, count(*) filter (where ${TARGET_SQL})::int as target
-      from company_data c left join contact_form_scan s on s.company_id = c.id
-     where ${ELIGIBLE} group by 1 order by 2 desc`)).rows;
-  const all: Record<string, number> = {};
-  const target: Record<string, number> = {};
-  for (const r of rows) { all[r.status] = r.n; target[r.status] = r.target; }
-  return { all, target };
+  return db.swr('formAutopilot:scanCounts', 30_000, async () => {
+    const rows = (await db.sql<{ status: string; n: number; target: number }>(`
+      select coalesce(s.status, 'not_checked') as status, count(*)::int as n, count(*) filter (where ${TARGET_SQL})::int as target
+        from company_data c left join contact_form_scan s on s.company_id = c.id
+       where ${ELIGIBLE} group by 1 order by 2 desc`)).rows;
+    const all: Record<string, number> = {};
+    const target: Record<string, number> = {};
+    for (const r of rows) { all[r.status] = r.n; target[r.status] = r.target; }
+    return { all, target };
+  });
 }
 
 type Ctx = { json: (res: http.ServerResponse, status: number, body: unknown) => void; readJson: (req: http.IncomingMessage) => Promise<Record<string, unknown>> };
@@ -404,15 +411,22 @@ export async function saveSend(worker: string, companyId: string, r: any): Promi
 
 /** What the page shows: the switch, today, the run, the PCs, the PC check, the outcome counts and the latest tries. */
 export async function status() {
-  const settings = await getSettings();
+  await ensureTables();
   const day = klNow().day;
-  const counts = Object.fromEntries((await db.sql<{ status: string; n: number }>(`select status, count(*)::int as n from contact_form_send group by 1 order by 2 desc`)).rows.map((r) => [r.status, r.n]));
-  const recent = (await db.sql(`select company_id::text, company_name, website, status, detail, form_url, subject, message, taken_by, checked_at, sent_at
-    from contact_form_send order by checked_at desc limit 40`)).rows;
-  const tpls = (await templates.list()).map((t) => ({ id: t.id, name: t.name }));
-  const run = await getRun();
+  const [settings, countsOut, recentOut, tplRows, run, sentCount, scan] = await Promise.all([
+    getSettings(),
+    db.sql<{ status: string; n: number }>(`select status, count(*)::int as n from contact_form_send group by 1 order by 2 desc`),
+    db.sql(`select company_id::text, company_name, website, status, detail, form_url, subject, message, taken_by, checked_at, sent_at
+      from contact_form_send order by checked_at desc limit 40`),
+    templates.list(),
+    getRun(),
+    sentToday(day),
+    scanCounts(),
+  ]);
+  const counts = Object.fromEntries(countsOut.rows.map((r) => [r.status, r.n]));
+  const tpls = tplRows.map((t) => ({ id: t.id, name: t.name }));
   const pcs = [...senders].map(([name, at]) => ({ name, seen_at: new Date(at).toISOString() }));
-  return { settings, templates: tpls, in_window: formWindowOpen(), sent_today: await sentToday(day), counts, run: run && await runProgress(run), senders: pcs, problem: lastProblem, scan: await scanCounts(), recent };
+  return { settings, templates: tpls, in_window: formWindowOpen(), sent_today: sentCount, counts, run: run && await runProgress(run), senders: pcs, problem: lastProblem, scan, recent: recentOut.rows };
 }
 
 // ---- a preview -----------------------------------------------------------------------
@@ -458,19 +472,26 @@ export async function report(opts: { day?: string; offset?: number }) {
   const outcome = `${count(`status = 'sent'`)} as sent, ${count(`status = 'submitted_unconfirmed'`)} as unconfirmed,
     ${count(`status = 'sending'`)} as sending, ${count(`status not in ('sent', 'submitted_unconfirmed', 'sending')`)} as other, count(*)::int as tried`;
   const today = `(now() at time zone 'Asia/Kuala_Lumpur')::date`;
-  const totals = (await db.sql(`select
-      ${count(`${SEND_DAY} = ${today} and sent_at is not null`)} as today, ${count(`${SEND_DAY} > ${today} - 7 and sent_at is not null`)} as week,
-      ${count(`sent_at is not null`)} as all_sent, count(*)::int as all_tried from contact_form_send`)).rows[0];
-  const days = (await db.sql(`select to_char(${SEND_DAY}, 'YYYY-MM-DD') as day, ${outcome} from contact_form_send group by 1 order by 1 desc limit 60`)).rows;
   const day = /^\d{4}-\d{2}-\d{2}$/.test(opts.day ?? '') ? opts.day! : null;
   const offset = Math.max(0, Math.floor(Number(opts.offset) || 0));
   const where = day ? `where ${SEND_DAY} = $2::date` : '';
   const params: unknown[] = day ? [offset, day] : [offset];
-  const total = Number((await db.sql<{ n: number }>(`select count(*)::int as n from contact_form_send ${where.replace('$2', '$1')}`, day ? [day] : [])).rows[0]?.n ?? 0);
-  const rows = (await db.sql(`select company_id::text, company_name, website, form_url, status, detail, subject, message, sender, filled, taken_by,
+  const [totalsOut, daysOut, totalOut, rowsOut, run] = await Promise.all([
+    db.sql(`select
+      ${count(`${SEND_DAY} = ${today} and sent_at is not null`)} as today, ${count(`${SEND_DAY} > ${today} - 7 and sent_at is not null`)} as week,
+      ${count(`sent_at is not null`)} as all_sent, count(*)::int as all_tried from contact_form_send`),
+    db.sql(`select to_char(${SEND_DAY}, 'YYYY-MM-DD') as day, ${outcome} from contact_form_send group by 1 order by 1 desc limit 60`),
+    db.sql<{ n: number }>(`select count(*)::int as n from contact_form_send ${where.replace('$2', '$1')}`, day ? [day] : []),
+    db.sql(`select company_id::text, company_name, website, form_url, status, detail, subject, message, sender, filled, taken_by,
       claimed_at, sent_at, checked_at, screenshot is not null as has_screenshot
-    from contact_form_send ${where} order by coalesce(sent_at, checked_at) desc offset $1 limit ${PAGE}`, params)).rows;
-  return { totals, days, day, total, offset, page_size: PAGE, rows };
+      from contact_form_send ${where} order by coalesce(sent_at, checked_at) desc offset $1 limit ${PAGE}`, params),
+    getRun().then((r) => (r ? runProgress(r) : null)),
+  ]);
+  const totals = totalsOut.rows[0];
+  const days = daysOut.rows;
+  const total = Number(totalOut.rows[0]?.n ?? 0);
+  const rows = rowsOut.rows;
+  return { totals, days, day, total, offset, page_size: PAGE, rows, run };
 }
 
 /** One send's screenshot, as the PC took it after pressing send. */
@@ -502,14 +523,17 @@ export async function sites(opts: { filter?: string; search?: string; offset?: n
   };
   const filter = (SITE_FILTERS as readonly string[]).includes(opts.filter ?? '') ? opts.filter as keyof typeof where : 'waiting';
   const from = `from contact_form_scan s join company_data c on c.id = s.company_id left join contact_form_send f on f.company_id = c.id`;
-  const counts = (await db.sql<Record<string, number>>(`select ${SITE_FILTERS.map((k) => `count(*) filter (where ${where[k]})::int as ${k}`).join(', ')} ${from}`)).rows[0];
   const search = String(opts.search ?? '').trim().slice(0, 100);
   const like = search ? ['%' + search.replace(/[\\%_]/g, (m) => '\\' + m) + '%'] : [];
   const match = (n: number) => (search ? ` and (c.name ilike $${n} or c.website ilike $${n})` : '');
   const offset = Math.max(0, Math.floor(Number(opts.offset) || 0));
-  const total = Number((await db.sql<{ n: number }>(`select count(*)::int as n ${from} where ${where[filter]}${match(1)}`, like)).rows[0]?.n ?? 0);
-  const rows = (await db.sql(`select c.id::text as company_id, c.name as company_name, c.category, c.website, s.status as form, s.url as form_url, s.detail as form_detail,
+  const [counts, totalOut, rowsOut] = await Promise.all([
+    db.swr('formAutopilot:siteCounts', 30_000, async () =>
+      (await db.sql<Record<string, number>>(`select ${SITE_FILTERS.map((k) => `count(*) filter (where ${where[k]})::int as ${k}`).join(', ')} ${from}`)).rows[0]),
+    db.sql<{ n: number }>(`select count(*)::int as n ${from} where ${where[filter]}${match(1)}`, like),
+    db.sql(`select c.id::text as company_id, c.name as company_name, c.category, c.website, s.status as form, s.url as form_url, s.detail as form_detail,
       f.status as send_status, f.detail as send_detail, f.sent_at, f.checked_at as tried_at, f.subject, f.message, f.taken_by
-    ${from} where ${where[filter]}${match(2)} order by coalesce(f.checked_at, s.checked_at) desc nulls last, c.id offset $1 limit ${PAGE}`, [offset, ...like])).rows;
-  return { filter, counts, total, offset, page_size: PAGE, rows };
+      ${from} where ${where[filter]}${match(2)} order by coalesce(f.checked_at, s.checked_at) desc nulls last, c.id offset $1 limit ${PAGE}`, [offset, ...like]),
+  ]);
+  return { filter, counts, total: Number(totalOut.rows[0]?.n ?? 0), offset, page_size: PAGE, rows: rowsOut.rows };
 }

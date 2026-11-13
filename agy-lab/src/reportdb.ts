@@ -62,7 +62,7 @@ function watchPool(p: InstanceType<typeof Pool>): void {
 // Heavy page reads: one run at a time per key, and the last answer is served at once
 // while a fresh one is fetched. Every open tab and poll used to start its own copy.
 const swrCache = new Map<string, { at: number; value: unknown; run: Promise<unknown> | null }>();
-function swr<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
+export function swr<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
   const hit = swrCache.get(key) ?? { at: 0, value: undefined, run: null };
   swrCache.set(key, hit);
   const refresh = (): Promise<unknown> => {
@@ -74,6 +74,12 @@ function swr<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
   if (hit.at && Date.now() - hit.at < ttlMs) return Promise.resolve(hit.value as T);
   if (hit.at) { void refresh().catch(() => {}); return Promise.resolve(hit.value as T); }
   return refresh() as Promise<T>;
+}
+
+export function invalidateSwr(keyPrefix: string): void {
+  for (const k of swrCache.keys()) {
+    if (k === keyPrefix || k.startsWith(keyPrefix + ':')) swrCache.delete(k);
+  }
 }
 
 /**
@@ -552,6 +558,8 @@ export function migrate(): Promise<void> {
     await sql(`
       create index if not exists published_report_company_version_idx
         on published_report (company_id, report_type, version desc);
+      create index if not exists published_report_type_company_idx
+        on published_report (report_type, company_id) where company_id is not null;
     `);
     await sql(`
       alter table company_research_run add column if not exists translated_report jsonb;
@@ -572,6 +580,10 @@ export function migrate(): Promise<void> {
       alter table company_data add column if not exists site_email_status text;
       alter table company_data add column if not exists site_email_error text;
       comment on column company_data.site_email_status is 'site-emails.ts outcome: checking, found, none, unreachable or no_site';
+      alter table company_data add column if not exists contact_form_status text;
+      alter table company_data add column if not exists contact_form_detail text;
+      alter table company_data add column if not exists contact_form_checked_at timestamptz;
+      comment on column company_data.contact_form_status is 'Last contact-form delivery outcome; blocked_by_captcha means skipped without human intervention';
 
       create table if not exists company_email (
         company_id bigint not null references company_data(id) on delete cascade,
@@ -593,6 +605,7 @@ export function migrate(): Promise<void> {
       );
       comment on table email_marketing_lead is 'email-marketing.ts: which lead email the hub sent into which Smartlead campaign';
       create index if not exists email_marketing_lead_email_idx on email_marketing_lead (email);
+      create index if not exists email_marketing_lead_company_idx on email_marketing_lead (company_id) where company_id is not null;
       alter table email_marketing_lead add column if not exists last_event text;
       alter table email_marketing_lead add column if not exists last_event_at timestamptz;
       alter table email_marketing_lead add column if not exists opened_at timestamptz;
@@ -600,6 +613,7 @@ export function migrate(): Promise<void> {
       alter table email_marketing_lead add column if not exists bounced_at timestamptz;
       alter table email_marketing_lead add column if not exists unsubscribed_at timestamptz;
       alter table email_marketing_lead add column if not exists category text;
+      create index if not exists email_marketing_lead_unsub_idx on email_marketing_lead (unsubscribed_at, bounced_at) where unsubscribed_at is not null or bounced_at is not null;
 
       create table if not exists email_marketing_event (
         id          bigserial primary key,
@@ -613,6 +627,8 @@ export function migrate(): Promise<void> {
       comment on table email_marketing_event is 'email-marketing.ts: every Smartlead webhook call, raw';
       create index if not exists email_marketing_event_email_idx on email_marketing_event (email);
       create index if not exists email_marketing_event_received_idx on email_marketing_event (received_at desc);
+      create index if not exists email_marketing_event_at_idx on email_marketing_event (at desc);
+      create index if not exists email_marketing_event_reply_idx on email_marketing_event (campaign_id, email, received_at desc) where event_type = 'EMAIL_REPLY' and email is not null;
       -- Events saved before secret_key was dropped on arrival.
       update email_marketing_event set payload = payload - 'secret_key' - 'webhook_url' where payload ? 'secret_key' or payload ? 'webhook_url';
 
@@ -3699,6 +3715,61 @@ export async function getCompanyContactRows(options: {
   `, params);
 
   return res.rows;
+}
+
+/**
+ * Lightweight alternative to getCompanyContactRows({ researchedOnly: true }) for email-list.ts:
+ * drives from published_report (instead of lateral-joining all 46k+ company_data rows), pulls
+ * only the contact/email JSON fields, and skips site_emails (which email-list.ts reads separately).
+ */
+export async function getResearchedCompanyEmailRows(): Promise<RawCompanyContactRow[]> {
+  await migrate();
+  const res = await sql<{
+    id: string;
+    name: string;
+    category: string | null;
+    lead_status: LeadStatus;
+    assigned_to: string | null;
+    contact_results: Record<string, unknown>[] | null;
+    research_result: Record<string, unknown> | null;
+  }>(`
+    with target_ids as (
+      select distinct company_id
+      from published_report
+      where company_id is not null
+        and report_type in ('contact_research', 'company_research')
+    )
+    select
+      c.id::text, c.name, c.category,
+      coalesce(c.lead_status, 'unassigned') as lead_status,
+      c.assigned_to,
+      (select jsonb_agg(jsonb_build_object(
+          'decision_makers', pr.result->'decision_makers',
+          'people', pr.result->'people',
+          'email_contacts', pr.result->'email_contacts'
+        ) order by pr.created_at desc)
+       from published_report pr
+       where pr.company_id = c.id and pr.report_type = 'contact_research'
+         and pr.status in ('completed', 'partial') and pr.result is not null) as contact_results,
+      (select jsonb_build_object(
+          'people', pr.result->'people',
+          'contacts', pr.result->'contacts'
+        )
+       from published_report pr
+       where pr.company_id = c.id and pr.report_type = 'company_research'
+         and pr.result is not null
+       order by pr.version desc, pr.created_at desc limit 1) as research_result
+    from target_ids t
+    join company_data c on c.id = t.company_id
+    where c.merged_into is null and coalesce(c.is_hidden, false) = false
+    order by lower(c.name) asc, c.id asc
+  `);
+  return res.rows.map((r) => ({
+    ...r,
+    address: null, phone: null, website: null, maps_url: null, rating: null, reviews: null,
+    contact_public_id: null, contact_status: null, contact_result: null,
+    research_public_id: null, research_status: null, site_emails: null,
+  }));
 }
 
 export async function close(): Promise<void> {

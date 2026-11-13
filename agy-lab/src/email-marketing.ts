@@ -431,7 +431,10 @@ async function recordEvent(body: Record<string, unknown>): Promise<void> {
       when('EMAIL_OPEN'), when('EMAIL_REPLY'), when('EMAIL_BOUNCE'), when('LEAD_UNSUBSCRIBED'), e.type === 'LEAD_CATEGORY_UPDATED' ? e.category : null]);
   const companyId = Number(row.rows[0]?.company_id) || null;
   // Smartlead's reply history can trail its webhook by a moment; the draft reads that history.
-  if (e.type === 'EMAIL_REPLY') setTimeout(() => void import('./email-replies.ts').then((r) => r.draftSoon(e.email!, e.campaign_id)), 20_000);
+  if (e.type === 'EMAIL_REPLY') {
+    db.invalidateSwr('emailReplies:conversations');
+    setTimeout(() => void import('./email-replies.ts').then((r) => r.draftSoon(e.email!, e.campaign_id)), 20_000);
+  }
   const status = ACTIVITY[e.type];
   if (!companyId || !status) return;
   // No telemarketer name: these are not agent work and must not count in agent stats.
@@ -466,10 +469,11 @@ export async function handleWebhook(req: http.IncomingMessage, res: http.ServerR
 
 // ---- routes --------------------------------------------------------------------
 
-let categoryCache: { at: number; list: any[] } | null = null;
+const SL_CACHE_MS = 20_000;
+
 async function categories() {
-  if (!categoryCache || Date.now() - categoryCache.at > 3600_000) categoryCache = { at: Date.now(), list: await sl.leadCategories() };
-  return categoryCache.list.map((c) => ({ id: c.id, name: c.name, sentiment: c.sentiment_type }));
+  const list = await db.swr('emailMarketing:categories', 3600_000, () => sl.leadCategories());
+  return (list ?? []).map((c: any) => ({ id: c.id, name: c.name, sentiment: c.sentiment_type }));
 }
 
 export function campaignRow(c: any, a: any) {
@@ -481,6 +485,18 @@ export function campaignRow(c: any, a: any) {
     sent: n(a?.unique_sent_count ?? a?.sent_count), opened: n(a?.unique_open_count ?? a?.open_count), clicked: n(a?.unique_click_count ?? a?.click_count),
     replied: n(a?.reply_count), bounced: n(a?.bounce_count), unsubscribed: n(a?.unsubscribed_count),
   };
+}
+
+export function cachedMailboxes() {
+  return db.swr('emailMarketing:mailboxes', SL_CACHE_MS, async () => (await sl.listMailboxes()) ?? []);
+}
+
+export function cachedCampaignRows() {
+  return db.swr('emailMarketing:campaigns', SL_CACHE_MS, async () => {
+    const list = (await sl.listCampaigns()) ?? [];
+    const rows = await Promise.all(list.map(async (c) => campaignRow(c, await sl.campaignAnalytics(c.id).catch(() => null))));
+    return rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  });
 }
 
 const intParam = (url: URL, name: string, dflt: number, max: number) =>
@@ -498,10 +514,11 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
         if (!db.configured()) return null;
         await db.migrate();
         const out = await db.sql<{ last: string | null; week: string }>(
-          `select max(received_at) as last, count(*) filter (where received_at > now() - interval '7 days')::text as week from email_marketing_event`);
+          `select (select max(received_at) from email_marketing_event) as last,
+                  (select count(*)::text from email_marketing_event where received_at > now() - interval '7 days') as week`);
         return out.rows[0] ?? null;
       };
-      const [mailboxes, cats, events] = await Promise.all([sl.listMailboxes(), categories(), lastEvents().catch(() => null)]);
+      const [mailboxes, cats, events] = await Promise.all([cachedMailboxes(), categories(), lastEvents().catch(() => null)]);
       return send(200, {
         configured: true,
         categories: cats,
@@ -615,22 +632,23 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     if (method === 'GET' && p === '/api/email-marketing/today') {
       if (!db.configured()) return send(503, { error: 'no report database configured' });
       await db.migrate();
-      const day = `(now() at time zone 'Asia/Kuala_Lumpur')::date`;
+      const day = autopilot.klNow().day;
+      const inDay = `at >= ($1::date::timestamp at time zone 'Asia/Kuala_Lumpur') and at < (($1::date + 1)::timestamp at time zone 'Asia/Kuala_Lumpur')`;
       const [sent, counts, hosts] = await Promise.all([
         db.sql<{ email: string; campaign_name: string | null; company: string | null; at: string }>(
           `select e.email, l.campaign_name, c.name as company, e.at
              from email_marketing_event e
              left join email_marketing_lead l on l.campaign_id = e.campaign_id and l.email = e.email
              left join company_data c on c.id = l.company_id
-            where e.event_type = 'EMAIL_SENT' and (e.at at time zone 'Asia/Kuala_Lumpur')::date = ${day}
-            order by e.at desc limit 500`),
+            where e.event_type = 'EMAIL_SENT' and e.at >= ($1::date::timestamp at time zone 'Asia/Kuala_Lumpur') and e.at < (($1::date + 1)::timestamp at time zone 'Asia/Kuala_Lumpur')
+            order by e.at desc limit 500`, [day]),
         db.sql<{ event_type: string; n: string }>(
-          `select event_type, count(*)::text as n from email_marketing_event where (at at time zone 'Asia/Kuala_Lumpur')::date = ${day} group by event_type`),
+          `select event_type, count(*)::text as n from email_marketing_event where ${inDay} group by event_type`, [day]),
         mailHosts.hostLabels().catch(() => new Map<string, string>()),
       ]);
       const n = (type: string) => Number(counts.rows.find((r) => r.event_type === type)?.n ?? 0);
       return send(200, {
-        day: autopilot.klNow().day,
+        day,
         sent: n('EMAIL_SENT'), opened: n('EMAIL_OPEN'), replied: n('EMAIL_REPLY'), bounced: n('EMAIL_BOUNCE'), unsubscribed: n('LEAD_UNSUBSCRIBED') + n('EMAIL_UNSUBSCRIBE'),
         rows: sent.rows.map((r) => ({ ...r, mail_host: hosts.get(mailHosts.domainOf(r.email)) ?? null })),
       });
@@ -692,9 +710,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
     }
 
     if (method === 'GET' && p === '/api/email-marketing/campaigns') {
-      const list = (await sl.listCampaigns()) ?? [];
-      const rows = await Promise.all(list.map(async (c) => campaignRow(c, await sl.campaignAnalytics(c.id).catch(() => null))));
-      return send(200, { campaigns: rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))) });
+      return send(200, { campaigns: await cachedCampaignRows() });
     }
 
     if (method === 'POST' && p === '/api/email-marketing/campaigns') {
@@ -705,6 +721,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       try { await prepareSteps(body.steps); } catch (err) { return send(400, { error: (err as Error).message }); }
       const id = await sl.createCampaign(name);
       const errors = await setup(id, body, true);
+      db.invalidateSwr('emailMarketing:campaigns');
       return send(200, { id, name, errors });
     }
 
@@ -725,17 +742,21 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
         });
       }
       if (method === 'POST' && sub === '/setup') {
-        return send(200, { id, errors: await setup(id, await ctx.readJson(req), false) });
+        const errors = await setup(id, await ctx.readJson(req), false);
+        db.invalidateSwr('emailMarketing:campaigns');
+        return send(200, { id, errors });
       }
       if (method === 'POST' && sub === '/status') {
         const status = String((await ctx.readJson(req)).status ?? '').toUpperCase();
         if (!['START', 'PAUSED', 'STOPPED'].includes(status)) return send(400, { error: 'status is START, PAUSED or STOPPED' });
         await sl.setStatus(id, status as 'START');
+        db.invalidateSwr('emailMarketing:campaigns');
         return send(200, { id, status });
       }
       if (method === 'DELETE' && sub === '') {
         await sl.deleteCampaign(id);
         await db.sql(`delete from email_marketing_lead where campaign_id = $1`, [id]).catch(() => {});
+        db.invalidateSwr('emailMarketing:campaigns');
         return send(200, { id, deleted: true });
       }
       if (method === 'POST' && sub === '/leads') {
@@ -746,7 +767,9 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
         const rows = keys ? all.filter((r) => keys.has(r.key)) : (body.all === true ? shown : []);
         if (!rows.length) return send(400, { error: 'no leads chosen: send keys[] or all:true with the filter' });
         const c = await sl.getCampaign(id);
-        return send(200, await push(id, c?.name ?? null, rows));
+        const result = await push(id, c?.name ?? null, rows);
+        db.invalidateSwr('emailMarketing:campaigns');
+        return send(200, result);
       }
       if (method === 'GET' && sub === '/leads') {
         const out = await sl.campaignLeads(id, intParam(url, 'offset', 0, 1e9), Math.max(1, intParam(url, 'limit', 50, 100)));
