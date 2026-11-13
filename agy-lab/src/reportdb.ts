@@ -59,6 +59,23 @@ function watchPool(p: InstanceType<typeof Pool>): void {
   } catch { /* diagnostics must never touch a query */ }
 }
 
+// Heavy page reads: one run at a time per key, and the last answer is served at once
+// while a fresh one is fetched. Every open tab and poll used to start its own copy.
+const swrCache = new Map<string, { at: number; value: unknown; run: Promise<unknown> | null }>();
+function swr<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
+  const hit = swrCache.get(key) ?? { at: 0, value: undefined, run: null };
+  swrCache.set(key, hit);
+  const refresh = (): Promise<unknown> => {
+    if (!hit.run) {
+      hit.run = fn().then((v) => { hit.value = v; hit.at = Date.now(); return v; }).finally(() => { hit.run = null; });
+    }
+    return hit.run;
+  };
+  if (hit.at && Date.now() - hit.at < ttlMs) return Promise.resolve(hit.value as T);
+  if (hit.at) { void refresh().catch(() => {}); return Promise.resolve(hit.value as T); }
+  return refresh() as Promise<T>;
+}
+
 /**
  * Stringify a value for a ::jsonb parameter, with lone surrogates repaired.
  *
@@ -2003,7 +2020,8 @@ const CONTACT_FOUND = `(nullif(trim(c.phone), '') is not null or (${DEEP_RESEARC
   + [`crep.result->'phone_contacts'`, `crep.result->'contacts'`, `crep.result->'email_contacts'`, `crep.result->'emails'`].map(jsonCount).join(' + ')
   + ` + coalesce((crep.result->'preview'->>'phones')::int, 0) + coalesce((crep.result->'preview'->>'emails')::int, 0)) > 0))`;
 
-export async function getLeadStats(): Promise<LeadStats> {
+export function getLeadStats(): Promise<LeadStats> { return swr('leadStats', 30_000, getLeadStatsQuery); }
+async function getLeadStatsQuery(): Promise<LeadStats> {
   if (!configured()) {
     return {
       total: 0,
@@ -2926,10 +2944,11 @@ async function telemarketerDetailsQuery(): Promise<TelemarketerAgent[]> {
   // whole table -- but the OR-of-lower(trim()) join no longer runs over every unowned lead.
   const res = await sql<TelemarketerAgent>(`
     with assigned as materialized (
-      select telemarketer_uid, assigned_to, lead_status, merged_into, is_hidden, id
+      select telemarketer_uid, lower(trim(assigned_to)) as an, lead_status, count(*)::int as n
       from company_data
       where merged_into is null and coalesce(is_hidden, false) = false
         and (telemarketer_uid is not null or assigned_to is not null)
+      group by 1, 2, 3
     )
     select
       t.id,
@@ -2940,16 +2959,16 @@ async function telemarketerDetailsQuery(): Promise<TelemarketerAgent[]> {
       t.notes,
       t.active,
       t.created_at::text,
-      count(c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false)::int as total_assigned,
-      count(c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and coalesce(c.lead_status, 'assigned') in ('assigned', 'unassigned'))::int as pending_count,
-      count(c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'contacted')::int as contacted_count,
-      count(c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'interested')::int as interested_count,
-      count(c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'not_interested')::int as not_interested_count,
-      count(c.id) filter (where c.merged_into is null and coalesce(c.is_hidden, false) = false and c.lead_status = 'do_not_call')::int as dnc_count
+      coalesce(sum(c.n), 0)::int as total_assigned,
+      coalesce(sum(c.n) filter (where coalesce(c.lead_status, 'assigned') in ('assigned', 'unassigned')), 0)::int as pending_count,
+      coalesce(sum(c.n) filter (where c.lead_status = 'contacted'), 0)::int as contacted_count,
+      coalesce(sum(c.n) filter (where c.lead_status = 'interested'), 0)::int as interested_count,
+      coalesce(sum(c.n) filter (where c.lead_status = 'not_interested'), 0)::int as not_interested_count,
+      coalesce(sum(c.n) filter (where c.lead_status = 'do_not_call'), 0)::int as dnc_count
     from telemarketer t
     left join assigned c on (
-      (t.uid is not null and (c.telemarketer_uid = t.uid or c.telemarketer_uid = ('uid:' || t.uid) or lower(trim(c.assigned_to)) = lower(trim(t.uid)) or lower(trim(c.assigned_to)) = lower(trim('uid:' || t.uid))))
-      or lower(trim(c.assigned_to)) = lower(trim(t.name))
+      (t.uid is not null and (c.telemarketer_uid = t.uid or c.telemarketer_uid = ('uid:' || t.uid) or c.an = lower(trim(t.uid)) or c.an = lower(trim('uid:' || t.uid))))
+      or c.an = lower(trim(t.name))
     )
     group by t.id, t.uid, t.name, t.phone, t.email, t.notes, t.active, t.created_at
     order by t.active desc, t.name asc
@@ -3246,7 +3265,8 @@ export interface TerritoryScanStat {
   created_at: string;
 }
 
-export async function getTerritoryScanStats(): Promise<TerritoryScanStat[]> {
+export function getTerritoryScanStats(): Promise<TerritoryScanStat[]> { return swr('territoryScanStats', 30_000, getTerritoryScanStatsQuery); }
+async function getTerritoryScanStatsQuery(): Promise<TerritoryScanStat[]> {
   if (!configured()) return [];
   await migrate();
   const res = await sql<TerritoryScanStat>(`
@@ -3402,7 +3422,8 @@ const CONTACT_PENDING_SQL = `
     and coalesce(crep.status, '') not in ('completed', 'partial', 'queued', 'running')`;
 
 // Pending contact research per taman, keyed by lower-cased query place.
-export async function getTamanContactPending(): Promise<Record<string, number>> {
+export function getTamanContactPending(): Promise<Record<string, number>> { return swr('tamanContactPending', 30_000, getTamanContactPendingQuery); }
+async function getTamanContactPendingQuery(): Promise<Record<string, number>> {
   if (!configured()) return {};
   await migrate();
   const out = await sql<{ place: string; pending: number }>(
