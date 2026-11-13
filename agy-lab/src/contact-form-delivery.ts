@@ -10,12 +10,13 @@
 // Where the leads come from is the caller's business. No kill gates: pages load as slowly as they
 // load, and every failure comes back as a status, never a throw.
 import http from 'node:http';
+import * as db from './reportdb.ts';
 import { browserPath } from './divedeeper/shots.ts';
 import { contactLinks, ownSiteUrl } from './site-emails.ts';
 
 export interface Sender { name: string; email: string; phone?: string; company?: string; website?: string }
 export interface DeliverInput {
-  lead: { company_name: string; website: string; contact_name?: string };
+  lead: { id?: string | number; company_name: string; website: string; contact_name?: string };
   sender: Sender;
   subject?: string;
   /** Plain text. {{company_name}}, {{website}} and {{contact_name}} are filled in. */
@@ -41,6 +42,9 @@ export interface DeliverResult {
   /** data:image/jpeg;base64 of the form, filled (and after sending when sent). */
   screenshot: string | null;
   finished_at: string;
+  /** Present when lead.id was supplied. A save failure never changes the delivery outcome. */
+  lead_saved?: boolean;
+  save_error?: string;
 }
 
 /** One box of a form, as the page snapshot reports it. */
@@ -150,6 +154,7 @@ export function readOutcome(textAfter: string, textBefore: string, formGone: boo
   // Only the lines the send added count: a footer that always says "thank you" proves nothing.
   const had = new Set(textBefore.split('\n').map((l) => l.trim()));
   const fresh = textAfter.split('\n').map((l) => l.trim()).filter((l) => l && !had.has(l)).join('\n');
+  if (/captcha|verify (?:that )?you are human|robot verification/i.test(fresh)) return { status: 'captcha', detail: 'blocked by CAPTCHA after submission; no retry attempted' };
   const ok = SUCCESS.exec(fresh);
   if (ok) return { status: 'sent', detail: `the site answered "${ok[0]}"` };
   const bad = REJECTED.exec(fresh);
@@ -161,7 +166,7 @@ export function readOutcome(textAfter: string, textBefore: string, formGone: boo
 
 // Runs inside each page and frame: tags every visible box and send button with data-cfd, and
 // reports the forms. Self-contained, because it is serialised into the browser.
-function snapshot(prefix: string): { forms: FormInfo[]; pageCaptcha: string | null } {
+function snapshot(prefix: string, markFields = true): { forms: FormInfo[]; pageCaptcha: string | null } {
   const visible = (el: Element): boolean => {
     const r = (el as HTMLElement).getBoundingClientRect();
     const st = getComputedStyle(el);
@@ -211,7 +216,7 @@ function snapshot(prefix: string): { forms: FormInfo[]; pageCaptcha: string | nu
       if ((type === 'checkbox' || type === 'radio') && !visible(el) && !(el.closest('label') && visible(el.closest('label')!))) return;
       if ((el as HTMLInputElement).disabled || (el as HTMLInputElement).readOnly) return;
       const id = `${formId}-${i}`;
-      el.setAttribute('data-cfd', id);
+      if (markFields) el.setAttribute('data-cfd', id);
       const label = labelOf(el);
       const options = el.tagName === 'SELECT'
         ? Array.from((el as HTMLSelectElement).options).filter((o) => o.value && !o.disabled && !/select|choose|pilih|--/i.test(o.text)).map((o) => o.value)
@@ -226,8 +231,8 @@ function snapshot(prefix: string): { forms: FormInfo[]; pageCaptcha: string | nu
     const send = buttons.find((b) => (b.getAttribute('type') || '').toLowerCase() === 'submit')
       ?? buttons.find((b) => /send|submit|hantar|hubungi|contact|enquir/i.test((b.textContent || '') + ' ' + (b.getAttribute('value') || '')))
       ?? buttons.find((b) => b.tagName === 'BUTTON' && !b.getAttribute('type'));
-    if (send) send.setAttribute('data-cfd', `${formId}-send`);
-    c.setAttribute('data-cfd-form', formId);
+    if (send && markFields) send.setAttribute('data-cfd', `${formId}-send`);
+    if (markFields) c.setAttribute('data-cfd-form', formId);
     const localCaptcha = c.querySelector('.g-recaptcha, .h-captcha, .cf-turnstile, [data-sitekey], iframe[src*="captcha"], iframe[src*="turnstile"], img[src*="captcha"], input[name*="captcha" i]');
     const quiz = Array.from(c.querySelectorAll('label, span, p')).some((n) => /\d+\s*[+x×*-]\s*\d+\s*=|captcha|are you human|bukan robot/i.test(n.textContent || ''));
     forms.push({
@@ -242,13 +247,34 @@ function snapshot(prefix: string): { forms: FormInfo[]; pageCaptcha: string | nu
 
 const FALLBACK_PATHS = ['/contact', '/contact-us', '/contactus', '/hubungi-kami', '/contact.html'];
 
+/** Save the last real delivery outcome separately from the lead's sales status. */
+export async function saveDeliveryResult(leadId: string | number | undefined, result: DeliverResult, store: {
+  migrate: () => Promise<void>;
+  sql: (query: string, params: unknown[]) => Promise<{ rowCount: number | null }>;
+} = db): Promise<void> {
+  if (leadId === undefined || result.status === 'dry_run') return;
+  result.lead_saved = false;
+  try {
+    await store.migrate();
+    const saved = await store.sql(`update company_data set contact_form_status = $2,
+      contact_form_detail = $3, contact_form_checked_at = $4::timestamptz where id = $1`,
+      [leadId, result.status === 'captcha' ? 'blocked_by_captcha' : result.status, result.detail, result.finished_at]);
+    result.lead_saved = saved.rowCount === 1;
+    if (!result.lead_saved) result.save_error = 'lead.id was not found; delivery outcome was not saved';
+  } catch {
+    result.save_error = 'could not save the delivery outcome to the lead; do not resend solely because saving failed';
+  }
+}
+
 /**
  * Each delivery opens its own browser and closes it. They run side by side (the worker's lanes),
  * never queued behind one another: a queue let one frozen site hold back every form after it.
  * Never throws.
  */
 export async function deliver(input: DeliverInput): Promise<DeliverResult> {
-  return deliverNow(input);
+  const result = await deliverNow(input);
+  await saveDeliveryResult(input.lead?.id, result);
+  return result;
 }
 
 // A delivery that is still running after this is killed; a send already pressed is then
@@ -287,20 +313,30 @@ async function deliverNow(input: DeliverInput): Promise<DeliverResult> {
     const dialogs: string[] = [];
     page.on('dialog', (d: any) => { dialogs.push(String(d.message?.() ?? '')); d.accept().catch(() => {}); });
 
+    let pageBlocked = false;
+    const blocked = async (reason: string): Promise<DeliverResult> => {
+      out.form_url = page.url();
+      try { out.screenshot = 'data:image/jpeg;base64,' + await page.screenshot({ type: 'jpeg', quality: 60, encoding: 'base64' }); } catch { /* keep existing screenshot */ }
+      return done('captcha', `blocked by CAPTCHA: ${reason}; skipped without waiting or retrying`);
+    };
     const open = async (url: string): Promise<boolean> => {
+      pageBlocked = false;
       out.pages_checked.push(url);
       try {
         const res = await page.goto(url, { waitUntil: 'domcontentloaded' });
         await sleep(2500);
+        // Challenge pages often return HTTP 403. Record CAPTCHA rather than unreachable.
+        pageBlocked = /just a moment|attention required|verify you are human/i.test(await page.title());
+        if (pageBlocked) return false;
         return !!res && res.status() < 400;
       } catch { return false; }
     };
-    const look = async () => {
+    const look = async (markFields = true) => {
       const found: Array<{ frame: any; form: FormInfo; pageCaptcha: string | null }> = [];
       let pageCaptcha: string | null = null;
       for (const [n, frame] of page.frames().entries()) {
         try {
-          const snap = await frame.evaluate(snapshot, `p${n}`);
+          const snap = await frame.evaluate(snapshot, `p${n}`, markFields);
           pageCaptcha ??= snap.pageCaptcha;
           for (const form of snap.forms) found.push({ frame, form, pageCaptcha: snap.pageCaptcha });
         } catch { /* a frame that went away while we looked */ }
@@ -308,7 +344,7 @@ async function deliverNow(input: DeliverInput): Promise<DeliverResult> {
       return { found, pageCaptcha };
     };
 
-    if (!(await open(home))) return done('site_unreachable', `${home} did not load`);
+    if (!(await open(home))) return pageBlocked ? await blocked('a page-level human verification check') : done('site_unreachable', `${home} did not load`);
     let homeHtml = '';
     try { homeHtml = await page.content(); } catch { /* keep going with fallbacks */ }
     const candidates = [home, ...contactLinks(homeHtml, page.url(), 3), ...FALLBACK_PATHS.map((p) => new URL(p, page.url()).toString())];
@@ -318,10 +354,13 @@ async function deliverNow(input: DeliverInput): Promise<DeliverResult> {
       const key = url.replace(/\/$/, '');
       if (seen.has(key)) continue;
       seen.add(key);
-      if (url !== home && !(await open(url))) continue;
+      if (url !== home && !(await open(url))) {
+        if (pageBlocked) return await blocked('a page-level human verification check');
+        continue;
+      }
       const { found, pageCaptcha } = await look();
       const pick = pickForm(found.map((f) => f.form));
-      if (!pick) { lastCaptcha ??= /Cloudflare check/.test(pageCaptcha ?? '') ? pageCaptcha : null; continue; }
+      if (!pick) { lastCaptcha ??= pageCaptcha; continue; }
       const hit = found.find((f) => f.form === pick)!;
       out.form_url = page.url();
       const shot = async () => {
@@ -332,7 +371,7 @@ async function deliverNow(input: DeliverInput): Promise<DeliverResult> {
         } catch { /* no screenshot, the result still stands */ }
       };
       const captcha = pick.captcha ?? hit.pageCaptcha ?? pageCaptcha;
-      if (captcha) { await shot(); return done('captcha', `skipped: the contact form is guarded by ${captcha}`); }
+      if (captcha) return await blocked(captcha);
 
       // The LLM step: where the script could not place a required box, the LLM says which sender value fits it.
       // Its answer is used only for those boxes and only with the listed values; anything else keeps the script's fill.
@@ -391,15 +430,19 @@ async function deliverNow(input: DeliverInput): Promise<DeliverResult> {
       await sleep(7000);
       const frame = page.frames().includes(hit.frame) ? hit.frame : page.mainFrame();
       const after = await frame.evaluate(() => document.body.innerText).catch(() => '');
+      const afterWords = [after, ...dialogs].join('\n');
+      const afterLook = await look(false);
+      const afterCaptcha = afterLook.pageCaptcha ?? afterLook.found.find((f) => f.form.captcha)?.form.captcha;
+      if (afterCaptcha && readOutcome(afterWords, before, false, false).status !== 'sent') return await blocked(afterCaptcha);
       const formGone = await frame.evaluate((id: string) => {
         const f = document.querySelector(`[data-cfd-form="${id}"]`);
         return !f || (f as HTMLElement).getBoundingClientRect().height < 5;
       }, pick.id).catch(() => true);
-      const outcome = readOutcome([after, ...dialogs].join('\n'), before, formGone, page.url() !== urlBefore);
+      const outcome = readOutcome(afterWords, before, formGone, page.url() !== urlBefore);
       try { out.screenshot = 'data:image/jpeg;base64,' + await page.screenshot({ type: 'jpeg', quality: 60, encoding: 'base64' }); } catch { /* keep the filled shot */ }
       return done(outcome.status, outcome.detail);
     }
-    if (lastCaptcha) return done('captcha', `skipped: ${lastCaptcha}`);
+    if (lastCaptcha) return await blocked(lastCaptcha);
     return done('no_form', `no contact form on ${out.pages_checked.length} page(s) checked`);
   } catch (err) {
     const why = (err as Error).message.slice(0, 300);
@@ -422,6 +465,8 @@ export function invalid(b: any): string | null {
   if (!b.lead?.company_name) return 'lead.company_name is required';
   if (!b.sender?.name || !/@/.test(b.sender?.email ?? '')) return 'sender.name and sender.email are required';
   if (!String(b.message ?? '').trim()) return 'message is required';
+  if (b.lead.id !== undefined && !((typeof b.lead.id === 'string' && /^[1-9]\d*$/.test(b.lead.id)) || (Number.isSafeInteger(b.lead.id) && b.lead.id > 0))) return 'lead.id must be a positive integer';
+  if (b.captcha_mode !== undefined || b.captcha_timeout_ms !== undefined) return 'manual CAPTCHA completion is not supported; CAPTCHA-protected leads are skipped automatically';
   return null;
 }
 
@@ -435,7 +480,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
   const problem = invalid(body);
   if (problem) { ctx.json(res, 400, { error: problem }); return true; }
   ctx.json(res, 200, await deliver({
-    lead: { company_name: String(body.lead.company_name), website: String(body.lead.website), contact_name: body.lead.contact_name ? String(body.lead.contact_name) : undefined },
+    lead: { id: body.lead.id, company_name: String(body.lead.company_name), website: String(body.lead.website), contact_name: body.lead.contact_name ? String(body.lead.contact_name) : undefined },
     sender: body.sender, subject: body.subject ? String(body.subject) : undefined, message: String(body.message), dry_run: body.dry_run === true,
   }));
   return true;

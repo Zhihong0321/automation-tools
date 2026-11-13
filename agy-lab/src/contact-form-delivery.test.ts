@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { classify, deliver, fillTemplate, invalid, pickForm, planFill, readOutcome, type DeliverInput, type Field, type FormInfo } from './contact-form-delivery.ts';
+import { classify, deliver, fillTemplate, invalid, pickForm, planFill, readOutcome, saveDeliveryResult, type DeliverInput, type DeliverResult, type Field, type FormInfo } from './contact-form-delivery.ts';
 import { browserPath } from './divedeeper/shots.ts';
 
 const f = (id: string, over: Partial<Field>): Field => ({ id, tag: 'input', type: 'text', name: '', label: '', required: false, ...over });
@@ -56,6 +56,8 @@ test('readOutcome only trusts text the send added', () => {
   assert.equal(readOutcome('Thank you for visiting\nContact', 'Thank you for visiting\nContact', false, false).status, 'submitted_unconfirmed');
   assert.equal(readOutcome('Please fill in all required fields', '', false, false).status, 'failed');
   assert.equal(readOutcome('same', 'same', true, false).status, 'sent');
+  assert.equal(readOutcome('Please complete CAPTCHA', '', true, true).status, 'captcha');
+  assert.equal(readOutcome('CAPTCHA verification failed', '', false, false).status, 'captcha');
 });
 
 test('fillTemplate and invalid', () => {
@@ -63,6 +65,37 @@ test('fillTemplate and invalid', () => {
   assert.equal(invalid(input), null);
   assert.match(invalid({ ...input, lead: { company_name: 'x' } })!, /website/);
   assert.match(invalid({ ...input, sender: { name: 'x', email: 'nope' } })!, /sender/);
+  assert.equal(invalid({ ...input, lead: { ...input.lead, id: '42' } }), null);
+  assert.match(invalid({ ...input, lead: { ...input.lead, id: -1 } })!, /lead.id/);
+  assert.match(invalid({ ...input, captcha_mode: 'manual' })!, /skipped automatically/);
+});
+
+test('delivery results mark the specified lead and preserve outcomes when saving fails', async () => {
+  const result = (): DeliverResult => ({ status: 'captcha', website: input.lead.website, form_url: null,
+    detail: 'blocked by CAPTCHA', filled: [], pages_checked: [], screenshot: null, finished_at: new Date().toISOString() });
+  const writes: unknown[][] = [];
+  const store = { migrate: async () => {}, sql: async (query: string, params: unknown[]) => {
+    assert.match(query, /update company_data set contact_form_status/);
+    assert.match(query, /where id = \$1/);
+    writes.push(params);
+    return { rowCount: 1 };
+  } };
+  const blocked = result();
+  await saveDeliveryResult('42', blocked, store);
+  assert.equal(blocked.lead_saved, true);
+  assert.deepEqual(writes[0], ['42', 'blocked_by_captcha', blocked.detail, blocked.finished_at]);
+  await saveDeliveryResult(undefined, result(), store);
+  await saveDeliveryResult('42', { ...result(), status: 'dry_run' }, store);
+  assert.equal(writes.length, 1, 'ad hoc requests and dry runs do not overwrite lead status');
+  const missing = result();
+  await saveDeliveryResult('404', missing, { ...store, sql: async () => ({ rowCount: 0 }) });
+  assert.equal(missing.lead_saved, false);
+  assert.match(missing.save_error!, /not found/);
+  const failedSave = { ...result(), status: 'sent' as const };
+  await saveDeliveryResult('42', failedSave, { ...store, sql: async () => { throw new Error('offline'); } });
+  assert.equal(failedSave.status, 'sent', 'a database error must not cause a duplicate send');
+  assert.equal(failedSave.lead_saved, false);
+  assert.ok(failedSave.save_error);
 });
 
 const PAGES: Record<string, string> = {
@@ -75,9 +108,11 @@ const PAGES: Record<string, string> = {
     <input type="hidden" name="token" value="abc">
     <label for="m">Message</label><textarea id="m" name="your-message"></textarea>
     <button type="submit">Send</button></form></body></html>`,
-  '/guarded': `<html><head><script src="https://www.google.com/recaptcha/api.js"></script></head><body><form method="post" action="/thanks">
+  '/guarded': `<html><body><form method="post" action="/thanks">
     <input name="name" placeholder="Name"><input name="email" type="email"><textarea name="msg"></textarea>
     <div class="g-recaptcha" data-sitekey="x"></div><button type="submit">Send</button></form></body></html>`,
+  '/challenge': '<html><head><title>Just a moment</title></head><body>Verify you are human</body></html>',
+  '/quiz': '<html><body><form><input type="email"><textarea></textarea><label>CAPTCHA: 2 + 2 = <input name="captcha_answer" required></label><button>Send</button></form></body></html>',
 };
 
 test('deliver fills and sends a real form, skips the off-screen trap, and leaves captcha forms alone', { skip: !browserPath() && 'no browser here' }, async () => {
@@ -90,7 +125,7 @@ test('deliver fills and sends a real form, skips the off-screen trap, and leaves
       return;
     }
     const page = PAGES[(req.url ?? '/').split('?')[0]!];
-    res.writeHead(page ? 200 : 404, { 'content-type': 'text/html' });
+    res.writeHead(req.url === '/challenge' ? 403 : page ? 200 : 404, { 'content-type': 'text/html' });
     res.end(page ?? 'not found');
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -113,7 +148,15 @@ test('deliver fills and sends a real form, skips the off-screen trap, and leaves
 
     const guarded = await deliver({ ...input, lead: { ...input.lead, website: base + '/guarded' } });
     assert.equal(guarded.status, 'captcha', guarded.detail);
+    assert.match(guarded.detail, /blocked by CAPTCHA/);
+    assert.deepEqual(guarded.filled, [], 'CAPTCHA forms are skipped before filling');
     assert.equal(posts.length, 1, 'nothing was sent to the captcha form');
+    const challenge = await deliver({ ...input, lead: { ...input.lead, website: base + '/challenge' } });
+    assert.equal(challenge.status, 'captcha', challenge.detail);
+    assert.deepEqual(challenge.pages_checked, [base + '/challenge'], 'page-level CAPTCHA is not retried on fallback paths');
+    const quiz = await deliver({ ...input, lead: { ...input.lead, website: base + '/quiz' } });
+    assert.equal(quiz.status, 'captcha', quiz.detail);
+    assert.equal(posts.length, 1, 'no CAPTCHA case submits a message');
   } finally {
     server.close();
   }
