@@ -130,7 +130,7 @@ async function candidates(limit: number): Promise<Lead[]> {
     const rows = (await db.sql<Lead>(`
       select c.id::text as company_id, c.name as company_name, c.category, c.website
         from contact_form_scan s join company_data c on c.id = s.company_id
-       where s.status = 'bot_can_submit' and ${TARGET_SQL} and ${MALAYSIAN_SQL}
+       where s.status = 'bot_can_submit' and ${TARGET_SQL}
          and coalesce(c.lead_status, 'unassigned') <> 'do_not_call'
          and c.merged_into is null and coalesce(c.is_hidden, false) = false
          and not exists (select 1 from contact_form_send f where f.company_id = c.id)
