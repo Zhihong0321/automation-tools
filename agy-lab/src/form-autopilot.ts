@@ -59,7 +59,6 @@ const TARGET_SQL = `c.category ~* '${pg(TARGET_CATEGORY).replace(/'/g, "''")}' a
 
 /** True for a Malaysian lead. company_data also holds other countries' Maps leads (Surat hotels with +91 phones, US leads), and foreign phone/address formats tell them apart. */
 export const MALAYSIAN_SQL = `not (coalesce(c.phone, '') ~ '^\\s*\\+' and coalesce(c.phone, '') !~ '^\\s*\\+\\s*60')
-  and not (coalesce(c.phone, '') ~ '^\\s*\\(?\\d{3}\\)?\\s*\\d{3}[-\\s]\\d{4}')
   and coalesce(c.address, '') !~* '\\b(USA|United States)\\b|,\\s*[A-Z]{2}\\s*\\d{5}'`;
 
 // ---- storage -----------------------------------------------------------------
@@ -136,7 +135,7 @@ async function candidates(limit: number): Promise<Lead[]> {
          and c.merged_into is null and coalesce(c.is_hidden, false) = false
          and not exists (select 1 from contact_form_send f where f.company_id = c.id)
          and not exists (select 1 from email_marketing_lead e where e.company_id = c.id)
-       order by s.checked_at desc nulls last, c.id limit 500 offset $1`, [offset])).rows;
+       order by c.id desc limit 500 offset $1`, [offset])).rows;
     out.push(...rows.filter((r) => {
       const host = siteHost(r.website);
       return isTargetCompany(r) && Boolean(host) && !shared.has(host!);
