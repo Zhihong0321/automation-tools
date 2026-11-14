@@ -23,7 +23,7 @@ import type http from 'node:http';
 import * as db from './reportdb.ts';
 import * as templates from './email-templates.ts';
 import { klNow, isTargetCompany, TARGET_CATEGORY, SOLAR } from './email-autopilot.ts';
-import { ELIGIBLE, sharedHosts, siteHost } from './site-emails.ts';
+import { ELIGIBLE, HOST_SQL, siteHost } from './site-emails.ts';
 import type { FormStatus } from './list-step2.ts';
 import type { DeliverInput, DeliverResult, AssistField, AssistFill } from './contact-form-delivery.ts';
 import { llm } from './core/index.ts';
@@ -123,9 +123,11 @@ export async function sentCompanyIds(): Promise<Set<string>> {
 
 /** The next leads to send to: target companies whose form the PC found open, never emailed, never tried here. */
 async function candidates(limit: number): Promise<Lead[]> {
-  const shared = await sharedHosts();
+  const sentHosts = new Set(
+    (await db.sql<{ host: string }>(`select distinct ${HOST_SQL} as host from contact_form_send where coalesce(website, '') <> ''`)).rows.map((r) => r.host)
+  );
   const out: Lead[] = [];
-  // Read the waiting list a page at a time until enough pass the name and shared-site checks, or it ends.
+  // Read the waiting list a page at a time until enough pass the target and host deduplication checks, or it ends.
   for (let offset = 0; out.length < limit; offset += 500) {
     const rows = (await db.sql<Lead>(`
       select c.id::text as company_id, c.name as company_name, c.category, c.website
@@ -136,13 +138,16 @@ async function candidates(limit: number): Promise<Lead[]> {
          and not exists (select 1 from contact_form_send f where f.company_id = c.id)
          and not exists (select 1 from email_marketing_lead e where e.company_id = c.id)
        order by c.id desc limit 500 offset $1`, [offset])).rows;
-    out.push(...rows.filter((r) => {
+    for (const r of rows) {
+      if (out.length >= limit) break;
       const host = siteHost(r.website);
-      return isTargetCompany(r) && Boolean(host) && !host!.endsWith('.sg') && !shared.has(host!);
-    }));
+      if (!host || host.endsWith('.sg') || !isTargetCompany(r) || sentHosts.has(host)) continue;
+      sentHosts.add(host);
+      out.push(r);
+    }
     if (rows.length < 500) break;
   }
-  return out.slice(0, limit);
+  return out;
 }
 
 const sentToday = async (day: string): Promise<number> => Number((await db.sql<{ n: number }>(

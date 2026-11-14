@@ -200,7 +200,7 @@ type Lead = { id: string; name: string; website: string };
 
 /** Hosts listed as the website of this many leads are a directory or a chain's head office, not the lead's own site. */
 const SHARED_HOST_LEADS = 3;
-const HOST_SQL = `regexp_replace(lower(website), '^([a-z]+://)?(www\\.)?([^/:?#]+).*$', '\\3')`;
+export const HOST_SQL = `regexp_replace(lower(website), '^([a-z]+://)?(www\\.)?([^/:?#]+).*$', '\\3')`;
 let shared: { hosts: Set<string>; at: number } | null = null;
 
 export function siteHost(website: string | null | undefined): string | null {
