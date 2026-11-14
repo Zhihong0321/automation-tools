@@ -3,7 +3,7 @@
 // read to a worker PC on a home line (this PC, the Mac mini) and answers with the
 // page as markdown: the stand-in for Tavily /extract, for nothing.
 //
-// One call reads one page: POST /api/fetch {url}. The service holds the request
+// One call reads one page: POST /api/fetch with caller and task identification. The service holds the request
 // open until a worker has read it (its own `wait`, the fetch timeout plus 30 s),
 // so a read always comes back as a job, done or failed, never as a hang here.
 //
@@ -52,7 +52,7 @@ export async function fetchPage(
     res = await fetchImpl(`${(opts.baseUrl ?? BASE_URL).replace(/\/+$/, '')}/api/fetch`, {
       method: 'POST',
       headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ url, format: opts.format ?? 'markdown', mainContent: opts.mainContent ?? true, timeoutMs }),
+      body: JSON.stringify({ callerId: 'telemarketing', taskDescription: 'Read web page', url, format: opts.format ?? 'markdown', mainContent: opts.mainContent ?? true, timeoutMs }),
     });
   } catch (cause) {
     throw fail(`myworker unreachable: ${(cause as Error).message}`, 'engine_error');
