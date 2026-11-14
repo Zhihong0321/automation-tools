@@ -291,10 +291,10 @@ const senders = new Map<string, number>();
 let lastProblem: string | null = null;
 
 /** A "send this many now" from the card, kept in the database so a redeploy does not lose it. started_at may be later: a scheduled start. */
-type Run = { started_at: string };
+type Run = { goal: number; started_at: string };
 async function getRun(): Promise<Run | null> {
   const v = (await db.sql<{ value: Run }>(`select value from email_marketing_setting where key = 'form_send_run'`)).rows[0]?.value;
-  return v && v.started_at ? v : null;
+  return v && v.goal > 0 ? v : null;
 }
 async function setRun(run: Run | null): Promise<void> {
   if (!run) { await db.sql(`delete from email_marketing_setting where key = 'form_send_run'`); return; }
@@ -302,9 +302,9 @@ async function setRun(run: Run | null): Promise<void> {
 }
 
 /** Starts "send this many", now or at startAt: PCs take them on their first ask after it, whatever the switch. */
-export async function startRun(startAt?: Date): Promise<Run> {
+export async function startRun(count: number, startAt?: Date): Promise<Run> {
   await ensureTables();
-  const run = { started_at: (startAt ?? new Date()).toISOString() };
+  const run = { goal: count, started_at: (startAt ?? new Date()).toISOString() };
   await setRun(run);
   lastProblem = null;
   return run;
@@ -327,9 +327,12 @@ async function wanted(): Promise<number> {
   await db.sql(`update contact_form_send set status = 'interrupted', detail = 'the PC stopped answering while sending this form; not sent again in case it went through', taken_until = null
     where status = 'sending' and taken_until < now()`);
   const run = await getRun();
-  // A run goes on until it is stopped from the card or no open lead is left (takeSendNow ends it then).
-  // It is not stopped at a count or by the clock, so it carries on through the night without a new start.
-  if (run && Date.parse(run.started_at) <= Date.now()) return FORM_TAKE_MAX;
+  if (run && Date.parse(run.started_at) <= Date.now()) {
+    const p = await runProgress(run);
+    // Up to twice the goal is tried: some forms turn out closed in the browser.
+    if (p.sent < run.goal && p.tried < run.goal * 2) return Math.max(0, Math.min(run.goal - p.sent, run.goal * 2 - p.tried) - p.sending);
+    if (!p.sending) await setRun(null);
+  }
   const settings = await getSettings();
   if (!settings.enabled) return 0;
   // No daily cap and no cap on forms in flight: each PC lane asks for one form at a time.

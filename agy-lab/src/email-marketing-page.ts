@@ -304,7 +304,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 <div class="sec" id="fpCard">
 <div class="panel">
 <div class="ap-head"><div class="grow"><h2 class="t">Contact forms</h2><p class="hint" id="fpState"></p></div><label class="switch" aria-label="Send through contact forms"><input type="checkbox" id="fpOn"><span></span></label></div>
-<div class="btns" style="margin-top:10px;flex-wrap:nowrap;align-items:center"><button class="primary grow" id="fpNow">Send now</button></div>
+<div class="btns" style="margin-top:10px;flex-wrap:nowrap;align-items:center"><input id="fpNowN" type="number" inputmode="numeric" min="1" max="20000" value="500" aria-label="How many to send now" style="width:90px;flex:none"><button class="primary grow" id="fpNow">Send now</button></div>
 <details class="more" style="border:0;margin:6px -14px -14px;background:none"><summary>Settings and the latest sites</summary><div class="in">
 <label class="f" for="fpTpl">Message: the first email of this template</label><select id="fpTpl"></select>
 <label class="f" for="fpName">Name</label><input id="fpName" autocomplete="off">
@@ -701,7 +701,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       $('fpTpl').innerHTML='<option value="">Choose the template…</option>'+(r.templates||[]).map(function(t){return '<option value="'+t.id+'">'+esc(t.name)+'</option>'}).join('');$('fpTpl').value=String(s.template_id||'');
       $('fpName').value=s.sender.name;$('fpCompany').value=s.sender.company;$('fpPhone').value=s.sender.phone;$('fpEmail').value=s.sender.email;
       var run=r.run,pc=(r.senders||[]).filter(function(x){return Date.now()-new Date(x.seen_at).getTime()<180000})[0],later=run&&new Date(run.started_at).getTime()>Date.now();
-      $('fpState').textContent=(later?'Scheduled to start '+new Date(run.started_at).toLocaleString('en-MY',{timeZone:'Asia/Kuala_Lumpur',weekday:'short',hour:'2-digit',minute:'2-digit'})+' KL, sent from the PC until stopped. ':run?'Sending until stopped: '+run.sent+' sent, '+run.tried+' tried, '+run.sending+' being filled on the PC. About half a minute a form. ':'')+
+      $('fpState').textContent=(later?'Scheduled: '+run.goal+' forms from '+new Date(run.started_at).toLocaleString('en-MY',{timeZone:'Asia/Kuala_Lumpur',weekday:'short',hour:'2-digit',minute:'2-digit'})+' KL, sent from the PC. ':run?'Sending now: '+run.sent+' of '+run.goal+' sent, '+run.tried+' tried, '+run.sending+' being filled on the PC. About half a minute a form. ':'')+
         (s.enabled?'Switch on: no daily limit and no time limit, sends around the clock, every day. ':'Switch off. ')+'Sent today: '+r.sent_today+'.'+
         (checked?' '+num(checked)+' forms tried in all: '+num((c.sent||0)+(c.submitted_unconfirmed||0))+' sent.':'')+
         (pc?' Sending PC: '+pc.name+', online.':' No sending PC online: forms go out while a PC runs the Step 2 Worker.')+(r.problem?' Problem: '+r.problem:'');
@@ -732,12 +732,13 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       if(!confirm('Stop sending? Forms a PC is filling right now still finish.'))return;
       return api('/api/email-marketing/form-autopilot/run/stop',{method:'POST',body:{}}).then(function(){show('info','Stopped.');return loadForms()}).catch(fail);
     }
+    var n=Math.round(Number($('fpNowN').value));if(!(n>=1&&n<=20000))return show('error','Send 1 to 20000 at a time.');
     if(!$('fpTpl').value)return show('error','Choose the template for contact forms first.');
-    if(!confirm('Start sending "'+$('fpTpl').selectedOptions[0].textContent+'" through company contact forms now, as '+$('fpName').value+', until you press Stop or no open lead is left?'))return;
+    if(!confirm('Send "'+$('fpTpl').selectedOptions[0].textContent+'" through '+n+' company contact forms now, as '+$('fpName').value+'?'))return;
     $('fpNow').disabled=true;
     api('/api/email-marketing/form-autopilot',{method:'POST',body:{template_id:Number($('fpTpl').value),sender:{name:$('fpName').value,company:$('fpCompany').value,phone:$('fpPhone').value,email:$('fpEmail').value}}})
-      .then(function(){return api('/api/email-marketing/form-autopilot/run',{method:'POST',body:{}})})
-      .then(function(){show('info','Sending now from the PC until you stop it. The card shows each one as it goes.');return loadForms()})
+      .then(function(){return api('/api/email-marketing/form-autopilot/run',{method:'POST',body:{count:n}})})
+      .then(function(){show('info','Sending '+n+' now from the PC. The card shows each one as it goes.');return loadForms()})
       .catch(function(e){fail(e);loadForms()});
   };
   $('fpSave').onclick=fpSave;
@@ -766,7 +767,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
     return api('/api/email-marketing/form-autopilot/report?offset=0').then(function(r){
       var t=r.totals||{},run=r.run;
       $('flStrip').innerHTML=[['sent today',t.today],['last 7 days',t.week],['sent in all',t.all_sent],['tried in all',t.all_tried]].map(function(x){return '<div><b>'+num(x[1])+'</b><span>'+x[0]+'</span></div>'}).join('');
-      $('flRun').textContent=run?(new Date(run.started_at).getTime()>Date.now()?'Scheduled start.':'Run going until stopped: '+run.sent+' sent, '+run.tried+' tried, '+run.sending+' being filled now.'):'No run going.';
+      $('flRun').textContent=run?(new Date(run.started_at).getTime()>Date.now()?'Scheduled: '+run.goal+' forms.':'Run going: '+run.sent+' of '+run.goal+' sent, '+run.tried+' tried, '+run.sending+' being filled now.'):'No run going.';
       $('flRows').innerHTML=r.rows.length?r.rows.slice(0,20).map(repRow).join(''):'<div class="empty">No contact form sent yet.</div>';
       clearTimeout(S.flTimer);if(run&&!$('flRows').hidden)S.flTimer=setTimeout(loadFormLog,30000);
     }).catch(fail);
