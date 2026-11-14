@@ -129,11 +129,16 @@ async function candidates(limit: number): Promise<Lead[]> {
     const rows = (await db.sql<Lead>(`
       select c.id::text as company_id, c.name as company_name, c.category, c.website
         from contact_form_scan s join company_data c on c.id = s.company_id
-       where s.status = 'bot_can_submit' and ${ELIGIBLE} and ${MALAYSIAN_SQL} and ${TARGET_SQL}
+       where s.status = 'bot_can_submit' and ${TARGET_SQL}
+         and coalesce(c.lead_status, 'unassigned') <> 'do_not_call'
+         and c.merged_into is null and coalesce(c.is_hidden, false) = false
          and not exists (select 1 from contact_form_send f where f.company_id = c.id)
          and not exists (select 1 from email_marketing_lead e where e.company_id = c.id)
-       order by s.checked_at, c.id limit 500 offset $1`, [offset])).rows;
-    out.push(...rows.filter((r) => isTargetCompany(r) && !shared.has(siteHost(r.website) ?? '')));
+       order by coalesce(s.checked_at, now()) desc, c.id desc limit 500 offset $1`, [offset])).rows;
+    out.push(...rows.filter((r) => {
+      const host = siteHost(r.website);
+      return isTargetCompany(r) && Boolean(host) && !shared.has(host!);
+    }));
     if (rows.length < 500) break;
   }
   return out.slice(0, limit);
@@ -377,8 +382,15 @@ async function takeSendNow(worker: string, limit: number): Promise<SendJob[]> {
   // The run ends only when no target company is left to check or to send to; otherwise it waits for the next take.
   if (!out.length && run && Date.parse(run.started_at) <= Date.now()) {
     const left = await scanCounts().then((s) => (s.target.not_checked ?? 0) + (s.target.taken ?? 0)).catch(() => 0);
-    if (left > 0) lastProblem = `Waiting: no open form is ready yet; the PCs are still checking ${left} target websites.`;
-    else { lastProblem = 'Finished: no target company is left to send to.'; await setRun(null); }
+    const waiting = (await candidates(1)).length;
+    if (waiting > 0) {
+      lastProblem = null;
+    } else if (left > 0) {
+      lastProblem = `Waiting: no open form is ready yet; the PCs are still checking ${left} target websites.`;
+    } else {
+      lastProblem = 'Finished: no target company is left to send to.';
+      await setRun(null);
+    }
   }
   return out;
 }
