@@ -121,6 +121,20 @@ export async function sentCompanyIds(): Promise<Set<string>> {
   return new Set((await db.sql<{ id: string }>(`select company_id::text as id from contact_form_send where sent_at is not null`)).rows.map((r) => r.id));
 }
 
+/** Companies that can be, or already were, reached through their website contact form. */
+export async function contactableCompanyIds(): Promise<Set<string>> {
+  await ensureTables();
+  const rows = (await db.sql<{ id: string }>(`
+    select c.id::text as id
+      from company_data c
+      left join contact_form_scan s on s.company_id = c.id
+      left join contact_form_send f on f.company_id = c.id
+     where f.sent_at is not null
+        or (s.status = 'bot_can_submit' and coalesce(f.status, '') not in ('failed', 'captcha', 'no_form', 'site_unreachable'))
+  `)).rows;
+  return new Set(rows.map((r) => r.id));
+}
+
 /** The next leads to send to: target companies whose form the PC found open, never emailed, never tried here. */
 async function candidates(limit: number): Promise<Lead[]> {
   const sentHosts = new Set(

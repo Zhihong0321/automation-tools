@@ -339,10 +339,10 @@ export async function syncWebhooks(): Promise<typeof webhookState> {
 /** Every 30 minutes, so a campaign made in Smartlead's own UI still reports back. */
 /** What the autopilot needs from this file: the target leads not in a campaign yet, a campaign's state, and push. */
 const autopilotDeps = (): autopilot.Deps<MarketingLead> => ({
-  // A company that already got the message through its contact form is not emailed too.
+  // Companies that cannot be contacted through their website contact form.
   pool: async () => {
-    const byForm = await formAutopilot.sentCompanyIds();
-    return (await leads({ status: 'new' })).matching.filter((r) => autopilot.isTarget(r) && !byForm.has(String(r.company_id)));
+    const contactable = await formAutopilot.contactableCompanyIds();
+    return (await leads({ status: 'new' })).matching.filter((r) => autopilot.isTarget(r) && !contactable.has(String(r.company_id)));
   },
   campaign: async (id) => {
     try {

@@ -23,9 +23,10 @@ export interface Settings {
   ramp_days: number;
   started_on: string | null;
   max_provider_share: number;
+  max_bounce_rate?: number;
 }
 
-export const DEFAULTS: Settings = { enabled: false, campaign_id: null, new_per_day: 10, ramp_start: 5, ramp_days: 14, started_on: null, max_provider_share: 0.5 };
+export const DEFAULTS: Settings = { enabled: false, campaign_id: null, new_per_day: 10, ramp_start: 5, ramp_days: 14, started_on: null, max_provider_share: 0.5, max_bounce_rate: 0.03 };
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(Math.max(n, lo), hi);
 
@@ -39,6 +40,7 @@ export function readSettings(raw: any): Settings {
     ramp_days: Math.round(clamp(Number(raw?.ramp_days ?? DEFAULTS.ramp_days), 0, 60)),
     started_on: /^\d{4}-\d{2}-\d{2}$/.test(String(raw?.started_on ?? '')) ? String(raw.started_on) : null,
     max_provider_share: clamp(Number(raw?.max_provider_share) || DEFAULTS.max_provider_share, 0.2, 1),
+    max_bounce_rate: typeof raw?.max_bounce_rate === 'number' ? clamp(Number(raw.max_bounce_rate), 0.01, 0.5) : DEFAULTS.max_bounce_rate,
   };
 }
 
@@ -154,7 +156,7 @@ export function plan<T extends PoolRow>(input: { settings: Settings; today: stri
   if (!s.campaign_id) return skip('Choose the campaign to feed.');
   if (!c) return skip('The campaign was not found in Smartlead.');
   if (!ACTIVE.has(c.status.toUpperCase())) return skip(`The campaign is ${c.status.toLowerCase()}. Start it in Smartlead and the next check adds leads.`);
-  if (c.sent >= 20 && c.bounced / c.sent >= 0.03) return skip(`Paused: ${(100 * c.bounced / c.sent).toFixed(1)}% of ${c.sent} sent emails bounced. Check the leads, then raise or reset the limit.`);
+  if (c.sent >= 20 && c.bounced / c.sent >= (s.max_bounce_rate ?? 0.03)) return skip(`Paused: ${(100 * c.bounced / c.sent).toFixed(1)}% of ${c.sent} sent emails bounced. Check the leads, then raise or reset the limit.`);
   const room = c.max_new_per_day > 0 ? Math.min(target, c.max_new_per_day) : target;
   const want = room - c.not_started;
   if (want <= 0) return skip(`${c.not_started} leads are still waiting to be sent in the campaign, so nothing is added.`);

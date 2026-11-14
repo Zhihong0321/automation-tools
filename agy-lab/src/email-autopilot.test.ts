@@ -70,6 +70,7 @@ test('the plan stops when the campaign is not ready, bounces, or still has leads
   assert.match(run(camp({ status: 'DRAFTED' })).skip!, /campaign is drafted/);
   assert.equal(run(camp({ status: 'COMPLETED' })).skip, null); // yesterday's batch all sent: feed it again
   assert.match(run(camp({ sent: 100, bounced: 5 })).skip!, /Paused: 5\.0% of 100/);
+  assert.equal(run(camp({ sent: 100, bounced: 5 }), settings({ max_bounce_rate: 0.10 })).skip, null);
   assert.equal(run(camp({ sent: 10, bounced: 5 })).skip, null); // too few sent to judge
   assert.match(run(camp({ not_started: 10 })).skip!, /10 leads are still waiting/);
   assert.match(run(camp(), settings({ campaign_id: null })).skip!, /Choose the campaign/);
@@ -93,8 +94,8 @@ test('a company already in a campaign is never picked again', () => {
 
 test('settings are clamped to sane values and default to off', () => {
   assert.equal(readSettings({}).enabled, false);
-  const s = readSettings({ enabled: true, new_per_day: 9999, ramp_start: 0, ramp_days: 999, max_provider_share: 5, campaign_id: '12' });
-  assert.deepEqual([s.new_per_day, s.ramp_start, s.ramp_days, s.max_provider_share, s.campaign_id], [200, 5, 60, 1, 12]);
+  const s = readSettings({ enabled: true, new_per_day: 9999, ramp_start: 0, ramp_days: 999, max_provider_share: 5, campaign_id: '12', max_bounce_rate: 0.8 });
+  assert.deepEqual([s.new_per_day, s.ramp_start, s.ramp_days, s.max_provider_share, s.campaign_id, s.max_bounce_rate], [200, 5, 60, 1, 12, 0.5]);
   assert.equal(readSettings({ new_per_day: 3, ramp_start: 9 }).ramp_start, 3);
 });
 
