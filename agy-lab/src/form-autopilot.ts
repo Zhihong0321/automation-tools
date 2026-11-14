@@ -59,7 +59,7 @@ const TARGET_SQL = `c.category ~* '${pg(TARGET_CATEGORY).replace(/'/g, "''")}' a
 
 /** True for a Malaysian lead. company_data also holds other countries' Maps leads (Surat hotels with +91 phones, US leads), and foreign phone/address formats tell them apart. */
 export const MALAYSIAN_SQL = `not (coalesce(c.phone, '') ~ '^\\s*\\+' and coalesce(c.phone, '') !~ '^\\s*\\+\\s*60')
-  and coalesce(c.address, '') !~* '\\b(USA|United States)\\b|,\\s*[A-Z]{2}\\s*\\d{5}'`;
+  and coalesce(c.address, '') !~* '\\b(USA|United States)\\b'`;
 
 // ---- storage -----------------------------------------------------------------
 
@@ -138,7 +138,7 @@ async function candidates(limit: number): Promise<Lead[]> {
        order by c.id desc limit 500 offset $1`, [offset])).rows;
     out.push(...rows.filter((r) => {
       const host = siteHost(r.website);
-      return isTargetCompany(r) && Boolean(host) && !shared.has(host!);
+      return isTargetCompany(r) && Boolean(host) && !host!.endsWith('.sg') && !shared.has(host!);
     }));
     if (rows.length < 500) break;
   }
