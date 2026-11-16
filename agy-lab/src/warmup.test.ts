@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { RAMP, PARTNERS, dailyTarget, dueNow, dayFraction, isPartner, parseDraft, personName } from './warmup.ts';
 
 test('every partner address is a .wm address on ee-mail, and none is a real business address', () => {
-  for (const p of PARTNERS) assert.ok(isPartner(p), p);
+  for (const p of PARTNERS) { assert.ok(isPartner(p), p); assert.ok(p.endsWith('@eternalgy.me'), 'only eternalgy.me can send from ee-mail: ' + p); }
   assert.equal(new Set(PARTNERS).size, PARTNERS.length);
   assert.ok(!isPartner('payroll@eternalgy.me'));
   assert.ok(!isPartner('daniel.ong.wm@gmail.com'));

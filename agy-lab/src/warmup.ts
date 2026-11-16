@@ -1,7 +1,8 @@
 // Inbox warm-up for the Google Workspace sending mailboxes (Email hub, Warm-up tab).
 //
-// The other side is our own catch-all mail server, ee-mail: every *@eternalgy.me and
-// *@eternalgy.com address is a mailbox there, so the partner addresses below need no setup.
+// The other side is our own catch-all mail server, ee-mail: every *@eternalgy.me address is a
+// mailbox there, so the partner addresses below need no setup. Only eternalgy.me can send from
+// there (Resend has not verified eternalgy.com, checked 2026-11-16), so every partner is on .me.
 // A partner address is a proper name with `.wm` appended (daniel.ong.wm@eternalgy.me), which
 // keeps warm-up mail apart from the real business mail ee-mail also holds. ee-mail is only
 // ever asked for mail that one of our warm-up mailboxes sent to a `.wm` address.
@@ -35,7 +36,7 @@ export const ANSWER_MIN = { from: 2, to: 30 };
 
 export const PARTNERS = [
   'daniel.ong.wm@eternalgy.me', 'priya.nair.wm@eternalgy.me', 'farah.hassan.wm@eternalgy.me', 'jason.lau.wm@eternalgy.me', 'nadia.karim.wm@eternalgy.me',
-  'kevin.tan.wm@eternalgy.com', 'siti.aminah.wm@eternalgy.com', 'ravi.menon.wm@eternalgy.com', 'amanda.ho.wm@eternalgy.com', 'hafiz.yusof.wm@eternalgy.com',
+  'kevin.tan.wm@eternalgy.me', 'siti.aminah.wm@eternalgy.me', 'ravi.menon.wm@eternalgy.me', 'amanda.ho.wm@eternalgy.me', 'hafiz.yusof.wm@eternalgy.me',
 ];
 const PARTNER_RE = /\.wm@eternalgy\.(me|com)$/i;
 export const isPartner = (address: string) => PARTNER_RE.test(address.trim());
@@ -118,6 +119,7 @@ async function migrate(): Promise<void> {
       detail  text
     );
     create index if not exists warmup_event_at on warmup_event (at desc);
+    delete from warmup_message where partner like '%@eternalgy.com';
   `);
 }
 let migrated: Promise<void> | null = null;
