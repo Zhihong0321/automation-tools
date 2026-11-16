@@ -461,15 +461,14 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 <div class="sec"><div class="panel">
 <h2 class="t">Inbox warm-up</h2>
 <p class="hint" id="wuInfo">Loading…</p>
-<div class="btns" style="margin-top:12px"><button class="primary grow" id="wuRun">Run a cycle now</button><button class="grow" id="wuReload">Refresh</button></div>
+<div class="btns" style="margin-top:12px"><button class="primary grow" id="wuRun">Run a job for every mailbox now</button><button class="grow" id="wuReload">Refresh</button></div>
 <p class="hint" id="wuRunNote"></p>
 </div></div>
-<div class="sec"><div class="sec-h"><h2>Mailboxes</h2><span class="aside" id="wuCount"></span></div><div id="wuBoxes"><div class="empty">Loading…</div></div></div>
-<div class="sec"><div class="sec-h"><h2>What was sent and answered</h2></div>
+<div class="sec"><div class="sec-h"><h2>Mailboxes</h2><span class="aside" id="wuCount"></span></div><div class="list" id="wuBoxes"><div class="empty">Loading…</div></div></div>
+<div class="sec"><div class="sec-h"><h2>Jobs</h2></div>
 <div class="filters"><select id="wuFilter" aria-label="Mailbox"><option value="">All mailboxes</option></select></div>
 <div class="list" id="wuLog"><div class="empty">Loading…</div></div>
 <div class="pager" style="margin-top:12px"><button id="wuMore" class="sm block">Older</button></div>
-<details class="more" style="margin-top:12px"><summary><span class="grow">Latest events and problems</span></summary><div class="in"><div class="list" id="wuEvents"></div></div></details>
 </div>
 <div class="sec"><details class="more"><summary><span class="grow">Add or update mailboxes</span></summary><div class="in">
 <label class="f" for="wuLogins">One per line: email, then its Google app password</label>
@@ -1241,17 +1240,11 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
   function wuName(a){return String(a||'').split('@')[0].replace(/[.]wm$/,'').split(/[._-]+/).map(function(w){return w.charAt(0).toUpperCase()+w.slice(1)}).join(' ')}
   function loadWarmup(){
     return api('/api/warmup').then(function(r){
-      var R=r.ramp,n=r.mailboxes.length;
-      $('wuInfo').textContent=n?'Each mailbox starts '+R.start+' new threads on its first day, +'+R.perDay+' a day, up to '+R.cap+', spread over the whole day with no time window. Each mail is written by the AI, goes to a partner address on ee-mail, and is answered there a few minutes later; the mailbox answers back in the same thread. Mail found in Spam is moved to the Inbox. Every '+r.tick_minutes+' minutes it checks again'+(r.last_tick?' (last: '+ago(r.last_tick.at)+' ago)':'')+'.':'No mailbox is saved yet. Add them at the bottom of this page.';
+      var n=r.mailboxes.length;
+      $('wuInfo').textContent=n?'Each mailbox runs '+r.jobs_per_day+' jobs a day. A job: the AI writes a work email, the mailbox sends it to a partner on @eternalgy.me, ee-mail reads it and replies after 1 to 5 minutes, Gmail reads the reply (moving it out of Spam if it landed there) and replies in the same thread after 1 to 5 minutes. A failed job is logged with the step it failed at and is not retried.':'No mailbox is saved yet. Add them at the bottom of this page.';
       $('wuCount').textContent=n?plural(n,'mailbox'):'';
       $('wuBoxes').innerHTML=n?r.mailboxes.map(function(m){
-        var ans=m.threads?Math.round(m.threads_answered*100/m.threads)+'%':'–';
-        var days=(m.days||[]).map(function(d){return '<div class="rowl" style="min-height:0;padding:9px 12px"><span class="grow rt" style="font-weight:500">'+esc(dayName(d.day,true))+'</span><span class="rr">sent '+d.sent+' · new '+d.new_threads+' · got '+d.received+(d.rescued?' · rescued '+d.rescued:'')+'</span></div>'}).join('');
-        return '<details class="more" style="margin-bottom:8px"><summary><span class="grow"><b>'+esc(m.name)+'</b><br><span class="aside">'+esc(m.email)+'</span></span><span class="aside">today '+m.sent_today+' sent, '+m.target_today+' new planned</span></summary><div class="in">'+
-          nums([['sent',m.sent],['new threads',m.threads],['answered',ans],['replies in',m.received]])+
-          '<div class="nums">'+[['reached ee-mail',m.arrived],['rescued from Spam',m.rescued],['errors, 24h',m.errors_24h],['day',m.age_days+1]].map(function(p){return '<div><b>'+num(p[1])+'</b><span>'+p[0]+'</span></div>'}).join('')+'</div>'+
-          (m.read_error?'<p class="hint">Inbox read problem: '+esc(m.read_error)+'</p>':'')+(m.last_error?'<p class="hint">Last error: '+esc(m.last_error)+'</p>':'')+
-          '<h3 style="margin:14px 2px 6px;font-size:14px">Daily report</h3><div class="list">'+(days||'<div class="empty">Nothing sent yet.</div>')+'</div></div></details>';
+        return '<div class="rowl"><div class="grow"><div class="rt">'+esc(m.name)+(m.running?' <span class="chip blue">job running</span>':'')+'</div><div class="rs">'+esc(m.email)+'</div><div class="rs">last 24h: '+m.success_24h+' success, '+m.failed_24h+' failed'+(m.rescued?' · '+m.rescued+' rescued from Spam':'')+'</div></div><div class="rr">'+m.success+' ok<br>'+m.failed+' failed</div></div>';
       }).join(''):'<div class="empty">No mailbox saved.</div>';
       var sel=$('wuFilter'),cur=sel.value;
       sel.innerHTML='<option value="">All mailboxes</option>'+r.mailboxes.map(function(m){return '<option value="'+esc(m.email)+'">'+esc(m.name)+'</option>'}).join('');sel.value=cur;
@@ -1259,28 +1252,26 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
     }).catch(fail);
   }
   function wuRow(x){
-    var mine=x.author==='mailbox',chip;
-    if(x.note&&x.attempts)chip='<span class="chip bad">Retrying</span>';
-    else if(mine)chip=x.replied_at?'<span class="chip ok">Answered</span>':x.arrived_at?'<span class="chip blue">Arrived, answer due</span>':'<span class="chip">Sent</span>';
-    else chip=x.unseen?'<span class="chip blue">Sent by ee-mail</span>':(/^Spam/.test(x.folder||'')?'<span class="chip warn">Was in Spam, rescued</span>':'<span class="chip ok">Landed in Inbox</span>');
-    var who=mine?wuName(x.mailbox)+' → '+wuName(x.partner):wuName(x.partner)+' → '+wuName(x.mailbox);
-    return '<details class="wu"><summary class="rowl" style="cursor:pointer"><div class="grow"><div class="rt">'+esc(x.subject)+'</div><div class="rs">'+esc(who)+'</div><div class="chips" style="margin-top:4px">'+chip+(x.source==='template'?'<span class="chip warn">template, AI unavailable</span>':'')+'<span class="chip">mail '+x.depth+'</span></div></div><div class="rr">'+ago(x.sent_at)+' ago</div></summary>'+
-      '<div style="padding:4px 14px 14px;white-space:pre-wrap;font-size:14.5px;line-height:1.55">'+esc(x.body)+'</div>'+(x.note?'<div class="rs" style="padding:0 14px 12px">'+esc(x.note)+'</div>':'')+'</details>';
+    var chip=x.status==='success'?'<span class="chip ok">Success</span>':x.status==='failed'?'<span class="chip bad">Failed</span>':'<span class="chip blue">Running</span>';
+    var spam=/^Spam/.test(x.folder||'')?'<span class="chip warn">Reply was in Spam, moved to Inbox</span>':x.folder?'<span class="chip">Reply landed in '+esc(x.folder)+'</span>':'';
+    var mails=(x.mails||[]).map(function(m){return '<div style="padding:10px 14px;border-top:1px solid var(--line)"><div class="rs">'+esc(wuName(m.from))+' → '+esc(wuName(m.to))+' · '+ago(m.at)+' ago</div><div style="white-space:pre-wrap;font-size:14.5px;line-height:1.55;margin-top:4px">'+esc(m.body)+'</div></div>'}).join('');
+    return '<details><summary class="rowl" style="cursor:pointer"><div class="grow"><div class="rt">'+esc(x.subject||'(writing…)')+'</div><div class="rs">'+esc(wuName(x.mailbox))+' ↔ '+esc(wuName(x.partner))+'</div><div class="chips" style="margin-top:4px">'+chip+spam+'<span class="chip">'+(x.mails||[]).length+' of 3 mails</span></div>'+
+      (x.status==='failed'?'<div class="rs" style="white-space:normal;margin-top:4px">Failed at: '+esc(x.step)+'. '+esc(x.error||'')+'</div>':x.status==='running'?'<div class="rs" style="margin-top:4px">'+esc(x.step)+'</div>':'')+
+      '</div><div class="rr">'+ago(x.started_at)+' ago</div></summary>'+mails+'</details>';
   }
   function wuLog(fresh){
     if(fresh){WU.before=0;WU.rows=[]}
-    var q='/api/warmup/log?limit=30'+($('wuFilter').value?'&mailbox='+encodeURIComponent($('wuFilter').value):'')+(WU.before?'&before='+WU.before:'');
+    var q='/api/warmup/jobs?limit=30'+($('wuFilter').value?'&mailbox='+encodeURIComponent($('wuFilter').value):'')+(WU.before?'&before='+WU.before:'');
     return api(q).then(function(r){
       WU.rows=WU.rows.concat(r.rows);if(r.rows.length)WU.before=Number(r.rows[r.rows.length-1].id);
-      $('wuLog').innerHTML=WU.rows.length?WU.rows.map(wuRow).join(''):'<div class="empty">Nothing sent yet. The first mail goes out within a few minutes of the mailboxes being saved.</div>';
+      $('wuLog').innerHTML=WU.rows.length?WU.rows.map(wuRow).join(''):'<div class="empty">No job yet.</div>';
       $('wuMore').hidden=r.rows.length<30;
-      if(fresh)$('wuEvents').innerHTML=r.events.length?r.events.map(function(e){return '<div class="rowl" style="min-height:0;padding:9px 12px"><div class="grow"><div class="rt" style="font-weight:500;white-space:normal">'+esc(e.detail)+'</div><div class="rs">'+esc(e.kind)+(e.mailbox?' · '+esc(wuName(e.mailbox)):'')+'</div></div><div class="rr">'+ago(e.at)+' ago</div></div>'}).join(''):'<div class="empty">No events.</div>';
     });
   }
   $('wuFilter').onchange=function(){wuLog(true).catch(fail)};
   $('wuMore').onclick=function(){wuLog(false).catch(fail)};
   $('wuReload').onclick=function(){loadWarmup()};
-  $('wuRun').onclick=function(){$('wuRun').disabled=true;api('/api/warmup/run',{method:'POST',body:{}}).then(function(r){$('wuRunNote').textContent=r.started?'A cycle is running. Refresh in a minute.':'A cycle is already running.'}).catch(fail).then(function(){$('wuRun').disabled=false})};
+  $('wuRun').onclick=function(){$('wuRun').disabled=true;api('/api/warmup/run',{method:'POST',body:{}}).then(function(r){$('wuRunNote').textContent='Started '+plural(r.started,'job')+'. Each takes about 3 to 11 minutes.';return loadWarmup()}).catch(fail).then(function(){$('wuRun').disabled=false})};
   $('wuSave').onclick=function(){
     var t=$('wuLogins').value;if(!t.trim())return;$('wuSave').disabled=true;
     api('/api/warmup/mailboxes',{method:'POST',body:{logins:t}}).then(function(r){$('wuLogins').value='';$('wuSaveNote').textContent='Saved '+plural(r.saved,'mailbox')+'.';return loadWarmup()}).catch(fail).then(function(){$('wuSave').disabled=false});
