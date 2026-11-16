@@ -23,7 +23,7 @@ import type http from 'node:http';
 import * as db from './reportdb.ts';
 import * as templates from './email-templates.ts';
 import { klNow, TARGET_CATEGORY, SOLAR } from './email-autopilot.ts';
-import { ELIGIBLE, HOST_SQL, siteHost } from './site-emails.ts';
+import { ELIGIBLE, siteHost } from './site-emails.ts';
 import type { FormStatus } from './list-step2.ts';
 import type { DeliverInput, DeliverResult, AssistField, AssistFill } from './contact-form-delivery.ts';
 import { llm } from './core/index.ts';
@@ -137,13 +137,10 @@ export async function contactableCompanyIds(): Promise<Set<string>> {
 
 /** The next leads to send to: target companies whose form the PC found open, never emailed, never tried here. */
 async function candidates(limit: number): Promise<Lead[]> {
-  // Only a website a form was really sent to counts: a try that failed, hit a captcha or never loaded did not reach it.
-  const sentHosts = new Set(
-    (await db.sql<{ host: string }>(`select distinct ${HOST_SQL} as host from contact_form_send where sent_at is not null and coalesce(website, '') <> ''`)).rows.map((r) => r.host)
-  );
   const out: Lead[] = [];
-  // Read the waiting list a page at a time until enough pass the host check, or it ends. The category
-  // and solar-company rules are in TARGET_SQL; a company's name never keeps it off the list.
+  // Read the waiting list a page at a time until enough are found, or it ends. The category and
+  // solar-company rules are in TARGET_SQL; neither a company's name nor a website another company
+  // shares keeps it off the list: every company with an open form is sent its own message.
   for (let offset = 0; out.length < limit; offset += 500) {
     const rows = (await db.sql<Lead>(`
       select c.id::text as company_id, c.name as company_name, c.category, c.website
@@ -157,8 +154,7 @@ async function candidates(limit: number): Promise<Lead[]> {
     for (const r of rows) {
       if (out.length >= limit) break;
       const host = siteHost(r.website);
-      if (!host || host.endsWith('.sg') || sentHosts.has(host)) continue;
-      sentHosts.add(host);
+      if (!host || host.endsWith('.sg')) continue;
       out.push(r);
     }
     if (rows.length < 500) break;
@@ -433,7 +429,7 @@ function emptyReason(): Promise<string> {
     const left = (scan.target.not_checked ?? 0) + (scan.target.taken ?? 0);
     const checking = left ? ` The PCs are still checking ${left} target websites.` : '';
     if (!waiting) return `Queue empty: no target company with an open form is left to send to.${checking}`;
-    return `Queue empty: ${waiting} target companies still have an open form, but each one's website already got a form from another company, or is a .sg site.${checking}`;
+    return `Queue empty: ${waiting} target companies still have an open form, but they are .sg sites or have no usable website address.${checking}`;
   });
 }
 
