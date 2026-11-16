@@ -356,8 +356,8 @@ async function wanted(): Promise<number> {
   const run = await getRun();
   if (run && Date.parse(run.started_at) <= Date.now()) {
     const p = await runProgress(run);
-    // Up to twice the goal is tried: some forms turn out closed in the browser.
-    if (p.sent < run.goal && p.tried < run.goal * 2) return Math.max(0, Math.min(run.goal - p.sent, run.goal * 2 - p.tried) - p.sending);
+    // The run goes on until the number the user typed has been sent, however many forms turn out closed in the browser.
+    if (p.sent < run.goal) return Math.max(0, run.goal - p.sent - p.sending);
     if (!p.sending) await setRun(null);
   }
   const settings = await getSettings();
@@ -410,8 +410,8 @@ async function takeSendNow(worker: string, limit: number): Promise<SendJob[]> {
     } else if (left > 0) {
       lastProblem = `Waiting: no open form is ready yet; the PCs are still checking ${left} target websites.`;
     } else {
-      lastProblem = 'Finished: no target company is left to send to.';
-      await setRun(null);
+      // The run stays: it only ends when the user presses Stop, or its number is sent. New open forms are taken as they come.
+      lastProblem = await emptyReason().catch(() => 'Nothing to send right now.');
     }
   } else if (!out.length) {
     // The switch is on, nothing was taken: say why on the card instead of sitting silent.

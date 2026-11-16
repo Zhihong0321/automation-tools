@@ -721,11 +721,13 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       (x.message?'<details><summary class="rs">Message sent'+(x.taken_by?' by '+esc(x.taken_by):'')+(when?', '+esc(new Date(when).toLocaleString())+'':'')+'</summary><div class="rs" style="white-space:pre-wrap;margin-top:6px"><b>'+esc(x.subject)+'</b>'+String.fromCharCode(10,10)+esc(x.message)+'</div></details>':'')+
       '</div><div class="rr"><span class="chip '+k+'">'+esc(String(x.status).replace(/_/g,' '))+'</span><div>'+(when?ago(when)+' ago':'')+'</div></div></div>';
   }
-  function fpSave(){
-    var b={enabled:$('fpOn').checked,template_id:Number($('fpTpl').value)||null,sender:{name:$('fpName').value,company:$('fpCompany').value,phone:$('fpPhone').value,email:$('fpEmail').value}};
+  // Only the switch itself sends "enabled": Save and the other boxes never turn it on or off, so a stale page cannot stop sending.
+  function fpSave(fromSwitch){
+    var b={template_id:Number($('fpTpl').value)||null,sender:{name:$('fpName').value,company:$('fpCompany').value,phone:$('fpPhone').value,email:$('fpEmail').value}};
+    if(fromSwitch===true)b.enabled=$('fpOn').checked;
     if(b.enabled&&!b.template_id){$('fpOn').checked=false;$('fpCard').querySelector('details').open=true;return show('error','Choose the template for contact forms first.')}
     if(b.enabled&&!confirm('Switch contact forms on? It sends the first email of "'+$('fpTpl').selectedOptions[0].textContent+'" through company websites, around the clock every day, with no daily limit and no time limit, as '+b.sender.name+'.')){$('fpOn').checked=false;return}
-    api('/api/email-marketing/form-autopilot',{method:'POST',body:b}).then(function(){show('info',b.enabled?'Contact forms are on.':'Saved. Contact forms are off.');return loadForms()}).catch(function(e){fail(e);loadForms()});
+    api('/api/email-marketing/form-autopilot',{method:'POST',body:b}).then(function(){show('info',b.enabled===true?'Contact forms are on.':b.enabled===false?'Contact forms are off.':'Saved.');return loadForms()}).catch(function(e){fail(e);loadForms()});
   }
   $('fpNow').onclick=function(){
     if($('fpNow').dataset.stop){
@@ -741,8 +743,8 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
       .then(function(){show('info','Sending '+n+' now from the PC. The card shows each one as it goes.');return loadForms()})
       .catch(function(e){fail(e);loadForms()});
   };
-  $('fpSave').onclick=fpSave;
-  $('fpOn').onchange=fpSave;
+  $('fpSave').onclick=function(){fpSave(false)};
+  $('fpOn').onchange=function(){fpSave(true)};
   $('fpTest').onclick=function(){
     $('fpOut').innerHTML='<p class="hint">Checking sites for an open form, then filling it without sending. This takes a minute or two…</p>';
     api('/api/email-marketing/form-autopilot/test',{method:'POST',body:{}}).then(function(r){
