@@ -18,6 +18,17 @@ test('tier 2: a named manager, director, head, PIC or GM', () => {
   }
 });
 
+test('a managing or senior partner is tier 1; C-suite below the CEO is tier 2; a plain contact stays tier 3', () => {
+  assert.equal(t('Lee', 'Managing Partner'), 1);
+  assert.equal(t('Lee', 'Senior Partner / Founder'), 1);
+  assert.equal(t('Lee', 'Pengerusi'), 1);
+  assert.equal(t('Lee', 'COO'), 2);
+  assert.equal(t('Lee', 'Chief Financial Officer'), 2);
+  assert.equal(t('Lee', 'Key Contact'), 3);
+  assert.equal(t('Lee', 'Partner'), 3);
+  assert.equal(t('Lee', 'Chief Executive Officer'), 1);
+});
+
 test('a deputy of the top role is tier 2, never tier 1', () => {
   assert.equal(t('Lim', 'Vice President'), 2);
   assert.equal(t('Lim', 'Deputy CEO'), 2);

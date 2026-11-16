@@ -16,10 +16,10 @@ export const TIER_LABELS: Record<Tier, string> = {
 };
 
 /** English, Malay and Chinese titles of the person who runs or owns the company. */
-const TOP = /\b(ceo|c\.e\.o|chief executive|founder|co-?founder|owner|co-?owner|proprietor|managing director|md|president|chairman|chairwoman|chairperson|pengarah urusan|pemilik|pengasas|tuan punya)\b|老板|老闆|东主|東主|董事长|董事長|董事总经理|董事總經理|总裁|總裁|创办人|創辦人|创始人|創始人/i;
+const TOP = /\b(ceo|c\.e\.o|chief executive|founder|co-?founder|owner|co-?owner|proprietor|managing director|md|president|chairman|chairwoman|chairperson|managing partner|senior partner|founding partner|equity partner|pengarah urusan|pengerusi|pemilik|pengasas|tuan punya)\b|老板|老闆|东主|東主|董事长|董事長|董事总经理|董事總經理|总裁|總裁|创办人|創辦人|创始人|創始人/i;
 
 /** Titles of the people who manage, direct or head a part of the company, or are the person in charge. */
-const MIDDLE = /\b(manager|director|head|hod|hop|pic|p\.i\.c|person in charge|person-in-charge|gm|deputy|vice[- ]president|vp|svp|evp|pengurus|pengarah|ketua)\b|经理|經理|总监|總監|主管|主任|负责人|負責人/i;
+const MIDDLE = /\b(manager|director|chief [a-z]+ officer|coo|cfo|cto|cmo|cio|head|hod|hop|pic|p\.i\.c|person in charge|person-in-charge|gm|deputy|vice[- ]president|vp|svp|evp|pengurus|pengarah|ketua)\b|经理|經理|总监|總監|主管|主任|负责人|負責人/i;
 
 /** A deputy or assistant to the top role is a tier 2 person, not the boss. */
 const BELOW_TOP = /\b(vice[- ]president|vp|svp|evp|deputy|assistant|asst\.?|associate|timbalan)\b/i;
