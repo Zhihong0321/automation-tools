@@ -193,3 +193,53 @@ export async function send(l: Login, m: Outgoing): Promise<string> {
     transport.close();
   }
 }
+
+export interface Rescued { message_id: string | null; subject: string | null; from: string | null }
+
+/**
+ * Warm-up only: moves mail from `wanted` senders out of the Spam folder into INBOX, so the
+ * mailbox learns the sender is not spam. `wanted` tests the sender's address. Answers what it moved.
+ */
+export async function rescueSpam(l: Login, wanted: (from: string) => boolean): Promise<Rescued[]> {
+  const client = await connect(l);
+  try {
+    const boxes = await client.list();
+    const spam = boxes.find((b: any) => b.specialUse === '\Junk') ?? boxes.find((b: any) => /spam|junk/i.test(String(b.path)));
+    if (!spam) return [];
+    const lock = await client.getMailboxLock(spam.path);
+    const moved: Rescued[] = [];
+    try {
+      const uids = (await client.search({ all: true }, { uid: true })) || [];
+      if (!uids.length) return [];
+      const hit: number[] = [];
+      for await (const m of client.fetch(uids.join(','), { uid: true, envelope: true }, { uid: true })) {
+        const from = String(m.envelope?.from?.[0]?.address ?? '').toLowerCase();
+        if (!from || !wanted(from)) continue;
+        hit.push(m.uid);
+        moved.push({ message_id: m.envelope?.messageId ?? null, subject: m.envelope?.subject ?? null, from });
+      }
+      if (hit.length) await client.messageMove(hit.join(','), 'INBOX', { uid: true });
+    } finally {
+      lock.release();
+    }
+    return moved;
+  } finally {
+    await client.logout().catch(() => {});
+  }
+}
+
+/** Warm-up only: marks INBOX mail read, as a person who opened it would. */
+export async function markSeen(l: Login, uids: number[]): Promise<void> {
+  if (!uids.length) return;
+  const client = await connect(l);
+  try {
+    const lock = await client.getMailboxLock('INBOX');
+    try {
+      await client.messageFlagsAdd(uids.join(','), ['\Seen'], { uid: true });
+    } finally {
+      lock.release();
+    }
+  } finally {
+    await client.logout().catch(() => {});
+  }
+}

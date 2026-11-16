@@ -39,6 +39,7 @@ import * as siteEmails from './site-emails.ts';
 import * as emailMarketing from './email-marketing.ts';
 import * as emailReplies from './email-replies.ts';
 import * as emailInbox from './email-inbox.ts';
+import * as warmup from './warmup.ts';
 import * as contactFormDelivery from './contact-form-delivery.ts';
 import { page as emailMarketingPage } from './email-marketing-page.ts';
 import * as emailPwa from './email-pwa.ts';
@@ -418,6 +419,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // ---- email marketing: lead emails into Smartlead campaigns, replies back --------
   if (await emailReplies.handle(req, res, url, { json, readJson })) return;
   if (await emailMarketing.handle(req, res, url, { json, readJson })) return;
+  if (await warmup.handle(req, res, url, { json, readJson })) return;
 
   // ---- contact-form delivery: one lead's message through its website contact form ----
   if (await contactFormDelivery.handle(req, res, url, { json, readJson })) return;
@@ -550,6 +552,7 @@ server.listen(PORT, '0.0.0.0', () => {
   void siteEmails.start();
   emailMarketing.start();
   emailInbox.start();
+  warmup.start();
   // Extract model lanes saved on /workers; until they load, calls use CONTACT_LLM_*.
   void extractLlm.refresh();
   contactWorker.start();

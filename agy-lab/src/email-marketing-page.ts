@@ -51,7 +51,7 @@ body.focus .bar{padding-left:4px}body.focus .bar h1{font-size:18px;font-weight:7
 .offline{background:var(--amber-soft);color:var(--amber);font-size:13.5px;text-align:center;padding:6px 16px}
 
 /* bottom tabs */
-.tabs{position:fixed;left:0;right:0;bottom:0;z-index:20;display:grid;grid-template-columns:repeat(4,1fr);background:var(--surface);border-top:1px solid var(--line);padding:6px 4px calc(6px + var(--bot))}
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:20;display:grid;grid-template-columns:repeat(5,1fr);background:var(--surface);border-top:1px solid var(--line);padding:6px 4px calc(6px + var(--bot))}
 .tabs a{display:flex;flex-direction:column;align-items:center;gap:3px;height:52px;justify-content:center;color:var(--muted);text-decoration:none;font-size:12px;font-weight:650;position:relative}
 .tabs .tp{display:grid;place-items:center;width:58px;height:30px;border-radius:999px;transition:background .2s}
 .tabs svg{width:22px;height:22px}
@@ -457,6 +457,27 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 <div class="pushbar"><button class="ink block" id="pushOpen">Add leads to a campaign</button></div>
 </div>
 </section>
+<section id="v-warmup" hidden>
+<div class="sec"><div class="panel">
+<h2 class="t">Inbox warm-up</h2>
+<p class="hint" id="wuInfo">Loading…</p>
+<div class="btns" style="margin-top:12px"><button class="primary grow" id="wuRun">Run a cycle now</button><button class="grow" id="wuReload">Refresh</button></div>
+<p class="hint" id="wuRunNote"></p>
+</div></div>
+<div class="sec"><div class="sec-h"><h2>Mailboxes</h2><span class="aside" id="wuCount"></span></div><div id="wuBoxes"><div class="empty">Loading…</div></div></div>
+<div class="sec"><div class="sec-h"><h2>What was sent and answered</h2></div>
+<div class="filters"><select id="wuFilter" aria-label="Mailbox"><option value="">All mailboxes</option></select></div>
+<div class="list" id="wuLog"><div class="empty">Loading…</div></div>
+<div class="pager" style="margin-top:12px"><button id="wuMore" class="sm block">Older</button></div>
+<details class="more" style="margin-top:12px"><summary><span class="grow">Latest events and problems</span></summary><div class="in"><div class="list" id="wuEvents"></div></div></details>
+</div>
+<div class="sec"><details class="more"><summary><span class="grow">Add or update mailboxes</span></summary><div class="in">
+<label class="f" for="wuLogins">One per line: email, then its Google app password</label>
+<textarea id="wuLogins" style="min-height:120px" placeholder="name@domain.com abcd efgh ijkl mnop" autocomplete="off" spellcheck="false"></textarea>
+<div class="btns" style="margin-top:10px"><button class="primary grow" id="wuSave">Save mailboxes</button></div>
+<p class="hint" id="wuSaveNote"></p>
+</div></details></div>
+</section>
 </main>
 
 <nav class="tabs" id="tabs" aria-label="Email hub">
@@ -464,6 +485,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 <a href="#replies" data-view="replies"><span class="tp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 13.5h5l1.5 3h5l1.5-3h5"/><path d="M5.5 4.5h13l2.5 9V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5.5z"/></svg></span>Inbox<span class="badge" id="badge" hidden></span></a>
 <a href="#campaigns" data-view="campaigns"><span class="tp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M21 3 10.5 13.5"/><path d="M21 3l-6.5 18-4-7.5L3 9.5z"/></svg></span>Campaigns</a>
 <a href="#leads" data-view="leads"><span class="tp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8"/><path d="M18 14.3a6.5 6.5 0 0 1 3.5 5.7"/></svg></span>Leads</a>
+<a href="#warmup" data-view="warmup"><span class="tp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M12 3c1 3.5 4.5 5 4.5 9a4.5 4.5 0 0 1-9 0c0-2 1-3 1.7-4C10 9.5 11 9 11 7c0-1.5.4-2.8 1-4z"/><path d="M9.5 20h5"/></svg></span>Warm-up</a>
 </nav>
 
 <div class="toast" id="toast" role="status" aria-live="polite"><span id="toastText"></span><button id="toastX" aria-label="Dismiss">×</button></div>
@@ -543,9 +565,9 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 
   // ---- routing ----
   // A hash name maps to the section that shows it, a section to its bottom tab.
-  var SECTION={dashboard:'dashboard',replies:'inbox',chats:'inbox',reply:'reply',campaigns:'campaigns',templates:'campaigns',campaign:'campaign',template:'template',leads:'leads',forms:'leads',sentreport:'leads'};
-  var TAB={dashboard:'dashboard',inbox:'replies',reply:'replies',campaigns:'campaigns',campaign:'campaigns',template:'campaigns',leads:'leads'};
-  var TITLE={dashboard:'Email hub',inbox:'Inbox',campaigns:'Campaigns',leads:'Leads',reply:'Reply',campaign:'Campaign',template:'Template'};
+  var SECTION={dashboard:'dashboard',replies:'inbox',chats:'inbox',reply:'reply',campaigns:'campaigns',templates:'campaigns',campaign:'campaign',template:'template',leads:'leads',forms:'leads',sentreport:'leads',warmup:'warmup'};
+  var TAB={dashboard:'dashboard',inbox:'replies',reply:'replies',campaigns:'campaigns',campaign:'campaigns',template:'campaigns',leads:'leads',warmup:'warmup'};
+  var TITLE={dashboard:'Email hub',inbox:'Inbox',campaigns:'Campaigns',leads:'Leads',warmup:'Warm-up',reply:'Reply',campaign:'Campaign',template:'Template'};
   var FOCUS={reply:'#replies',campaign:'#campaigns',template:'#templates'};
   function route(soft){
     var h=location.hash.replace(/^#/,'')||'dashboard';var parts=h.split('/');var v=SECTION[parts[0]]?parts[0]:'dashboard';var sec=SECTION[v];
@@ -571,6 +593,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
     });
     if(sec==='leads'){$('paneLeads').hidden=v!=='leads';$('paneForms').hidden=v!=='forms';$('paneReport').hidden=v!=='sentreport'}
     if(v==='leads'){loadStatus().catch(fail);hostStatus();if(!S.leadRows.length||soft)loadLeads()}
+    if(sec==='warmup')loadWarmup();
     if(v==='forms')loadSites();
     if(v==='sentreport')loadReport();
     if(!soft)window.scrollTo(0,0);
@@ -1212,6 +1235,56 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
     }).catch(function(){});
   }
   $('hostCheck').onclick=function(){api('/api/email-marketing/mail-hosts/check',{method:'POST',body:{}}).then(hostStatus).catch(fail)};
+
+  // ---- warm-up ----
+  var WU={before:0,rows:[]};
+  function wuName(a){return String(a||'').split('@')[0].replace(/[.]wm$/,'').split(/[._-]+/).map(function(w){return w.charAt(0).toUpperCase()+w.slice(1)}).join(' ')}
+  function loadWarmup(){
+    return api('/api/warmup').then(function(r){
+      var R=r.ramp,n=r.mailboxes.length;
+      $('wuInfo').textContent=n?'Each mailbox starts '+R.start+' new threads on its first day, +'+R.perDay+' a day, up to '+R.cap+', spread over the whole day with no time window. Each mail is written by the AI, goes to a partner address on ee-mail, and is answered there a few minutes later; the mailbox answers back in the same thread. Mail found in Spam is moved to the Inbox. Every '+r.tick_minutes+' minutes it checks again'+(r.last_tick?' (last: '+ago(r.last_tick.at)+' ago)':'')+'.':'No mailbox is saved yet. Add them at the bottom of this page.';
+      $('wuCount').textContent=n?plural(n,'mailbox'):'';
+      $('wuBoxes').innerHTML=n?r.mailboxes.map(function(m){
+        var ans=m.threads?Math.round(m.threads_answered*100/m.threads)+'%':'–';
+        var days=(m.days||[]).map(function(d){return '<div class="rowl" style="min-height:0;padding:9px 12px"><span class="grow rt" style="font-weight:500">'+esc(dayName(d.day,true))+'</span><span class="rr">sent '+d.sent+' · new '+d.new_threads+' · got '+d.received+(d.rescued?' · rescued '+d.rescued:'')+'</span></div>'}).join('');
+        return '<details class="more" style="margin-bottom:8px"><summary><span class="grow"><b>'+esc(m.name)+'</b><br><span class="aside">'+esc(m.email)+'</span></span><span class="aside">today '+m.sent_today+' sent, '+m.target_today+' new planned</span></summary><div class="in">'+
+          nums([['sent',m.sent],['new threads',m.threads],['answered',ans],['replies in',m.received]])+
+          '<div class="nums">'+[['reached ee-mail',m.arrived],['rescued from Spam',m.rescued],['errors, 24h',m.errors_24h],['day',m.age_days+1]].map(function(p){return '<div><b>'+num(p[1])+'</b><span>'+p[0]+'</span></div>'}).join('')+'</div>'+
+          (m.read_error?'<p class="hint">Inbox read problem: '+esc(m.read_error)+'</p>':'')+(m.last_error?'<p class="hint">Last error: '+esc(m.last_error)+'</p>':'')+
+          '<h3 style="margin:14px 2px 6px;font-size:14px">Daily report</h3><div class="list">'+(days||'<div class="empty">Nothing sent yet.</div>')+'</div></div></details>';
+      }).join(''):'<div class="empty">No mailbox saved.</div>';
+      var sel=$('wuFilter'),cur=sel.value;
+      sel.innerHTML='<option value="">All mailboxes</option>'+r.mailboxes.map(function(m){return '<option value="'+esc(m.email)+'">'+esc(m.name)+'</option>'}).join('');sel.value=cur;
+      return wuLog(true);
+    }).catch(fail);
+  }
+  function wuRow(x){
+    var mine=x.author==='mailbox',chip;
+    if(x.note&&x.attempts)chip='<span class="chip bad">Retrying</span>';
+    else if(mine)chip=x.replied_at?'<span class="chip ok">Answered</span>':x.arrived_at?'<span class="chip blue">Arrived, answer due</span>':'<span class="chip">Sent</span>';
+    else chip=x.unseen?'<span class="chip blue">Sent by ee-mail</span>':(/^Spam/.test(x.folder||'')?'<span class="chip warn">Was in Spam, rescued</span>':'<span class="chip ok">Landed in Inbox</span>');
+    var who=mine?wuName(x.mailbox)+' → '+wuName(x.partner):wuName(x.partner)+' → '+wuName(x.mailbox);
+    return '<details class="wu"><summary class="rowl" style="cursor:pointer"><div class="grow"><div class="rt">'+esc(x.subject)+'</div><div class="rs">'+esc(who)+'</div><div class="chips" style="margin-top:4px">'+chip+(x.source==='template'?'<span class="chip warn">template, AI unavailable</span>':'')+'<span class="chip">mail '+x.depth+'</span></div></div><div class="rr">'+ago(x.sent_at)+' ago</div></summary>'+
+      '<div style="padding:4px 14px 14px;white-space:pre-wrap;font-size:14.5px;line-height:1.55">'+esc(x.body)+'</div>'+(x.note?'<div class="rs" style="padding:0 14px 12px">'+esc(x.note)+'</div>':'')+'</details>';
+  }
+  function wuLog(fresh){
+    if(fresh){WU.before=0;WU.rows=[]}
+    var q='/api/warmup/log?limit=30'+($('wuFilter').value?'&mailbox='+encodeURIComponent($('wuFilter').value):'')+(WU.before?'&before='+WU.before:'');
+    return api(q).then(function(r){
+      WU.rows=WU.rows.concat(r.rows);if(r.rows.length)WU.before=Number(r.rows[r.rows.length-1].id);
+      $('wuLog').innerHTML=WU.rows.length?WU.rows.map(wuRow).join(''):'<div class="empty">Nothing sent yet. The first mail goes out within a few minutes of the mailboxes being saved.</div>';
+      $('wuMore').hidden=r.rows.length<30;
+      if(fresh)$('wuEvents').innerHTML=r.events.length?r.events.map(function(e){return '<div class="rowl" style="min-height:0;padding:9px 12px"><div class="grow"><div class="rt" style="font-weight:500;white-space:normal">'+esc(e.detail)+'</div><div class="rs">'+esc(e.kind)+(e.mailbox?' · '+esc(wuName(e.mailbox)):'')+'</div></div><div class="rr">'+ago(e.at)+' ago</div></div>'}).join(''):'<div class="empty">No events.</div>';
+    });
+  }
+  $('wuFilter').onchange=function(){wuLog(true).catch(fail)};
+  $('wuMore').onclick=function(){wuLog(false).catch(fail)};
+  $('wuReload').onclick=function(){loadWarmup()};
+  $('wuRun').onclick=function(){$('wuRun').disabled=true;api('/api/warmup/run',{method:'POST',body:{}}).then(function(r){$('wuRunNote').textContent=r.started?'A cycle is running. Refresh in a minute.':'A cycle is already running.'}).catch(fail).then(function(){$('wuRun').disabled=false})};
+  $('wuSave').onclick=function(){
+    var t=$('wuLogins').value;if(!t.trim())return;$('wuSave').disabled=true;
+    api('/api/warmup/mailboxes',{method:'POST',body:{logins:t}}).then(function(r){$('wuLogins').value='';$('wuSaveNote').textContent='Saved '+plural(r.saved,'mailbox')+'.';return loadWarmup()}).catch(fail).then(function(){$('wuSave').disabled=false});
+  };
 
   // ---- phone app ----
   if('serviceWorker' in navigator)window.addEventListener('load',function(){navigator.serviceWorker.register('/email-marketing-sw.js',{scope:'/email-marketing'}).catch(function(){})});
