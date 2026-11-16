@@ -3,9 +3,9 @@
 // One job type. A job is one short conversation, driven by the LLM:
 //   1. the LLM writes a work email (subject and body, its own choice)
 //   2. the mailbox sends it over SMTP to a partner address on ee-mail (@eternalgy.me)
-//   3. wait 10s, read it on ee-mail
+//   3. wait 10s, read it on ee-mail (every 10s until it shows, up to 2 min)
 //   4. the LLM writes the partner's reply; wait 1-5 min; ee-mail sends it
-//   5. wait 10s, read it in Gmail (Inbox, else Spam, moved to Inbox), mark it read
+//   5. wait 10s, read it in Gmail the same way (Inbox, else Spam, moved to Inbox), mark it read
 //   6. the LLM writes the mailbox's reply; wait 1-5 min; send it over SMTP in the same thread
 // The job is logged success or failed with the step it failed at. A failed job is not retried.
 //
@@ -34,6 +34,15 @@ export function personName(address: string): string {
 const pick = <T,>(xs: T[]): T => xs[Math.floor(Math.random() * xs.length)];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const replyWait = () => 60_000 + Math.random() * 4 * 60_000;
+/** Waits 10s, then looks every 10s until `look` finds the mail, for up to 2 minutes. Null when it never showed. */
+async function waitForMail<T>(look: () => Promise<T | null>): Promise<T | null> {
+  for (let i = 0; i < 12; i++) {
+    await sleep(10_000);
+    const found = await look();
+    if (found) return found;
+  }
+  return null;
+}
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 500);
 const toHtml = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
 const reSubject = (s: string) => (/^re:/i.test(s.trim()) ? s.trim() : `Re: ${s.trim()}`);
@@ -171,12 +180,11 @@ export async function runJob(b: Box): Promise<void> {
     at = 'send from Gmail';
     const sent = await mailbox.send(login(b), { to: partner, from_name: b.name, subject: first.subject, text: first.body, html: toHtml(first.body) });
     mails.push({ from: b.email, to: partner, subject: first.subject, body: first.body, at: new Date().toISOString() });
-    await step('sent, waiting 10s for ee-mail', { subject: first.subject });
+    await step('sent, waiting for it on ee-mail', { subject: first.subject });
 
-    await sleep(10_000);
     at = 'read on ee-mail';
-    const got = await eeFind(b.email, partner, first.subject);
-    if (!got) throw new Error('not on ee-mail 10s after sending');
+    const got = await waitForMail(() => eeFind(b.email, partner, first.subject));
+    if (!got) throw new Error('not on ee-mail 2 minutes after sending');
 
     at = 'write the partner reply';
     const reply = await writeReply(partner, b.email, [{ from: b.email, body: got.text || first.body }]);
@@ -187,12 +195,11 @@ export async function runJob(b: Box): Promise<void> {
     const since = new Date();
     await eeSend(partner, b.email, subject, reply, sent);
     mails.push({ from: partner, to: b.email, subject, body: reply, at: new Date().toISOString() });
-    await step('partner replied, waiting 10s for Gmail');
+    await step('partner replied, waiting for it in Gmail');
 
-    await sleep(10_000);
     at = 'read in Gmail';
-    const inbox = await mailbox.findMail(login(b), { from: partner, subject, since });
-    if (!inbox) throw new Error('partner reply not in Gmail Inbox or Spam 10s after sending');
+    const inbox = await waitForMail(() => mailbox.findMail(login(b), { from: partner, subject, since }));
+    if (!inbox) throw new Error('partner reply not in Gmail Inbox or Spam 2 minutes after sending');
     await step('read in Gmail, writing the reply', { folder: inbox.folder });
 
     at = 'write the Gmail reply';

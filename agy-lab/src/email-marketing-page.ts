@@ -1241,7 +1241,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
   function loadWarmup(){
     return api('/api/warmup').then(function(r){
       var n=r.mailboxes.length;
-      $('wuInfo').textContent=n?'Each mailbox runs '+r.jobs_per_day+' jobs a day. A job: the AI writes a work email, the mailbox sends it to a partner on @eternalgy.me, ee-mail reads it and replies after 1 to 5 minutes, Gmail reads the reply (moving it out of Spam if it landed there) and replies in the same thread after 1 to 5 minutes. A failed job is logged with the step it failed at and is not retried.':'No mailbox is saved yet. Add them at the bottom of this page.';
+      $('wuInfo').textContent=n?'Each mailbox runs '+r.jobs_per_day+' jobs a day. A job: the AI writes a work email, the mailbox sends it to a partner on @eternalgy.me, ee-mail reads it (checked every 10s for up to 2 minutes) and replies after 1 to 5 minutes, Gmail reads the reply the same way (moving it out of Spam if it landed there) and replies in the same thread after 1 to 5 minutes. A failed job is logged with the step it failed at and is not retried.':'No mailbox is saved yet. Add them at the bottom of this page.';
       $('wuCount').textContent=n?plural(n,'mailbox'):'';
       $('wuBoxes').innerHTML=n?r.mailboxes.map(function(m){
         return '<div class="rowl"><div class="grow"><div class="rt">'+esc(m.name)+(m.running?' <span class="chip blue">job running</span>':'')+'</div><div class="rs">'+esc(m.email)+'</div><div class="rs">last 24h: '+m.success_24h+' success, '+m.failed_24h+' failed'+(m.rescued?' · '+m.rescued+' rescued from Spam':'')+'</div></div><div class="rr">'+m.success+' ok<br>'+m.failed+' failed</div></div>';
