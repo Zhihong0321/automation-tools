@@ -9,7 +9,7 @@
 //      contact_form_scan row per company; a batch a PC never answers is free again after its lease.
 //      Target companies (email-autopilot.ts TARGET_CATEGORY) are handed out first.
 //   2. Sending runs on a PC too. The same commercial and industrial companies the email autopilot
-//      picks (isTargetCompany), whose site the PC found bot_can_submit, never emailed and never
+//      picks (the same category rule, but no name rule), whose site the PC found bot_can_submit, never emailed and never
 //      tried here; a website shared by several leads (a directory, a head office) is skipped. The
 //      hub writes the first step of the template chosen for forms, with the fixed form sender
 //      (name, company, mobile, email), into contact_form_send and hands it to the PC
@@ -22,7 +22,7 @@
 import type http from 'node:http';
 import * as db from './reportdb.ts';
 import * as templates from './email-templates.ts';
-import { klNow, isTargetCompany, TARGET_CATEGORY, SOLAR } from './email-autopilot.ts';
+import { klNow, TARGET_CATEGORY, SOLAR } from './email-autopilot.ts';
 import { ELIGIBLE, HOST_SQL, siteHost } from './site-emails.ts';
 import type { FormStatus } from './list-step2.ts';
 import type { DeliverInput, DeliverResult, AssistField, AssistFill } from './contact-form-delivery.ts';
@@ -137,11 +137,13 @@ export async function contactableCompanyIds(): Promise<Set<string>> {
 
 /** The next leads to send to: target companies whose form the PC found open, never emailed, never tried here. */
 async function candidates(limit: number): Promise<Lead[]> {
+  // Only a website a form was really sent to counts: a try that failed, hit a captcha or never loaded did not reach it.
   const sentHosts = new Set(
-    (await db.sql<{ host: string }>(`select distinct ${HOST_SQL} as host from contact_form_send where coalesce(website, '') <> ''`)).rows.map((r) => r.host)
+    (await db.sql<{ host: string }>(`select distinct ${HOST_SQL} as host from contact_form_send where sent_at is not null and coalesce(website, '') <> ''`)).rows.map((r) => r.host)
   );
   const out: Lead[] = [];
-  // Read the waiting list a page at a time until enough pass the target and host deduplication checks, or it ends.
+  // Read the waiting list a page at a time until enough pass the host check, or it ends. The category
+  // and solar-company rules are in TARGET_SQL; a company's name never keeps it off the list.
   for (let offset = 0; out.length < limit; offset += 500) {
     const rows = (await db.sql<Lead>(`
       select c.id::text as company_id, c.name as company_name, c.category, c.website
@@ -155,7 +157,7 @@ async function candidates(limit: number): Promise<Lead[]> {
     for (const r of rows) {
       if (out.length >= limit) break;
       const host = siteHost(r.website);
-      if (!host || host.endsWith('.sg') || !isTargetCompany(r) || sentHosts.has(host)) continue;
+      if (!host || host.endsWith('.sg') || sentHosts.has(host)) continue;
       sentHosts.add(host);
       out.push(r);
     }
@@ -411,8 +413,28 @@ async function takeSendNow(worker: string, limit: number): Promise<SendJob[]> {
       lastProblem = 'Finished: no target company is left to send to.';
       await setRun(null);
     }
+  } else if (!out.length) {
+    // The switch is on, nothing was taken: say why on the card instead of sitting silent.
+    lastProblem = await emptyReason().catch(() => 'Nothing to send right now.');
   }
   return out;
+}
+
+/** Why the switch is on and no form goes out: what is still waiting and what keeps it from being sent. */
+function emptyReason(): Promise<string> {
+  return db.swr('formAutopilot:emptyReason', 60_000, async () => {
+    const waiting = Number((await db.sql<{ n: number }>(`
+      select count(*)::int as n from contact_form_scan s join company_data c on c.id = s.company_id
+       where s.status = 'bot_can_submit' and ${TARGET_SQL}
+         and coalesce(c.lead_status, 'unassigned') <> 'do_not_call' and c.merged_into is null and coalesce(c.is_hidden, false) = false
+         and not exists (select 1 from contact_form_send f where f.company_id = c.id)
+         and not exists (select 1 from email_marketing_lead e where e.company_id = c.id)`)).rows[0]?.n ?? 0);
+    const scan = await scanCounts();
+    const left = (scan.target.not_checked ?? 0) + (scan.target.taken ?? 0);
+    const checking = left ? ` The PCs are still checking ${left} target websites.` : '';
+    if (!waiting) return `Queue empty: no target company with an open form is left to send to.${checking}`;
+    return `Queue empty: ${waiting} target companies still have an open form, but each one's website already got a form from another company, or is a .sg site.${checking}`;
+  });
 }
 
 /** A PC's outcome for one form it was given. A late answer for an interrupted form is kept too: it is the truth. */
