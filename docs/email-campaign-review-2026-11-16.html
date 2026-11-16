@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Email Campaign Review</title>
+<style>
+  :root {
+    --bg: #f6f4ef; --paper: #ffffff; --ink: #14213d; --muted: #5b6475; --line: #e3dfd4;
+    --accent: #f2a900; --accent-soft: #fff4d6; --bad: #b42318; --bad-soft: #fdecea;
+    --good: #1a7f4b; --good-soft: #e6f4ec; --code: #f3f1ea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e1424; --paper: #151d31; --ink: #e8ebf3; --muted: #9aa3b8; --line: #263049;
+      --accent: #f5b72a; --accent-soft: #2b2612; --bad: #ff8a80; --bad-soft: #2c1517;
+      --good: #6fd39b; --good-soft: #12261c; --code: #1b2540;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  main { max-width: 880px; margin: 0 auto; padding: 40px 16px 80px; }
+  header { border-left: 4px solid var(--accent); padding-left: 16px; margin-bottom: 32px; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0 0 6px; }
+  .sub { color: var(--muted); margin: 0; }
+  h2 { font-size: 21px; margin: 44px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 17px; margin: 26px 0 8px; }
+  p, li { max-width: 72ch; }
+  .verdict { background: var(--paper); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+  .verdict p { margin: 6px 0; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 14px 0; }
+  .stat { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .stat b { display: block; font-size: 24px; line-height: 1.2; }
+  .stat span { color: var(--muted); font-size: 13px; }
+  .stat.bad b { color: var(--bad); }
+  table { width: 100%; border-collapse: collapse; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; font-size: 15px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--code); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  .table-wrap { overflow-x: auto; }
+  .mail { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; white-space: pre-wrap; font-family: ui-monospace, Consolas, "SF Mono", monospace; font-size: 14px; line-height: 1.55; }
+  .mail .subj { display: block; font-weight: 700; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px dashed var(--line); }
+  .meta { color: var(--muted); font-size: 13px; margin: 4px 0 8px; }
+  .issue { border-left: 3px solid var(--bad); background: var(--bad-soft); padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 10px 0; }
+  .fix { border-left: 3px solid var(--good); background: var(--good-soft); padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 10px 0; }
+  .note { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 10px 0; }
+  .issue p, .fix p, .note p { margin: 4px 0; }
+  code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 14px; }
+  ol li, ul li { margin: 4px 0; }
+  footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <h1>Email campaign review</h1>
+  <p class="sub">Eternalgy cold outreach · checked live on 16 Nov 2026 · what is running, how it did, and the rewritten message</p>
+</header>
+
+<div class="verdict">
+  <p><b>Verdict:</b> the message has not produced one real reply.</p>
+  <p>It went to 32 inboxes by email and 1,233 companies through their contact forms. That is about 1,265 sends and zero email answers. The only two replies in the system are our own tests.</p>
+  <p>The main hook, a tax allowance with a 31 Dec 2026 deadline, is also running out. In 45 days it becomes untrue, and the contact forms and the email autopilot will keep sending it.</p>
+  <p>The rewrite below changes the hook, makes the ask smaller, splits the message by who reads it (using the new VIP tiers), and adds follow-ups.</p>
+</div>
+
+<h2>1. What is running now</h2>
+
+<div class="table-wrap"><table>
+  <tr><th>Item</th><th>Live setting</th></tr>
+  <tr><td>Campaign</td><td>"Solar tax allowance - Nov 2026" (Smartlead 4290233), started 2 Nov</td></tr>
+  <tr><td>Steps</td><td><b>1 email only.</b> No follow-ups</td></tr>
+  <tr><td>Sender</td><td>One mailbox: eternalgy@atap.solar, shown as "Zhi Hong Gan"</td></tr>
+  <tr><td>Schedule</td><td>Mon to Sat, 09:00 to 17:00 KL, 10 minutes between emails, at most 10 new a day</td></tr>
+  <tr><td>Email autopilot</td><td>On. Adds 5 new leads a day to this campaign. Ran 3, 4, 5, 14 and 16 Nov (nothing 6 to 13 Nov). Bounce limit set to 20%</td></tr>
+  <tr><td>Contact forms</td><td>Send the same template ("Solar tax allowance - Nov 2026", template 1) through company websites</td></tr>
+</table></div>
+
+<h2>2. Results</h2>
+
+<h3>Email campaign</h3>
+<div class="stats">
+  <div class="stat"><b>32</b><span>sent</span></div>
+  <div class="stat"><b>9</b><span>opened (28%)</span></div>
+  <div class="stat bad"><b>0</b><span>replied</span></div>
+  <div class="stat bad"><b>5</b><span>bounced (15.6%)</span></div>
+  <div class="stat"><b>0</b><span>clicked · 0 unsubscribed</span></div>
+</div>
+
+<h3>Contact forms (same message)</h3>
+<div class="stats">
+  <div class="stat"><b>1,233</b><span>forms sent (713 confirmed, 520 unconfirmed)</span></div>
+  <div class="stat bad"><b>0</b><span>email replies matched in the inbox</span></div>
+</div>
+
+<div class="note">
+  <p><b>What this can and cannot tell us</b></p>
+  <p>32 emails is too few to judge the email copy by itself. 1,233 forms with no email answer is a real signal.</p>
+  <p>I can't see phone calls or WhatsApp messages to +60 11-2100 0099. If the sales team got calls from the forms, they are not counted here.</p>
+  <p>The 28% open rate means little. Apple Mail and some Outlook setups open every email automatically, so judge by replies.</p>
+</div>
+
+<h2>3. The message as the lead sees it</h2>
+<p class="meta">Real example, from a contact form sent on 14 Nov. The email is the same, except the email version shows the company name cleaned up.</p>
+<div class="mail"><span class="subj">Subject: TMI Shipping (M) Sdn Bhd electricity bill</span>Hi,
+
+Let's unlock the hidden money in your TNB bills.
+
+60% of a solar system's cost can come off TMI Shipping (M) Sdn Bhd's taxable income, if it's installed before 31 Dec 2026.
+
+Most companies we talk to haven't heard of it.
+
+Send me one recent TNB bill, and I'll show you what you'd pay after solar.
+
+Worth a look?
+
+Eternalgy | The Benchmark of Long-Lasting Solar PV Systems
+CIDB G7 contractor · SEDA Registered PV Service Provider · MyHIJAU certified
+12 MWp+ installed · 1,100+ sites commissioned · Golden Bull Award 2025
+
+Not relevant? Reply "stop" and I won't write again.</div>
+
+<h2>4. What is wrong with it, line by line</h2>
+
+<div class="issue">
+  <p><b>1. The hook is about to expire, and will then be false.</b></p>
+  <p>The allowance covers qualifying spending up to 31 Dec 2026. Today is 16 Nov, and most C&amp;I rooftops take 4 to 8 weeks from survey to commissioning, before SEDA and TNB approvals. A lead who replies today may not make the date.</p>
+  <p>From 1 Jan 2027 the message is simply wrong. Nothing stops the forms and the autopilot from sending it then.</p>
+</div>
+
+<div class="issue">
+  <p><b>2. The first line reads like spam.</b></p>
+  <p>"Let's unlock the hidden money in your TNB bills" is the kind of line spam filters and busy owners skip. It says nothing specific. The real point, the tax allowance, only comes in line 2.</p>
+</div>
+
+<div class="issue">
+  <p><b>3. The ask is too big for a first contact.</b></p>
+  <p>"Send me one recent TNB bill" asks a stranger to email a company document after one message. Then "Worth a look?" adds a second ask. One small ask works better: a one-word reply.</p>
+</div>
+
+<div class="issue">
+  <p><b>4. The subject line looks automated.</b></p>
+  <p>"TMI Shipping (M) Sdn Bhd electricity bill" uses the raw Google Maps name. On other sends it read "Dobi Bubblelab Sri Pulai (Self-service laundry) electricity bill". The contact forms don't clean names the way the email side does.</p>
+</div>
+
+<div class="issue">
+  <p><b>5. Filler and hype.</b></p>
+  <p>"Most companies we talk to haven't heard of it" adds nothing. "The Benchmark of Long-Lasting Solar PV Systems" is a tagline, and your own writing rules ban hype.</p>
+</div>
+
+<div class="issue">
+  <p><b>6. It talks to nobody.</b></p>
+  <p>"Hi," goes to a CEO and to info@ alike. Most addresses are general inboxes. Nothing asks the reader to pass it on to whoever pays the bill.</p>
+</div>
+
+<div class="issue">
+  <p><b>7. One email, then silence.</b></p>
+  <p>The campaign has no follow-up. In cold email most replies come from the second to fourth touch. Every lead gets one chance today.</p>
+</div>
+
+<div class="issue">
+  <p><b>8. The opt-out line does not fit a contact form.</b></p>
+  <p>"Reply 'stop'" makes no sense in a website form. The reader has no thread to reply to, and the form only ever sends once.</p>
+</div>
+
+<h3>What is good and should stay</h3>
+<div class="fix">
+  <p>Short lines with space between them. A money angle, not "I'm X from Y". The credentials line under the ask: CIDB G7, SEDA RPVSP, MyHIJAU, 12 MWp+, 1,100+ sites, Golden Bull Award. No street address. No price or saving promised.</p>
+</div>
+
+<h2>5. The new angle</h2>
+<p>Every fact used below comes from <code>agy-lab/src/email-skill.md</code> (the corporate profile). No price, saving percentage, payback or system size is promised.</p>
+<div class="table-wrap"><table>
+  <tr><th>Hook</th><th>Why it works</th><th>Use in</th></tr>
+  <tr><td><b>We rebuild your actual bill, line by line</b> (most quotes multiply the bill by a saving percentage)</td><td>True, specific, and only Eternalgy can say it. It doesn't expire.</td><td>Email 1, forms</td></tr>
+  <tr><td><b>NEM ended; under ATAP, unused credits expire each billing period</b></td><td>New rule this year. Owners who looked at solar before NEM ended are working from an old picture.</td><td>Follow-up 1</td></tr>
+  <tr><td><b>No upfront cost: we finance, build and run it as a SEDA Registered PV Investor</b></td><td>Answers the most common objection, the money, before they raise it.</td><td>Follow-up 2</td></tr>
+  <tr><td><b>60% Green Investment Tax Allowance until 31 Dec 2026</b></td><td>Strong but nearly over. Use only as one extra email to tier 1, and stop by 1 Dec.</td><td>Optional, tier 1 only</td></tr>
+</table></div>
+
+<h2>6. Rewritten copy</h2>
+<p>There is one sequence per kind of reader, using the VIP tiers now on the Email-marketing page. Each email is under 80 words and asks one thing.</p>
+<p><code>{{sender_footer}}</code> holds the credentials line and the "stop" line. The Smartlead mailbox adds the signature.</p>
+
+<h3>A. Tier 1 and 2: owners, CEOs, managers, directors (named)</h3>
+
+<p class="meta">Email 1 · day 0 · subject options: "your TNB bill, line by line" or "{{company_name}}'s TNB bill"</p>
+<div class="mail"><span class="subj">Subject: your TNB bill, line by line</span>Hi {{first_name}},
+
+Most solar quotes take your TNB bill and multiply it by a saving percentage.
+
+We rebuild the actual bill, line by line, and show what it becomes after solar.
+
+Want to see that for {{company_name}}? Just reply "yes".
+
+{{sender_footer}}</div>
+
+<p class="meta">Follow-up 1 · day 3 · empty subject, so it lands in the same thread</p>
+<div class="mail">Hi {{first_name}},
+
+One thing that catches companies out this year.
+
+NEM ended on 1 January. Under ATAP, solar credits you don't use in the same billing period expire.
+
+So a system sized the old way can send power to the grid for credits that run out.
+
+We size from your real usage. Should I run {{company_name}}'s bill?</div>
+
+<p class="meta">Follow-up 2 · day 7 · last email</p>
+<div class="mail">Hi {{first_name}},
+
+If upfront cost is what holds {{company_name}} back:
+
+we can finance, build and run the system ourselves, as a SEDA Registered PV Investor, through a power purchase agreement or a lease. No upfront cost.
+
+Whether it fits depends on the site, so we check yours first.
+
+Last note from me. If the timing is wrong, reply "later".</div>
+
+<p class="meta">Optional, tier 1 only, until 1 Dec 2026 · remove after that</p>
+<div class="mail"><span class="subj">Subject: 60% tax allowance, ends 31 Dec</span>Hi {{first_name}},
+
+Solar spending up to 31 December 2026 can qualify for a 60% Green Investment Tax Allowance.
+
+Most rooftops take 4 to 8 weeks from survey to commissioning, so the window is short.
+
+The rules are set by the authorities. We check what qualifies for {{company_name}}.
+
+Want me to check? Reply "yes".
+
+{{sender_footer}}</div>
+
+<h3>B. Tier 3: named person, position unknown</h3>
+<p>Same three emails as A. Email 1 gets one extra line before the ask:</p>
+<div class="mail">If someone else looks after the electricity bill, a forward would help.</div>
+
+<h3>C. Tier 4: general inbox (info@, sales@, admin@)</h3>
+<div class="mail"><span class="subj">Subject: for whoever handles the TNB bill</span>Hi,
+
+Could you pass this to the person who looks after {{company_name}}'s electricity bill?
+
+Most solar quotes multiply the bill by a saving percentage. We rebuild the actual bill, line by line, and show what it becomes after solar.
+
+If that's useful, just reply "yes".
+
+{{sender_footer}}</div>
+<p class="meta">Follow-ups for tier 4: the same two as A, with "Hi," in place of "Hi {{first_name}},".</p>
+
+<h3>D. Contact form (one-off, no reply thread)</h3>
+<div class="mail"><span class="subj">Subject: for whoever handles the TNB bill</span>Hi,
+
+Please pass this to whoever looks after the electricity bill.
+
+Most solar quotes multiply your TNB bill by a saving percentage. We rebuild the actual bill, line by line, and show what it becomes after solar.
+
+To see yours, email eternalgy@atap.solar or WhatsApp +60 11-2100 0099.
+
+CIDB G7 contractor · SEDA Registered PV Service Provider · MyHIJAU certified
+12 MWp+ installed · 1,100+ sites commissioned · Golden Bull Award 2025</div>
+<p class="meta">No company name, so no messy Maps names. No "reply stop", because a form is sent once. The contact details are in the text, because a form has no reply thread.</p>
+
+<h3>New footer ({{sender_footer}})</h3>
+<div class="mail">CIDB G7 contractor · SEDA Registered PV Service Provider · MyHIJAU certified
+12 MWp+ installed · 1,100+ sites commissioned · Golden Bull Award 2025
+
+Not relevant? Reply "stop" and I won't write again.</div>
+<p class="meta">Same as today, minus the "The Benchmark of Long-Lasting Solar PV Systems" tagline line in the template.</p>
+
+<h2>7. Who it would go to</h2>
+<div class="table-wrap"><table>
+  <tr><th>Tier</th><th>Who</th><th>Emails</th><th>Sequence</th></tr>
+  <tr><td>1</td><td>CEO, owner, founder, managing director, chairman</td><td>277</td><td>A (+ optional tax email until 1 Dec)</td></tr>
+  <tr><td>2</td><td>Manager, director, head, HOP, PIC, GM</td><td>826</td><td>A</td></tr>
+  <tr><td>3</td><td>Named person, position unknown</td><td>838</td><td>B</td></tr>
+  <tr><td>4</td><td>General inbox</td><td>51,052</td><td>C</td></tr>
+</table></div>
+
+<h2>8. Other things that hold results down (not copy)</h2>
+<p>These are not part of the message. They are here so the copy isn't blamed for them. I have changed none of them.</p>
+<ul>
+  <li><b>Bounce rate 15.6%</b> (5 of 32). Senders usually keep this under 3%, or inbox providers start filtering the whole mailbox. The autopilot's bounce limit is set at 20%, so it will not pause on this.</li>
+  <li><b>Sending domain.</b> The emails say Eternalgy but come from atap.solar, while the website is eternalgy.me. Some readers and filters see a brand and domain that don't match.</li>
+  <li><b>Contact-form names.</b> Forms put the raw Maps name into the text. The email side uses a cleaned name.</li>
+  <li><b>No end date on the tax hook.</b> The forms and the autopilot send template 1 with no expiry. If it stays, it is wrong from 1 Jan 2027.</li>
+  <li><b>Volume.</b> At 5 new leads a day, two weeks is about 60 emails. That is too few to compare two messages with confidence.</li>
+</ul>
+
+<h2>9. How to judge the new copy</h2>
+<ol>
+  <li>Count <b>replies</b>, not opens. Treat any "yes", question or "later" as a reply. Count "stop" separately.</li>
+  <li>Compare per tier. Tier 1 and 2 should answer more than tier 4. If they don't, the copy is the problem, not the list.</li>
+  <li>Track calls and WhatsApp messages that mention the email or form. Today they are invisible in these numbers.</li>
+</ol>
+
+<footer>
+  Sources: live hub data on 16 Nov 2026 (Smartlead campaign 4290233, templates, reply inbox, contact-form log, email autopilot, lead tiers). Facts from agy-lab/src/email-skill.md. Writing rules from the user's cold-email guidance.
+</footer>
+
+</main>
+</body>
+</html>
