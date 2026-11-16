@@ -446,6 +446,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 <div class="filters">
 <select id="leadStatus" aria-label="Status"><option value="new">Not in a campaign yet</option><option value="pushed">In a campaign</option><option value="replied">Replied</option><option value="stopped">Bounced or unsubscribed</option><option value="all">Any status</option></select>
 <select id="leadSource" aria-label="Source"><option value="all">All sources</option><option value="research">Contact research</option><option value="website">Website</option><option value="person">Has a person name</option></select>
+<select id="leadTier" aria-label="VIP tier" title="Tier 1 CEO or owner, tier 2 manager, director, head or PIC, tier 3 a named person, tier 4 a general email"><option value="all">All tiers</option><option value="1">Tier 1: CEO / owner</option><option value="2">Tier 2: manager / director / head / PIC</option><option value="3">Tier 3: named person</option><option value="4">Tier 4: general email</option><option value="1,2">Tier 1 + 2</option><option value="1,2,3">Tier 1 + 2 + 3</option></select>
 <select id="leadHost" aria-label="Mail host" title="Who hosts the email: spread a campaign across hosts so no one provider sees too much"><option value="all">All mail hosts</option></select>
 </div>
 <div class="meta-row"><span class="grow" id="leadCount"></span><button class="linkb" id="hostCheck">Check mail hosts</button></div>
@@ -1068,7 +1069,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
 
   // ---- leads ----
   var LIMIT=100;
-  function leadQuery(){return 'search='+encodeURIComponent($('leadSearch').value.trim())+'&source='+$('leadSource').value+'&status='+$('leadStatus').value+'&mail_host='+encodeURIComponent($('leadHost').value)}
+  function leadQuery(){return 'search='+encodeURIComponent($('leadSearch').value.trim())+'&source='+$('leadSource').value+'&status='+$('leadStatus').value+'&tier='+encodeURIComponent($('leadTier').value)+'&mail_host='+encodeURIComponent($('leadHost').value)}
   function hostOptions(counts){
     var keep=$('leadHost').value,names=Object.keys(counts||{}).sort(function(a,b){return counts[b]-counts[a]}),total=0;
     names.forEach(function(k){total+=counts[k]});
@@ -1086,7 +1087,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
           var st=c.bounced_at?['bad','bounced']:c.unsubscribed_at?['bad','unsubscribed']:c.replied_at?['ok','replied']:c.opened_at?['warn','opened']:c.last_event==='EMAIL_SENT'?['','sent']:['','added'];
           return '<span class="chip '+st[0]+'">'+esc(c.name||('#'+c.id))+': '+st[1]+'</span>'}).join('');
         return '<label class="lead"><input type="checkbox" data-key="'+esc(x.key)+'"'+(S.picked[x.key]?' checked':'')+'><span class="lb"><span class="ln" style="display:block">'+esc(x.company_name)+'</span><span class="le" style="display:block">'+esc(x.email)+'</span>'+
-          '<span class="lm" style="display:block">'+esc([x.category,x.person_name].filter(Boolean).join(', '))+'</span><span class="chips"><span class="chip blue">'+(x.mail_host?esc(x.mail_host):'Mail host not checked')+'</span>'+camps+'</span></span></label>'}).join(''):'<div class="empty">No lead emails match.</div>';
+          '<span class="lm" style="display:block">'+esc([x.category,x.person_name,x.person_role].filter(Boolean).join(', '))+'</span><span class="chips"><span class="chip '+(x.tier<=2?'ok':'')+'">Tier '+esc(String(x.tier))+'</span><span class="chip blue">'+(x.mail_host?esc(x.mail_host):'Mail host not checked')+'</span>'+camps+'</span></span></label>'}).join(''):'<div class="empty">No lead emails match.</div>';
       var end=Math.min(S.leadOffset+LIMIT,S.leadTotal);
       $('leadPage').textContent=S.leadTotal?(S.leadOffset+1)+'–'+end+' of '+num(S.leadTotal):'';
       $('leadPrev').disabled=S.leadOffset===0;$('leadNext').disabled=end>=S.leadTotal;$('checkAll').checked=false;syncPush();
@@ -1105,7 +1106,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
   var searchTimer=null;
   $('leadSearch').oninput=function(){clearTimeout(searchTimer);searchTimer=setTimeout(function(){S.leadOffset=0;loadLeads()},450)};
   $('leadSearch').onkeydown=function(e){if(e.key==='Enter'){clearTimeout(searchTimer);S.leadOffset=0;loadLeads();this.blur()}};
-  $('leadSource').onchange=$('leadStatus').onchange=$('leadHost').onchange=function(){S.leadOffset=0;loadLeads()};
+  $('leadSource').onchange=$('leadStatus').onchange=$('leadTier').onchange=$('leadHost').onchange=function(){S.leadOffset=0;loadLeads()};
   $('leadPrev').onclick=function(){S.leadOffset=Math.max(0,S.leadOffset-LIMIT);loadLeads().then(function(){window.scrollTo(0,0)})};
   $('leadNext').onclick=function(){S.leadOffset+=LIMIT;loadLeads().then(function(){window.scrollTo(0,0)})};
   $('pushCampaign').onchange=syncPush;
@@ -1121,7 +1122,7 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
     }).catch(function(e){fail(e);syncPush()});
   }
   $('pushSelected').onclick=function(){var k=pickedKeys();pushLeads({keys:k},plural(k.length,'selected lead email'))};
-  $('pushAll').onclick=function(){pushLeads({all:true,search:$('leadSearch').value.trim(),source:$('leadSource').value,status:$('leadStatus').value,mail_host:$('leadHost').value},plural(S.leadTotal,'matching lead email'))};
+  $('pushAll').onclick=function(){pushLeads({all:true,search:$('leadSearch').value.trim(),source:$('leadSource').value,status:$('leadStatus').value,tier:$('leadTier').value,mail_host:$('leadHost').value},plural(S.leadTotal,'matching lead email'))};
 
   // ---- templates and sender ----
   var FIELDS={lead:[],sender:[]};
