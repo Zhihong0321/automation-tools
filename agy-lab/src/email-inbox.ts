@@ -62,6 +62,7 @@ async function migrate(): Promise<void> {
       kept         integer not null default 0,
       error        text
     );
+    delete from email_marketing_inbox where email ~* '(\\.wm@eternalgy\\.me|^warmup\\.[a-z]+@eternalgy\\.me)$';
   `);
 }
 let migrated: Promise<void> | null = null;
@@ -75,7 +76,9 @@ const SETTLE_MS = 15 * 60_000;
 const ACT_WITHIN_MS = 3 * 24 * 3600_000;
 
 const FREE_MAIL = /^(gmail|googlemail|yahoo|ymail|hotmail|outlook|live|icloud|me|aol|msn|proton|protonmail|qq|163|126|zoho)\./i;
-const SYSTEM_SENDER = /^(mailer-daemon|postmaster|no-?reply|do-?not-?reply|notifications?|bounce[s]?)[@+]/i;
+const WARMUP_SENDER = /(\.wm@eternalgy\.me|^warmup\.[a-z]+@eternalgy\.me)$/i;
+const OWN_DOMAIN = /^(eternalgy\.(me|com|asia|digital|org)|atap\.solar)$/i;
+const SYSTEM_SENDER =/^(mailer-daemon|postmaster|no-?reply|do-?not-?reply|notifications?|bounce[s]?)[@+]/i;
 
 export const normId = (id: string | null | undefined) => String(id ?? '').trim().replace(/^<|>$/g, '').toLowerCase();
 
@@ -101,6 +104,8 @@ const hostOf = (website: string) => { try { return new URL(/^https?:\/\//i.test(
 
 /** The lead a sender belongs to: themself, else (not on a free-mail domain) a lead at their company's domain. */
 export async function matchSender(email: string): Promise<Match | null> {
+  // Inbox warm-up mail (warmup.ts) is ours, never a lead: the .wm partners and the first build's warmup.* senders.
+  if (WARMUP_SENDER.test(email)) return null;
   const own = await db.sql<{ email: string; campaign_id: string; campaign_name: string | null; company_id: string | null }>(
     `select email, campaign_id::text, campaign_name, company_id::text from email_marketing_lead where lower(email) = $1 order by pushed_at desc limit 1`, [email]);
   const row = own.rows[0];
@@ -112,7 +117,8 @@ export async function matchSender(email: string): Promise<Match | null> {
     if (lead?.id && camp) return { lead_email: email, campaign_id: Number(camp.campaign_id), campaign_name: camp.campaign_name ?? null, company_id: null, matched_by: 'lead' };
   }
   const domain = email.split('@')[1] ?? '';
-  if (!domain || FREE_MAIL.test(domain)) return null;
+  // Our own domains are no lead's company, even when a test lead uses one.
+  if (!domain || FREE_MAIL.test(domain) || OWN_DOMAIN.test(domain)) return null;
   const peer = await db.sql<{ email: string; campaign_id: string; campaign_name: string | null; company_id: string | null }>(
     `select email, campaign_id::text, campaign_name, company_id::text from email_marketing_lead where split_part(lower(email), '@', 2) = $1 order by pushed_at desc limit 1`, [domain]);
   const p = peer.rows[0];
