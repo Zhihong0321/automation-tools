@@ -162,22 +162,21 @@ test('the honeypot looks like success but dials nothing and is recorded as spam'
   assert.equal((await store.latest(1))[0].status, 'spam');
 });
 
-test('limits: 2 per number per 24h, labelled limited and recorded', async () => {
+test('limits: 4 per number per 24h, labelled limited and recorded', async () => {
   const calls: Call[] = [];
   let t = Date.parse('2026-01-01T00:00:00Z');
   const { store, deps } = setup({ fetch: fakeVoice(202, { call_id: 'x' }, calls), now: () => t });
   const ip = (i: number) => ({ ip: `198.51.100.${i}`, userAgent: 'ua' });
-  assert.equal((await submit(good, ip(1), deps)).code, 'requested');
-  assert.equal((await submit(good, ip(2), deps)).code, 'requested');
-  const third = await submit(good, ip(3), deps);
-  assert.deepEqual([third.ok, third.code, third.message, third.http], [false, 'limited', MESSAGES.limited, 429]);
-  assert.equal(calls.length, 2);
+  for (let i = 1; i <= 4; i++) assert.equal((await submit(good, ip(i), deps)).code, 'requested', `request ${i}`);
+  const fifth = await submit(good, ip(5), deps);
+  assert.deepEqual([fifth.ok, fifth.code, fifth.message, fifth.http], [false, 'limited', MESSAGES.limited, 429]);
+  assert.equal(calls.length, 4);
   assert.equal((await store.latest(1))[0].status, 'limited');
   // another number is unaffected
-  assert.equal((await submit({ ...good, whatsapp: '019-876 5432' }, ip(3), deps)).code, 'requested');
+  assert.equal((await submit({ ...good, whatsapp: '019-876 5432' }, ip(5), deps)).code, 'requested');
   // after 24h the same number may ask again
   t += 24 * 3600_000 + 1000;
-  assert.equal((await submit(good, ip(4), deps)).code, 'requested');
+  assert.equal((await submit(good, ip(6), deps)).code, 'requested');
 });
 
 test('limits: 5 per client IP per hour', async () => {
