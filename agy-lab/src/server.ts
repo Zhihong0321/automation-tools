@@ -35,6 +35,7 @@ import * as companyDive from './companydive.ts';
 import * as companyDivePeople from './companydive-people.ts';
 import { page as companyDivePage } from './companydive-page.ts';
 import * as diveDeeper from './divedeeper.ts';
+import * as callMe from './call-me.ts';
 import * as siteEmails from './site-emails.ts';
 import * as emailMarketing from './email-marketing.ts';
 import * as emailReplies from './email-replies.ts';
@@ -304,6 +305,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (await intel.handlePublic(req, res, url)) return;
   if (await companyDive.handlePublic(req, res, url)) return;
   if (await diveDeeper.handlePublic(req, res, url)) return;
+  // The public "Call me" page and its POST: one WhatsApp call from the AI agent (call-me.ts).
+  if (await callMe.handlePublic(req, res, url)) return;
 
   // /v1/* is the gateway - the OpenAI-shaped surface other tools point at. It sits
   // behind the same token because a bearer header is exactly what an OpenAI client
@@ -380,6 +383,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 
   // ---- business intelligence product API -------------------------------
   if (await intel.handleApi(req, res, url, { json, readJson })) return;
+
+  // ---- staff review of "Call me" requests ---------------------------------
+  if (await callMe.handleApi(req, res, url, { json })) return;
 
   // ---- the gateway ------------------------------------------------------
   // Before everything else, because this is the surface that has consumers: a

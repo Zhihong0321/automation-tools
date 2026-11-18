@@ -17,6 +17,7 @@ export const document = {
     { name: 'Published reports', description: 'Read final public output using an opaque report identifier.' },
     { name: 'Company dive', description: 'Deep dive one company by name: a cited dossier plus linked people, behind a public report link that shows live progress.' },
     { name: 'Telemarketing', description: 'Telemarketer agent lead distribution, disposition updates, and notes authenticated by Telemarketer UID.' },
+    { name: 'Call me', description: 'Public page where a visitor asks the AI agent for one WhatsApp call; staff review the requests.' },
   ],
   security: [{ bearerAuth: [] }],
   paths: {
@@ -519,6 +520,34 @@ export const document = {
         responses: {
           '200': { description: 'Telemarketer profile and statistics' },
           '403': { description: 'Invalid or inactive Telemarketer UID' },
+        },
+      },
+    },
+    '/call-me': {
+      post: {
+        operationId: 'requestCall',
+        tags: ['Call me'],
+        summary: 'Ask the AI agent to place one WhatsApp call (public, same-origin, no token)',
+        description: 'Body: name and/or company (at least one), whatsapp (Malaysian numbers without +, others with +), and the hidden honeypot field website (leave empty). Always answers {ok, code, message}; code is requested, busy, limited, invalid_number, missing_name_or_company, not_configured or error. GET /call-me serves the page.',
+        security: [],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string', maxLength: 120 }, company: { type: 'string', maxLength: 120 }, whatsapp: { type: 'string' }, website: { type: 'string' } }, required: ['whatsapp'] } } } },
+        responses: {
+          '200': { description: 'Call requested', content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } },
+          '400': { description: 'Invalid number, or neither name nor company', content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } },
+          '409': { description: 'The agent is busy', content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } },
+          '429': { description: 'Limited: 2 per number per 24h, 5 per client per hour', content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } },
+          '503': { description: 'The call could not be placed; the request is saved', content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } },
+        },
+      },
+    },
+    '/api/call-me-requests': {
+      get: {
+        operationId: 'listCallMeRequests',
+        tags: ['Call me'],
+        summary: 'The latest 200 Call me requests, newest first (no IP data)',
+        responses: {
+          '200': { description: 'Recent requests with their status', content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } },
+          '401': { $ref: '#/components/responses/Unauthorized' },
         },
       },
     },
