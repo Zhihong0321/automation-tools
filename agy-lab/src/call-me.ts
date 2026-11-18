@@ -62,7 +62,8 @@ export interface Outcome {
   http: number;
 }
 
-export const LIMIT_PER_NUMBER = 2;
+// A backstop against ringing one number over and over. The voice service enforces the real allowance (2 connected calls a day), because only it knows which calls connected.
+export const LIMIT_PER_NUMBER = 4;
 export const NUMBER_WINDOW_MS = 24 * 3600_000;
 export const LIMIT_PER_IP = 5;
 export const IP_WINDOW_MS = 3600_000;
