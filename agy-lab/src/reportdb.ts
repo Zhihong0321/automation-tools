@@ -2156,9 +2156,13 @@ export async function listLeads(options: {
   assignedTo?: string | null;
   researchStatus?: string | null;
   limit?: number;
+  /** Highest page size this caller may ask for. Default 100; the telemarketer API passes 500 (its documented cap). */
+  maxLimit?: number;
   offset?: number;
   sort?: string | null;
 } = {}): Promise<{ leads: LeadItem[]; total: number; stats: LeadStats; limit: number; offset: number }> {
+  const cap = Number.isFinite(options.maxLimit) && (options.maxLimit as number) >= 1 ? Math.round(options.maxLimit as number) : 100;
+  const wanted = Number.isFinite(options.limit) ? Math.round(options.limit as number) : 50;
   if (!configured()) {
     return {
       leads: [],
@@ -2175,12 +2179,12 @@ export async function listLeads(options: {
         deep_researched: 0,
         hidden: 0,
       },
-      limit: Math.min(Math.max(Math.round(options.limit ?? 50), 1), 100),
+      limit: Math.min(Math.max(wanted, 1), cap),
       offset: Math.max(Math.round(options.offset ?? 0), 0),
     };
   }
   await migrate();
-  const limit = Math.min(Math.max(Math.round(options.limit ?? 50), 1), 100);
+  const limit = Math.min(Math.max(wanted, 1), cap);
   const offset = Math.max(Math.round(options.offset ?? 0), 0);
 
   const whereConditions: string[] = ['c.merged_into is null'];
@@ -2662,16 +2666,53 @@ export async function finalizeContactResult(input: {
   return (out.rowCount ?? 0) > 0;
 }
 
+export type AssignLeadsResult = {
+  /** Company rows actually assigned. */
+  updated: number;
+  /** Ids the caller sent. */
+  requested: number;
+  /** requested - updated: ids that were not assigned (see the counts below). */
+  skipped: number;
+  /** Ids that are not a positive number. */
+  invalid: number;
+  /** Ids sent more than once in the same request. */
+  duplicates: number;
+  /** Ids with no company row. */
+  notFound: number;
+  /** Ids that are a merged duplicate of another company (assign the surviving company instead). */
+  merged: number;
+  /** true when skipped > 0, so a caller can show it. The rows that matched are assigned either way. */
+  partial: boolean;
+  warning?: string;
+};
+
 export async function assignLeads(
   companyIds: (string | number)[],
   assignedTo: string,
   notes?: string | null,
-): Promise<{ updated: number }> {
+): Promise<AssignLeadsResult> {
   await migrate();
   const trimmed = assignedTo.trim();
   if (!trimmed) throw new Error('assignedTo is required');
-  const ids = companyIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0);
-  if (!ids.length) return { updated: 0 };
+  const requested = companyIds.length;
+  const numeric = companyIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0);
+  const ids = [...new Set(numeric)];
+  const invalid = requested - numeric.length;
+  const duplicates = numeric.length - ids.length;
+  const summarize = (updated: number, notFound: number, merged: number): AssignLeadsResult => {
+    const skipped = Math.max(requested - updated, 0);
+    const parts: string[] = [];
+    if (invalid) parts.push(invalid + ' not a valid id');
+    if (duplicates) parts.push(duplicates + ' sent twice');
+    if (notFound) parts.push(notFound + ' not found');
+    if (merged) parts.push(merged + ' merged into another company');
+    return {
+      updated, requested, skipped, invalid, duplicates, notFound, merged,
+      partial: skipped > 0,
+      ...(skipped > 0 ? { warning: 'Assigned ' + updated + ' of ' + requested + '; ' + skipped + ' not assigned (' + (parts.join(', ') || 'unknown') + ').' } : {}),
+    };
+  };
+  if (!ids.length) return summarize(0, 0, 0);
 
   const target = await resolveTelemarketer(trimmed);
   const agentUid = target.uid;
@@ -2703,17 +2744,32 @@ export async function assignLeads(
        where company_id = any($1::bigint[]) and action = 'assignment' and coalesce(notes, '') = ''`,
       [assignedIds],
     );
-  }
-
-  for (const cid of assignedIds) {
+    // One statement for the whole batch: a per-id insert loop took ~1 minute per 2,500 ids.
     await sql(
       `insert into lead_activity_log (company_id, telemarketer_name, telemarketer_uid, action, previous_status, new_status, notes, is_mock, created_at)
-       values ($1, $2, $3, 'assignment', 'unassigned', 'assigned', $4, false, now())`,
-      [cid, target.name, agentUid, notes?.trim() || null],
+       select cid, $2, $3, 'assignment', 'unassigned', 'assigned', $4, false, now()
+       from unnest($1::bigint[]) as cid`,
+      [assignedIds, target.name, agentUid, notes?.trim() || null],
     ).catch(() => {});
   }
 
-  return { updated: res.rows.length };
+  // Say why ids were skipped, so the caller is told the truth. A failure here only loses the breakdown.
+  let notFound = 0;
+  let merged = 0;
+  if (assignedIds.length < ids.length) {
+    const got = new Set(assignedIds);
+    const missing = ids.filter((id) => !got.has(id));
+    try {
+      const found = await sql<{ id: string; merged_into: string | null }>(
+        `select id::text, merged_into::text from company_data where id = any($1::bigint[])`, [missing]);
+      merged = found.rows.filter((r) => r.merged_into != null).length;
+      notFound = missing.length - found.rows.length;
+    } catch {
+      notFound = missing.length;
+    }
+  }
+
+  return summarize(assignedIds.length, notFound, merged);
 }
 
 export async function unassignLeads(companyIds: (string | number)[]): Promise<{ updated: number }> {
@@ -4940,9 +4996,13 @@ export async function listAtapSolarRegistrations(options: {
   source?: string | null;
   state?: string | null;
   limit?: number;
+  /** Highest page size this caller may ask for. Default 100; the telemarketer API passes 500 (its documented cap). */
+  maxLimit?: number;
   offset?: number;
   sort?: string | null;
 } = {}): Promise<{ leads: AtapSolarRegistrationLead[]; total: number; stats: AtapSolarRegistrationStats; limit: number; offset: number }> {
+  const cap = Number.isFinite(options.maxLimit) && (options.maxLimit as number) >= 1 ? Math.round(options.maxLimit as number) : 100;
+  const wanted = Number.isFinite(options.limit) ? Math.round(options.limit as number) : 50;
   if (!configured()) {
     return {
       leads: [],
@@ -4960,12 +5020,12 @@ export async function listAtapSolarRegistrations(options: {
         facebook_ads: 0,
         other_sources: 0,
       },
-      limit: Math.min(Math.max(Math.round(options.limit ?? 50), 1), 100),
+      limit: Math.min(Math.max(wanted, 1), cap),
       offset: Math.max(Math.round(options.offset ?? 0), 0),
     };
   }
   await migrate();
-  const limit = Math.min(Math.max(Math.round(options.limit ?? 50), 1), 100);
+  const limit = Math.min(Math.max(wanted, 1), cap);
   const offset = Math.max(Math.round(options.offset ?? 0), 0);
 
   const whereConditions: string[] = [];

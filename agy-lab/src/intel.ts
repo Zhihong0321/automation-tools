@@ -3285,8 +3285,11 @@ export async function handleTelemarketerApi(
     const rawStatus = url.searchParams.get('status');
     const search = url.searchParams.get('search');
     const sort = url.searchParams.get('sort');
-    const limit = Number(url.searchParams.get('limit') ?? 50);
-    const offset = Number(url.searchParams.get('offset') ?? 0);
+    // limit is 1-500 as documented (docs.ts); a missing or non-numeric value falls back to 50 / 0.
+    const limitRaw = Number(url.searchParams.get('limit') ?? 50);
+    const offsetRaw = Number(url.searchParams.get('offset') ?? 0);
+    const limit = Number.isFinite(limitRaw) ? limitRaw : 50;
+    const offset = Number.isFinite(offsetRaw) ? offsetRaw : 0;
 
     // Normalize status filter if given
     let statusFilter = rawStatus ? rawStatus.trim() : undefined;
@@ -3306,6 +3309,7 @@ export async function handleTelemarketerApi(
           status: statusFilter,
           search,
           limit,
+          maxLimit: 500,
           offset,
           sort,
         }),
@@ -3335,6 +3339,7 @@ export async function handleTelemarketerApi(
         status: statusFilter,
         search,
         limit,
+        maxLimit: 500,
         offset,
         sort,
       }),
@@ -3719,6 +3724,8 @@ export async function handleApi(req: http.IncomingMessage, res: http.ServerRespo
       return true;
     }
     const result = await db.assignLeads(companyIds, assignedTo, notes);
+    // Partial assignment is labelled, not failed: the rows that matched ARE assigned.
+    // `partial` + `warning` tell the portal exactly how many were skipped and why.
     ctx.json(res, 200, { ok: true, ...result, assignedTo });
     return true;
   }

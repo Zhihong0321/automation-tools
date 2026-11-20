@@ -333,3 +333,18 @@ test('blacklisted leads and remarks survive delete, merge and reset paths', asyn
   assert.match(fnBody('async function carryMergedLeadStateToKeepers'), /string_agg\(distinct note/);
   assert.match(fnBody('export async function assignLeads'), /action = 'assignment' and coalesce\(notes, ''\) = ''/);
 });
+
+test('telemarketer list pages up to the documented 500 and every other caller stays at 100', async () => {
+  const saved = process.env.DATABASE_URL;
+  delete process.env.DATABASE_URL;
+  try {
+    assert.equal((await db.listLeads({ limit: 5000, maxLimit: 500 })).limit, 500);
+    assert.equal((await db.listLeads({ limit: 5000 })).limit, 100);
+    assert.equal((await db.listLeads({ limit: 150, maxLimit: 500 })).limit, 150);
+    assert.equal((await db.listLeads({ limit: Number.NaN, maxLimit: 500 })).limit, 50);
+    assert.equal((await db.listAtapSolarRegistrations({ limit: 5000, maxLimit: 500 })).limit, 500);
+    assert.equal((await db.listAtapSolarRegistrations({ limit: 5000 })).limit, 100);
+  } finally {
+    if (saved !== undefined) process.env.DATABASE_URL = saved;
+  }
+});
