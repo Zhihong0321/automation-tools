@@ -836,6 +836,11 @@ export function migrate(): Promise<void> {
       alter table lead_activity_log add column if not exists lead_type text not null default 'gmap';
       create index if not exists lead_activity_log_reg_idx on lead_activity_log (registration_id);
     `);
+    // Taman lead lookup matches listed companies by name + address. A hash index
+    // has no key-size limit, so a very long name can never fail the build. If it
+    // still fails, the lookup only runs slower: log it and carry on.
+    await sql(`create index if not exists company_data_name_hash_idx on company_data using hash (name)`)
+      .catch((err) => console.warn('[migrate] company_data_name_hash_idx not created:', err instanceof Error ? err.message : err));
   })().catch((err) => {
     migrated = null;
     throw err;
@@ -3407,6 +3412,46 @@ export async function getTamanAssignments(state = 'johor'): Promise<Record<strin
   return map;
 }
 
+// Company ids for the reports picked by `where` ($1 is its one parameter):
+// the companies linked through search_report_company, plus (withJson) the
+// companies listed in each report's stored JSON, matched by place_id or by
+// name + address. Every match is its own indexed lookup. The old single join
+// used `a = b OR c = d`, which no index can serve, so Postgres walked
+// company_data once per listed company: 105 s and still running for one taman
+// on 2026-11-20, holding the whole db pool while it ran.
+async function tamanIdsFromReports(where: string, param: string, withJson: boolean): Promise<string[]> {
+  const linked = await sql<{ id: string }>(
+    `with reps as (
+       select r.id, r.source_search_report_id from published_report r where ${where}
+     ), rep_ids as (
+       select id as rid from reps
+       union
+       select source_search_report_id from reps where source_search_report_id is not null
+     )
+     select distinct sc.company_id::text as id
+     from search_report_company sc
+     where sc.report_id in (select rid from rep_ids)`,
+    [param],
+  );
+  const ids = linked.rows.map((r) => String(r.id));
+  if (!withJson) return ids;
+
+  const fromJson = await sql<{ id: string }>(
+    `with listed as materialized (
+       select distinct ce->>'place_id' as pid, ce->>'name' as nm, ce->>'address' as addr
+       from published_report r,
+       jsonb_array_elements(case when jsonb_typeof(r.result->'companies') = 'array' then r.result->'companies' else '[]'::jsonb end) ce
+       where ${where} and ce->>'place_id' is not null
+     )
+     select c.id::text as id from listed l join company_data c on c.place_id = l.pid
+     union
+     select c.id::text as id from listed l join company_data c on c.name = l.nm and c.address = l.addr`,
+    [param],
+  );
+  for (const r of fromJson.rows) ids.push(String(r.id));
+  return ids;
+}
+
 export async function findTamanCompanyIds(options: {
   publicId?: string;
   queryPlace?: string;
@@ -3417,63 +3462,26 @@ export async function findTamanCompanyIds(options: {
   const ids = new Set<string>();
 
   if (options.publicId && options.publicId.trim()) {
-    const pId = options.publicId.trim();
-    const linked = await sql<{ company_id: string }>(
-      `select distinct sc.company_id::text
-       from search_report_company sc
-       join published_report r on (r.source_search_report_id = sc.report_id or r.id = sc.report_id)
-       where r.public_id = $1`,
-      [pId],
-    );
-    for (const r of linked.rows) ids.add(String(r.company_id));
-
-    const fromJson = await sql<{ id: string }>(
-      `select distinct c.id::text
-       from published_report r,
-       jsonb_array_elements(case when jsonb_typeof(r.result->'companies') = 'array' then r.result->'companies' else '[]'::jsonb end) ce
-       join company_data c on (c.place_id = ce->>'place_id' or (c.name = ce->>'name' and c.address = ce->>'address'))
-       where r.public_id = $1 and ce->>'place_id' is not null`,
-      [pId],
-    );
-    for (const r of fromJson.rows) ids.add(String(r.id));
+    const found = await tamanIdsFromReports('r.public_id = $1', options.publicId.trim(), true);
+    for (const id of found) ids.add(id);
   }
 
   if (options.queryPlace && options.queryPlace.trim()) {
-    const qp = options.queryPlace.trim().toLowerCase();
-    const linked = await sql<{ company_id: string }>(
-      `select distinct sc.company_id::text
-       from search_report_company sc
-       join published_report r on (r.source_search_report_id = sc.report_id or r.id = sc.report_id)
-       where r.report_type = 'business_search'
-         and lower(trim(coalesce(r.request->>'place', ''))) = $1`,
-      [qp],
+    const found = await tamanIdsFromReports(
+      `r.report_type = 'business_search' and lower(trim(coalesce(r.request->>'place', ''))) = $1`,
+      options.queryPlace.trim().toLowerCase(),
+      true,
     );
-    for (const r of linked.rows) ids.add(String(r.company_id));
-
-    const fromJson = await sql<{ id: string }>(
-      `select distinct c.id::text
-       from published_report r,
-       jsonb_array_elements(case when jsonb_typeof(r.result->'companies') = 'array' then r.result->'companies' else '[]'::jsonb end) ce
-       join company_data c on (c.place_id = ce->>'place_id' or (c.name = ce->>'name' and c.address = ce->>'address'))
-       where r.report_type = 'business_search'
-         and lower(trim(coalesce(r.request->>'place', ''))) = $1
-         and ce->>'place_id' is not null`,
-      [qp],
-    );
-    for (const r of fromJson.rows) ids.add(String(r.id));
+    for (const id of found) ids.add(id);
   }
 
   if (options.taman && options.taman.trim() && ids.size === 0) {
-    const tm = options.taman.trim().toLowerCase();
-    const linked = await sql<{ company_id: string }>(
-      `select distinct sc.company_id::text
-       from search_report_company sc
-       join published_report r on (r.source_search_report_id = sc.report_id or r.id = sc.report_id)
-       where r.report_type = 'business_search'
-         and lower(trim(coalesce(r.request->>'place', ''))) like '%' || $1 || '%'`,
-      [tm],
+    const found = await tamanIdsFromReports(
+      `r.report_type = 'business_search' and lower(trim(coalesce(r.request->>'place', ''))) like '%' || $1 || '%'`,
+      options.taman.trim().toLowerCase(),
+      false,
     );
-    for (const r of linked.rows) ids.add(String(r.company_id));
+    for (const id of found) ids.add(id);
   }
 
   return Array.from(ids);
