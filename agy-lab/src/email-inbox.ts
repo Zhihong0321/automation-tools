@@ -297,7 +297,8 @@ export async function answer(to: InboxRow, text: string): Promise<string> {
   const subject = /^re:/i.test(to.subject ?? '') ? String(to.subject) : 'Re: ' + (to.subject || 'your email');
   const when = new Date(to.received_at).toUTCString();
   const theirs = to.body_text ?? htmlToText(to.body_html ?? '');
-  const signature = box?.signature ? String(box.signature) : '';
+  // A reply that already ends with the sender's sign-off (email-replies.ts) needs no second signature under it.
+  const signature = box?.signature && !/\n\s*(regards|best regards|warm regards),?\s*\n[\s\S]*eternalgy sdn bhd/i.test(text) ? String(box.signature) : '';
   const html = textToHtml(text) + (signature ? '<br>' + signature : '') +
     `<br><div>On ${when}, ${to.email_name ? to.email_name + ' &lt;' + to.email + '&gt;' : to.email} wrote:</div>` +
     `<blockquote style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex">${to.body_html || textToHtml(theirs)}</blockquote>`;

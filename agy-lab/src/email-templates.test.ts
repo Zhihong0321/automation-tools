@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { check, fillSender, render, cleanSteps, readSender, DEFAULT_SENDER, type Sender, type Step } from './email-templates.ts';
+import { check, fillSender, render, cleanSteps, readSender, DEFAULT_SENDER, withSignOff, type Sender, type Step } from './email-templates.ts';
 import { page } from './email-marketing-page.ts';
 
 const sender: Sender = { sender_name: 'Tan Wei Ming', sender_title: 'Director', sender_phone: '+60 11-2100 0099', sender_footer: 'Eternalgy Sdn Bhd. Reply "stop" to opt out.' };
@@ -60,4 +60,12 @@ test('the page has a Templates tab, and its script is valid JavaScript', () => {
   assert.match(html, /id="tplPick"/);
   const script = html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>'));
   assert.doesNotThrow(() => new vm.Script(script));
+});
+
+test('signOff closes a reply with name, title, company and contact, once', () => {
+  const s: Sender = { sender_name: 'Mr. Gan Zhi Hong', sender_title: 'Marketing Manager', sender_phone: '+60 11-2100 0099', sender_footer: '' };
+  const out = withSignOff('Yes we can.', s);
+  assert.equal(out, 'Yes we can.\n\nRegards,\nMr. Gan Zhi Hong\nMarketing Manager\nEternalgy Sdn Bhd\nWhatsApp +60 11-2100 0099\nhttps://eternalgy.me');
+  assert.equal(withSignOff(out, s), out);
+  assert.equal(withSignOff('Thanks.\n\nRegards,\nSomeone\nEternalgy Sdn Bhd', s), 'Thanks.\n\nRegards,\nSomeone\nEternalgy Sdn Bhd');
 });

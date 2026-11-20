@@ -14,6 +14,7 @@ import * as db from './reportdb.ts';
 import { llm } from './core/index.ts';
 import { smartlead as sl } from './core/index.ts';
 import * as inbox from './email-inbox.ts';
+import * as templates from './email-templates.ts';
 import { cachedCampaignRows, cachedMailboxes, campaignRow, htmlToText, leads, pick, stripQuoted, textToHtml, threads, webhookEvent } from './email-marketing.ts';
 
 type Ctx = {
@@ -164,7 +165,7 @@ export function generate(email: string, campaignId: number | null, instruction: 
     try {
       // No cutoff of our own: the draft is worth waiting for, and the page shows it is writing.
       const out = await llm.ask(buildPrompt({ company: company.name ?? lead.company_name, category: company.category, campaign: thread.campaign_name, messages, instruction }), { timeoutMs: 30 * 60_000, step: 'email reply' });
-      draft = cleanDraft(out.answer);
+      draft = await signed(cleanDraft(out.answer));
       model = out.model;
     } catch (err) {
       error = (err as Error).message;
@@ -186,6 +187,12 @@ export function draftSoon(email: string, campaignId: number | null): void {
   void generate(email, campaignId).catch((err: Error) => console.warn(`[email-replies] no draft for ${email}: ${err.message}`));
 }
 
+/** The sender profile's sign-off on a reply; if the profile cannot be read the default one still goes on. */
+async function signed(text: string): Promise<string> {
+  const sender = await templates.getSender().catch(() => templates.DEFAULT_SENDER);
+  return templates.withSignOff(text, sender);
+}
+
 export async function send(draftId: number, body: string): Promise<Draft> {
   await ready();
   const out = await db.sql<Draft>(`select * from email_marketing_draft where id = $1`, [draftId]);
@@ -195,8 +202,9 @@ export async function send(draftId: number, body: string): Promise<Draft> {
   // No stats id: the lead wrote to our mailbox directly, so the answer goes out from it over SMTP.
   const direct = d.reply_stats_id ? null : await inbox.byMessageId(d.reply_message_id);
   if (!d.reply_stats_id && !direct?.inbound) throw Object.assign(new Error('Smartlead gave this reply no stats id, so it cannot be answered in the thread'), { status: 422 });
-  const text = body.trim();
-  if (!text) throw Object.assign(new Error('the reply is empty'), { status: 400 });
+  const typed = body.trim();
+  if (!typed) throw Object.assign(new Error('the reply is empty'), { status: 400 });
+  const text = await signed(typed);
   // Claim it first, so a double tap on a phone sends once.
   const claim = await db.sql(`update email_marketing_draft set status = 'sent', sent_at = now(), sent_body = $2, updated_at = now() where id = $1 and status <> 'sent' returning id`, [draftId, text]);
   if (!claim.rowCount) throw Object.assign(new Error('already sent'), { status: 409 });
@@ -404,6 +412,8 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       const company = await companyFor(email, thread.campaign_id);
       const draft = target ? (await db.sql<Draft>(`select * from email_marketing_draft where campaign_id = $1 and email = $2 and reply_message_id = $3`,
         [thread.campaign_id, email, messageKey(target)])).rows[0] ?? null : null;
+      // Drafts written before the sign-off existed show it too, so what the operator reads is what goes out.
+      if (draft?.draft && draft.status !== 'sent') draft.draft = await signed(draft.draft);
       return send_(200, { lead, company, thread, target, draft, drafting: pending.has(email + '|' + (campaignId ?? '')) || pending.has(email + '|' + thread.campaign_id), model: llm.config()?.model ?? null });
     }
 

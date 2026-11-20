@@ -25,6 +25,21 @@ export const DEFAULT_SENDER: Sender = {
   sender_footer: 'CIDB G7 contractor · SEDA Registered PV Service Provider · MyHIJAU certified\n12 MWp+ installed · 1,100+ sites commissioned · Golden Bull Award 2025\n\nNot relevant? Reply "stop" and I won\'t write again.',
 };
 
+/** The closing of a reply: Regards, name, title, company, contact. Built from the sender profile, so a reply never goes out unsigned. */
+export function signOff(sender: Sender): string {
+  const phone = sender.sender_phone.trim();
+  return ['Regards,', sender.sender_name.trim(), sender.sender_title.trim(), 'Eternalgy Sdn Bhd', phone ? `WhatsApp ${phone}` : '', 'https://eternalgy.me']
+    .filter(Boolean).join('\n');
+}
+
+/** The text with the sign-off under it; text that already carries it is left alone. */
+export function withSignOff(text: string, sender: Sender): string {
+  const body = String(text ?? '').trim();
+  const sig = signOff(sender);
+  if (body.includes(sig) || /\n\s*(regards|best regards|warm regards),?\s*\n[\s\S]*eternalgy sdn bhd/i.test(body)) return body;
+  return body + '\n\n' + sig;
+}
+
 const FIELD = /\{\{\s*([a-z_]+)\s*\}\}/gi;
 /** A note to self left in the text: [CONFIRM wording], [TODO], [Sender name]. */
 const NOTE = /\[(?:confirm|todo|tbd|verif|insert|sender|your|name|title)[^\]\n]*\]/gi;
