@@ -951,8 +951,10 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
     }
     html+='<details class="more" style="margin-top:18px"><summary><span class="grow">Category</span><span class="aside">'+esc(catName(t.category_id)||'None')+'</span></summary><div class="in"><select id="rCat"><option value="">No category</option>'+S.cats.map(function(c){return '<option value="'+c.id+'"'+(c.id==t.category_id?' selected':'')+'>'+esc(c.name)+'</option>'}).join('')+'</select></div></details>';
     if(target&&!(d&&d.status==='sent'))html+='<div class="actbar"><button class="primary" id="rSend">Approve &amp; send</button><button id="rDismiss">No reply needed</button></div>';
+    else if(target)html+='<div class="actbar"><button class="primary" id="rAnother">Write another reply</button></div>';
     else html+='<div style="height:calc(24px + var(--bot))"></div>';
     $('rBody').innerHTML=html;
+    if($('rAnother'))$('rAnother').onclick=function(){this.disabled=true;this.textContent='Writing…';writeDraft(null,true)};
     var note=$('rDraftNote');
     if(note&&d&&d.status!=='sent')note.textContent=d.status==='drafting'?'writing with '+(d.model||r.model||'deepseek')+'…':(d.model?'drafted by '+d.model+', '+ago(d.updated_at)+' ago':'');
     if(note&&!d&&target)note.textContent='writing with '+(r.model||'deepseek')+'…';
@@ -964,12 +966,12 @@ body.focus .toast{bottom:calc(86px + var(--bot))}
     if($('rSend'))$('rSend').onclick=sendReply;
     if($('rDismiss'))$('rDismiss').onclick=dismissReply;
   }
-  function writeDraft(hint){
+  function writeDraft(hint,followUp){
     var R=S.reply,r=R.data;if(!r)return;
     if($('rText')){$('rText').disabled=true;$('rText').value='';$('rText').placeholder='Writing the reply…'}
     if($('rDraftNote'))$('rDraftNote').textContent='writing with '+(r.model||'deepseek')+'…';
     if($('rSend'))$('rSend').disabled=true;
-    api('/api/email-marketing/drafts',{method:'POST',body:{email:R.email,campaign_id:r.thread.campaign_id,instruction:hint}}).then(function(x){
+    api('/api/email-marketing/drafts',{method:'POST',body:{email:R.email,campaign_id:r.thread.campaign_id,instruction:hint,follow_up:followUp===true}}).then(function(x){
       if(S.reply!==R)return;r.draft=x.draft;renderReply();
     }).catch(function(e){if(S.reply!==R)return;fail(e);renderReply()});
   }

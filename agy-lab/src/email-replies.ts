@@ -75,7 +75,15 @@ export function latestInbound(messages: Message[]): Message | null {
 /** Messages carry no id in some Smartlead builds; the time keeps one reply apart from the next. */
 export const messageKey = (m: Message) => String(m.message_id || m.stats_id || m.time || 'reply');
 
-export function buildPrompt(input: { company: string | null; category: string | null; campaign: string | null; messages: Message[]; instruction?: string | null }): string {
+/** Every draft for one customer message, newest first: the first answer, then follow-ups keyed "<id>#1", "<id>#2". */
+async function draftsFor(campaignId: number | string, email: string, base: string): Promise<Draft[]> {
+  const like = base.replace(/[\\%_]/g, '\\$&') + '#%';
+  return (await db.sql<Draft>(
+    `select * from email_marketing_draft where campaign_id = $1 and email = $2 and (reply_message_id = $3 or reply_message_id like $4) order by created_at desc, id desc`,
+    [campaignId, email, base, like])).rows;
+}
+
+export function buildPrompt(input: { company: string | null; category: string | null; campaign: string | null; messages: Message[]; instruction?: string | null; followUp?: boolean }): string {
   const thread = input.messages.map((m) =>
     `--- ${m.inbound ? 'THEM (the lead)' : 'US (Eternalgy)'}${m.time ? ' · ' + m.time : ''}${m.subject ? ' · subject: ' + m.subject : ''}\n${m.body.trim() || '(empty)'}`).join('\n\n');
   return [
@@ -88,7 +96,9 @@ export function buildPrompt(input: { company: string | null; category: string | 
     'The email thread, oldest first:',
     thread,
     '',
-    'Write our reply to their latest message.',
+    input.followUp
+      ? 'We have already answered their latest message (our answer is in the thread above). Write one more short email to them in the same thread, following the sender\'s extra instruction. Do not repeat what we already said.'
+      : 'Write our reply to their latest message.',
     '- First detect the language of THEIR LATEST message (English, Malay, Chinese or any other) and write the whole reply in that language, even if earlier messages were in another. If it mixes languages, use the one most of it is in.',
     '- Short, simple, clear. Answer what they asked in the first sentence. Under 80 words (the link line does not count), 2 or 3 short paragraphs. No filler, no flowery thanks.',
     '- If they are interested or asking questions, end with one clear next step: send the TNB bill, a free site survey or a short call, and offer WhatsApp.',
@@ -141,10 +151,10 @@ const pending = new Map<string, Promise<Draft>>();
  * webhook and an opening page asking together share it. A failed model call is kept
  * as a failed draft with its reason; Rewrite tries again.
  */
-export function generate(email: string, campaignId: number | null, instruction: string | null = null): Promise<Draft> {
+export function generate(email: string, campaignId: number | null, instruction: string | null = null, followUp = false): Promise<Draft> {
   const key = email + '|' + (campaignId ?? '');
   const running = pending.get(key);
-  if (running && !instruction) return running;
+  if (running && !instruction && !followUp) return running;
   const job = (async () => {
     await ready();
     const { lead, thread } = await loadThread(email, campaignId);
@@ -153,9 +163,12 @@ export function generate(email: string, campaignId: number | null, instruction: 
     const target = latestInbound(messages);
     if (!target) throw Object.assign(new Error(`${email} has not replied in "${thread.campaign_name}"`), { status: 404 });
     const company = await companyFor(email, thread.campaign_id);
-    const ident = [thread.campaign_id, email, messageKey(target)];
-    const existing = await db.sql<Draft>(`select * from email_marketing_draft where campaign_id = $1 and email = $2 and reply_message_id = $3`, ident);
-    if (existing.rows[0]?.status === 'sent') return existing.rows[0];
+    const base = messageKey(target);
+    const have = await draftsFor(thread.campaign_id, email, base);
+    // The latest draft for this customer message is the live one; once it is sent, "write another" opens the next "#n".
+    const live = have[0]?.reply_message_id ?? base;
+    const ident = [thread.campaign_id, email, have[0]?.status === 'sent' && followUp ? `${base}#${have.length}` : live];
+    if (have[0]?.status === 'sent' && !followUp) return have[0];
     await db.sql(
       `insert into email_marketing_draft (campaign_id, email, company_id, reply_message_id, reply_stats_id, reply_time, reply_html, reply_text, status, instruction)
        values ($1, $2, $4, $3, $5, $6, $7, $8, 'drafting', $9)
@@ -164,7 +177,7 @@ export function generate(email: string, campaignId: number | null, instruction: 
     let draft: string | null = null, error: string | null = null, model: string | null = null;
     try {
       // No cutoff of our own: the draft is worth waiting for, and the page shows it is writing.
-      const out = await llm.ask(buildPrompt({ company: company.name ?? lead.company_name, category: company.category, campaign: thread.campaign_name, messages, instruction }), { timeoutMs: 30 * 60_000, step: 'email reply' });
+      const out = await llm.ask(buildPrompt({ company: company.name ?? lead.company_name, category: company.category, campaign: thread.campaign_name, messages, instruction, followUp: ident[2] !== base }), { timeoutMs: 30 * 60_000, step: 'email reply' });
       draft = await signed(cleanDraft(out.answer));
       model = out.model;
     } catch (err) {
@@ -200,7 +213,9 @@ export async function send(draftId: number, body: string): Promise<Draft> {
   if (!d) throw Object.assign(new Error('no such draft'), { status: 404 });
   if (d.status === 'sent') throw Object.assign(new Error(`already sent ${d.sent_at}`), { status: 409 });
   // No stats id: the lead wrote to our mailbox directly, so the answer goes out from it over SMTP.
-  const direct = d.reply_stats_id ? null : await inbox.byMessageId(d.reply_message_id);
+  // A follow-up's key is "<message id>#n"; the customer's real message id is the part before it.
+  const messageId = d.reply_message_id.replace(/#\d+$/, '');
+  const direct = d.reply_stats_id ? null : await inbox.byMessageId(messageId);
   if (!d.reply_stats_id && !direct?.inbound) throw Object.assign(new Error('Smartlead gave this reply no stats id, so it cannot be answered in the thread'), { status: 422 });
   const typed = body.trim();
   if (!typed) throw Object.assign(new Error('the reply is empty'), { status: 400 });
@@ -214,7 +229,7 @@ export async function send(draftId: number, body: string): Promise<Draft> {
       email_stats_id: d.reply_stats_id,
       email_body: textToHtml(text),
       // reply_message_id doubles as the draft's key and can be a stats id or a time; only a real Message-ID goes on.
-      reply_message_id: /[@<]/.test(d.reply_message_id) ? d.reply_message_id : undefined,
+      reply_message_id: /[@<]/.test(messageId) ? messageId : undefined,
       reply_email_time: d.reply_time ?? undefined,
       reply_email_body: d.reply_html ?? undefined,
     });
@@ -254,8 +269,10 @@ export async function conversations(): Promise<Conversation[]> {
         select distinct on (campaign_id, email) email, campaign_id::text, payload
           from email_marketing_event where event_type = 'EMAIL_REPLY' and email is not null
          order by campaign_id, email, received_at desc`),
+      // sent_at is the latest send for the pair, so an unsent follow-up draft does not put an answered chat back in the waiting list.
       db.sql<{ email: string; campaign_id: string; status: Draft['status']; sent_at: string | null; updated_at: string }>(`
-        select distinct on (campaign_id, email) email, campaign_id::text, status, sent_at, updated_at
+        select distinct on (campaign_id, email) email, campaign_id::text, status,
+               max(sent_at) over (partition by campaign_id, email) as sent_at, updated_at
           from email_marketing_draft order by campaign_id, email, created_at desc`),
       inbox.rows().catch(() => []),
     ]);
@@ -276,7 +293,7 @@ export async function conversations(): Promise<Conversation[]> {
       }
       const d = draftOf.get(k);
       // pg hands timestamptz back as a Date; compared with the ISO replied_at it is never later.
-      const answered = d?.status === 'sent' && d.sent_at ? new Date(d.sent_at).toISOString() : null;
+      const answered = d?.sent_at ? new Date(d.sent_at).toISOString() : null;
       byKey.set(k, { ...c, draft_status: d?.status ?? null, answered_at: answered, needs_reply: false });
     };
     for (const r of local.rows) {
@@ -410,8 +427,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       if (!lead || !thread) return send_(404, { error: `${email} has no Smartlead thread` });
       const target = latestInbound(thread.messages as Message[]);
       const company = await companyFor(email, thread.campaign_id);
-      const draft = target ? (await db.sql<Draft>(`select * from email_marketing_draft where campaign_id = $1 and email = $2 and reply_message_id = $3`,
-        [thread.campaign_id, email, messageKey(target)])).rows[0] ?? null : null;
+      const draft = target ? (await draftsFor(thread.campaign_id, email, messageKey(target)))[0] ?? null : null;
       // Drafts written before the sign-off existed show it too, so what the operator reads is what goes out.
       if (draft?.draft && draft.status !== 'sent') draft.draft = await signed(draft.draft);
       return send_(200, { lead, company, thread, target, draft, drafting: pending.has(email + '|' + (campaignId ?? '')) || pending.has(email + '|' + thread.campaign_id), model: llm.config()?.model ?? null });
@@ -423,7 +439,7 @@ export async function handle(req: http.IncomingMessage, res: http.ServerResponse
       const email = String(body.email ?? '').trim().toLowerCase();
       if (!email) return send_(400, { error: 'email is required' });
       const instruction = String(body.instruction ?? '').trim() || null;
-      return send_(200, { draft: await generate(email, Number(body.campaign_id) || null, instruction) });
+      return send_(200, { draft: await generate(email, Number(body.campaign_id) || null, instruction, body.follow_up === true) });
     }
 
     const one = p.match(/^\/api\/email-marketing\/drafts\/(\d+)\/(send|dismiss)$/);
